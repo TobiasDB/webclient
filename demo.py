@@ -252,6 +252,36 @@ def main() -> None:
                         json=plan.model_dump(), headers=auth).json()
         print("service plan:  ", rows["rows"])
 
+    # [remote] The RemoteWebClient drives that same service over HTTP with no
+    #      local browser or lxml -- httpx + pydantic only. The plan API is
+    #      identical to the local client; documents are handles.
+    import threading
+    import time
+
+    import uvicorn
+
+    from webclient import RemoteWebClient
+
+    app = create_app(token="demo")
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0,
+                                           log_level="error"))
+    threading.Thread(target=server.run, daemon=True).start()
+    while not server.started:
+        time.sleep(0.01)
+    port = server.servers[0].sockets[0].getsockname()[1]
+
+    with RemoteWebClient(f"http://127.0.0.1:{port}", token="demo") as rc:
+        doc = rc.ref(f"{base}/").fetch()
+        print("\nremote fetch:  ", doc.title, "| ok:", doc.ok)
+        print("remote render: ", doc.markdown.splitlines()[0])
+        print("remote select: ", doc.select_all(".title"))
+        # identical plan API -- runs server-side, no local browser/lxml
+        same_plan = q.ref.fetch().select_all(".card").map(
+            title=q.node.select(".title").text)
+        print("remote plan:   ", same_plan.collect(rc.ref(f"{base}/")))
+    server.should_exit = True
+    app.state.wc.close()
+
 
 if __name__ == "__main__":
     main()

@@ -274,3 +274,30 @@ detached submit + `GET /plans/{id}` polling + row streaming. Simpler and
 fine for modest plans; detached execution with a plan registry and the
 `/plans/{id}/rows` + `/plans/{id}/stream` endpoints is a follow-up when a
 plan's runtime warrants async submission.
+
+---
+
+## RemoteWebClient
+
+### 36. lxml / charset-normalizer imports made lazy — 🟢
+Moved into the parsing sites (`_parsed`, `Node.html`, `Document.text`,
+`_select_elements`) so importing `webclient.models` -- and therefore the
+lazy layer and the remote client -- no longer loads the native lxml wheel.
+playwright was already lazy. Verified: with lxml+playwright import-blocked,
+`RemoteWebClient` and the full `q` plan API still import and build.
+
+### 37. Remote parity is structural, not nominal — 🟢
+`RemoteWebClient` / `RemoteDocument` / `RemoteSession` are NOT subclasses of
+the eager types; they duck-type the same method names. Rationale: a remote
+`select` can't return an in-process `Node`. Contract: the **plan API**
+(`q` + `collect`/`execute`) is 100% portable (identical rows local or
+remote, proven by a cross-check test); the **imperative document surface**
+is best-effort and chatty -- render, one-level select (`select`/
+`select_all` with optional `attr`), `.text`/`.title` work; deep nested
+selection should lower to a plan. Deps: httpx + pydantic only.
+
+### 38. Remote tests use a real uvicorn thread — 🟢
+`httpx.ASGITransport` is async-only, so a sync `httpx.Client` can't drive
+the ASGI app in-process. Tests boot uvicorn on an ephemeral port in a
+daemon thread -- which also exercises the true HTTP path -- and point the
+RemoteWebClient at it.

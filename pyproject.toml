@@ -10,16 +10,19 @@ requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.7",
     "httpx>=0.27",
-    "lxml>=5.0",
-    "cssselect>=1.2",
-    "charset-normalizer>=3.0",
     "typing_extensions>=4.5",
 ]
 
 [project.optional-dependencies]
+# Local parsing/extraction (Document.select/render). Not needed by the
+# RemoteWebClient, which parses server-side.
+local = ["lxml>=5.0", "cssselect>=1.2", "charset-normalizer>=3.0"]
 browser = ["playwright>=1.40"]                 # M4 LiveDocument
 service = ["fastapi>=0.110", "uvicorn>=0.29"]  # M7 browser-as-a-service
+# `remote` needs nothing beyond the base deps (httpx + pydantic).
+remote = []
 dev = ["pytest>=8", "pytest-httpserver>=1.0", "mypy>=1.10", "lxml-stubs",
+       "lxml>=5.0", "cssselect>=1.2", "charset-normalizer>=3.0",
        "playwright>=1.40", "fastapi>=0.110", "uvicorn>=0.29"]
 
 [tool.setuptools]

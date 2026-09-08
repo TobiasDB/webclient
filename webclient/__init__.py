@@ -45,6 +45,13 @@ from .live import LiveDocument, LiveNode
 from .models import OnError
 from .plugins.base import Plugin, Renderer, Surface, SurfaceKind
 from .pool import ClientPool, Lease, PoolStats
+from .remote import (
+    RemoteDocument,
+    RemoteError,
+    RemoteRef,
+    RemoteSession,
+    RemoteWebClient,
+)
 from .session import Session
 
 __all__ = [
@@ -59,5 +66,7 @@ __all__ = [
     "LiveDocument", "LiveNode",
     "Expr", "Lazy", "QueryPlan", "OnError", "col", "lit", "q",
     "Executor", "ExecutionGraph", "ExecutionStep", "RunStats",
+    "RemoteWebClient", "RemoteDocument", "RemoteSession", "RemoteRef",
+    "RemoteError",
     "WebClient", "default_client",
 ]
