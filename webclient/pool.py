@@ -1,0 +1,122 @@
+"""ClientPool: bounded leases over concrete transports.
+
+M2 implements the http side (a reusable set of persistent
+``httpx.AsyncClient``s, ISSUES #19 -- a borrowed client is exclusive to its
+lease, so plugins may install event hooks for the request's duration).
+Page leases land in M4.
+"""
+from __future__ import annotations
+
+import asyncio
+from typing import Any, Literal
+from uuid import uuid4
+
+import httpx
+from pydantic import BaseModel, PrivateAttr
+
+LeaseKind = Literal["http", "page"]
+
+
+class Lease(BaseModel):
+    """A held transport resource; one lease == one unit of parallelism."""
+
+    id: str
+    kind: LeaseKind
+    session_id: str | None = None
+
+    _pool: Any = PrivateAttr(default=None)
+    _client: Any = PrivateAttr(default=None)   # httpx.AsyncClient (http kind)
+
+    def release(self) -> None:
+        if self._pool is not None:
+            self._pool.release(self)
+
+
+class PoolStats(BaseModel):
+    http_total: int = 0
+    http_free: int = 0
+    pages_total: int = 0
+    pages_free: int = 0
+    waiting: int = 0
+
+
+class ClientPool(BaseModel):
+    max_http: int = 10
+    max_pages: int = 4
+    acquire_timeout: float = 60.0
+
+    _owner: Any = PrivateAttr(default=None)            # owning WebClient
+    _semaphore: Any = PrivateAttr(default=None)        # asyncio.Semaphore
+    _idle: list[Any] = PrivateAttr(default_factory=list)
+    _held: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _created: int = PrivateAttr(default=0)
+    _proxy_index: int = PrivateAttr(default=0)
+    _waiting: int = PrivateAttr(default=0)
+
+    # -- sync facade ---------------------------------------------------------
+    def acquire(self, kind: LeaseKind, *, session: Any = None,
+                timeout: float | None = None) -> Lease:
+        return self._owner._ensure_loop().run(
+            self._acquire(kind, session=session, timeout=timeout))
+
+    def release(self, lease: Lease) -> None:
+        self._owner._ensure_loop().run(self._release(lease))
+
+    def stats(self) -> PoolStats:
+        return PoolStats(
+            http_total=self._created,
+            http_free=len(self._idle),
+            waiting=self._waiting,
+        )
+
+    # -- engine side (runs on the loop) --------------------------------------
+    async def _acquire(self, kind: LeaseKind, *, session: Any = None,
+                       timeout: float | None = None) -> Lease:
+        if kind == "page":
+            raise NotImplementedError("page leases land in M4")
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self.max_http)
+        self._waiting += 1
+        try:
+            await asyncio.wait_for(
+                self._semaphore.acquire(),
+                timeout if timeout is not None else self.acquire_timeout)
+        except asyncio.TimeoutError:
+            raise TimeoutError(
+                f"pool exhausted: no http lease within {self.acquire_timeout}s") from None
+        finally:
+            self._waiting -= 1
+        client = self._idle.pop() if self._idle else self._new_http_client()
+        lease = Lease(id=uuid4().hex, kind="http",
+                      session_id=getattr(session, "id", None))
+        lease._pool = self
+        lease._client = client
+        self._held[lease.id] = client
+        return lease
+
+    async def _release(self, lease: Lease) -> None:
+        client = self._held.pop(lease.id, None)
+        if client is not None:
+            client.event_hooks = {}    # a lease returns clean
+            self._idle.append(client)
+            self._semaphore.release()
+
+    def _new_http_client(self) -> httpx.AsyncClient:
+        owner = self._owner
+        proxy_url: str | None = None
+        if owner is not None and owner.proxy_pool:
+            proxy = owner.proxy_pool[self._proxy_index % len(owner.proxy_pool)]
+            self._proxy_index += 1
+            proxy_url = proxy.authenticated_url
+        self._created += 1
+        return httpx.AsyncClient(
+            verify=owner.verify_tls if owner is not None else True,
+            proxy=proxy_url,
+        )
+
+    async def _aclose(self) -> None:
+        clients = self._idle + list(self._held.values())
+        self._idle.clear()
+        self._held.clear()
+        for client in clients:
+            await client.aclose()

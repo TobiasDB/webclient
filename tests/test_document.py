@@ -192,13 +192,6 @@ def test_network_event_forward_ref_resolved():
 
 # -- later milestones stay loud --------------------------------------------- #
 
-@pytest.mark.parametrize("call", [
-    lambda d: d.reload(),
-    lambda d: d.render("markdown"),
-    lambda d: d.paginate("a.next"),
-    lambda d: d.html.markdown,
-    lambda d: d.html.elements,
-])
-def test_unbuilt_features_raise_with_milestone(call):
-    with pytest.raises(NotImplementedError, match="M"):
-        call(make_doc())
+def test_unbuilt_features_raise_with_milestone():
+    with pytest.raises(NotImplementedError, match="M3"):
+        make_doc().paginate("a.next")

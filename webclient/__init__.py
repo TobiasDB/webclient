@@ -1,9 +1,12 @@
 """webclient -- declarative web client.
 
-M1 exposes the pure core (Reference, Document + typed views, Node) and the
-event taxonomy. The interface spec lives in /models.py at the repo root;
-PLAN.md maps every remaining name to its milestone.
+M1: pure core (Reference, Document + typed views, Node) and the event
+taxonomy. M2: WebClient (http fetch via the engine loop + ClientPool),
+EventBus/EventRegistry, plugin framework, core network capture and core
+renderers. The interface spec lives in /models.py at the repo root; PLAN.md
+maps every remaining name to its milestone.
 """
+from .client import WebClient, default_client
 from .events import (
     ActionEvent,
     AssetEvent,
@@ -14,27 +17,39 @@ from .events import (
     DOMUnloadEvent,
     DOMUpdateEvent,
     Event,
+    EventBus,
+    EventRegistry,
     FetchEvent,
     NavigationEvent,
     NetworkEvent,
+    Subscription,
     Topic,
     XHREvent,
 )
 from .models import (
     BinaryDocument,
     Document,
+    Element,
     FetchError,
     HTMLDocument,
     JSONDocument,
     Node,
+    Proxy,
     Reference,
+    Script,
     XMLDocument,
 )
+from .plugins.base import Plugin, Renderer, Surface, SurfaceKind
+from .pool import ClientPool, Lease, PoolStats
 
 __all__ = [
     "ActionEvent", "AssetEvent", "ConsoleEvent", "DOMEvent", "DOMLoadEvent",
     "DOMSnapshotEvent", "DOMUnloadEvent", "DOMUpdateEvent", "Event",
-    "FetchEvent", "NavigationEvent", "NetworkEvent", "Topic", "XHREvent",
-    "BinaryDocument", "Document", "FetchError", "HTMLDocument",
-    "JSONDocument", "Node", "Reference", "XMLDocument",
+    "EventBus", "EventRegistry", "FetchEvent", "NavigationEvent",
+    "NetworkEvent", "Subscription", "Topic", "XHREvent",
+    "BinaryDocument", "Document", "Element", "FetchError", "HTMLDocument",
+    "JSONDocument", "Node", "Proxy", "Reference", "Script", "XMLDocument",
+    "Plugin", "Renderer", "Surface", "SurfaceKind",
+    "ClientPool", "Lease", "PoolStats",
+    "WebClient", "default_client",
 ]

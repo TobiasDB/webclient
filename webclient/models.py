@@ -42,7 +42,43 @@ _LINK_ATTRS = ("href", "src", "action")
 class FetchError(Exception):
     """A fetch failed: transport error, or non-2xx status. Raised unless the
     fetch was made with ``optional=True`` (which instead returns the not-ok
-    Document for inspection via ``.ok``)."""
+    Document for inspection via ``.ok``). Carries ``document`` when a
+    response was received."""
+
+    def __init__(self, message: str, document: "Document | None" = None):
+        super().__init__(message)
+        self.document = document
+
+
+class Proxy(BaseModel):
+    url: str
+    username: str | None = None
+    password: str | None = None
+
+    @property
+    def authenticated_url(self) -> str:
+        if self.username is None:
+            return self.url
+        scheme, _, rest = self.url.partition("://")
+        auth = self.username + (f":{self.password}" if self.password else "")
+        return f"{scheme}://{auth}@{rest}"
+
+
+class Script(BaseModel):
+    """JS injected into a browser page (M4)."""
+
+    source: str
+    run_at: Literal["init", "domcontentloaded", "load"] = "init"
+
+
+class Element(BaseModel):
+    """A typed content block -- the "elements" representation."""
+
+    id: str = ""
+    type: str = "text"               # title/text/list_item/table/code/image
+    text: str = ""
+    parent_id: str | None = None
+    metadata: dict[str, Any] = {}
 
 
 def _later(feature: str, milestone: str) -> NotImplementedError:
@@ -163,8 +199,20 @@ class Reference(BaseModel):
         return self._client
 
     # -- fetching -----------------------------------------------------------
-    def fetch(self, **kwargs: Any) -> "Document":
-        raise _later("Reference.fetch", "M2 (http) / M4 (browser)")
+    def fetch(self, *, browser: bool = False,
+              scripts: Sequence[Script] | None = None,
+              wait_until: str = "load",
+              optional: bool = False,
+              session: Any = None,
+              client: Any = None) -> "Document":
+        """Fetch this reference. Raises FetchError on transport failure or
+        non-2xx status unless ``optional=True``. Resolution: explicit
+        ``client`` > bound client > process default."""
+        from .client import default_client
+        wc = client or self._client or default_client()
+        return wc.fetch(self, browser=browser, scripts=scripts,
+                        wait_until=wait_until, optional=optional,
+                        session=session or self._session)
 
 
 # --------------------------------------------------------------------------- #
@@ -292,8 +340,9 @@ class Document(Reference):
     def ok(self) -> bool:
         return 200 <= self.status_code < 300
 
-    def reload(self, **kwargs: Any) -> Self:
-        raise _later("Document.reload", "M2")
+    def reload(self, *, optional: bool = False, client: Any = None) -> Any:
+        """Re-fetch this document with its own request spec."""
+        return self.fetch(optional=optional, client=client)
 
     # -- event store --------------------------------------------------------
     @overload
@@ -310,9 +359,19 @@ class Document(Reference):
     def actions(self) -> Sequence[ActionEvent]:
         return self.events_of(ActionEvent)
 
-    # -- representations ----------------------------------------------------
+    # -- representations (plugin-backed; core table works unbound) ----------
     def render(self, format: str, **options: Any) -> Any:
-        raise _later("Document.render", "M2 (renderer plugins)")
+        if self._client is not None:
+            table = self._client._render_table
+        else:
+            from .plugins.render import default_render_table
+            table = default_render_table()
+        renderer = table.get((self.kind, format))
+        if renderer is None:
+            raise LookupError(
+                f"no renderer registered for kind={self.kind!r} "
+                f"format={format!r}")
+        return renderer.render(self, format, **options)
 
     # -- typed views (aliases of this document, ISSUES #6) ------------------
     def _view(self, cls: type["Document"]) -> Any:
@@ -404,11 +463,11 @@ class HTMLDocument(Document):
 
     @property
     def markdown(self) -> str:
-        raise _later("HTMLDocument.markdown", "M2 (renderer plugins)")
+        return self.render("markdown")
 
     @property
-    def elements(self) -> Any:
-        raise _later("HTMLDocument.elements", "M2 (renderer plugins)")
+    def elements(self) -> list[Element]:
+        return self.render("elements")
 
 
 class JSONDocument(Document):
@@ -419,7 +478,16 @@ class JSONDocument(Document):
         return _json.loads(self.text)
 
     def query(self, path: str) -> Any:
-        raise _later("JSONDocument.query", "M2")
+        """Dotted-path query with [n] indexing, e.g. "items[0].name".
+        (JMESPath-lite; a full engine is a later, deliberate dependency.)"""
+        import re
+        value = self.data
+        for token in re.findall(r"[^.\[\]]+|\[\d+\]", path):
+            if token.startswith("["):
+                value = value[int(token[1:-1])]
+            else:
+                value = value[token]
+        return value
 
 
 class XMLDocument(Document):

@@ -68,6 +68,8 @@ def test_bind_returns_bound_copy():
     assert ref.bound is None
 
 
-def test_fetch_is_loudly_unimplemented():
-    with pytest.raises(NotImplementedError, match="M2"):
-        Reference(hostname="e.com").fetch()
+def test_browser_fetch_is_loudly_unimplemented():
+    from webclient import WebClient
+    with WebClient() as wc:
+        with pytest.raises(NotImplementedError, match="M4"):
+            Reference(hostname="e.com").fetch(browser=True, client=wc)
