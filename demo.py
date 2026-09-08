@@ -18,6 +18,7 @@ from webclient import (
     Reference,
     Renderer,
     WebClient,
+    q,
 )
 
 PAGE = b"""
@@ -192,7 +193,22 @@ def main() -> None:
         # [M2] Pool stats: bounded leases over http clients AND browser pages.
         print("pool:       ", wc.pool.stats())
 
-    # [M5] Lazy plans: q.ref.fetch().select_all(".card").map(...)     -- soon
+    # [M5] Lazy plans: the same interface, recorded not executed. Build a
+    #      declarative extraction pipeline; it serializes to a QueryPlan --
+    #      the wire format for the future HTTP/websocket API.
+    plan = (
+        q.ref.fetch().select_all(".card")
+        .map(
+            title=q.node.select(".title").text,
+            price=q.node.select(".price").text,
+            link=q.node.select("a").attr("href"),
+        )
+        .filter(q.col("price") != "")
+    )
+    print("\nlazy plan:")
+    print("  " + plan.explain().replace("\n", "\n  "))
+    print("wire form:  ", plan.to_query().model_dump_json()[:70], "...")
+
     # [M6] Executor: wc.execute(plan, ref, stream=True)               -- soon
     # [M7] HTTP/WS service: browser as a service                      -- soon
 

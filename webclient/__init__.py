@@ -39,7 +39,9 @@ from .models import (
     Script,
     XMLDocument,
 )
+from .lazy import Expr, Lazy, QueryPlan, col, lit, q
 from .live import LiveDocument, LiveNode
+from .models import OnError
 from .plugins.base import Plugin, Renderer, Surface, SurfaceKind
 from .pool import ClientPool, Lease, PoolStats
 from .session import Session
@@ -54,5 +56,6 @@ __all__ = [
     "Plugin", "Renderer", "Surface", "SurfaceKind",
     "ClientPool", "Lease", "PoolStats", "Session",
     "LiveDocument", "LiveNode",
+    "Expr", "Lazy", "QueryPlan", "OnError", "col", "lit", "q",
     "WebClient", "default_client",
 ]

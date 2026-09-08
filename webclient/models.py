@@ -10,6 +10,7 @@ Error philosophy (ISSUES #8): loud by default, leniency opt-in via
 from __future__ import annotations
 
 import json as _json
+from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Sequence, overload
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
@@ -37,6 +38,15 @@ HttpMethod = Literal["get", "post", "put", "patch", "delete", "head", "options"]
 DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443}
 
 _LINK_ATTRS = ("href", "src", "action")
+
+
+class OnError(str, Enum):
+    """Error policy for a lazy-pipeline step when its input is missing or it
+    fails: drop the row, abort the pipeline, or keep the row with None."""
+
+    skip = "skip"
+    raise_error = "raise"
+    ignore = "ignore"
 
 
 class FetchError(Exception):
