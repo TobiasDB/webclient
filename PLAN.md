@@ -25,8 +25,9 @@ HTTP/WS service ───┘        │
 
 ### Threading model (the KISS bridge)
 
-- One asyncio event loop in a daemon thread, started lazily by the first
-  `WebClient`. All I/O is async inside the engine.
+- One asyncio event loop **per WebClient**, in a daemon thread, started
+  lazily. All I/O is async inside the engine. (Isolation: closing one
+  client can never starve another; ISSUES #18.)
 - Every public facade method is implemented as `async def _method` on the
   engine side plus a thin sync wrapper:
   `asyncio.run_coroutine_threadsafe(coro, loop).result(timeout)`.
@@ -109,8 +110,15 @@ sniffing: content-type header first, leading bytes as fallback.
      (full snapshots + digest, periodic checkpoints) and DOMUpdateEvent
      subclasses (incrementals)
    - action: interactions record + emit ActionEvent (emitted facade-side)
-   All emits are pre-tagged {session_id, document_id} by the surface, and
-   stamped with a per-document monotonic `seq` by the bus.
+   Emit contract (ISSUES #15): the surface OVERWRITES correlation ids with
+   its own and sets `source` to the plugin name; the bus stamps `seq` and
+   `ts` unconditionally.
+   Event scoping: dom/action capture plugins additionally stamp
+   `Event.node_id` — a stable node identity (rrweb node ids) — which is
+   what LiveNode.events_of narrows on (ancestor-path prefix: an event
+   matches a node when its node_id is the node or a descendant). Static
+   Node.events_of stays document-scoped; narrowing exists only where live
+   capture assigned identities.
 3. wc registers routing subscriptions for the new document id:
    bus.subscribe(topic, doc_append_handler, document_id=id)
    -> the ONLY mechanism filling Document.events (typed views read it)
@@ -140,7 +148,9 @@ sniffing: content-type header first, leading bytes as fallback.
   with the EventRegistry, and — for Renderers — registers
   `(kind, format) -> renderer` in a render table. Attach order ==
   registration order; core plugins are pre-registered and replaced by
-  registering a plugin with the same `name`.
+  registering a plugin with the same `name`. A different-named plugin
+  claiming an occupied `(kind, format)` shadows it — last-registered wins,
+  with a warning log (ISSUES #16).
 - **All capture is plugins** (§2.2); the engine only creates surfaces and
   calls attach/detach. One pathway to maintain, and swapping naive DOM
   capture for RRWeb is pure registration.
@@ -281,9 +291,12 @@ Each milestone ships importable + tested before the next starts.
 - **M4 — browser.** `engine/browser.py`: page pool, contexts per session,
   page surfaces + core page plugins (network/console/dom/action),
   LiveDocument actions/wait/navigate/screenshot, storage_state
-  round-trip, `replay`. Then `plugins/rrweb.py` as the first external-
-  style plugin — it must require zero engine changes (that's the test of
-  the plugin interface). Tests serve local static pages with JS.
+  round-trip, `replay`. Capture plugins stamp `node_id` on dom/action
+  events; `LiveNode.events_of` narrowing gets its own test (click a child,
+  assert the parent's node sees it and a sibling's doesn't). Then
+  `plugins/rrweb.py` as the first external-style plugin — it must require
+  zero engine changes (that's the test of the plugin interface). Tests
+  serve local static pages with JS.
 - **M5 — lazy recorder.** `Expr` op recording with record-time signature
   validation (registry-aware for `events_of`/`render`), `QueryPlan`
   serialization round-trip, `q` namespace, `__dir__` completion.
@@ -313,6 +326,20 @@ Each milestone ships importable + tested before the next starts.
 - Wire format is `QueryPlan` JSON, versioned (`version: 1`) from the start.
 - Lazy chains validate at record time, because `Expr.__getattr__` typing
   can't catch typos.
+- Retry policy is deliberately minimal: transport errors only, no backoff.
+  A full policy (5xx / 429 / Retry-After / jitter) is post-v1 (ISSUES #20).
+- Error philosophy, uniform (ISSUES #8): **loud by default, leniency via
+  `optional=True`** — missing element/attr raises; fetch raises FetchError
+  on transport failure or non-2xx; `optional=True` returns None (selection
+  / attr) or the not-ok Document (fetch, inspect `.ok`).
+- One selection interface (ISSUES #10): `select`/`select_all` take CSS or
+  XPath (leading `/` or `./` = XPath), elements only — attribute/text/
+  scalar XPaths raise ValueError (use `.attr()` / `.text`). No separate
+  `xpath()` method. Selecting on a treeless kind (json/binary) raises a
+  typed error, not a parse error.
+- Event scoping (ISSUES #9): `Event.node_id` stamped by capture plugins;
+  LiveNode narrows events by node-identity ancestor prefix; static Node is
+  document-scoped.
 - Deps: runtime `pydantic`, `httpx`, `playwright`, `lxml`, `cssselect`,
   `markdownify` (or hand-rolled in the html renderer); service adds
   `fastapi`, `uvicorn`; dev `mypy`, `pytest`, `pytest-httpserver`.

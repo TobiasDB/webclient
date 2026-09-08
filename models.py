@@ -72,6 +72,17 @@ class Proxy(BaseModel):
     password: str | None = None
 
 
+class FetchError(Exception):
+    """A fetch failed: transport error, or non-2xx status. Raised unless the
+    fetch was made with ``optional=True``.
+
+    Error philosophy, everywhere in this interface: **loud by default,
+    leniency opt-in via ``optional=True``** -- a missing element, missing
+    attribute, or failed fetch raises unless ``optional=True``, in which
+    case selection/attr return None and fetch returns the (not-ok) Document
+    for the caller to inspect via ``.ok``."""
+
+
 class Script(BaseModel):
     """JS injected into a browser page."""
 
@@ -103,6 +114,10 @@ class Event(BaseModel):
     session_id: str | None = None
     document_id: str | None = None
     plan_id: str | None = None
+    node_id: str | None = None       # element-level correlation: stable node
+                                     # identity stamped by capture plugins
+                                     # (rrweb node ids); enables LiveNode
+                                     # event narrowing
 
 
 E = TypeVar("E", bound=Event)
@@ -453,17 +468,19 @@ class WebClient(BaseModel):
         ...
 
     @overload
-    def fetch(self, ref: Reference, *,
-              session: Session | None = None) -> Document: ...
+    def fetch(self, ref: Reference, *, session: Session | None = None,
+              optional: bool = False) -> Document: ...
     @overload
     def fetch(self, ref: Reference, *, browser: Literal[True],
               session: Session | None = None,
               scripts: Sequence[Script] | None = None,
-              wait_until: WaitEvent = "load") -> LiveDocument: ...
+              wait_until: WaitEvent = "load",
+              optional: bool = False) -> LiveDocument: ...
     def fetch(self, ref: Reference, *, browser: bool = False,
               session: Session | None = None,
               scripts: Sequence[Script] | None = None,
-              wait_until: WaitEvent = "load") -> Document | LiveDocument: ...
+              wait_until: WaitEvent = "load",
+              optional: bool = False) -> Document | LiveDocument: ...
 
     # -- registries (the service's handles) ---------------------------------
     def document(self, document_id: str) -> Document | None: ...
@@ -566,16 +583,21 @@ class Reference(BaseModel):
     def bound(self) -> WebClient | None: ...
 
     # -- fetching -----------------------------------------------------------
+    # A transport failure or non-2xx status raises FetchError unless
+    # optional=True, which returns the Document regardless (check .ok).
     @overload
-    def fetch(self, *, client: WebClient | None = None) -> Document: ...
+    def fetch(self, *, optional: bool = False,
+              client: WebClient | None = None) -> Document: ...
     @overload
     def fetch(self, *, browser: Literal[True],
               scripts: Sequence[Script] | None = None,
               wait_until: WaitEvent = "load",
+              optional: bool = False,
               client: WebClient | None = None) -> LiveDocument: ...
     def fetch(self, *, browser: bool = False,
               scripts: Sequence[Script] | None = None,
               wait_until: WaitEvent = "load",
+              optional: bool = False,
               client: WebClient | None = None) -> Document | LiveDocument: ...
 
 
@@ -604,10 +626,18 @@ class Node(BaseModel):
     @overload  # link-likes intentionally narrow str -> Reference
     def attr(self, name: Literal["href", "src", "action"]) -> Reference: ...  # type: ignore[overload-overlap]
     @overload
-    def attr(self, name: str) -> str | None: ...
-    def attr(self, name: str) -> Reference | str | None:
+    def attr(  # type: ignore[overload-overlap]
+        self, name: Literal["href", "src", "action"], *,
+        optional: Literal[True]) -> Reference | None: ...
+    @overload
+    def attr(self, name: str) -> str: ...
+    @overload
+    def attr(self, name: str, *, optional: Literal[True]) -> str | None: ...
+    def attr(self, name: str, *,
+             optional: bool = False) -> Reference | str | None:
         """Attribute value; link-like attributes resolve to a Reference
-        against the owning document's URL."""
+        against the owning document's URL. A missing attribute raises
+        LookupError unless ``optional=True`` (then None)."""
         ...
 
     # index selects the nth match; negative indexes from the end (-1 = last)
@@ -618,8 +648,11 @@ class Node(BaseModel):
                optional: Literal[True]) -> Node | None: ...
     def select(self, selector: str, *, index: int = 0,
                optional: bool = False) -> Node | None:
-        """CSS-select within this element. Raises if no match unless
-        ``optional=True``."""
+        """Select within this element by CSS or XPath (auto-detected:
+        selectors starting with "/" or "./" are XPath). Selection returns
+        elements only -- an XPath producing attributes or text (".../@href",
+        "text()") is rejected with ValueError; use ``.attr()`` / ``.text``.
+        Raises if no match unless ``optional=True``."""
         ...
 
     def select_all(self, selector: str, limit: int | None = None,
@@ -630,8 +663,9 @@ class Node(BaseModel):
     @overload
     def events_of(self, event: Topic) -> Sequence[Event]: ...
     def events_of(self, event: type[Event] | Topic) -> Sequence[Event]:
-        """Events routed to the owning document, narrowed to this element
-        (matched by selector / target)."""
+        """Events routed to the owning document. On a static Node this is
+        document scope, unfiltered -- element narrowing requires the node
+        identity that only live capture stamps (see LiveNode.events_of)."""
         ...
 
 
@@ -664,6 +698,17 @@ class LiveNode(Node):
 
     def select_all(self, selector: str, limit: int | None = None,
                    offset: int = 0) -> Sequence[LiveNode]: ...
+
+    # element-scoped events, via capture-stamped node identity
+    @overload
+    def events_of(self, event: type[E]) -> Sequence[E]: ...
+    @overload
+    def events_of(self, event: Topic) -> Sequence[Event]: ...
+    def events_of(self, event: type[Event] | Topic) -> Sequence[Event]:
+        """Narrowed to this element: an event matches when its ``node_id``
+        resolves to this node or a descendant (ancestor-path prefix over
+        the capture plugin's stable node ids)."""
+        ...
 
 
 # --------------------------------------------------------------------------- #
@@ -723,8 +768,10 @@ class Document(Reference):
         """View: ``events_of(ActionEvent)``."""
         ...
 
-    def reload(self, *, client: WebClient | None = None) -> Self:
-        """Re-fetch this document with its own request spec."""
+    def reload(self, *, optional: bool = False,
+               client: WebClient | None = None) -> Self:
+        """Re-fetch this document with its own request spec. Raises
+        FetchError on failure unless ``optional=True``."""
         ...
 
     # -- representations (plugin-backed; see Renderer) ----------------------
@@ -752,7 +799,8 @@ class Document(Reference):
     @property
     def binary(self) -> BinaryDocument: ...
 
-    # -- selection (delegates to the html view) -----------------------------
+    # -- selection (kind-appropriate parser; css or xpath, elements only;
+    #    selecting on a kind with no tree, e.g. json, raises a typed error) --
     @overload
     def select(self, selector: str, *, index: int = 0) -> Node: ...
     @overload
@@ -824,8 +872,8 @@ class JSONDocument(Document):
 
 class XMLDocument(Document):
     kind: Literal["html", "json", "xml", "binary"] = "xml"
-
-    def xpath(self, expression: str) -> list[Node]: ...
+    # no separate xpath method: select()/select_all() accept XPath on any
+    # document (element-producing expressions only), namespaces included
 
 
 class BinaryDocument(Document):
