@@ -126,9 +126,13 @@ def create_app(client: WebClient | None = None, *,
     def fetch(body: FetchBody) -> dict[str, Any]:
         ref = Reference.from_url(body.url, method=body.method,  # type: ignore[arg-type]
                                  headers=body.headers).bind(wc)
-        doc = wc.fetch(ref, browser=body.browser,
-                       session=_session(body.session_id),
-                       optional=body.optional)
+        sess = _session(body.session_id)
+        doc: Any
+        if body.browser:
+            doc = wc.fetch(ref, browser=True, session=sess,
+                           optional=body.optional)
+        else:
+            doc = wc.fetch(ref, session=sess, optional=body.optional)
         return _doc_meta(remember(doc))
 
     @app.get("/documents/{document_id}", dependencies=[Depends(auth)])

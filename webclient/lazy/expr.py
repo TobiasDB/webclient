@@ -10,6 +10,7 @@ that ``Expr.__getattr__`` typing cannot.
 from __future__ import annotations
 
 import inspect
+import types
 import typing
 from typing import Any, Callable
 
@@ -60,7 +61,9 @@ def _resolve_return(owner: type, method_name: str) -> _Return:
     else:
         func = member
     try:
-        hints = typing.get_type_hints(func)
+        # localns carries LiveDocument/LiveNode, which models only imports
+        # under TYPE_CHECKING, so their string annotations resolve.
+        hints = typing.get_type_hints(func, localns=dict(_TYPES))
     except Exception:
         return _Return(None, False)
     annotation = hints.get("return")
@@ -71,11 +74,22 @@ def _resolve_return(owner: type, method_name: str) -> _Return:
     if origin in (list, typing.Sequence) or str(origin).endswith("Sequence"):
         inner = args[0] if args else None
         return _Return(_as_type(inner), True)
-    if origin is typing.Union:
+    if origin is typing.Union or origin is types.UnionType:
         non_none = [a for a in args if a is not type(None)]
-        if len(non_none) == 1:
-            return _Return(_as_type(non_none[0]), False)
-        return _Return(None, False)
+        # For a union like Document | LiveDocument, validate against the most
+        # permissive resolvable arm (a base class exposes the common surface).
+        resolved: list[type] = [c for c in (_as_type(a) for a in non_none)
+                                if c is not None]
+        for candidate in resolved:
+            if all(issubclass(other, candidate) or issubclass(candidate, other)
+                   for other in resolved):
+                # pick the base (the one others subclass)
+                base = candidate
+                for other in resolved:
+                    if issubclass(base, other):
+                        base = other
+                return _Return(base, False)
+        return _Return(resolved[0] if resolved else None, False)
     return _Return(_as_type(annotation), False)
 
 

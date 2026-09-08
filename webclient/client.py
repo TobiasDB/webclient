@@ -10,7 +10,7 @@ import atexit
 import logging
 import threading
 import weakref
-from typing import TYPE_CHECKING, Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Sequence, overload
 from uuid import uuid4
 
 if TYPE_CHECKING:
@@ -178,11 +178,18 @@ class WebClient(BaseModel):
             **kwargs: Any) -> Reference:
         return Reference.from_url(url, method=method, **kwargs).bind(self)
 
+    @overload
+    def fetch(self, ref: Reference, *, session: Any = ...,
+              optional: bool = ...) -> Document: ...
+    @overload
+    def fetch(self, ref: Reference, *, browser: Literal[True],
+              session: Any = ..., scripts: Sequence[Script] | None = ...,
+              wait_until: str = ..., optional: bool = ...) -> LiveDocument: ...
     def fetch(self, ref: Reference, *, browser: bool = False,
               session: Any = None,
               scripts: Sequence[Script] | None = None,
               wait_until: str = "load",
-              optional: bool = False) -> Document:
+              optional: bool = False) -> Document | LiveDocument:
         if browser:
             return self._ensure_loop().run(self._fetch_browser(
                 ref, session=session, scripts=scripts,

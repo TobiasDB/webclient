@@ -12,14 +12,17 @@ from __future__ import annotations
 import json as _json
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, Sequence, overload
+from typing import TYPE_CHECKING, Any, Literal, Sequence, overload
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
-from charset_normalizer import from_bytes as _detect_charset
-from lxml import etree
-from lxml import html as _lxml_html
 from pydantic import BaseModel, PrivateAttr
 from typing_extensions import Self
+
+# lxml / charset-normalizer are imported lazily (only where parsing happens),
+# so importing the models -- and therefore the lazy layer and the remote
+# client -- does not require the native lxml wheel (ISSUES #36).
+if TYPE_CHECKING:
+    from .live import LiveDocument
 
 from .events import (
     ActionEvent,
@@ -106,6 +109,7 @@ def _is_xpath(selector: str) -> bool:
 def _select_elements(root: Any, selector: str) -> list[Any]:
     """CSS or XPath (auto-detected) -> element list. Elements only: XPath
     producing attributes, text or scalars is rejected (ISSUES #10)."""
+    from lxml import etree
     if _is_xpath(selector):
         results = root.xpath(selector)
         if not isinstance(results, list):  # count(), boolean(), string()
@@ -209,20 +213,31 @@ class Reference(BaseModel):
         return self._client
 
     # -- fetching -----------------------------------------------------------
+    @overload
+    def fetch(self, *, optional: bool = ..., session: Any = ...,
+              client: Any = ...) -> "Document": ...
+    @overload
+    def fetch(self, *, browser: Literal[True],
+              scripts: Sequence[Script] | None = ...,
+              wait_until: str = ..., optional: bool = ...,
+              session: Any = ..., client: Any = ...) -> "LiveDocument": ...
     def fetch(self, *, browser: bool = False,
               scripts: Sequence[Script] | None = None,
               wait_until: str = "load",
               optional: bool = False,
               session: Any = None,
-              client: Any = None) -> "Document":
+              client: Any = None) -> "Document | LiveDocument":
         """Fetch this reference. Raises FetchError on transport failure or
         non-2xx status unless ``optional=True``. Resolution: explicit
         ``client`` > bound client > process default."""
         from .client import default_client
         wc = client or self._client or default_client()
-        return wc.fetch(self, browser=browser, scripts=scripts,
-                        wait_until=wait_until, optional=optional,
-                        session=session or self._session)
+        sess = session or self._session
+        if browser:
+            return wc.fetch(self, browser=True, scripts=scripts,
+                            wait_until=wait_until, optional=optional,
+                            session=sess)
+        return wc.fetch(self, optional=optional, session=sess)
 
 
 # --------------------------------------------------------------------------- #
@@ -250,6 +265,7 @@ class Node(BaseModel):
     @property
     def html(self) -> str:
         """Outer HTML of the element."""
+        from lxml import etree
         return etree.tostring(self._element, encoding="unicode")
 
     @overload  # link-likes intentionally narrow str -> Reference
@@ -341,6 +357,7 @@ class Document(Reference):
                 return self.content.decode(self.encoding)
             except (LookupError, UnicodeDecodeError):
                 pass
+        from charset_normalizer import from_bytes as _detect_charset
         best = _detect_charset(self.content).best()
         if best is not None:
             return str(best)
@@ -417,6 +434,8 @@ class Document(Reference):
     # -- selection ----------------------------------------------------------
     def _parsed(self) -> Any:
         if self._tree is None:
+            from lxml import etree
+            from lxml import html as _lxml_html
             if self.kind == "html":
                 self._tree = _lxml_html.fromstring(self.content or b"<html></html>")
             elif self.kind == "xml":
