@@ -75,6 +75,7 @@ class WebClient(BaseModel):
     _sessions: dict[str, Any] = PrivateAttr(default_factory=dict)
     _live: dict[str, Any] = PrivateAttr(default_factory=dict)  # strong refs
     _browser: Any = PrivateAttr(default=None)
+    _exec: Any = PrivateAttr(default=None)
     _render_table: dict[tuple[str, str], Renderer] = PrivateAttr(default_factory=dict)
     _closed: bool = PrivateAttr(default=False)
 
@@ -508,7 +509,15 @@ class WebClient(BaseModel):
             self._loop.run(self._browser.close_session_context(session))
 
     def execute(self, plan: Any, context: Any, *, stream: bool = False) -> Any:
-        raise NotImplementedError("plan execution lands in M6")
+        """Compile and run a lazy plan against ``context`` via the Executor."""
+        return self._executor().run(plan, context, stream=stream)
+
+    def _executor(self) -> Any:
+        if self._exec is None:
+            from .lazy.executor import Executor
+            self._exec = Executor()
+            self._exec._client = self
+        return self._exec
 
 
 # --------------------------------------------------------------------------- #

@@ -85,11 +85,14 @@ def test_dir_delegates_to_wrapped_class():
     assert "select" in dir(q.node)
 
 
-def test_collect_defers_to_executor(monkeypatch):
+def test_collect_runs_via_executor(httpserver):
     from webclient import WebClient
+    httpserver.expect_request("/c").respond_with_data(
+        "<html><body><b>hi</b></body></html>", content_type="text/html")
     with WebClient() as wc:
-        with pytest.raises(NotImplementedError, match="M6"):
-            q.ref.fetch().collect(wc.ref("https://e.com"), client=wc)
+        value = q.ref.fetch().select("b").text.collect(
+            wc.ref(httpserver.url_for("/c")))
+        assert value == "hi"
 
 
 def test_live_proxies_exist():

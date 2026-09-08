@@ -192,8 +192,9 @@ def test_network_event_forward_ref_resolved():
 
 # -- later milestones stay loud --------------------------------------------- #
 
-def test_unbuilt_features_raise_with_milestone():
-    from webclient import WebClient
-    with WebClient() as wc:
-        with pytest.raises(NotImplementedError, match="M6"):
-            wc.execute(object(), make_doc())
+def test_live_pagination_still_pending():
+    # The one remaining stub: action-driven live pagination (post-M6).
+    from webclient import LiveDocument
+    live = LiveDocument(hostname="e.com")
+    with pytest.raises(NotImplementedError, match="live pagination"):
+        live.paginate("a.next")

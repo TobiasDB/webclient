@@ -68,8 +68,8 @@ def test_bind_returns_bound_copy():
     assert ref.bound is None
 
 
-def test_execute_is_loudly_unimplemented():
+def test_bound_reference_carries_client():
     from webclient import WebClient
     with WebClient() as wc:
-        with pytest.raises(NotImplementedError, match="M6"):
-            wc.execute(object(), Reference(hostname="e.com"))
+        ref = wc.ref("https://example.com/x")
+        assert ref.bound is wc

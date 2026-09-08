@@ -40,6 +40,7 @@ from .models import (
     XMLDocument,
 )
 from .lazy import Expr, Lazy, QueryPlan, col, lit, q
+from .lazy.executor import ExecutionGraph, ExecutionStep, Executor, RunStats
 from .live import LiveDocument, LiveNode
 from .models import OnError
 from .plugins.base import Plugin, Renderer, Surface, SurfaceKind
@@ -57,5 +58,6 @@ __all__ = [
     "ClientPool", "Lease", "PoolStats", "Session",
     "LiveDocument", "LiveNode",
     "Expr", "Lazy", "QueryPlan", "OnError", "col", "lit", "q",
+    "Executor", "ExecutionGraph", "ExecutionStep", "RunStats",
     "WebClient", "default_client",
 ]

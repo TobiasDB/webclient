@@ -209,7 +209,25 @@ def main() -> None:
     print("  " + plan.explain().replace("\n", "\n  "))
     print("wire form:  ", plan.to_query().model_dump_json()[:70], "...")
 
-    # [M6] Executor: wc.execute(plan, ref, stream=True)               -- soon
+    # [M6] Executor: run the plan. Fetches lease from the pool, map() fans
+    #      out per element with bounded concurrency, rows stream as ready.
+    with WebClient() as wc:
+        rows = plan.collect(wc.ref(f"{base}/"))
+        for row in rows:
+            print(f"  row:       {row['title']} {row['price']} "
+                  f"-> {row['link'].path}")
+
+        # [M6] A pipeline that follows each card's link (then + col) and
+        #      pulls a field from the JSON detail page -- streamed.
+        enriched = (
+            q.ref.fetch().select_all(".card")
+            .map(title=q.node.select(".title").text,
+                 link=q.node.select("a.link").attr("href"))
+            .then(name=q.col("link").fetch().json.query("name"))
+        )
+        print("streamed:")
+        for row in enriched.collect(wc.ref(f"{base}/"), stream=True):
+            print("  detail:   ", row["title"], "->", row["name"])
     # [M7] HTTP/WS service: browser as a service                      -- soon
 
 
