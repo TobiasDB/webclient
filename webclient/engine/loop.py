@@ -5,7 +5,6 @@ coroutines via ``run``.
 from __future__ import annotations
 
 import asyncio
-import queue
 import threading
 from typing import Any, AsyncIterator, Coroutine, Iterator, TypeVar
 
@@ -43,33 +42,79 @@ class EngineLoop:
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
 
     def stream(self, source: AsyncIterator[T], buffer: int = 8) -> Iterator[T]:
-        """Bridge an async iterator into a blocking sync iterator. Bounded
-        queue = backpressure onto the producer."""
-        out: queue.Queue[Any] = queue.Queue(maxsize=buffer)
+        """Bridge an async iterator into a blocking sync iterator.
+
+        The queue is loop-native (``asyncio.Queue``): ``_pump`` awaits
+        ``put``/``get`` on the loop, so it is cleanly cancellable no matter
+        how the consumer stops -- fully drained, broken early, or abandoned
+        to GC. Backpressure comes from the bounded queue; the consumer pulls
+        each item with its own ``run_coroutine_threadsafe(get())``.
+        """
+        q: asyncio.Queue = asyncio.Queue(maxsize=max(1, buffer))
+        box: dict[str, Any] = {}
 
         async def _pump() -> None:
+            box["task"] = asyncio.current_task()
             try:
                 async for item in source:
-                    await asyncio.get_event_loop().run_in_executor(None, out.put, item)
-                await asyncio.get_event_loop().run_in_executor(None, out.put, _SENTINEL)
-            except BaseException as exc:  # surfaced on the consuming side
-                await asyncio.get_event_loop().run_in_executor(None, out.put, exc)
+                    await q.put(item)
+                await q.put(_SENTINEL)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:      # surfaced on the consuming side
+                await q.put(exc)
 
-        future = asyncio.run_coroutine_threadsafe(_pump(), self._loop)
+        asyncio.run_coroutine_threadsafe(_pump(), self._loop)
         try:
             while True:
-                item = out.get()
+                if self.closed:
+                    break
+                item = asyncio.run_coroutine_threadsafe(
+                    q.get(), self._loop).result()
                 if item is _SENTINEL:
                     break
                 if isinstance(item, BaseException):
                     raise item
                 yield item
         finally:
-            future.cancel()
+            # Cancel the pump AND wait for it to finish, so it can never
+            # survive the consumer. The CancelledError is thrown into the
+            # suspended source generator at its await point, running its own
+            # finally (releasing leases, publishing done).
+            async def _shutdown() -> None:
+                task = box.get("task")
+                if task is not None and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except BaseException:
+                        pass
+
+            if not self.closed:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        _shutdown(), self._loop).result(timeout=5)
+                except Exception:
+                    pass
 
     def stop(self) -> None:
         if not self.closed:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            # Cancel every outstanding task and let the loop settle them so
+            # none is "destroyed while pending" when the loop closes.
+            done = threading.Event()
+
+            async def _drain() -> None:
+                current = asyncio.current_task()
+                pending = [t for t in asyncio.all_tasks() if t is not current]
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                self._loop.stop()
+                done.set()
+
+            asyncio.run_coroutine_threadsafe(_drain(), self._loop)
+            done.wait(timeout=5)
             self._thread.join(timeout=5)
         if not self._loop.is_running():
             self._loop.close()
