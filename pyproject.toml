@@ -9,6 +9,7 @@ description = "Declarative web client: references, documents, live browser pages
 requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.7",
+    "httpx>=0.27",
     "lxml>=5.0",
     "cssselect>=1.2",
     "charset-normalizer>=3.0",
@@ -16,7 +17,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "mypy>=1.10", "lxml-stubs"]
+browser = ["playwright>=1.40"]                 # M4 LiveDocument
+service = ["fastapi>=0.110", "uvicorn>=0.29"]  # M7 browser-as-a-service
+dev = ["pytest>=8", "pytest-httpserver>=1.0", "mypy>=1.10", "lxml-stubs",
+       "playwright>=1.40", "fastapi>=0.110", "uvicorn>=0.29"]
 
 [tool.setuptools]
 packages = ["webclient"]
