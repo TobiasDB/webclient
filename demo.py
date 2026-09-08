@@ -13,7 +13,7 @@ import http.server
 import threading
 
 from webclient import (
-    ActionEvent,
+    DOMUpdateEvent,
     NavigationEvent,
     Reference,
     Renderer,
@@ -35,6 +35,16 @@ PAGE = b"""
 </body></html>
 """
 ITEM = b'{"id": %d, "name": "%s", "stock": {"count": 7}}'
+APP = b"""
+<html><head><title>Live App</title></head><body>
+  <h1>Cart</h1>
+  <input id="qty" type="text">
+  <button id="add" onclick="document.querySelector('#cart').insertAdjacentHTML(
+    'beforeend', '<li>item x' + document.querySelector('#qty').value + '</li>')">add</button>
+  <ul id="cart"></ul>
+  <script>console.log("app ready");</script>
+</body></html>
+"""
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -60,6 +70,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"welcome")
             return
+        elif self.path == "/app":                  # a JS-driven live page
+            body, ctype = APP, "text/html"
         elif self.path == "/old":                  # a redirect hop
             self.send_response(302)
             self.send_header("Location", "/")
@@ -155,11 +167,31 @@ def main() -> None:
         for page_doc in feed.paginate("a.next", limit=3):
             print("page:       ", page_doc.select("h1").text)
 
-        # [M2] Pool stats: bounded leases over persistent http clients.
+        # [M4] browser=True -> a LiveDocument backed by a real page. Actions
+        #      auto-wait and are recorded; the DOM/console/network are
+        #      captured onto the document as events.
+        live = wc.ref(f"{base}/app").fetch(browser=True)
+        live.write("#qty", "3").click("#add")
+        live.wait_for("#cart li", timeout=5.0)
+        print("live dom:   ", live.select("#cart li").text)
+        print("console:    ", [e.text for e in live.console])
+        print("dom events: ", len(live.dom_mutations), "mutations captured")
+
+        # [M4] LiveNode event narrowing: an element sees only its own subtree.
+        cart = live.select("#cart")
+        print("narrowed:   ", len(cart.events_of(DOMUpdateEvent)), "under #cart")
+
+        # [M4] A recording replays onto a fresh page to reproduce state.
+        actions = list(live.actions)
+        wc.release(live)                            # page back to the pool
+        replayed = wc.ref(f"{base}/app").fetch(browser=True)
+        replayed.replay(actions)
+        print("replayed:   ", replayed.select("#cart li", optional=True) is not None)
+        wc.release(replayed)
+
+        # [M2] Pool stats: bounded leases over http clients AND browser pages.
         print("pool:       ", wc.pool.stats())
 
-    # [M4] browser=True -> LiveDocument: click/write/wait_for, live events,
-    #      rrweb capture, LiveNode event narrowing                    -- soon
     # [M5] Lazy plans: q.ref.fetch().select_all(".card").map(...)     -- soon
     # [M6] Executor: wc.execute(plan, ref, stream=True)               -- soon
     # [M7] HTTP/WS service: browser as a service                      -- soon

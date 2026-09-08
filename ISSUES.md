@@ -210,3 +210,41 @@ parsed JSON into `path → value` leaf blocks with `parent_id` links.
 Calling a sync facade method from the loop thread (i.e. from a bus handler)
 raises `RuntimeError` immediately (`PLAN §5` bridge-deadlock). `PLAN §2.4`
 says "debug mode" — I made it unconditional (the check is one comparison).
+
+---
+
+## M4 — browser
+
+### 29. `Plugin.attach_async` additive hook — 🟢
+Some plugins need *awaited* setup on a page surface (playwright
+`page.expose_binding` for the DOM plugin's `__wc_emit`). The spec's
+`Plugin.attach(surface)` is sync. Rather than make the whole plugin surface
+async, the engine calls an OPTIONAL `attach_async(surface)` coroutine right
+after the sync `attach`, on the loop. Plugins that don't need it don't
+define it; the sync `attach` stays the documented contract. Flag if you'd
+rather `attach` itself became async.
+
+### 30. Live event capture races with `goto` — 🟢 (design note)
+Console/XHR/DOM events fire *during* navigation, before a LiveDocument
+object exists. Fix: routing is subscribed to a temp list *before* `goto`
+(mirrors the http path), then the list is adopted into `live.events` and
+routing re-pointed — safe because publish and this swap both run on the one
+loop thread (no interleave).
+
+### 31. DOM capture is a hand-rolled MutationObserver, not rrweb — 🔴
+`PLAN §2.2/M4` names rrweb as the swap-in DOM plugin and the acceptance
+gate ("zero engine changes"). I shipped the *interface* proof instead: a
+`PageDomPlugin` using an injected MutationObserver that stamps `node_id`
+identity paths and emits periodic `dom.snapshot` checkpoints with a digest,
+plus a test (`test_custom_page_plugin_needs_no_engine_changes`) proving an
+external plugin needs no engine changes. A real rrweb plugin
+(`plugins/rrweb.py`, bundling rrweb's JS, richer snapshots) is NOT yet
+written. Is the hand-rolled capture enough for now, or do you want the
+actual rrweb integration before M5?
+
+### 32. `screenshot`/`evaluate`/`execute` beyond strict M4 scope — 🟢
+Implemented `evaluate` (JS with return), `execute` (chainable side-effect),
+element + full-page `screenshot`, `back`/`forward` history, and the full
+interaction set (check/select_option/upload/drag/scroll/press) now, since
+they're thin playwright wrappers and demo/tests exercise them. No new
+decisions; flagging scope.

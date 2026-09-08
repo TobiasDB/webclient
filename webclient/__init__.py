@@ -39,6 +39,7 @@ from .models import (
     Script,
     XMLDocument,
 )
+from .live import LiveDocument, LiveNode
 from .plugins.base import Plugin, Renderer, Surface, SurfaceKind
 from .pool import ClientPool, Lease, PoolStats
 from .session import Session
@@ -52,5 +53,6 @@ __all__ = [
     "JSONDocument", "Node", "Proxy", "Reference", "Script", "XMLDocument",
     "Plugin", "Renderer", "Surface", "SurfaceKind",
     "ClientPool", "Lease", "PoolStats", "Session",
+    "LiveDocument", "LiveNode",
     "WebClient", "default_client",
 ]

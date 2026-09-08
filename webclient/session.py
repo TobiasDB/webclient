@@ -44,5 +44,11 @@ class Session(BaseModel):
             raise RuntimeError(f"session {self.id} is {self.status}")
 
     def close(self) -> None:
-        if self.status != "closed":
-            self.status = "closed"
+        if self.status == "closed":
+            return
+        if self._client is not None:
+            try:
+                self._client._teardown_session(self)
+            except RuntimeError:
+                pass                       # engine already stopped
+        self.status = "closed"

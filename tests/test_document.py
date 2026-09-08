@@ -195,7 +195,5 @@ def test_network_event_forward_ref_resolved():
 def test_unbuilt_features_raise_with_milestone():
     from webclient import WebClient
     with WebClient() as wc:
-        with pytest.raises(NotImplementedError, match="M4"):
-            wc.release(make_doc())
         with pytest.raises(NotImplementedError, match="M6"):
             wc.execute(object(), make_doc())

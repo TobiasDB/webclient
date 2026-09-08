@@ -21,8 +21,10 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from typing_extensions import Self
 
 from .engine import http as engine_http
+from .engine.browser import BrowserHost
 from .engine.loop import EngineLoop
 from .events import EventBus, EventRegistry
+from .live import LiveDocument
 from .models import (
     Document,
     FetchError,
@@ -33,6 +35,7 @@ from .models import (
 )
 from .plugins.base import Plugin, Renderer, Surface, SurfaceKind
 from .plugins.network import HttpNetworkPlugin
+from .plugins.page import PageConsolePlugin, PageDomPlugin, PageNetworkPlugin
 from .plugins.render import core_renderers
 from .pool import ClientPool
 
@@ -40,7 +43,8 @@ logger = logging.getLogger("webclient")
 
 
 def _core_plugins() -> list[Plugin]:
-    return [HttpNetworkPlugin(), *core_renderers()]
+    return [HttpNetworkPlugin(), PageNetworkPlugin(), PageConsolePlugin(),
+            PageDomPlugin(), *core_renderers()]
 
 
 class WebClient(BaseModel):
@@ -52,6 +56,7 @@ class WebClient(BaseModel):
     # policy
     timeout: float = 30.0
     retries: int = 0                 # transport errors only (ISSUES #20)
+    events_cap: int = 1000           # per-document event-store cap
     verify_tls: bool = True
     default_headers: dict[str, str] = Field(default_factory=dict)
     proxy_pool: list[Proxy] = Field(default_factory=list)
@@ -68,6 +73,8 @@ class WebClient(BaseModel):
     _loop_lock: Any = PrivateAttr(default_factory=threading.Lock)
     _documents: dict[str, Any] = PrivateAttr(default_factory=dict)
     _sessions: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _live: dict[str, Any] = PrivateAttr(default_factory=dict)  # strong refs
+    _browser: Any = PrivateAttr(default=None)
     _render_table: dict[tuple[str, str], Renderer] = PrivateAttr(default_factory=dict)
     _closed: bool = PrivateAttr(default=False)
 
@@ -86,11 +93,24 @@ class WebClient(BaseModel):
     def close(self) -> None:
         if self._closed:
             return
+        if self._loop is not None and not self._loop.closed:
+            for live in list(self._live.values()):
+                try:
+                    self._loop.run(self._release_live(live))
+                except Exception:
+                    pass
+            for sess in list(self._sessions.values()):
+                try:
+                    sess.close()   # persists browser storage_state
+                except Exception:
+                    pass
+            if self._browser is not None:
+                self._loop.run(self._browser.aclose())
+            self._loop.run(self.pool._aclose())
         self._closed = True
         for sess in self._sessions.values():
-            sess.close()
-        if self._loop is not None and not self._loop.closed:
-            self._loop.run(self.pool._aclose())
+            sess.status = "closed"
+        if self._loop is not None:
             self._loop.stop()
 
     def _ensure_loop(self) -> EngineLoop:
@@ -141,6 +161,17 @@ class WebClient(BaseModel):
         for plugin, surface in reversed(attached):
             plugin.detach(surface)
 
+    @staticmethod
+    async def _run_attach_async(
+            attached: list[tuple[Plugin, Surface]]) -> None:
+        """Await plugins' optional async setup (ISSUES #29: additive
+        `attach_async` hook for setup that must be awaited, e.g. playwright
+        expose_binding)."""
+        for plugin, surface in attached:
+            hook = getattr(plugin, "attach_async", None)
+            if hook is not None:
+                await hook(surface)
+
     # -- references / fetching ----------------------------------------------
     def ref(self, url: str, method: HttpMethod = "get",
             **kwargs: Any) -> Reference:
@@ -152,9 +183,164 @@ class WebClient(BaseModel):
               wait_until: str = "load",
               optional: bool = False) -> Document:
         if browser:
-            raise NotImplementedError("browser fetch lands in M4")
+            return self._ensure_loop().run(self._fetch_browser(
+                ref, session=session, scripts=scripts,
+                wait_until=wait_until, optional=optional))
         return self._ensure_loop().run(
             self._fetch(ref, optional=optional, session=session))
+
+    # -- browser path (M4) ----------------------------------------------------
+    def _browser_host(self) -> BrowserHost:
+        if self._browser is None:
+            self._browser = BrowserHost(headless=self.headless)
+        return self._browser
+
+    async def _fetch_browser(self, ref: Reference, *, session: Any,
+                             scripts: Sequence[Script] | None,
+                             wait_until: str, optional: bool) -> LiveDocument:
+        session = session or ref._session
+        if session is not None:
+            session.check()
+        lease = await self.pool._acquire("page", session=session)
+        page = lease._page
+        for plugin in self.plugins:
+            if "page" in plugin.surfaces:
+                for script in plugin.scripts:
+                    await page.add_init_script(script.source)
+        for script in (*self.default_scripts, *(scripts or ())):
+            await page.add_init_script(script.source)
+        headers = {**(session.headers if session else {}), **ref.headers}
+        if headers:
+            await page.set_extra_http_headers(headers)
+        if session is not None and session.cookies:
+            await page.context.add_cookies([
+                {"name": k, "value": v, "url": ref.url}
+                for k, v in session.cookies.items()])
+        document_id = uuid4().hex
+        # Subscribe routing BEFORE navigation: console/xhr/dom events fire
+        # during goto, so the store must be listening first.
+        events: list[Any] = []
+        routing = self._route_events(document_id, events)
+        attached = self._attach("page", page, document_id=document_id,
+                                session_id=session.id if session else None)
+        await self._run_attach_async(attached)
+        try:
+            response = await page.goto(ref.url, wait_until=wait_until)
+        except Exception as exc:
+            self._detach(attached)
+            routing.cancel()
+            await self.pool._release(lease)
+            if optional:
+                doc = self._build_document(ref, document_id, None, [], session)
+                return doc  # type: ignore[return-value]
+            raise FetchError(f"browser {ref.url}: {exc}") from exc
+        live = await self._wrap_live_page(ref, document_id, page, response,
+                                          lease, session, attached, events,
+                                          routing)
+        if not optional and not live.ok:
+            await self._release_live(live)
+            raise FetchError(
+                f"browser {ref.url} -> {live.status_code}", document=live)
+        return live
+
+    def _route_events(self, document_id: str, events: list[Any]) -> Any:
+        def route(event: Any) -> None:
+            events.append(event)
+            if len(events) > self.events_cap:
+                del events[0]
+        return self.bus.subscribe("", route, document_id=document_id)
+
+    async def _wrap_live_page(self, ref: Reference, document_id: str,
+                              page: Any, response: Any, lease: Any,
+                              session: Any, attached: list[Any],
+                              events: list[Any], routing: Any) -> LiveDocument:
+        fields = {name: getattr(ref, name) for name in Reference.model_fields}
+        live = LiveDocument(
+            **fields,
+            id=document_id,
+            kind="html",
+            content=(await page.content()).encode(),
+            status_code=response.status if response is not None else 200,
+            response_headers=dict(response.headers) if response is not None else {},
+            final_url=page.url,
+        )
+        live._client = self
+        live._session = session
+        live._page = page
+        live._lease = lease
+        live._attached = attached
+        live._routing = routing
+        live.events.extend(events)           # events captured during goto
+        # keep routing appending to the live document's own list
+        routing.cancel()
+        live._routing = self._route_events(document_id, live.events)
+        if session is not None:
+            live.session_id = session.id
+            for cookie in await page.context.cookies():
+                session.cookies[cookie["name"]] = cookie["value"]
+        self._documents[document_id] = weakref.ref(live)
+        self._live[document_id] = live       # strong: a leased page must
+        return live                          # never depend on gc
+
+    async def _swap_document(self, live: LiveDocument, ref: Reference,
+                             nav: Any) -> LiveDocument:
+        page = live._page
+        if page is None:
+            raise RuntimeError(
+                "this LiveDocument was released or navigated away")
+        self._detach(live._attached)
+        if live._routing is not None:
+            live._routing.cancel()
+        document_id = uuid4().hex
+        events: list[Any] = []
+        routing = self._route_events(document_id, events)
+        attached = self._attach("page", page, document_id=document_id,
+                                session_id=live.session_id)
+        await self._run_attach_async(attached)
+        try:
+            response = await nav(page)
+        except Exception as exc:
+            self._detach(attached)
+            routing.cancel()
+            raise FetchError(f"navigate {ref.url}: {exc}") from exc
+        new = await self._wrap_live_page(
+            Reference.from_url(page.url), document_id, page, response,
+            live._lease, live._session, attached, events, routing)
+        live._page = None
+        live._lease = None
+        live._attached = []
+        self._live.pop(live.id, None)
+        return new
+
+    def _navigate(self, live: LiveDocument, ref: Reference, *,
+                  headers: dict[str, str] | None,
+                  wait_until: str) -> LiveDocument:
+        async def nav(page: Any) -> Any:
+            if headers:
+                await page.set_extra_http_headers(headers)
+            return await page.goto(ref.url, wait_until=wait_until)
+        return self._ensure_loop().run(self._swap_document(live, ref, nav))
+
+    def _history(self, live: LiveDocument,
+                 direction: Literal["back", "forward"]) -> LiveDocument:
+        async def nav(page: Any) -> Any:
+            move = page.go_back if direction == "back" else page.go_forward
+            return await move()
+        ref = Reference.from_url(live.final_url or live.url)
+        return self._ensure_loop().run(self._swap_document(live, ref, nav))
+
+    async def _release_live(self, live: LiveDocument) -> None:
+        if live._routing is not None:
+            live._routing.cancel()
+            live._routing = None
+        if live._attached:
+            self._detach(live._attached)
+            live._attached = []
+        if live._lease is not None:
+            await self.pool._release(live._lease)
+            live._lease = None
+        live._page = None
+        self._live.pop(live.id, None)
 
     async def _fetch(self, ref: Reference, *, optional: bool,
                      session: Any = None) -> Document:
@@ -306,7 +492,20 @@ class WebClient(BaseModel):
         return loop.stream(pages(), buffer=max(1, prefetch))
 
     def release(self, doc: Any) -> None:
-        raise NotImplementedError("live documents land in M4")
+        """Return a live page's lease to the pool."""
+        if not isinstance(doc, LiveDocument):
+            raise TypeError("release() takes a LiveDocument")
+        self._ensure_loop().run(self._release_live(doc))
+
+    def _teardown_session(self, session: Any) -> None:
+        """Release the session's pages and persist its browser storage."""
+        if self._closed or self._loop is None or self._loop.closed:
+            return
+        for live in [d for d in self._live.values()
+                     if d.session_id == session.id]:
+            self._loop.run(self._release_live(live))
+        if self._browser is not None:
+            self._loop.run(self._browser.close_session_context(session))
 
     def execute(self, plan: Any, context: Any, *, stream: bool = False) -> Any:
         raise NotImplementedError("plan execution lands in M6")

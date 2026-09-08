@@ -26,6 +26,7 @@ class Lease(BaseModel):
 
     _pool: Any = PrivateAttr(default=None)
     _client: Any = PrivateAttr(default=None)   # httpx.AsyncClient (http kind)
+    _page: Any = PrivateAttr(default=None)     # playwright Page (page kind)
 
     def release(self) -> None:
         if self._pool is not None:
@@ -52,6 +53,9 @@ class ClientPool(BaseModel):
     _created: int = PrivateAttr(default=0)
     _proxy_index: int = PrivateAttr(default=0)
     _waiting: int = PrivateAttr(default=0)
+    _page_semaphore: Any = PrivateAttr(default=None)
+    _pages_held: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _pages_created: int = PrivateAttr(default=0)
 
     # -- sync facade ---------------------------------------------------------
     def acquire(self, kind: LeaseKind, *, session: Any = None,
@@ -66,6 +70,8 @@ class ClientPool(BaseModel):
         return PoolStats(
             http_total=self._created,
             http_free=len(self._idle),
+            pages_total=self._pages_created,
+            pages_free=self.max_pages - len(self._pages_held),
             waiting=self._waiting,
         )
 
@@ -73,7 +79,7 @@ class ClientPool(BaseModel):
     async def _acquire(self, kind: LeaseKind, *, session: Any = None,
                        timeout: float | None = None) -> Lease:
         if kind == "page":
-            raise NotImplementedError("page leases land in M4")
+            return await self._acquire_page(session, timeout)
         if self._semaphore is None:
             self._semaphore = asyncio.Semaphore(self.max_http)
         self._waiting += 1
@@ -95,12 +101,50 @@ class ClientPool(BaseModel):
         return lease
 
     async def _release(self, lease: Lease) -> None:
+        if lease.kind == "page":
+            page = self._pages_held.pop(lease.id, None)
+            if page is not None:
+                try:
+                    await page.close()  # context (session state) stays alive
+                except Exception:
+                    pass
+                self._page_semaphore.release()
+            return
         client = self._held.pop(lease.id, None)
         if client is not None:
             client.event_hooks = {}    # a lease returns clean...
             client.cookies.clear()     # ...and must not leak cookies across
             self._idle.append(client)  # sessions (Session owns cookie state)
             self._semaphore.release()
+
+    async def _acquire_page(self, session: Any,
+                            timeout: float | None) -> Lease:
+        import asyncio as _asyncio
+        if self._page_semaphore is None:
+            self._page_semaphore = _asyncio.Semaphore(self.max_pages)
+        self._waiting += 1
+        try:
+            await _asyncio.wait_for(
+                self._page_semaphore.acquire(),
+                timeout if timeout is not None else self.acquire_timeout)
+        except _asyncio.TimeoutError:
+            raise TimeoutError(
+                f"pool exhausted: no page lease within {self.acquire_timeout}s"
+            ) from None
+        finally:
+            self._waiting -= 1
+        try:
+            page = await self._owner._browser_host().new_page(session)
+        except BaseException:
+            self._page_semaphore.release()
+            raise
+        self._pages_created += 1
+        lease = Lease(id=uuid4().hex, kind="page",
+                      session_id=getattr(session, "id", None))
+        lease._pool = self
+        lease._page = page
+        self._pages_held[lease.id] = page
+        return lease
 
     def _new_http_client(self) -> httpx.AsyncClient:
         owner = self._owner
