@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "webclient"
+version = "0.1.0"
+description = "Declarative web client: references, documents, live browser pages, lazy extraction plans"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.7",
+    "lxml>=5.0",
+    "cssselect>=1.2",
+    "charset-normalizer>=3.0",
+    "typing_extensions>=4.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "mypy>=1.10", "lxml-stubs"]
+
+[tool.setuptools]
+packages = ["webclient"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
