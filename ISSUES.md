@@ -248,3 +248,29 @@ element + full-page `screenshot`, `back`/`forward` history, and the full
 interaction set (check/select_option/upload/drag/scroll/press) now, since
 they're thin playwright wrappers and demo/tests exercise them. No new
 decisions; flagging scope.
+
+---
+
+## M7 — service
+
+### 33. Raw-CDP passthrough (WS /sessions/{id}/cdp) deferred — 🔴
+The spec/plan list a raw CDP websocket onto a session's BrowserContext
+(Browserbase/string.ai/Spider compatibility). NOT implemented this pass:
+it needs the chromium CDP endpoint proxied through the websocket and the
+context's `newCDPSession`, which is a meaningful chunk on its own. Every
+other M7 endpoint (sessions, fetch, render, select, plans, events WS) is
+done. Want the CDP passthrough as a follow-up?
+
+### 34. Service must hold documents (weakref mismatch) — 🟢
+The library registers static Documents by *weakref* (ISSUES decision: the
+caller keeps them). The service returns only an id and keeps nothing, so
+documents were GC'd between requests. Fix: the service keeps its own
+bounded LRU strong-ref cache (cap 256) of documents it fetched. This is a
+service-layer concern; the library's weakref policy is unchanged.
+
+### 35. Plan submission runs synchronously — 🟢
+`POST /plans` runs the plan and returns all rows, rather than the spec's
+detached submit + `GET /plans/{id}` polling + row streaming. Simpler and
+fine for modest plans; detached execution with a plan registry and the
+`/plans/{id}/rows` + `/plans/{id}/stream` endpoints is a follow-up when a
+plan's runtime warrants async submission.

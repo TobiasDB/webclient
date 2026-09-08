@@ -228,7 +228,29 @@ def main() -> None:
         print("streamed:")
         for row in enriched.collect(wc.ref(f"{base}/"), stream=True):
             print("  detail:   ", row["title"], "->", row["name"])
-    # [M7] HTTP/WS service: browser as a service                      -- soon
+    # [M7] The same WebClient behind an HTTP API -- browser as a service.
+    #      Documents are handles; content crosses the wire only via /render
+    #      or /select, and plans are submitted as QueryPlan JSON.
+    from fastapi.testclient import TestClient
+
+    from webclient.service import create_app
+
+    with TestClient(create_app(token="demo")) as api:
+        auth = {"Authorization": "Bearer demo"}
+        meta = api.post("/fetch", json={"url": f"{base}/"}, headers=auth).json()
+        print("\nservice fetch:", {k: meta[k] for k in ("kind", "ok", "title")})
+        md = api.get(f"/documents/{meta['id']}/render",
+                     params={"format": "markdown"}, headers=auth).json()
+        print("service render:", md["result"].splitlines()[0])
+        titles = api.post(f"/documents/{meta['id']}/select",
+                          json={"selector": ".title", "all": True},
+                          headers=auth).json()
+        print("service select:", titles["values"])
+        plan = q.ref.fetch().select_all(".card").map(
+            title=q.node.select(".title").text).to_query()
+        rows = api.post("/plans", params={"url": f"{base}/"},
+                        json=plan.model_dump(), headers=auth).json()
+        print("service plan:  ", rows["rows"])
 
 
 if __name__ == "__main__":
