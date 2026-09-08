@@ -441,8 +441,24 @@ class Document(Reference):
             selector, limit=limit, offset=offset)
 
     # -- pagination ---------------------------------------------------------
-    def paginate(self, *args: Any, **kwargs: Any) -> Any:
-        raise _later("Document.paginate", "M3")
+    def paginate(self, on: Any, *, until: Any = None,
+                 limit: int | None = None, offset: int = 0,
+                 resume: "Reference | None" = None, prefetch: int = 1,
+                 client: Any = None) -> Any:
+        """Iterate pages starting from this one.
+
+        ``on`` builds the next Reference: a CSS/XPath selector whose match's
+        href is followed; a callable ``(Document) -> Reference | None``; or
+        an iterable of dicts (merged as query params onto this document's
+        reference) or References. ``until`` stops iteration, evaluated on
+        the next page (selector match or predicate). ``limit`` caps pages
+        fetched; ``offset`` skips pages before yielding; ``resume`` restarts
+        from the Reference of the last page a prior run yielded.
+        ``prefetch`` pages are buffered ahead of the consumer."""
+        from .client import default_client
+        wc = client or self._client or default_client()
+        return wc._paginate(self, on, until, limit, offset, resume, prefetch,
+                            self._session)
 
 
 class HTMLDocument(Document):

@@ -10,8 +10,11 @@ import atexit
 import logging
 import threading
 import weakref
-from typing import Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Sequence
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from .session import Session
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -64,6 +67,7 @@ class WebClient(BaseModel):
     _loop: EngineLoop | None = PrivateAttr(default=None)
     _loop_lock: Any = PrivateAttr(default_factory=threading.Lock)
     _documents: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _sessions: dict[str, Any] = PrivateAttr(default_factory=dict)
     _render_table: dict[tuple[str, str], Renderer] = PrivateAttr(default_factory=dict)
     _closed: bool = PrivateAttr(default=False)
 
@@ -83,6 +87,8 @@ class WebClient(BaseModel):
         if self._closed:
             return
         self._closed = True
+        for sess in self._sessions.values():
+            sess.close()
         if self._loop is not None and not self._loop.closed:
             self._loop.run(self.pool._aclose())
             self._loop.stop()
@@ -147,35 +153,49 @@ class WebClient(BaseModel):
               optional: bool = False) -> Document:
         if browser:
             raise NotImplementedError("browser fetch lands in M4")
-        if session is not None:
-            raise NotImplementedError("sessions land in M3")
-        return self._ensure_loop().run(self._fetch(ref, optional=optional))
+        return self._ensure_loop().run(
+            self._fetch(ref, optional=optional, session=session))
 
-    async def _fetch(self, ref: Reference, *, optional: bool) -> Document:
+    async def _fetch(self, ref: Reference, *, optional: bool,
+                     session: Any = None) -> Document:
+        session = session or ref._session
+        if session is not None:
+            session.check()
         document_id = uuid4().hex
         routed: list[Any] = []
         subscription = self.bus.subscribe("", routed.append,
                                           document_id=document_id)
-        lease = await self.pool._acquire("http")
+        headers = {**self.default_headers,
+                   **(session.headers if session else {}), **ref.headers}
+        cookies = {**(session.cookies if session else {}), **ref.cookies}
+        timeout = self.timeout
+        if session is not None and session.timeout is not None:
+            timeout = session.timeout
+        lease = await self.pool._acquire("http", session=session)
         try:
-            attached = self._attach("transport", lease._client,
-                                    document_id=document_id)
+            attached = self._attach(
+                "transport", lease._client, document_id=document_id,
+                session_id=session.id if session else None)
             try:
                 response = await engine_http.request(
-                    lease._client, ref,
-                    default_headers=self.default_headers,
-                    timeout=self.timeout, retries=self.retries)
+                    lease._client, ref, headers=headers, cookies=cookies,
+                    timeout=timeout, retries=self.retries)
             finally:
                 self._detach(attached)
         except httpx.TransportError as exc:
             subscription.cancel()
             if optional:
-                return self._build_document(ref, document_id, None, routed)
+                return self._build_document(ref, document_id, None, routed,
+                                            session)
             raise FetchError(f"{ref.method.upper()} {ref.url}: {exc}") from exc
         finally:
             await self.pool._release(lease)
         subscription.cancel()
-        document = self._build_document(ref, document_id, response, routed)
+        if session is not None:
+            for hop in (*response.history, response):
+                session.cookies.update(dict(hop.cookies))
+        document = self._build_document(ref, document_id, response, routed,
+                                        session)
         if not optional and not document.ok:
             raise FetchError(
                 f"{ref.method.upper()} {ref.url} -> {document.status_code}",
@@ -184,7 +204,7 @@ class WebClient(BaseModel):
 
     def _build_document(self, ref: Reference, document_id: str,
                         response: httpx.Response | None,
-                        routed: list[Any]) -> Document:
+                        routed: list[Any], session: Any = None) -> Document:
         fields = {name: getattr(ref, name) for name in Reference.model_fields}
         if response is None:
             document = Document(**fields, id=document_id, status_code=0)
@@ -202,6 +222,9 @@ class WebClient(BaseModel):
                 elapsed=response.elapsed.total_seconds(),
             )
         document._client = self
+        document._session = session
+        if session is not None:
+            document.session_id = session.id
         document.events.extend(routed)
         self._documents[document_id] = weakref.ref(document)
         self._attach("document", document, document_id=document_id)
@@ -212,9 +235,75 @@ class WebClient(BaseModel):
         found = self._documents.get(document_id)
         return found() if found is not None else None
 
-    # -- later milestones -----------------------------------------------------
-    def session(self, **overrides: Any) -> Any:
-        raise NotImplementedError("sessions land in M3")
+    # -- sessions -------------------------------------------------------------
+    def session(self, **overrides: Any) -> "Session":
+        from .session import Session
+        import time as _time
+        sess = Session(id=uuid4().hex, status="running", **overrides)
+        if sess.ttl is not None:
+            sess.expires_at = _time.time() + sess.ttl
+        sess._client = self
+        self._sessions[sess.id] = sess
+        self._attach("session", sess, session_id=sess.id)
+        return sess
+
+    # -- pagination (static; live pagination lands in M4) ---------------------
+    def _paginate(self, first: Document, on: Any, until: Any,
+                  limit: int | None, offset: int, resume: Reference | None,
+                  prefetch: int, session: Any):
+        loop = self._ensure_loop()
+
+        def next_from(doc: Document, iterator: Any, first_ref: Reference):
+            if callable(on):
+                return on(doc)
+            if isinstance(on, str):
+                node = doc.select(on, optional=True)
+                return node.attr("href", optional=True) if node is not None else None
+            item = next(iterator, None)
+            if item is None:
+                return None
+            if isinstance(item, Reference):
+                return item
+            if isinstance(item, dict):
+                return first_ref.with_params(**{k: str(v) for k, v in item.items()})
+            raise TypeError(
+                "iterable pagination items must be dicts (query params) or "
+                f"References, got {type(item).__name__}")
+
+        def stops(doc: Document) -> bool:
+            if until is None:
+                return False
+            if callable(until):
+                return bool(until(doc))
+            return doc.select(until, optional=True) is not None
+
+        async def pages():
+            iterator = iter(on) if not (callable(on) or isinstance(on, str)) else None
+            first_ref = Reference(
+                **{name: getattr(first, name) for name in Reference.model_fields})
+            if resume is not None:
+                current = await self._fetch(resume, optional=False,
+                                            session=session)
+            else:
+                current = first
+            fetched, index = 1, 0
+            while True:
+                if index >= offset:
+                    yield current
+                index += 1
+                if limit is not None and fetched >= limit:
+                    break
+                next_ref = next_from(current, iterator, first_ref)
+                if next_ref is None:
+                    break
+                doc = await self._fetch(next_ref, optional=False,
+                                        session=session)
+                fetched += 1
+                if stops(doc):
+                    break
+                current = doc
+
+        return loop.stream(pages(), buffer=max(1, prefetch))
 
     def release(self, doc: Any) -> None:
         raise NotImplementedError("live documents land in M4")

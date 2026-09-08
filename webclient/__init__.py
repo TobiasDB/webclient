@@ -41,6 +41,7 @@ from .models import (
 )
 from .plugins.base import Plugin, Renderer, Surface, SurfaceKind
 from .pool import ClientPool, Lease, PoolStats
+from .session import Session
 
 __all__ = [
     "ActionEvent", "AssetEvent", "ConsoleEvent", "DOMEvent", "DOMLoadEvent",
@@ -50,6 +51,6 @@ __all__ = [
     "BinaryDocument", "Document", "Element", "FetchError", "HTMLDocument",
     "JSONDocument", "Node", "Proxy", "Reference", "Script", "XMLDocument",
     "Plugin", "Renderer", "Surface", "SurfaceKind",
-    "ClientPool", "Lease", "PoolStats",
+    "ClientPool", "Lease", "PoolStats", "Session",
     "WebClient", "default_client",
 ]

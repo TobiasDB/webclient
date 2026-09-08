@@ -97,8 +97,9 @@ class ClientPool(BaseModel):
     async def _release(self, lease: Lease) -> None:
         client = self._held.pop(lease.id, None)
         if client is not None:
-            client.event_hooks = {}    # a lease returns clean
-            self._idle.append(client)
+            client.event_hooks = {}    # a lease returns clean...
+            client.cookies.clear()     # ...and must not leak cookies across
+            self._idle.append(client)  # sessions (Session owns cookie state)
             self._semaphore.release()
 
     def _new_http_client(self) -> httpx.AsyncClient:

@@ -45,6 +45,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body, ctype = ITEM % (1, b"Aeropress"), "application/json"
         elif self.path == "/items/2":
             body, ctype = ITEM % (2, b"Grinder"), "application/json"
+        elif self.path.startswith("/feed"):        # paginated + cookie-aware
+            from urllib.parse import parse_qs, urlparse
+            page = int(parse_qs(urlparse(self.path).query).get("p", ["1"])[0])
+            user = "friend" if "token=tok" in (self.headers.get("Cookie") or "") else "guest"
+            nxt = f'<a class="next" href="/feed?p={page + 1}">more</a>' if page < 3 else ""
+            body = (f"<html><body><h1>feed p{page} for {user}</h1>{nxt}"
+                    "</body></html>").encode()
+            ctype = "text/html"
+        elif self.path == "/login":                # sets a session cookie
+            self.send_response(200)
+            self.send_header("Set-Cookie", "token=tok; Path=/")
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"welcome")
+            return
         elif self.path == "/old":                  # a redirect hop
             self.send_response(302)
             self.send_header("Location", "/")
@@ -127,10 +142,22 @@ def main() -> None:
         wc.use(Shouty())
         print("plugin:     ", doc.render("markdown"))
 
+        # [M3] Sessions: identity (cookies/headers) spanning fetches, with a
+        #      ttl'd lifecycle. Cookies set by responses persist; sessions
+        #      are isolated from each other.
+        session = wc.session(ttl=300, headers={"x-app": "demo"})
+        session.ref(f"{base}/login").fetch()
+        print("session:    ", session.status, "cookies:", session.cookies)
+
+        # [M3] paginate(): walk a next-link chain (selector, callable, or
+        #      iterable of params), with until/limit/offset/resume knobs.
+        feed = session.ref(f"{base}/feed").fetch()
+        for page_doc in feed.paginate("a.next", limit=3):
+            print("page:       ", page_doc.select("h1").text)
+
         # [M2] Pool stats: bounded leases over persistent http clients.
         print("pool:       ", wc.pool.stats())
 
-    # [M3] Sessions (cookies/identity spanning fetches) + paginate()  -- soon
     # [M4] browser=True -> LiveDocument: click/write/wait_for, live events,
     #      rrweb capture, LiveNode event narrowing                    -- soon
     # [M5] Lazy plans: q.ref.fetch().select_all(".card").map(...)     -- soon

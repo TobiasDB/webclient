@@ -193,5 +193,9 @@ def test_network_event_forward_ref_resolved():
 # -- later milestones stay loud --------------------------------------------- #
 
 def test_unbuilt_features_raise_with_milestone():
-    with pytest.raises(NotImplementedError, match="M3"):
-        make_doc().paginate("a.next")
+    from webclient import WebClient
+    with WebClient() as wc:
+        with pytest.raises(NotImplementedError, match="M4"):
+            wc.release(make_doc())
+        with pytest.raises(NotImplementedError, match="M6"):
+            wc.execute(object(), make_doc())
