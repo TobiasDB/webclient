@@ -1,9 +1,9 @@
-"""ClientPool: bounded leases over concrete transports.
+"""Bounded leases over the concrete clients.
 
-M2 implements the http side (a reusable set of persistent
-``httpx.AsyncClient``s, ISSUES #19 -- a borrowed client is exclusive to its
-lease, so plugins may install event hooks for the request's duration).
-Page leases land in M4.
+Transports are the pool's business, not the WebClient's: an http lease hands
+out a reusable `httpx.AsyncClient`, a page lease hands out a playwright Page
+from the session's context. Both are created by factories the pool owns, so
+retries, proxy selection and lifetime live in one place.
 """
 from __future__ import annotations
 
@@ -11,157 +11,160 @@ import asyncio
 from typing import Any, Literal
 from uuid import uuid4
 
-import httpx
-from pydantic import BaseModel, PrivateAttr
+from pydantic import BaseModel
 
 LeaseKind = Literal["http", "page"]
 
 
-class Lease(BaseModel):
-    """A held transport resource; one lease == one unit of parallelism."""
+class Lease:
+    """A held resource. One lease is one unit of parallelism."""
 
-    id: str
-    kind: LeaseKind
-    session_id: str | None = None
+    __slots__ = ("id", "kind", "session_id", "client", "page", "_pool")
 
-    _pool: Any = PrivateAttr(default=None)
-    _client: Any = PrivateAttr(default=None)   # httpx.AsyncClient (http kind)
-    _page: Any = PrivateAttr(default=None)     # playwright Page (page kind)
+    def __init__(self, kind: LeaseKind, pool: "ClientPool",
+                 session_id: str | None = None) -> None:
+        self.id = uuid4().hex
+        self.kind = kind
+        self.session_id = session_id
+        self.client: Any = None
+        self.page: Any = None
+        self._pool = pool
 
-    def release(self) -> None:
-        if self._pool is not None:
-            self._pool.release(self)
+    async def release(self) -> None:
+        await self._pool.release(self)
+
+    def __repr__(self) -> str:
+        return f"Lease({self.kind}, {self.id[:8]})"
 
 
 class PoolStats(BaseModel):
     http_total: int = 0
     http_free: int = 0
+    http_held: int = 0
     pages_total: int = 0
-    pages_free: int = 0
+    pages_held: int = 0
     waiting: int = 0
 
 
-class ClientPool(BaseModel):
-    max_http: int = 10
-    max_pages: int = 4
-    acquire_timeout: float = 60.0
+class ClientPool:
+    """Bounded, FIFO, and honest about what is outstanding."""
 
-    _owner: Any = PrivateAttr(default=None)            # owning WebClient
-    _semaphore: Any = PrivateAttr(default=None)        # asyncio.Semaphore
-    _idle: list[Any] = PrivateAttr(default_factory=list)
-    _held: dict[str, Any] = PrivateAttr(default_factory=dict)
-    _created: int = PrivateAttr(default=0)
-    _proxy_index: int = PrivateAttr(default=0)
-    _waiting: int = PrivateAttr(default=0)
-    _page_semaphore: Any = PrivateAttr(default=None)
-    _pages_held: dict[str, Any] = PrivateAttr(default_factory=dict)
-    _pages_created: int = PrivateAttr(default=0)
+    def __init__(self, *, max_http: int = 10, max_pages: int = 4,
+                 acquire_timeout: float = 60.0) -> None:
+        self.max_http = max_http
+        self.max_pages = max_pages
+        self.acquire_timeout = acquire_timeout
+        self.owner: Any = None
 
-    # -- sync facade ---------------------------------------------------------
-    def acquire(self, kind: LeaseKind, *, session: Any = None,
-                timeout: float | None = None) -> Lease:
-        return self._owner._ensure_loop().run(
-            self._acquire(kind, session=session, timeout=timeout))
+        self._http_semaphore: asyncio.Semaphore | None = None
+        self._page_semaphore: asyncio.Semaphore | None = None
+        self._idle: list[Any] = []
+        self._held: dict[str, Any] = {}
+        self._pages: dict[str, Any] = {}
+        self._http_created = 0
+        self._pages_created = 0
+        self._proxy_index = 0
+        self._waiting = 0
 
-    def release(self, lease: Lease) -> None:
-        self._owner._ensure_loop().run(self._release(lease))
-
-    def stats(self) -> PoolStats:
-        return PoolStats(
-            http_total=self._created,
-            http_free=len(self._idle),
-            pages_total=self._pages_created,
-            pages_free=self.max_pages - len(self._pages_held),
-            waiting=self._waiting,
-        )
-
-    # -- engine side (runs on the loop) --------------------------------------
-    async def _acquire(self, kind: LeaseKind, *, session: Any = None,
-                       timeout: float | None = None) -> Lease:
+    # -- acquisition ---------------------------------------------------------
+    async def acquire(self, kind: LeaseKind, *, session: Any = None,
+                      timeout: float | None = None) -> Lease:
         if kind == "page":
             return await self._acquire_page(session, timeout)
-        if self._semaphore is None:
-            self._semaphore = asyncio.Semaphore(self.max_http)
+        return await self._acquire_http(session, timeout)
+
+    async def _gate(self, semaphore: asyncio.Semaphore, timeout: float | None,
+                    what: str) -> None:
         self._waiting += 1
         try:
             await asyncio.wait_for(
-                self._semaphore.acquire(),
+                semaphore.acquire(),
                 timeout if timeout is not None else self.acquire_timeout)
         except asyncio.TimeoutError:
             raise TimeoutError(
-                f"pool exhausted: no http lease within {self.acquire_timeout}s") from None
+                f"pool exhausted: no {what} lease within "
+                f"{timeout or self.acquire_timeout}s") from None
         finally:
             self._waiting -= 1
-        client = self._idle.pop() if self._idle else self._new_http_client()
-        lease = Lease(id=uuid4().hex, kind="http",
-                      session_id=getattr(session, "id", None))
-        lease._pool = self
-        lease._client = client
-        self._held[lease.id] = client
+
+    async def _acquire_http(self, session: Any, timeout: float | None) -> Lease:
+        if self._http_semaphore is None:
+            self._http_semaphore = asyncio.Semaphore(self.max_http)
+        await self._gate(self._http_semaphore, timeout, "http")
+        lease = Lease("http", self, getattr(session, "id", None))
+        lease.client = self._idle.pop() if self._idle else self._new_http(session)
+        self._held[lease.id] = lease.client
         return lease
 
-    async def _release(self, lease: Lease) -> None:
-        if lease.kind == "page":
-            page = self._pages_held.pop(lease.id, None)
-            if page is not None:
-                try:
-                    await page.close()  # context (session state) stays alive
-                except Exception:
-                    pass
-                self._page_semaphore.release()
-            return
-        client = self._held.pop(lease.id, None)
-        if client is not None:
-            client.event_hooks = {}    # a lease returns clean...
-            client.cookies.clear()     # ...and must not leak cookies across
-            self._idle.append(client)  # sessions (Session owns cookie state)
-            self._semaphore.release()
-
-    async def _acquire_page(self, session: Any,
-                            timeout: float | None) -> Lease:
-        import asyncio as _asyncio
+    async def _acquire_page(self, session: Any, timeout: float | None) -> Lease:
         if self._page_semaphore is None:
-            self._page_semaphore = _asyncio.Semaphore(self.max_pages)
-        self._waiting += 1
+            self._page_semaphore = asyncio.Semaphore(self.max_pages)
+        await self._gate(self._page_semaphore, timeout, "page")
         try:
-            await _asyncio.wait_for(
-                self._page_semaphore.acquire(),
-                timeout if timeout is not None else self.acquire_timeout)
-        except _asyncio.TimeoutError:
-            raise TimeoutError(
-                f"pool exhausted: no page lease within {self.acquire_timeout}s"
-            ) from None
-        finally:
-            self._waiting -= 1
-        try:
-            page = await self._owner._browser_host().new_page(session)
+            page = await self.owner._browser().new_page(session)
         except BaseException:
             self._page_semaphore.release()
             raise
         self._pages_created += 1
-        lease = Lease(id=uuid4().hex, kind="page",
-                      session_id=getattr(session, "id", None))
-        lease._pool = self
-        lease._page = page
-        self._pages_held[lease.id] = page
+        lease = Lease("page", self, getattr(session, "id", None))
+        lease.page = page
+        self._pages[lease.id] = page
         return lease
 
-    def _new_http_client(self) -> httpx.AsyncClient:
-        owner = self._owner
+    # -- release -------------------------------------------------------------
+    async def release(self, lease: Lease) -> None:
+        if lease.kind == "page":
+            page = self._pages.pop(lease.id, None)
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+                if self._page_semaphore is not None:
+                    self._page_semaphore.release()
+            return
+        client = self._held.pop(lease.id, None)
+        if client is not None:
+            client.cookies.clear()      # Session owns cookie state, not the
+            self._idle.append(client)   # borrowed transport
+            if self._http_semaphore is not None:
+                self._http_semaphore.release()
+
+    # -- factories -----------------------------------------------------------
+    def _new_http(self, session: Any) -> Any:
+        import httpx
+        owner = self.owner
         proxy_url: str | None = None
-        if owner is not None and owner.proxy_pool:
+        proxy = getattr(session, "proxy", None)
+        if proxy is None and owner is not None and owner.proxy_pool:
             proxy = owner.proxy_pool[self._proxy_index % len(owner.proxy_pool)]
             self._proxy_index += 1
+        if proxy is not None:
             proxy_url = proxy.authenticated_url
-        self._created += 1
+        self._http_created += 1
         return httpx.AsyncClient(
             verify=owner.verify_tls if owner is not None else True,
-            proxy=proxy_url,
-        )
+            proxy=proxy_url, follow_redirects=False)
 
-    async def _aclose(self) -> None:
-        clients = self._idle + list(self._held.values())
+    # -- introspection -------------------------------------------------------
+    def stats(self) -> PoolStats:
+        return PoolStats(
+            http_total=self._http_created, http_free=len(self._idle),
+            http_held=len(self._held), pages_total=self._pages_created,
+            pages_held=len(self._pages), waiting=self._waiting)
+
+    async def aclose(self) -> None:
+        for page in list(self._pages.values()):
+            try:
+                await page.close()
+            except Exception:
+                pass
+        self._pages.clear()
+        clients = [*self._idle, *self._held.values()]
         self._idle.clear()
         self._held.clear()
         for client in clients:
-            await client.aclose()
+            try:
+                await client.aclose()
+            except Exception:
+                pass

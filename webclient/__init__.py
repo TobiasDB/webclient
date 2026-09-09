@@ -1,72 +1,61 @@
-"""webclient -- declarative web client.
+"""webclient — references, documents, and one expression language over both.
 
-M1: pure core (Reference, Document + typed views, Node) and the event
-taxonomy. M2: WebClient (http fetch via the engine loop + ClientPool),
-EventBus/EventRegistry, plugin framework, core network capture and core
-renderers. The interface spec lives in /models.py at the repo root; PLAN.md
-maps every remaining name to its milestone.
+    from webclient import WebClient, doc, el, field
+
+    with WebClient() as wc:
+        page = wc.resolve("https://example.com")
+        page.select("h1").attr("text")
+
+        page.then(rows=doc.select_all(".card").map(
+            el.select("h3").attr("text").alias("title"),
+            price=el.select(".price").attr("text"),
+        ))
+
+`then` / `map` / `otherwise` are methods on the real classes; `doc`, `el`,
+`ref` and `err` are those same classes with recording switched on. One
+implementation serves both, so a plan cannot mean something different from
+the code that would compute it directly.
 """
+from .backing import (Backing, HttpBacking, Kind, StaticBacking, TreeBacking,
+                      charset_of, sniff_kind)
+from .document import Document, Element
+from .errors import (PlanError, ResolveError, SelectionError, StaleDocument,
+                     UnsupportedOperation, WebClientError)
+from .ops import CoreView, OpSpec, REGISTRY, op, op_property
+from .plan import Plan, Projection, Source
+from .records import Err, Record, RecordSet
+from .reference import HttpMethod, Proxy, Reference, Script
+from .render import Block, RendererRegistry, default_registry
+from .roots import DROP_ROW, NULL, RAISE_ERROR, doc, el, err, field, lit, ref
+from .telemetry import (ConsoleRecord, Observers, RedirectRecord,
+                        RequestRecord, RetryRecord, Telemetry)
+from .values import Expr, Failure, Selection, Value
+
 from .client import WebClient, default_client
-from .events import (
-    ActionEvent,
-    AssetEvent,
-    ConsoleEvent,
-    DOMEvent,
-    DOMLoadEvent,
-    DOMSnapshotEvent,
-    DOMUnloadEvent,
-    DOMUpdateEvent,
-    Event,
-    EventBus,
-    EventRegistry,
-    FetchEvent,
-    NavigationEvent,
-    NetworkEvent,
-    Subscription,
-    Topic,
-    XHREvent,
-)
-from .models import (
-    BinaryDocument,
-    Document,
-    Element,
-    FetchError,
-    HTMLDocument,
-    JSONDocument,
-    Node,
-    Proxy,
-    Reference,
-    Script,
-    XMLDocument,
-)
-from .lazy import Expr, Lazy, QueryPlan, col, lit, q
-from .lazy.executor import ExecutionGraph, ExecutionStep, Executor, RunStats
-from .live import LiveDocument, LiveNode
-from .models import OnError
-from .plugins.base import Plugin, Renderer, Surface, SurfaceKind
 from .pool import ClientPool, Lease, PoolStats
-from .remote import (
-    RemoteDocument,
-    RemoteError,
-    RemoteRef,
-    RemoteSession,
-    RemoteWebClient,
-)
 from .session import Session
 
 __all__ = [
-    "ActionEvent", "AssetEvent", "ConsoleEvent", "DOMEvent", "DOMLoadEvent",
-    "DOMSnapshotEvent", "DOMUnloadEvent", "DOMUpdateEvent", "Event",
-    "EventBus", "EventRegistry", "FetchEvent", "NavigationEvent",
-    "NetworkEvent", "Subscription", "Topic", "XHREvent",
-    "BinaryDocument", "Document", "Element", "FetchError", "HTMLDocument",
-    "JSONDocument", "Node", "Proxy", "Reference", "Script", "XMLDocument",
-    "Plugin", "Renderer", "Surface", "SurfaceKind",
-    "ClientPool", "Lease", "PoolStats", "Session",
-    "LiveDocument", "LiveNode",
-    "Expr", "Lazy", "QueryPlan", "OnError", "col", "lit", "q",
-    "Executor", "ExecutionGraph", "ExecutionStep", "RunStats",
-    "RemoteWebClient", "RemoteDocument", "RemoteSession", "RemoteRef",
-    "RemoteError",
-    "WebClient", "default_client",
+    # core
+    "WebClient", "default_client", "Document", "Element", "Reference",
+    "Session",
+    # expression language
+    "doc", "el", "ref", "err", "field", "lit",
+    "RAISE_ERROR", "DROP_ROW", "NULL",
+    "Expr", "Value", "Selection", "Record", "RecordSet", "Err", "Failure",
+    "Plan", "Projection", "Source", "PlanError",
+    # backings
+    "Backing", "TreeBacking", "StaticBacking", "HttpBacking", "Kind",
+    "sniff_kind", "charset_of",
+    # rendering
+    "Block", "RendererRegistry", "default_registry",
+    # telemetry
+    "Telemetry", "Observers", "RequestRecord", "RedirectRecord",
+    "ConsoleRecord", "RetryRecord",
+    # extension
+    "op", "op_property", "OpSpec", "REGISTRY", "CoreView",
+    "ClientPool", "Lease", "PoolStats",
+    # errors
+    "WebClientError", "UnsupportedOperation", "StaleDocument", "ResolveError",
+    "SelectionError",
 ]
