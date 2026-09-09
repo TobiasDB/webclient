@@ -192,3 +192,74 @@ def test_lazy_wrappers_refuse_to_pretend(page):
     lazy = doc.select("h1").attr("text")
     with pytest.raises(Exception):
         lazy.get()
+
+
+# -- the guarantee the old engine broke --------------------------------------- #
+
+def test_every_plan_step_kind_is_dispatched(page):
+    """No step kind is ever passed through untouched.
+
+    The old executor returned the row unchanged for any op it did not
+    recognise, which is how a second `.map()` vanished without an error. Every
+    kind in the IR must be claimed by exactly one dispatcher: `_apply` for
+    ordinary steps, or `_run_segments` for `otherwise`, which recovers
+    everything recorded before it and so cannot be a plain step.
+    """
+    import asyncio
+    import typing
+
+    from webclient import plan as plan_module
+    from webclient.execute import _apply, _run_segments
+
+    kinds = typing.get_args(typing.get_args(plan_module.Step)[0])
+    assert len(kinds) >= 9
+
+    unhandled = []
+    for kind in kinds:
+        step = _sample(kind)
+        if kind is plan_module.OtherwiseStep:
+            # a sentinel only applies to a failure, so give it one
+            failing = plan_module.CallStep(
+                op="attr", args=[plan_module.Arg(value="nope")])
+            outcome = asyncio.run(
+                _run_segments([failing, step], page, None, None))
+            if not (outcome.ok and outcome.value is None):
+                unhandled.append(kind.__name__)
+            continue
+        try:
+            asyncio.run(_apply(step, page, None, None))
+        except PlanError as exc:
+            if "no evaluation for plan step" in str(exc):
+                unhandled.append(kind.__name__)
+        except Exception:
+            pass            # any other failure means it *was* dispatched
+    assert unhandled == []
+
+
+def _sample(kind):
+    from webclient import plan as p
+    blank = p.Plan()
+    samples = {
+        p.CallStep: p.CallStep(op="attr", args=[p.Arg(value="text")]),
+        p.LiteralStep: p.LiteralStep(value=1),
+        p.BinOpStep: p.BinOpStep(operator="eq", right=p.Arg(value=1)),
+        p.ThenStep: p.ThenStep(fields=[]),
+        p.MapStep: p.MapStep(fields=[]),
+        p.FilterStep: p.FilterStep(predicate=blank),
+        p.OtherwiseStep: p.OtherwiseStep(sentinel="null"),
+        p.ExplodeStep: p.ExplodeStep(path="x"),
+        p.LimitStep: p.LimitStep(count=1),
+    }
+    return samples[kind]
+
+
+def test_an_unknown_step_raises_rather_than_passing_through(page):
+    import asyncio
+
+    from webclient.execute import _apply
+
+    class Rogue:
+        kind = "rogue"
+
+    with pytest.raises(PlanError, match="no evaluation for plan step"):
+        asyncio.run(_apply(Rogue(), page, None, None))
