@@ -26,12 +26,18 @@ Evidence gathered against the current tree, not impressions:
 
 Settled in design review; revisit only with cause.
 
-1. **One op declaration, two bindings.** `@op` records name, typed signature,
-   return kind, purity, capability and resource once. Eager surfaces bind to
-   implementations; `LazyDocument`/`LazyElement` are *generated* recorders
-   over the same registry, with a generated `.pyi` checked in CI. The plan
-   evaluator calls the same bound implementations — there is no second
-   `select`. This is the structural fix for the divergence class of bug.
+1. **One class, two evaluation modes.** `then` / `map` / `otherwise` /
+   `filter` are methods on the real classes; the module roots `doc`, `el`,
+   `ref` are those same classes with `is_lazy=True`. Eager calls evaluate,
+   lazy calls record, through one implementation. **No generated twin, no
+   `.pyi`, no codegen** — eager and lazy cannot drift because they are
+   literally the same method. `@op` still declares purity, capability,
+   resource and cardinality as metadata the scheduler and validator read.
+2. **Ops return `Value[T]` / `Selection[T]`.** A wrapper is materialised
+   eagerly and unevaluated lazily, so `.alias()`/`.otherwise()`/`.map()` are
+   type-visible in both modes. `.get()` unwraps on the eager path. Declaring
+   raw returns (`attr -> str`) would make `.alias()` a type error on `str` in
+   the language's most common idiom.
 2. **One `Document`, surfaces as mixins, capability from the backing.**
    `Document(SelectSurface, InteractSurface, DomSurface, RenderSurface)`.
    Ops are flat. An op the backing can't serve raises `UnsupportedOperation`
@@ -50,9 +56,21 @@ Settled in design review; revisit only with cause.
    `render(format)` is the only render op. One op, one IR node, one stub
    signature, overloads narrowing returns.
 8. **Two lazy roots**: `doc` (the document), `el` (current element in `map`).
-9. **Error model**: `.on_error("null"|"drop"|"fail")` step-level, default
-   `fail`; `.require(*fields)` row-level. Documents may occupy intermediate
-   columns; `collect()` drops non-scalar columns unless `keep=` names them.
+9. **Two record constructors, one error combinator.** `then(...)` is one
+   context → one record; `map(...)` is `then` lifted over a collection. Both
+   take positional expressions named by `.alias()` and keyword expressions.
+   `otherwise(...)` takes either a **recovery projection** or a sentinel
+   (`RAISE_ERROR` / `DROP_ROW` / `NULL`), absorbing what was `on_error` plus
+   `require` plus plan-level strictness. Recovery blocks see two roots — `doc`
+   (context reached at failure, possibly synthetic) and `err` (the failure) —
+   and produce **tagged** records carrying `ok`. Results are trees, not
+   tables; `.explode(path)` flattens for tabular consumers. A resolved
+   document is the *context* of the `then` that projects it, so Documents
+   never need parking in columns.
+9b. **Documents accumulate extractions.** An eager `then` stores its record on
+   the document (`doc.fields`), and `field(name)` means one thing in both
+   modes: a value already extracted in this context — the record being built
+   in a plan, `doc.fields` on a Document.
 10. **No event bus.** `doc.telemetry` is a typed record written directly by
     the backing; `wc.on(RecordType, handler)` dispatches by class for
     streaming consumers.
@@ -75,7 +93,8 @@ webclient/
   pool.py          Pool[T], http + page factories, leases
   telemetry.py     typed records, observer registry
   render/          registry + core renderers
-  lazy/            ir.py · record.py · _generated.pyi · plan.py · eval.py
+  values.py        Value[T], Selection[T], Expr — the wrapper types
+  lazy/            ir.py · plan.py (compile) · eval.py
   sync.py          generated sync facade (anyio blocking portal)
 ```
 
@@ -108,18 +127,20 @@ class InteractSurface:
 ```
 
 `capability` drives `UnsupportedOperation`; `pure`/`resource` drive the
-scheduler; `cardinality` is what the recorder and evaluator both read, so
-element-wise mapping is one declared fact rather than two assumptions;
-the signature drives record-time validation and the generated stub.
+scheduler; `cardinality` is what recording and evaluation both read, so
+element-wise mapping is one declared fact rather than two assumptions. The
+same decorated method serves both modes — it branches on `self.is_lazy` once,
+at the top, and everything after that is the single implementation.
 
 ### Lazy IR
 
 ```
 Plan   = { version, source, steps }
 Source = Context | Reference(url) | Document(id)
-Step   = Call(op, args) | Map(fields) | Filter(plan) | Require(fields)
-       | OnError(policy) | Explode(field) | Limit(n)
-Arg    = Literal(v) | Field(name) | Sub(Plan)
+Step   = Call(op, args) | Then(fields) | Map(fields) | Filter(plan)
+       | Otherwise(recovery | sentinel) | Explode(path) | Limit(n)
+Field  = { name, plan }        # from .alias() or a keyword
+Arg    = Literal(v) | FieldRef(name) | Sub(Plan)
 ```
 
 Typed pydantic unions throughout — an Expr as an argument is `Sub`, a
@@ -141,17 +162,19 @@ Each ships importable, tested, `mypy --strict` clean on new modules, with
 - **R0 — walking skeleton.** `ops.py` + registry + capability errors;
   `Reference`; `Backing` protocol with `Static` + `Http`; `Document` with
   `SelectSurface` only; `Element` addressing; `pool.py` http leases;
-  `WebClient.resolve`; sync facade + `.core`; stub generation + CI check.
+  `WebClient.resolve`; `Value`/`Selection`; sync facade + `.core`.
   Fix `pyproject` packages.
   *Gate:* `EXAMPLES.md` §1 runs verbatim; a browser op raises
-  `UnsupportedOperation`; redirect link resolution is correct; generated
-  stub matches the registry.
-- **R1 — lazy core.** IR, generated `LazyDocument`/`LazyElement`,
-  record-time validation, DAG compile, evaluator over the same op impls,
-  `map`/`filter`/`require`/`on_error`/`explode`, `explain`, JSON round-trip.
+  `UnsupportedOperation`; redirect link resolution is correct;
+  `mypy --strict` clean including `.alias()` on an `attr()` result.
+- **R1 — the expression language.** `is_lazy` recording on the real classes,
+  `then`/`map`/`otherwise`/`filter`/`alias`/`explode`, `doc.fields` +
+  `field()`, IR, record-time validation, DAG compile, evaluator over the same
+  op implementations, `explain`, JSON round-trip.
   *Gate:* differential corpus — every example plan run eagerly and lazily,
   identical results; a test asserting every IR node kind is implemented or
-  raises; nested-map correctness; bounded-fan-out memory test.
+  raises; nested-map correctness; tagged-recovery shapes; bounded-fan-out
+  memory test.
 - **R2 — render.** Registry + `markdown`/`readable`/`links`/`elements`
   ported from the current renderers. *Gate:* golden files, plugin format
   registration.
