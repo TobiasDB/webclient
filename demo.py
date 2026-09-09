@@ -20,6 +20,7 @@ from webclient import (
     WebClient,
     q,
 )
+from webclient.models import Document
 
 PAGE = b"""
 <html><head><title>Demo Shop</title></head><body>
@@ -285,3 +286,64 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+class LazyExpr:
+    """A lazy expression tree that builds a QueryPlan instead of executing."""
+
+    is_lazy: bool = True # Swaps the runtime behaviour of OPs to be lazy
+
+    def map(self, **kwargs) -> LazyExpr:
+        """Map a dict of column names to lazy expressions."""
+        raise NotImplementedError("map must be implemented by subclasses")
+
+    def project(self, *columns) -> LazyExpr:
+        """Project a subset of columns from the lazy expression."""
+        raise NotImplementedError("project must be implemented by subclasses")
+
+    def filter(self, condition) -> LazyExpr:
+        """Filter rows based on a lazy condition expression."""
+        raise NotImplementedError("filter must be implemented by subclasses")
+
+    def optional(self, mode: Literal["skip", "keep", "error"] = "keep") -> LazyExpr:
+        """Mark the lazy expression as optional (lenient)."""
+        raise NotImplementedError("optional must be implemented by subclasses")
+
+    def require(self, mode: Literal["skip", "keep", "error"] = "skip") -> LazyExpr:
+        """Require that certain columns must be present in the lazy expression."""
+        raise NotImplementedError("require must be implemented by subclasses")
+
+
+    def to_query(self) -> dict:
+        """Serialize the lazy expression to a QueryPlan dict."""
+        raise NotImplementedError("to_query must be implemented by subclasses")
+
+    def explain(self) -> str:
+        """Return a human-readable explanation of the lazy expression."""
+        raise NotImplementedError("explain must be implemented by subclasses")
+
+    
+class LazyDocument(Document, LazyExpr): ...
+    # stubs go here; the actual implementation is in the Document class, all methods are typed to return Lazy classes / LazyValue
+
+doc = LazyDocument()
+ref = LazyReference()
+doc.select_all(".card").map(
+    title=doc.select(".title").text,
+    price=doc.select(".price").text,
+    link=doc.select("a").attr("href"),
+).filter(field("price") != "")
+
+# Lazy items can also be rooted -> they dont need additional runtime context to be executed
+ref("http://example.com").fetch().select_all(".card").map(
+    title=doc.select(".title").text,
+    price=doc.select(".price").text,
+    link=doc.select("a").attr("href"),
+).filter(field("price") != "")
+
+# Similarly documents can be rooted to an ID  to reference a doc already loaded, if non is specified it will be assumed to be the current document from the context
+doc("1234").select_all(".card").map(
+    title=doc.select(".title").text,
+    price=doc.select(".price").text,
+    link=doc.select("a").attr("href"),
+).filter(field("price") != "")
