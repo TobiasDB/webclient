@@ -67,4 +67,7 @@ class Session(BaseModel):
         self.status = "closed"
 
     def __repr__(self) -> str:
-        return f"Session({self.id[:8]}, {self.status})"
+        return (f"Session({self.id[:8]}, {self.status}, "
+                f"cookies={len(self.cookies)})")
+
+    __str__ = __repr__

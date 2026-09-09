@@ -109,7 +109,8 @@ def _record(obj: Any, spec: OpSpec, args: tuple[Any, ...],
 def _check_capability(obj: Any, spec: OpSpec) -> None:
     if spec.capability is None:
         return
-    capabilities = getattr(obj, "_capabilities", frozenset())
+    capabilities: frozenset[str] = getattr(obj, "_capabilities",
+                                            frozenset())
     if spec.capability in capabilities:
         return
     handler = getattr(obj, "_capability_error", None)

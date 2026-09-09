@@ -359,32 +359,35 @@ async def _filter(step: FilterStep, value: Any, client: Any,
 
 
 def _explode(step: ExplodeStep, value: Any) -> RecordSet:
-    parts = step.path.split(".")
-    rows: list[Any] = []
-
-    def walk(record: Any, path: Sequence[str]) -> None:
-        if not path:
-            rows.append(record)
-            return
-        head, rest = path[0], path[1:]
-        if not isinstance(record, Mapping) or head not in record:
-            raise PlanError(f"explode: no column {head!r} to flatten")
-        nested = record[head]
-        if not isinstance(nested, (list, tuple, RecordSet, Selection)):
-            raise PlanError(
-                f"explode: column {head!r} is not a collection")
-        outer = {k: v for k, v in record.items() if k != head}
-        for item in nested:
-            merged = dict(outer)
-            if isinstance(item, Mapping):
-                merged.update(item)
-            else:
-                merged[head] = item
-            walk(merged, rest) if rest else rows.append(Record(merged))
-
+    """Flatten a list-valued column, dotted paths included."""
+    rows: list[Record] = []
     for record in _iterate(value):
-        walk(record, parts)
+        rows.extend(_flatten(record, step.path.split(".")))
     return RecordSet(rows)
+
+
+def _flatten(record: Any, path: Sequence[str]) -> list[Record]:
+    if not path:
+        return [record if isinstance(record, Record)
+                else Record(dict(record))]
+    head, rest = path[0], path[1:]
+    if not isinstance(record, Mapping) or head not in record:
+        raise PlanError(
+            f"explode: no column {head!r} to flatten "
+            f"(have: {', '.join(record) if isinstance(record, Mapping) else '?'})")
+    nested = record[head]
+    if not isinstance(nested, (list, tuple, RecordSet, Selection)):
+        raise PlanError(f"explode: column {head!r} is not a collection")
+    outer = {k: v for k, v in record.items() if k != head}
+    out: list[Record] = []
+    for item in nested:
+        merged = dict(outer)
+        if isinstance(item, Mapping):
+            merged.update(item)
+        else:
+            merged[head] = item
+        out.extend(_flatten(Record(merged), rest))
+    return out
 
 
 def _limit(step: LimitStep, value: Any) -> Any:

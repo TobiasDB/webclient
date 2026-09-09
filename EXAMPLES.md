@@ -1,8 +1,10 @@
 # Interface by example
 
-Worked use cases for the redesigned core, written *before* implementation so
-the interface can be judged on how it reads. Each section ends with
-**Friction** — where the design is still uncomfortable and a decision is owed.
+Worked use cases for the core, written *before* implementation so the
+interface could be judged on how it reads, then reconciled against the built
+code. **§1–§11 and §13 are implemented and exercised by `demo.py` and the test
+suite; §12 (remote) is deferred.** Where a section says a decision was owed,
+the decision is now recorded at the end.
 
 Naming decisions assumed throughout (all revisable, they are what these
 examples are testing):
@@ -54,10 +56,11 @@ single op covering real attributes and pseudo-attributes alike.
 ```python
     el.attr("text")     # normalised text content   -> Value[str]
     el.attr("html")     # outer HTML                -> Value[str]
-    el.attr("href")     # link attrs narrow         -> Value[Reference]
+    el.attr("href")     # link attrs narrow         -> Reference
     el.attr("data-id")  # any real attribute        -> Value[str]
     el.attr("nope")     # LookupError, or optional=True -> Value[None]
 
+    el.attr("href").resolve()      # so this is a complete thought
     el.attr("text").get()          # "Hello world" — explicit unwrap
     print(el.attr("text"))         # __str__, no unwrap needed
     el.attr("text") == "Hello"     # True — eager comparison
@@ -66,7 +69,7 @@ single op covering real attributes and pseudo-attributes alike.
 Documents accept the same op against their root, so `doc.attr("title")` and
 `doc.attr("text")` need no separate spellings. `doc.content` stays the raw
 bytes and the render surface keeps its own verb, `render(format)` (`markdown`, `readable`, `links`,
-`elements`), which now cannot be confused with an accessor.
+`elements`, `links`), which now cannot be confused with an accessor.
 
 One op means one IR node, one generated stub signature, and one place where
 overloads narrow the return type — instead of `text`, `html` and `attr` each
@@ -392,7 +395,7 @@ plan = (
             ),
         ),
     )
-    .otherwise(doc.RAISE_ERROR)
+    .otherwise(RAISE_ERROR)
 )
 ```
 
@@ -413,10 +416,12 @@ plan = (
 
 | Form | Meaning |
 |---|---|
-| `.otherwise(a=…, b=…)` | on failure, produce this record instead |
-| `.otherwise(doc.RAISE_ERROR)` | on failure, abort the whole plan |
-| `.otherwise(doc.DROP_ROW)` | on failure, drop the enclosing row |
-| `.otherwise(doc.NULL)` | on failure, yield null for this field |
+| `.otherwise(a=…, b=…)` | on failure, produce this record instead — **tagged** with `ok` |
+| `.otherwise(RAISE_ERROR)` | on failure, abort the whole plan |
+| `.otherwise(DROP_ROW)` | on failure, drop the enclosing row |
+| `.otherwise(NULL)` | on failure, yield null for this field |
+
+Only a recovery projection tags; a sentinel leaves the value alone.
 
 That single combinator absorbs the whole error model — the earlier design
 needed `on_error(policy)` **and** `require(*fields)` **and** a plan-level
@@ -459,7 +464,7 @@ plan = (
           chart = el.select("a").attr("href").resolve(browser=True)
                     .wait_stable()
                     .then(shot = doc.screenshot(".chart"))
-                    .otherwise(doc.NULL),
+                    .otherwise(NULL),
       ))
 )
 ```
@@ -536,7 +541,7 @@ in-process path validates the same structure a wire path would.
 
 ---
 
-## 12. Remote API — not a parallel class hierarchy
+## 12. Remote API — not a parallel class hierarchy *(deferred)*
 
 Because Elements are addresses and plans are serialisable, "remote" is a
 **backing plus an execution location**, not a second API:
@@ -606,7 +611,8 @@ wc.scrape("https://app.example.com", browser=True,
 5. ~~Sub-plan dedupe vs Documents-in-columns~~ — **settled**: Documents may
    sit in intermediate columns; `collect()` drops non-scalar columns unless
    `keep=` names them. No invisible dedupe (§8).
-6. Whether remote supports imperative ops or plans/renders only (§12).
+6. Whether remote supports imperative ops or plans/renders only (§12) —
+   **still open**, deferred with remote itself.
 7. ~~Generated lazy twin + `.pyi`~~ — **superseded**: `then`/`map`/`otherwise`
    are methods on the real classes, so the lazy root is the same class with
    `is_lazy=True`. No codegen, no stub (§6).

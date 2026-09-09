@@ -18,8 +18,8 @@ from typing_extensions import Self
 
 from .errors import PlanError, WebClientError
 from .plan import (Arg, BinOpStep, CallStep, ExplodeStep, FilterStep,
-                   LimitStep, MapStep, OtherwiseStep, Plan, Projection,
-                   Sentinel, Source, ThenStep)
+                   LimitStep, MapStep, Operator, OtherwiseStep, Plan,
+                   Projection, Sentinel, Source, ThenStep)
 
 T = TypeVar("T")
 
@@ -188,7 +188,7 @@ class Expr:
         return collect_plan(self._plan_or_new(), context, client=client)
 
     # -- operators ----------------------------------------------------------
-    def _binop(self, operator: str, other: Any = None) -> Any:
+    def _binop(self, operator: Operator, other: Any = None) -> Any:
         if self.is_lazy:
             return self._respawn(
                 self._plan_or_new().extend(
@@ -241,7 +241,7 @@ _RESULT_OF: dict[str, str] = {
     "explode": "RecordSet", "limit": "Selection", "otherwise": "Record",
 }
 
-_EAGER_OPS: dict[str, Callable[[Any, Any], Any]] = {
+_EAGER_OPS: dict[Operator, Callable[[Any, Any], Any]] = {
     "eq": lambda a, b: a == b, "ne": lambda a, b: a != b,
     "lt": lambda a, b: a < b, "le": lambda a, b: a <= b,
     "gt": lambda a, b: a > b, "ge": lambda a, b: a >= b,

@@ -95,9 +95,13 @@ def _main(root: Any) -> Any:
 
 def markdown(document: Any, *, main_content_only: bool = False) -> str:
     root = document._backing.tree()
+    target = _main(root) if main_content_only else root
     out: list[str] = []
-    _blocks(_main(root) if main_content_only else root, out)
-    return "\n\n".join(b for b in out if b.strip())
+    _blocks(target, out)
+    rendered = "\n\n".join(b for b in out if b.strip())
+    # A document with only inline content has no blocks; returning "" for it
+    # would be technically true and practically useless.
+    return rendered or _inline(target)
 
 
 def readable(document: Any) -> str:
@@ -159,11 +163,28 @@ def elements(document: Any) -> list[Block]:
                 walk(child)
 
     walk(root)
+    if not out:
+        text = _norm("".join(root.itertext()))
+        if text:
+            out.append(Block(id="e1", type="text", text=text))
     return out
 
 
 def raw_html(document: Any) -> str:
     return document._backing.text
+
+
+def links(document: Any, *, selector: str = "a[href]") -> list[Any]:
+    """Every link as a Reference, resolved against the URL that answered."""
+    base = document._link_base()
+    out = []
+    for element in document._backing.tree().cssselect(selector):
+        for name in ("href", "src", "action"):
+            value = element.get(name)
+            if value:
+                out.append(base.join(value))
+                break
+    return out
 
 
 def install(registry: RendererRegistry) -> None:
@@ -172,3 +193,4 @@ def install(registry: RendererRegistry) -> None:
         registry.register(kind, "readable", readable)
         registry.register(kind, "elements", elements)
         registry.register(kind, "html", raw_html)
+        registry.register(kind, "links", links)

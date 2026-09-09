@@ -1,349 +1,406 @@
-"""demo.py -- one clean tour of every implemented webclient feature.
+#!/usr/bin/env python
+"""A tour of everything webclient currently does, against a local server.
 
-Maintained with every milestone. Sections marked [M<n>] appear as their
-milestone lands; the interface spec is /models.py, the roadmap PLAN.md.
+Run: python demo.py            (add --no-browser to skip the playwright part)
 
-Runs fully offline: it serves its own demo site on localhost.
-
-    env/bin/python demo.py
+Every section is a feature that exists; nothing here is aspirational.
 """
 from __future__ import annotations
 
-import http.server
+import argparse
+import json
+import sys
 import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from webclient import (
-    DOMUpdateEvent,
-    NavigationEvent,
-    Reference,
-    Renderer,
-    WebClient,
-    q,
-)
-from webclient.models import Document
+from webclient import (DROP_ROW, NULL, RAISE_ERROR, Document, Plan,
+                       RequestRecord, ResolveError, StaleDocument,
+                       UnsupportedOperation, WebClient, doc, el, err, field,
+                       ref)
 
-PAGE = b"""
-<html><head><title>Demo Shop</title></head><body>
-<nav><a href="/about">about</a></nav>
-<main>
-  <h1>Featured Items</h1>
-  <p>Hand-picked <strong>daily</strong>.</p>
-  <div class="card"><h2 class="title">Aeropress</h2>
-    <a class="link" href="/items/1">view</a><span class="price">$39</span></div>
-  <div class="card"><h2 class="title">Grinder</h2>
-    <a class="link" href="/items/2">view</a><span class="price">$129</span></div>
-</main>
-<footer>fine print</footer>
-</body></html>
-"""
-ITEM = b'{"id": %d, "name": "%s", "stock": {"count": 7}}'
-APP = b"""
-<html><head><title>Live App</title></head><body>
-  <h1>Cart</h1>
-  <input id="qty" type="text">
-  <button id="add" onclick="document.querySelector('#cart').insertAdjacentHTML(
-    'beforeend', '<li>item x' + document.querySelector('#qty').value + '</li>')">add</button>
-  <ul id="cart"></ul>
-  <script>console.log("app ready");</script>
-</body></html>
-"""
+# --------------------------------------------------------------------------- #
+# A tiny site to scrape
+# --------------------------------------------------------------------------- #
+
+LISTING = """<html><head><title>Coffee Shop</title></head><body>
+<h1>Beans</h1>
+<p class="result-count">3 results</p>
+<div class="card"><h3>Ethiopia Guji</h3><span class="price">18.00</span>
+  <a href="/item/1">details</a></div>
+<div class="card"><h3>Kenya Nyeri</h3><span class="price">21.50</span>
+  <a href="/item/2">details</a></div>
+<div class="card"><h3>Mystery Lot</h3><span class="price"></span>
+  <a href="/item/404">details</a></div>
+<a class="next" href="/page/2">next page</a>
+</body></html>"""
+
+PAGE2 = """<html><body><h1>Beans</h1>
+<div class="card"><h3>Colombia Huila</h3><span class="price">17.00</span>
+  <a href="/item/1">details</a></div>
+</body></html>"""
+
+CATEGORIES = """<html><body>
+<div class="cat"><h2>Filter</h2>
+  <div class="item"><span class="label">Guji</span><span class="sku">F1</span></div>
+  <div class="item"><span class="label">Nyeri</span><span class="sku">F2</span></div>
+</div>
+<div class="cat"><h2>Espresso</h2>
+  <div class="item"><span class="label">Huila</span><span class="sku">E1</span></div>
+</div></body></html>"""
+
+LIVE = """<html><head><title>Live</title></head><body>
+<h1>Dashboard</h1>
+<table id="rows">
+  <tr class="row"><td class="name">alpha</td><td class="size">1</td></tr>
+  <tr class="row"><td class="name">beta</td><td class="size">2</td></tr>
+</table>
+<button id="more">load more</button>
+<script>
+document.getElementById('more').addEventListener('click', () => setTimeout(() => {
+  const tr = document.createElement('tr');
+  tr.className = 'row';
+  tr.innerHTML = '<td class="name">gamma</td><td class="size">3</td>';
+  document.getElementById('rows').appendChild(tr);
+}, 150));
+</script></body></html>"""
+
+SECOND = "<html><head><title>Second</title></head><body><h1>Second</h1></body></html>"
 
 
-class Handler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):  # noqa: N802
-        if self.path == "/":                       # html page
-            body, ctype = PAGE, "text/html; charset=utf-8"
-        elif self.path == "/items/1":              # json documents
-            body, ctype = ITEM % (1, b"Aeropress"), "application/json"
-        elif self.path == "/items/2":
-            body, ctype = ITEM % (2, b"Grinder"), "application/json"
-        elif self.path.startswith("/feed"):        # paginated + cookie-aware
-            from urllib.parse import parse_qs, urlparse
-            page = int(parse_qs(urlparse(self.path).query).get("p", ["1"])[0])
-            user = "friend" if "token=tok" in (self.headers.get("Cookie") or "") else "guest"
-            nxt = f'<a class="next" href="/feed?p={page + 1}">more</a>' if page < 3 else ""
-            body = (f"<html><body><h1>feed p{page} for {user}</h1>{nxt}"
-                    "</body></html>").encode()
-            ctype = "text/html"
-        elif self.path == "/login":                # sets a session cookie
-            self.send_response(200)
-            self.send_header("Set-Cookie", "token=tok; Path=/")
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write(b"welcome")
-            return
-        elif self.path == "/app":                  # a JS-driven live page
-            body, ctype = APP, "text/html"
-        elif self.path == "/old":                  # a redirect hop
-            self.send_response(302)
-            self.send_header("Location", "/")
-            self.end_headers()
-            return
-        else:
-            self.send_response(404)
-            self.end_headers()
-            self.wfile.write(b"lost")
-            return
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.end_headers()
-        self.wfile.write(body)
+class Handler(BaseHTTPRequestHandler):
+    hits: dict[str, int] = {}
 
-    def log_message(self, *args):  # quiet
+    def log_message(self, *args: object) -> None:
         pass
 
+    def do_GET(self) -> None:                                # noqa: N802
+        path = self.path
+        Handler.hits[path] = Handler.hits.get(path, 0) + 1
+        if path == "/listing":
+            return self._send(LISTING)
+        if path == "/page/2":
+            return self._send(PAGE2)
+        if path == "/categories":
+            return self._send(CATEGORIES)
+        if path == "/live":
+            return self._send(LIVE)
+        if path == "/second":
+            return self._send(SECOND)
+        if path.startswith("/item/") and path != "/item/404":
+            n = path.rsplit("/", 1)[-1]
+            return self._send(json.dumps(
+                {"id": n, "origin": f"origin-{n}", "roast": "medium"}),
+                content_type="application/json")
+        if path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", "/deep/final")
+            self.end_headers()
+            return
+        if path == "/deep/final":
+            return self._send('<html><body><a href="sibling.html">rel</a>'
+                              "</body></html>")
+        if path == "/flaky":
+            status = 503 if Handler.hits[path] == 1 else 200
+            return self._send("<p>steady</p>", status=status)
+        if path == "/set-cookie":
+            self.send_response(200)
+            self.send_header("Set-Cookie", "token=s3cret; Path=/")
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<p>ok</p>")
+            return
+        if path == "/whoami":
+            cookie = self.headers.get("Cookie", "(none)")
+            return self._send(f"<p>{cookie}</p>")
+        self._send("<h1>Not Found</h1>", status=404)
 
-def serve() -> str:
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    def _send(self, body: str, *, status: int = 200,
+              content_type: str = "text/html") -> None:
+        payload = body.encode()
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+def serve() -> tuple[HTTPServer, str]:
+    server = HTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    return f"http://127.0.0.1:{server.server_port}"
+    return server, f"http://127.0.0.1:{server.server_port}"
 
 
-def main() -> None:
-    base = serve()
+# --------------------------------------------------------------------------- #
 
-    # [M1] References are pure request specs -- build, derive, inspect.
-    ref = Reference.from_url(f"{base}/?utm=x", params={"page": "1"})
-    print("url:        ", ref.url)
-    print("derived:    ", ref.with_params(page="2").replace(fragment="top").url)
-    print("joined:     ", ref.join("items/1").url)
+def title(text: str) -> None:
+    print(f"\n\033[1m{text}\033[0m\n" + "─" * len(text))
 
-    # [M2] A WebClient owns the pool, bus, plugins; it is the lifecycle root.
-    with WebClient(default_headers={"user-agent": "webclient-demo"}) as wc:
 
-        # [M2] Live event stream: everything observable crosses one bus.
-        wc.bus.subscribe("network", lambda e: print(
-            f"event:       {e.topic} #{e.seq} {e.status_code} {e.request.path}"))
+def show(label: str, value: object) -> None:
+    print(f"  {label:<22} {value}")
 
-        # [M2] Fetch through a redirect; loud by default, optional=True lenient.
-        doc = wc.ref(f"{base}/old").fetch()
-        print("final url:  ", doc.final_url)
-        missing = wc.ref(f"{base}/nope").fetch(optional=True)
-        print("optional:   ", missing.status_code, "ok:", missing.ok)
 
-        # [M1] Selection: css or xpath, elements only; index/optional knobs.
-        for card in doc.select_all(".card"):
-            title = card.select(".title").text
-            price = card.select("./span[@class='price']").text     # xpath
-            link = card.select("a").attr("href")                   # -> Reference
-            # [M2] Follow the link: json documents get typed access + query.
-            item = link.fetch()
-            print(f"card:        {title} {price} -> "
-                  f"{item.json.data['name']} (stock {item.json.query('stock.count')})")
+# --------------------------------------------------------------------------- #
 
-        # [M1] Typed views + [M2] plugin-backed representations.
-        page = doc.html
-        print("title:      ", page.title)
-        print("markdown:   ", page.markdown.splitlines()[0])
-        print("text:       ", page.render("text", main_content_only=True)[:40])
-        print("elements:   ", [(e.type, e.text) for e in page.elements][:3])
-        print("links:      ", [r.path for r in page.links()])
+def core(wc: WebClient, base: str) -> Document:
+    title("1. Resolving — one verb, one Document")
+    listing = wc.resolve(f"{base}/listing")
+    show("status", listing.status_code.get())
+    show("final_url", listing.final_url.get())
+    show("title", listing.attr("title").get())
+    show("h1", listing.select("h1").attr("text").get())
+    show("cards", len(listing.select_all(".card")))
+    show("backing", listing._backing_name)
 
-        # [M2] Events routed onto the document that caused them.
-        print("doc events: ", [e.topic for e in doc.events])
-        print("navigations:", [e.status_code for e in doc.events_of(NavigationEvent)])
-        print("actions:    ", list(doc.actions))   # empty until browser (M4)
+    title("2. One accessor — attr(), real and pseudo attributes")
+    card = listing.select(".card", index=1)
+    show('attr("text")', card.select("h3").attr("text").get())
+    show('attr("href")', card.select("a").attr("href").url)
+    show("element address", card.path)
+    show('attr("nope")', card.attr("nope", optional=True).get())
 
-        # [M2] Plugins: replace a core renderer by registration alone.
-        class Shouty(Renderer):
-            name: str = "shouty"
-            kind: str = "html"  # type: ignore[assignment]
-            formats: list[str] = ["markdown"]
+    title("3. Links resolve against the URL that answered")
+    redirected = wc.resolve(f"{base}/redirect")
+    show("requested", f"{base}/redirect")
+    show("answered", redirected.final_url.get())
+    show("relative link", redirected.select("a").attr("href").url)
+    show("redirect hops", [r.status for r in redirected.telemetry.redirects])
 
-            def render(self, document, format, **options):
-                return document.html.title.upper()
+    title("4. Representations — one render op, format by name")
+    show("markdown", listing.render("markdown").get().splitlines()[0])
+    show("elements", [b.type for b in listing.render("elements").get()][:5])
+    show("links", len(listing.render("links").get()))
+    show("formats", wc.renderers.formats("html"))
 
-        wc.use(Shouty())
-        print("plugin:     ", doc.render("markdown"))
+    def shouty(document: Document) -> str:
+        return document.select("h1").attr("text").get().upper()
 
-        # [M3] Sessions: identity (cookies/headers) spanning fetches, with a
-        #      ttl'd lifecycle. Cookies set by responses persist; sessions
-        #      are isolated from each other.
-        session = wc.session(ttl=300, headers={"x-app": "demo"})
-        session.ref(f"{base}/login").fetch()
-        print("session:    ", session.status, "cookies:", session.cookies)
+    wc.renderers.register("html", "shouty", shouty)
+    show('custom "shouty"', listing.render("shouty").get())
 
-        # [M3] paginate(): walk a next-link chain (selector, callable, or
-        #      iterable of params), with until/limit/offset/resume knobs.
-        feed = session.ref(f"{base}/feed").fetch()
-        for page_doc in feed.paginate("a.next", limit=3):
-            print("page:       ", page_doc.select("h1").text)
+    title("5. Capability is runtime state, and errors say so")
+    show("supports(browser)", listing.supports("browser"))
+    try:
+        listing.click(".next")
+    except UnsupportedOperation as exc:
+        show("click()", str(exc))
 
-        # [M4] browser=True -> a LiveDocument backed by a real page. Actions
-        #      auto-wait and are recorded; the DOM/console/network are
-        #      captured onto the document as events.
-        live = wc.ref(f"{base}/app").fetch(browser=True)
-        live.write("#qty", "3").click("#add")
-        live.wait_for("#cart li", timeout=5.0)
-        print("live dom:   ", live.select("#cart li").text)
-        print("console:    ", [e.text for e in live.console])
-        print("dom events: ", len(live.dom_mutations), "mutations captured")
+    title("6. Telemetry — records, no bus")
+    seen: list[RequestRecord] = []
+    wc.on(RequestRecord, seen.append)
+    wc.resolve(f"{base}/listing")
+    show("observed", [(r.status, f"{r.ms:.0f}ms") for r in seen])
+    show("per-document", listing.telemetry)
+    return listing
 
-        # [M4] LiveNode event narrowing: an element sees only its own subtree.
-        cart = live.select("#cart")
-        print("narrowed:   ", len(cart.events_of(DOMUpdateEvent)), "under #cart")
 
-        # [M4] A recording replays onto a fresh page to reproduce state.
-        actions = list(live.actions)
-        wc.release(live)                            # page back to the pool
-        replayed = wc.ref(f"{base}/app").fetch(browser=True)
-        replayed.replay(actions)
-        print("replayed:   ", replayed.select("#cart li", optional=True) is not None)
-        wc.release(replayed)
-
-        # [M2] Pool stats: bounded leases over http clients AND browser pages.
-        print("pool:       ", wc.pool.stats())
-
-    # [M5] Lazy plans: the same interface, recorded not executed. Build a
-    #      declarative extraction pipeline; it serializes to a QueryPlan --
-    #      the wire format for the future HTTP/websocket API.
-    plan = (
-        q.ref.fetch().select_all(".card")
-        .map(
-            title=q.node.select(".title").text,
-            price=q.node.select(".price").text,
-            link=q.node.select("a").attr("href"),
-        )
-        .filter(q.col("price") != "")
+def expressions(listing: Document, base: str, wc: WebClient) -> None:
+    title("7. then / map — evaluated now, on a real Document")
+    record = listing.then(
+        doc.select("h1").attr("text").alias("category"),
+        count=doc.select(".result-count").attr("text"),
+        rows=doc.select_all(".card").map(
+            el.select("h3").attr("text").alias("title"),
+            price=el.select(".price").attr("text").otherwise(NULL),
+            link=el.select("a").attr("href"),
+        ),
     )
-    print("\nlazy plan:")
+    show("category", record["category"])
+    show("count", record["count"])
+    for row in record["rows"]:
+        show("  row", {"title": row["title"], "price": row["price"],
+                       "link": row["link"].url})
+
+    title("8. Extractions are stored on the Document")
+    show("doc.fields", sorted(listing.fields))
+    show('field("category")', listing.field("category").get())
+
+    title("9. filter, explode, limit")
+    priced = (listing.select_all(".card")
+              .map(el.select("h3").attr("text").alias("title"),
+                   price=el.select(".price").attr("text"))
+              .filter(field("price") != ""))
+    show("filtered", [r["title"] for r in priced])
+
+    categories = Document.from_content(CATEGORIES, url=f"{base}/categories")
+    nested = categories.select_all(".cat").map(
+        el.select("h2").attr("text").alias("name"),
+        items=el.select_all(".item").map(
+            el.select(".label").attr("text").alias("label"),
+            sku=el.select(".sku").attr("text")),
+    )
+    show("nested", [(r["name"], len(r["items"])) for r in nested])
+    show("exploded", [dict(r) for r in nested.explode("items")])
+
+    title("10. The same expression, recorded instead of run")
+    plan = doc.select_all(".card").map(
+        el.select("h3").attr("text").alias("title"))
+    show("eager", [r["title"] for r in listing.select_all(".card").map(
+        el.select("h3").attr("text").alias("title"))])
+    show("lazy", [r["title"] for r in plan.collect(listing)])
+    print()
     print("  " + plan.explain().replace("\n", "\n  "))
-    print("wire form:  ", plan.to_query().model_dump_json()[:70], "...")
 
-    # [M6] Executor: run the plan. Fetches lease from the pool, map() fans
-    #      out per element with bounded concurrency, rows stream as ready.
-    with WebClient() as wc:
-        rows = plan.collect(wc.ref(f"{base}/"))
-        for row in rows:
-            print(f"  row:       {row['title']} {row['price']} "
-                  f"-> {row['link'].path}")
+    title("11. Plans are the serialisation")
+    blob = plan.to_plan().model_dump_json()
+    show("json bytes", len(blob))
+    from webclient.execute import collect_plan
+    restored = Plan.model_validate_json(blob)
+    show("re-run", [r["title"] for r in collect_plan(restored, listing)])
 
-        # [M6] A pipeline that follows each card's link (then + col) and
-        #      pulls a field from the JSON detail page -- streamed.
-        enriched = (
-            q.ref.fetch().select_all(".card")
-            .map(title=q.node.select(".title").text,
-                 link=q.node.select("a.link").attr("href"))
-            .then(name=q.col("link").fetch().json.query("name"))
+    title("12. otherwise — recovery keeps what the failure told you")
+    followed = (
+        ref(f"{base}/listing").resolve()
+        .then(
+            doc.select("h1").attr("text").alias("board"),
+            rows=doc.select_all(".card").map(
+                el.select("h3").attr("text").alias("title"),
+                link=el.select("a").attr("href"),
+                detail=field("link").resolve().then(
+                    origin=doc.query("origin"),
+                    roast=doc.query("roast"),
+                ).otherwise(
+                    status=doc.status_code,
+                    message=err.message,
+                    where=err.op,
+                ),
+            ),
         )
-        print("streamed:")
-        for row in enriched.collect(wc.ref(f"{base}/"), stream=True):
-            print("  detail:   ", row["title"], "->", row["name"])
-    # [M7] The same WebClient behind an HTTP API -- browser as a service.
-    #      Documents are handles; content crosses the wire only via /render
-    #      or /select, and plans are submitted as QueryPlan JSON.
-    from fastapi.testclient import TestClient
+        .otherwise(RAISE_ERROR)
+    ).collect(client=wc)
+    show("board", followed["board"])
+    for row in followed["rows"]:
+        detail = row["detail"]
+        summary = (f"ok origin={detail['origin']}" if detail["ok"]
+                   else f"FAILED status={detail['status']} {detail['message']}")
+        show(f"  {row['title'][:16]}", summary)
 
-    from webclient.service import create_app
 
-    with TestClient(create_app(token="demo")) as api:
-        auth = {"Authorization": "Bearer demo"}
-        meta = api.post("/fetch", json={"url": f"{base}/"}, headers=auth).json()
-        print("\nservice fetch:", {k: meta[k] for k in ("kind", "ok", "title")})
-        md = api.get(f"/documents/{meta['id']}/render",
-                     params={"format": "markdown"}, headers=auth).json()
-        print("service render:", md["result"].splitlines()[0])
-        titles = api.post(f"/documents/{meta['id']}/select",
-                          json={"selector": ".title", "all": True},
-                          headers=auth).json()
-        print("service select:", titles["values"])
-        plan = q.ref.fetch().select_all(".card").map(
-            title=q.node.select(".title").text).to_query()
-        rows = api.post("/plans", params={"url": f"{base}/"},
-                        json=plan.model_dump(), headers=auth).json()
-        print("service plan:  ", rows["rows"])
+def sessions_and_pages(wc: WebClient, base: str) -> None:
+    title("13. Sessions carry cookies and headers")
+    session = wc.session(headers={"X-Demo": "1"})
+    session.resolve(f"{base}/set-cookie")
+    show("session cookies", session.cookies)
+    show("echoed back", session.resolve(f"{base}/whoami")
+         .select("p").attr("text").get())
+    show("session", session)
 
-    # [remote] The RemoteWebClient drives that same service over HTTP with no
-    #      local browser or lxml -- httpx + pydantic only. The plan API is
-    #      identical to the local client; documents are handles.
-    import threading
-    import time
+    title("14. Pagination")
+    first = wc.resolve(f"{base}/listing")
+    pages = list(wc.paginate(first, ".next"))
+    show("pages walked", len(pages))
+    show("titles", [p.select("h1").attr("text").get() for p in pages])
 
-    import uvicorn
+    title("15. Middleware — retries are an ordered chain")
+    from webclient.middleware import observe, redirects, retry
+    with WebClient(middleware=[redirects(), retry(2, on_status=(503,)),
+                               observe()]) as flaky_client:
+        recovered = flaky_client.resolve(f"{base}/flaky")
+        show("final status", recovered.status_code.get())
+        show("retries", [(r.attempt, r.reason)
+                         for r in recovered.telemetry.retries])
 
-    from webclient import RemoteWebClient
+    title("16. scrape() — composition, not machinery")
+    out = wc.scrape(f"{base}/listing", formats=("markdown", "links"))
+    show("status", out["status"])
+    show("markdown head", out["formats"]["markdown"].splitlines()[0])
+    show("links", len(out["formats"]["links"]))
 
-    app = create_app(token="demo")
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0,
-                                           log_level="error"))
-    threading.Thread(target=server.run, daemon=True).start()
-    while not server.started:
-        time.sleep(0.01)
-    port = server.servers[0].sockets[0].getsockname()[1]
+    title("17. Errors are typed")
+    try:
+        wc.resolve(f"{base}/item/404")
+    except ResolveError as exc:
+        show("ResolveError", f"{exc} (document attached: "
+                             f"{exc.document is not None})")
+    lenient = wc.resolve(f"{base}/item/404", optional=True)
+    show("optional=True", f"ok={lenient.ok.get()} "
+                          f"message={lenient.message.get()}")
 
-    with RemoteWebClient(f"http://127.0.0.1:{port}", token="demo") as rc:
-        doc = rc.ref(f"{base}/").fetch()
-        print("\nremote fetch:  ", doc.title, "| ok:", doc.ok)
-        print("remote render: ", doc.markdown.splitlines()[0])
-        print("remote select: ", doc.select_all(".title"))
-        # identical plan API -- runs server-side, no local browser/lxml
-        same_plan = q.ref.fetch().select_all(".card").map(
-            title=q.node.select(".title").text)
-        print("remote plan:   ", same_plan.collect(rc.ref(f"{base}/")))
-    server.should_exit = True
-    app.state.wc.close()
+
+def browser(wc: WebClient, base: str) -> None:
+    title("18. The browser backing — same ops, different backing")
+    try:
+        live = wc.resolve(f"{base}/live", browser=True)
+    except Exception as exc:                                  # pragma: no cover
+        show("skipped", f"{type(exc).__name__}: {exc}")
+        return
+    try:
+        show("backing", live._backing_name)
+        show("supports(browser)", live.supports("browser"))
+        show("rows before", len(live.select_all(".row")))
+
+        element = live.select(".row", index=1)
+        show("element address", element.path)
+
+        live.click("#more").wait_stable(quiet_ms=250)
+        show("rows after", len(live.select_all(".row")))
+        show("address still valid",
+             element.select(".name").attr("text").get())
+
+        title("19. The same plan over both backings")
+        plan = doc.select_all(".row").map(
+            el.select(".name").attr("text").alias("name"),
+            size=el.select(".size").attr("text"))
+        static = wc.resolve(f"{base}/live")
+        show("http backing", [dict(r) for r in plan.collect(static)])
+        show("page backing", [dict(r) for r in plan.collect(live)][:2])
+
+        title("20. navigate() — the old Document keeps its snapshot")
+        second = live.navigate("/second")
+        show("new document", second.select("h1").attr("text").get())
+        show("old, static half", live.render("markdown").get().splitlines()[0])
+        show("old, supports()", live.supports("browser"))
+        try:
+            live.click("#more")
+        except StaleDocument as exc:
+            show("old, live half", str(exc))
+
+        shot = second.screenshot()
+        show("screenshot", f"{shot.kind.get()}, "
+                           f"{len(shot.content.get())} bytes")
+        show("console", second.telemetry.console)
+        wc.release(second)
+        show("pages held", wc.stats().pages_held)
+    finally:
+        try:
+            wc.release(live)
+        except Exception:
+            pass
+
+
+def async_passthrough(wc: WebClient, base: str) -> None:
+    title("21. Async is a pass-through, not a second API")
+    import anyio
+
+    async def main() -> None:
+        document = await wc.core.resolve(f"{base}/listing")
+        rendered = await document.core.render("markdown")
+        show("await wc.core.resolve", document.status_code.get())
+        show("await doc.core.render", rendered.get().splitlines()[0])
+
+    anyio.run(main)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--no-browser", action="store_true")
+    args = parser.parse_args()
+
+    server, base = serve()
+    print(f"\033[2mserving {base}\033[0m")
+    try:
+        with WebClient() as wc:
+            listing = core(wc, base)
+            expressions(listing, base, wc)
+            sessions_and_pages(wc, base)
+            if not args.no_browser:
+                browser(wc, base)
+            async_passthrough(wc, base)
+        print("\n\033[1mdone.\033[0m")
+    finally:
+        server.shutdown()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
-
-
-class LazyExpr:
-    """A lazy expression tree that builds a QueryPlan instead of executing."""
-
-    is_lazy: bool = True # Swaps the runtime behaviour of OPs to be lazy
-
-    def map(self, **kwargs) -> LazyExpr:
-        """Map a dict of column names to lazy expressions."""
-        raise NotImplementedError("map must be implemented by subclasses")
-
-    def project(self, *columns) -> LazyExpr:
-        """Project a subset of columns from the lazy expression."""
-        raise NotImplementedError("project must be implemented by subclasses")
-
-    def filter(self, condition) -> LazyExpr:
-        """Filter rows based on a lazy condition expression."""
-        raise NotImplementedError("filter must be implemented by subclasses")
-
-    def optional(self, mode: Literal["skip", "keep", "error"] = "keep") -> LazyExpr:
-        """Mark the lazy expression as optional (lenient)."""
-        raise NotImplementedError("optional must be implemented by subclasses")
-
-    def require(self, mode: Literal["skip", "keep", "error"] = "skip") -> LazyExpr:
-        """Require that certain columns must be present in the lazy expression."""
-        raise NotImplementedError("require must be implemented by subclasses")
-
-
-    def to_query(self) -> dict:
-        """Serialize the lazy expression to a QueryPlan dict."""
-        raise NotImplementedError("to_query must be implemented by subclasses")
-
-    def explain(self) -> str:
-        """Return a human-readable explanation of the lazy expression."""
-        raise NotImplementedError("explain must be implemented by subclasses")
-
-    
-class LazyDocument(Document, LazyExpr): ...
-    # stubs go here; the actual implementation is in the Document class, all methods are typed to return Lazy classes / LazyValue
-
-doc = LazyDocument()
-ref = LazyReference()
-doc.select_all(".card").map(
-    title=doc.select(".title").text,
-    price=doc.select(".price").text,
-    link=doc.select("a").attr("href"),
-).filter(field("price") != "")
-
-# Lazy items can also be rooted -> they dont need additional runtime context to be executed
-ref("http://example.com").fetch().select_all(".card").map(
-    title=doc.select(".title").text,
-    price=doc.select(".price").text,
-    link=doc.select("a").attr("href"),
-).filter(field("price") != "")
-
-# Similarly documents can be rooted to an ID  to reference a doc already loaded, if non is specified it will be assumed to be the current document from the context
-doc("1234").select_all(".card").map(
-    title=doc.select(".title").text,
-    price=doc.select(".price").text,
-    link=doc.select("a").attr("href"),
-).filter(field("price") != "")
+    sys.exit(main())

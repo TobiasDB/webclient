@@ -94,7 +94,11 @@ webclient/
   telemetry.py     typed records, observer registry
   render/          registry + core renderers
   values.py        Value[T], Selection[T], Expr — the wrapper types
-  lazy/            ir.py · plan.py (compile) · eval.py
+  records.py       Record, RecordSet, Err
+  plan.py          the typed plan IR
+  execute.py       the evaluator
+  explain.py       plan.explain()
+  roots.py         doc / el / ref / err / field
   sync.py          generated sync facade (anyio blocking portal)
 ```
 
@@ -154,12 +158,12 @@ first-class case, not a leaked dict. Rules the evaluator enforces:
 - Fan-out is a bounded work queue, not a materialised task list; a failing
   row cancels its siblings deterministically and orphans nothing.
 
-## 4. Milestones
+## 4. Milestones — **all delivered**
 
-Each ships importable, tested, `mypy --strict` clean on new modules, with
-`demo.py` extended to exercise everything landed so far.
+Each shipped importable, tested, mypy-clean, with `demo.py` extended to
+exercise everything landed so far (21 sections, all runnable).
 
-- **R0 — walking skeleton.** `ops.py` + registry + capability errors;
+- **R0 — walking skeleton.** ✅ `ops.py` + registry + capability errors;
   `Reference`; `Backing` protocol with `Static` + `Http`; `Document` with
   `SelectSurface` only; `Element` addressing; `pool.py` http leases;
   `WebClient.resolve`; `Value`/`Selection`; sync facade + `.core`.
@@ -167,7 +171,7 @@ Each ships importable, tested, `mypy --strict` clean on new modules, with
   *Gate:* `EXAMPLES.md` §1 runs verbatim; a browser op raises
   `UnsupportedOperation`; redirect link resolution is correct;
   `mypy --strict` clean including `.alias()` on an `attr()` result.
-- **R1 — the expression language.** `is_lazy` recording on the real classes,
+- **R1 — the expression language.** ✅ `is_lazy` recording on the real classes,
   `then`/`map`/`otherwise`/`filter`/`alias`/`explode`, `doc.fields` +
   `field()`, IR, record-time validation, DAG compile, evaluator over the same
   op implementations, `explain`, JSON round-trip.
@@ -175,23 +179,23 @@ Each ships importable, tested, `mypy --strict` clean on new modules, with
   identical results; a test asserting every IR node kind is implemented or
   raises; nested-map correctness; tagged-recovery shapes; bounded-fan-out
   memory test.
-- **R2 — render.** Registry + `markdown`/`readable`/`links`/`elements`
+- **R2 — render.** ✅ Registry + `markdown`/`readable`/`links`/`elements`
   ported from the current renderers. *Gate:* golden files, plugin format
   registration.
-- **R3 — browser backing.** `PageBacking`, page leases, context per
+- **R3 — browser backing.** ✅ `PageBacking`, page leases, context per
   session, `InteractSurface`, `DomSurface` (`wait_stable`, `wait_for`,
   `evaluate`, `screenshot`), node-id element addressing, `navigate` +
   snapshot-readable staleness. *Gate:* `EXAMPLES.md` §2 and §9 verbatim;
   **the same plan produces identical rows over http and page backings**;
   no lease leaks under `pool.stats()`.
-- **R4 — telemetry.** Records written by both backings; observer registry.
+- **R4 — telemetry.** ✅ Records written by both backings; observer registry.
   *Gate:* redirect chain, console lines, request timings; no subscription
   ordering anywhere in the code.
-- **R5 — sessions, middleware, pagination.** `Session` lifecycle and
+- **R5 — sessions, middleware, pagination.** ✅ `Session` lifecycle and
   storage_state; retry/proxy/cache as ordered `Middleware`; `paginate` as a
   plan construct. *Gate:* login flow in §2; retry policy unit-tested
   without network.
-- **R6 — cut over.** Delete superseded modules, port `demo.py` fully,
+- **R6 — cut over.** ✅ Delete superseded modules, port `demo.py` fully,
   replace root `models.py` with the new frozen interface, merge.
 
 ## 5. Deferred
@@ -200,8 +204,36 @@ Service/HTTP API, remote client and `RemoteBacking`, rrweb, DOM streaming
 and replay, CDP passthrough, pagination resume/prefetch, full retry policy
 (5xx/429/Retry-After/jitter), `scrape()` one-shot convenience.
 
-## 6. Open
+## 6. What changed during the build
+
+Recorded because each was a real decision, not a detail:
+
+- **`links` is a render format, not its own op.** It was going to be an op on
+  the grounds that it returns References rather than text — but a format
+  already returns whatever it means (`elements` returns typed blocks), so a
+  second name could not be justified.
+- **`attr("href")` returns a `Reference`, not `Value[Reference]`.** The op's
+  result class depends on its argument (`returns_for` on the spec), which
+  makes `attr("href").resolve()` a complete thought in both modes and one
+  that type-checks.
+- **Lazy wrappers forward unknown names to the op registry.** `field("link")`
+  must accept `.resolve()`, and a column's type is a run-time fact — so
+  `field()` is typed `Any` and lazy `Value`/`Selection` forward by name,
+  validating against the registry as they record. A typo fails at authoring
+  time with the list of known ops, which is the guarantee the old design's
+  record-time validation gave.
+- **`FieldStep` was deleted from the IR.** `field` is an op, so a second
+  node kind for it would have been a node the evaluator had to special-case —
+  exactly the sort of thing that used to get silently skipped.
+- **Renderers fall back for inline-only documents.** `markdown` and
+  `elements` returned empty for a document with no block elements, which is
+  technically true and practically useless.
+
+## 7. Open
 
 - Whether a remote client supports imperative ops at all, or only plans and
   renders (`EXAMPLES.md` §12). Deferred with remote; the address-based
   Element and serialisable IR keep both doors open.
+- A real retry policy (5xx / 429 / `Retry-After` / backoff + jitter). The
+  middleware seam is in place; the policy is deliberately not grown by
+  accident.

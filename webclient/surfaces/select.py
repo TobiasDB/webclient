@@ -62,8 +62,8 @@ class SelectSurface:
         return chain(found, lambda paths: Selection(
             [self._spawn_element(p) for p in paths]))
 
-    @overload
-    def attr(self, name: Literal["href", "src", "action"], *,
+    @overload  # link attrs deliberately narrow str -> Reference
+    def attr(self, name: Literal["href", "src", "action"], *,  # type: ignore[overload-overlap]
              optional: bool = ...) -> "Reference": ...
     @overload
     def attr(self, name: str, *, optional: bool = ...) -> Value[str]: ...

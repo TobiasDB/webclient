@@ -155,7 +155,7 @@ class _Core:
                        wait_until: str = "load") -> Document:
         wc = self._wc
         backing = document._backing
-        lease = backing.lease
+        lease = getattr(backing, "lease", None)
         telemetry = Telemetry(wc.observers)
         moved = type(backing)(backing.page, lease=lease, telemetry=telemetry,
                               request=reference, timeout=wc.timeout)
@@ -175,10 +175,11 @@ class _Core:
         backing = document._backing_obj
         wc = self._wc
         wc._live.pop(document.id, None)
-        if backing is None or getattr(backing, "lease", None) is None:
+        lease = getattr(backing, "lease", None) if backing else None
+        if lease is None:
             return
         await document._freeze(None)
-        await wc.pool.release(backing.lease)
+        await wc.pool.release(lease)
 
     # -- pagination ----------------------------------------------------------
     async def pages(self, start: Document, on: Any, *, until: Any = None,
@@ -212,7 +213,8 @@ class _Core:
     def _next_reference(document: Document, on: Any, iterator: Any,
                         first: Reference) -> Reference | None:
         if callable(on):
-            return on(document)
+            following: Reference | None = on(document)
+            return following
         if isinstance(on, str):
             node = document.select(on, optional=True)
             if node is None:

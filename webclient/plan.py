@@ -16,6 +16,8 @@ from typing import Annotated, Any, Literal, Union
 from pydantic import BaseModel, Field as PydanticField
 
 Sentinel = Literal["raise", "drop", "null"]
+Operator = Literal["eq", "ne", "lt", "le", "gt", "ge", "and", "or", "not",
+                   "contains"]
 
 
 # --------------------------------------------------------------------------- #
@@ -79,8 +81,7 @@ class LiteralStep(BaseModel):
 
 class BinOpStep(BaseModel):
     kind: Literal["binop"] = "binop"
-    operator: Literal["eq", "ne", "lt", "le", "gt", "ge", "and", "or", "not",
-                      "contains"]
+    operator: Operator
     right: Arg | None = None
 
 
