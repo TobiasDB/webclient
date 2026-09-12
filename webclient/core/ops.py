@@ -1,50 +1,60 @@
 """Op dispatch (PLAN §9): the surface objects (Reference/Document/Collection/
 Field) are data; their *behaviour* lives here as registered ops, and the
 executor runs a plan step by dispatching through this module rather than
-calling a method on the value. Each op is wrapped by the same ``@policy``
-envelope the methods used, so error/capability semantics are unchanged.
+calling a method on the value. Each op is the same ``@policy``-wrapped body
+the method had -- ``self`` is the value the executor is walking.
 
-Migration is incremental and green: an op not yet moved off its class falls
-back to the method on the value. Once every op is registered, the classes
-carry no methods and the fallback is dead.
+Ops register against a receiver class name and ``run_op`` resolves by walking
+the value's MRO, so a ``WebBase`` op serves every subclass while a
+``Collection`` override wins for a collection. Migration stays green: an op
+not yet registered for a value falls back to a method on it.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence, cast
 
-from .base import RETURN, ErrorPolicy, policy
+from .base import (CLASSES, RETURN, ErrorPolicy, Field, OpError, _gather,
+                   _plain, policy)
 
 if TYPE_CHECKING:
+    from .base import Collection, WebBase
     from .document import Document, Reference
-    from .base import Collection, Field
 
-#: op-name -> callable(value, *args, **kwargs); @policy-wrapped like the methods
-CALL_OPS: dict[str, Callable[..., Any]] = {}
-#: computed accessors read as a bare attribute (no call): name -> fn(value)
-PROP_OPS: dict[str, Callable[..., Any]] = {}
+#: receiver-class-name -> {op-name -> callable(self, *args, **kwargs)}
+CALL_OPS: dict[str, dict[str, Callable[..., Any]]] = {}
+#: receiver-class-name -> {attr-name -> fn(self)} for computed bare reads
+PROP_OPS: dict[str, dict[str, Callable[..., Any]]] = {}
 
 
-def op(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Register ``fn(self, ...)`` as the call-op ``name`` (``self`` = the value
-    the executor is walking). Decorate the @policy-wrapped function."""
+def op(receiver: str, name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Register a called op ``name`` on ``receiver`` (decorate the
+    @policy-wrapped function; ``self`` = the value)."""
     def register(fn: Callable[..., Any]) -> Callable[..., Any]:
-        CALL_OPS[name] = fn
+        CALL_OPS.setdefault(receiver, {})[name] = fn
         return fn
     return register
 
 
-def prop(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Register ``fn(self)`` as the computed accessor ``name`` (a bare read)."""
+def prop(receiver: str, name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Register a computed bare-read accessor ``name`` on ``receiver``."""
     def register(fn: Callable[..., Any]) -> Callable[..., Any]:
-        PROP_OPS[name] = fn
+        PROP_OPS.setdefault(receiver, {})[name] = fn
         return fn
     return register
+
+
+def _lookup(table: dict[str, dict[str, Any]], value: Any, name: str) -> Any:
+    for klass in type(value).__mro__:
+        ops = table.get(klass.__name__)
+        if ops is not None and name in ops:
+            return ops[name]
+    return None
 
 
 def run_op(value: Any, name: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
-    """Dispatch a called op. Falls back to a method on ``value`` for any op
-    not yet migrated into the registry."""
-    fn = CALL_OPS.get(name)
+    """Dispatch a called op, resolving by the value's MRO; fall back to a
+    method for an op not yet migrated."""
+    fn = _lookup(CALL_OPS, value, name)
     if fn is not None:
         return fn(value, *args, **kwargs)
     return getattr(value, name)(*args, **kwargs)
@@ -53,19 +63,17 @@ def run_op(value: Any, name: str, args: list[Any], kwargs: dict[str, Any]) -> An
 def read_prop(value: Any, name: str) -> Any:
     """Read a bare attribute: a registered computed accessor, else the value's
     own attribute (a plain data field, or a not-yet-migrated property)."""
-    fn = PROP_OPS.get(name)
+    fn = _lookup(PROP_OPS, value, name)
     if fn is not None:
         return fn(value)
     return getattr(value, name)
 
 
 # ========================================================================= #
-# Document ops (PLAN §9): behaviour moved off the Document class. Each is the
-# same @policy-wrapped body the method had -- ``self`` is the Document the
-# executor is walking -- delegating to its DocumentCore / the backings.
+# Document ops -- delegate to the DocumentCore / backings.
 # ========================================================================= #
 
-@op("select")
+@op("Document", "select")
 @policy(returns="Document")
 def select(self: Document, selector: str, *, index: int = 0,
            wait: float | None = None, error: ErrorPolicy | None = None,
@@ -73,7 +81,7 @@ def select(self: Document, selector: str, *, index: int = 0,
     return self._core.dispatch("select", selector, index=index, wait=wait)
 
 
-@op("select_all")
+@op("Document", "select_all")
 @policy(returns="Collection")
 def select_all(self: Document, selector: str, limit: int | None = None,
                offset: int = 0, *, error: ErrorPolicy | None = None
@@ -81,114 +89,246 @@ def select_all(self: Document, selector: str, limit: int | None = None,
     return self._core.dispatch("select_all", selector, limit=limit, offset=offset)
 
 
-@op("attr")
+@op("Document", "attr")
 @policy(returns="Field")
 def attr(self: Document, name: str, *,
          error: ErrorPolicy | None = None) -> "Field[str] | Reference":
     return self._core.dispatch("attr", name)
 
 
-@op("render")
+@op("Document", "render")
 @policy(returns="None")
 def render(self: Document, format: str, **options: Any) -> Any:
     return self._core.dispatch("render", format, **options)
 
 
-@op("click")
+@op("Document", "click")
 @policy(returns="Self")
 def click(self: Document, selector: str | None = None, *,
           error: ErrorPolicy | None = None, **kw: Any) -> Document:
     return self._core.dispatch("click", selector, **kw)
 
 
-@op("write")
+@op("Document", "write")
 @policy(returns="Self")
 def write(self: Document, selector: str, text: str, *,
           error: ErrorPolicy | None = None, **kw: Any) -> Document:
     return self._core.dispatch("write", selector, text, **kw)
 
 
-@op("press")
+@op("Document", "press")
 @policy(returns="Self")
 def press(self: Document, key: str, *,
           error: ErrorPolicy | None = None, **kw: Any) -> Document:
     return self._core.dispatch("press", key, **kw)
 
 
-@op("hover")
+@op("Document", "hover")
 @policy(returns="Self")
 def hover(self: Document, selector: str, *,
           error: ErrorPolicy | None = None, **kw: Any) -> Document:
     return self._core.dispatch("hover", selector, **kw)
 
 
-@op("check")
+@op("Document", "check")
 @policy(returns="Self")
 def check(self: Document, selector: str, checked: bool = True, *,
           error: ErrorPolicy | None = None, **kw: Any) -> Document:
     return self._core.dispatch("check", selector, checked, **kw)
 
 
-@op("select_option")
+@op("Document", "select_option")
 @policy(returns="Self")
 def select_option(self: Document, selector: str, *,
                   error: ErrorPolicy | None = None, **kw: Any) -> Document:
     return self._core.dispatch("select_option", selector, **kw)
 
 
-@op("upload")
+@op("Document", "upload")
 @policy(returns="Self")
 def upload(self: Document, selector: str, files: Sequence[str], *,
            error: ErrorPolicy | None = None) -> Document:
     return self._core.dispatch("upload", selector, files)
 
 
-@op("drag")
+@op("Document", "drag")
 @policy(returns="Self")
 def drag(self: Document, source: str, target: str, *,
          error: ErrorPolicy | None = None) -> Document:
     return self._core.dispatch("drag", source, target)
 
 
-@op("scroll")
+@op("Document", "scroll")
 @policy(returns="Self")
 def scroll(self: Document, selector: str | None = None, *, x: int = 0,
            y: int = 0, error: ErrorPolicy | None = None) -> Document:
     return self._core.dispatch("scroll", selector, x=x, y=y)
 
 
-@op("execute")
+@op("Document", "execute")
 @policy(returns="Self")
 def execute(self: Document, script: str, *,
             error: ErrorPolicy | None = None) -> Document:
     return self._core.dispatch("execute", script)
 
 
-@op("evaluate")
+@op("Document", "evaluate")
 @policy(returns="Field")
 def evaluate(self: Document, script: str, *,
              error: ErrorPolicy | None = None) -> Any:
     return self._core.dispatch("evaluate", script)
 
 
-@op("screenshot")
+@op("Document", "screenshot")
 @policy(returns="Document")
 def screenshot(self: Document, selector: str | None = None, *,
                error: ErrorPolicy | None = None, **kw: Any) -> Document:
     return self._core.dispatch("screenshot", selector, **kw)
 
 
-@op("wait_for")
+@op("Document", "wait_for")
 @policy(returns="Self")
 def wait_for(self: Document, selector: str | None = None, *,
              error: ErrorPolicy | None = None, **kw: Any) -> Document:
     return self._core.dispatch("wait_for", selector, **kw)
 
 
-@prop("title")
+@prop("Document", "title")
 def title(self: Document) -> str | None:
     node = run_op(self, "select", ["title"], {"error": RETURN})
     return node.text if node.ok else None
+
+
+# ========================================================================= #
+# Reference ops -- resolve (via the bound client) + pure derivations.
+# ========================================================================= #
+
+@op("Reference", "resolve")
+@policy(returns="Document", require="ok")
+def resolve(self: Reference, *, browser: bool = False, session: Any = None,
+            optional: bool = False, error: ErrorPolicy | None = None,
+            **options: Any) -> Document:
+    wc = self._client or (self._session._client if self._session else None)
+    if wc is None:
+        from .expr import Expr, Plan
+        root = Expr(Plan(root="Reference", source=self.request_fields()))
+        return cast("Document", run_op(root, "resolve", [],
+                    {"browser": browser, "optional": optional, **options}))
+    return wc.resolve(self, browser=browser, optional=optional,
+                      session=session or self._session, **options)
+
+
+@op("Reference", "replace")
+def replace(self: Reference, **fields: Any) -> Reference:
+    return self.model_copy(update={**fields, "name": "",
+                                   "root": self.name or self.root})
+
+
+@op("Reference", "with_params")
+def with_params(self: Reference, **params: str) -> Reference:
+    return cast("Reference", run_op(
+        self, "replace", [], {"params": {**self.params, **params}}))
+
+
+@op("Reference", "join")
+def join(self: Reference, href: str) -> Reference:
+    from urllib.parse import urljoin
+
+    from .document import Reference as _Reference
+    return _Reference.from_url(urljoin(self.url, href))
+
+
+# ========================================================================= #
+# WebBase ops -- extraction + accessors (serve every subclass via the MRO).
+# ========================================================================= #
+
+@op("WebBase", "extract")
+@policy(returns="Self")
+def extract(self: WebBase, *, error: ErrorPolicy | None = None,
+            **named_expr: Any) -> WebBase:
+    return self._aextract(named_expr)
+
+
+@op("WebBase", "project")
+def project(self: WebBase, model: Any = None, *,
+            error: ErrorPolicy | None = None) -> Any:
+    if not self.ok:
+        raise OpError(self.error)
+    data = {k: _plain(v) for k, v in self._fields.items()}
+    return model(**data) if model is not None else data
+
+
+@op("WebBase", "is_empty")
+@policy(returns="Field", always=True)
+def is_empty(self: WebBase, *, error: ErrorPolicy | None = None) -> "Field[bool]":
+    return Field[bool](value=self._is_empty())
+
+
+@op("WebBase", "is_ok")
+@policy(returns="Field", always=True)
+def is_ok(self: WebBase, *, error: ErrorPolicy | None = None) -> "Field[bool]":
+    return Field[bool](value=self.ok)
+
+
+@op("WebBase", "field")
+@policy(returns="Field")
+def field(self: WebBase, name: str, *,
+          error: ErrorPolicy | None = None) -> "Field[Any]":
+    value = self._extracted(name)
+    return value if isinstance(value, Field) else Field[Any](value=value)
+
+
+@op("WebBase", "reference")
+@policy(returns="Reference")
+def reference(self: WebBase, name: str, *,
+              error: ErrorPolicy | None = None) -> Reference:
+    return cast("Reference", self._extracted(name, CLASSES["Reference"]))
+
+
+@op("WebBase", "references")
+@policy(returns="Collection")
+def references(self: WebBase, *names: str,
+               error: ErrorPolicy | None = None) -> "Collection[Reference]":
+    return _gather(self, names, CLASSES["Reference"])
+
+
+@op("WebBase", "document")
+@policy(returns="Document")
+def document(self: WebBase, name: str, *,
+             error: ErrorPolicy | None = None) -> Document:
+    return cast("Document", self._extracted(name, CLASSES["Document"]))
+
+
+@op("WebBase", "documents")
+@policy(returns="Collection")
+def documents(self: WebBase, *names: str,
+              error: ErrorPolicy | None = None) -> "Collection[Document]":
+    return _gather(self, names, CLASSES["Document"])
+
+
+# ========================================================================= #
+# Collection ops -- element-mapped extract/filter/project (whole-collection).
+# ========================================================================= #
+
+@op("Collection", "extract")
+@policy(returns="Self")
+def collection_extract(self: Collection, *, error: ErrorPolicy | None = None,
+                       **named_expr: Any) -> Collection:
+    return self._aextract_all(named_expr)
+
+
+@op("Collection", "filter")
+@policy(returns="Collection")
+def collection_filter(self: Collection, *exprs: Any,
+                      error: ErrorPolicy | None = None,
+                      **named_expr: Any) -> Collection:
+    return self._afilter((*exprs, *named_expr.values()))
+
+
+@op("Collection", "project")
+def collection_project(self: Collection, model: Any = None, *,
+                       error: ErrorPolicy | None = None) -> list[Any]:
+    return [run_op(el, "project", [model], {}) for el in self._items]
 
 
 __all__ = ["CALL_OPS", "PROP_OPS", "op", "prop", "run_op", "read_prop"]
