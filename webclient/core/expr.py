@@ -204,7 +204,7 @@ def _install_roots() -> None:
     """Expose the typed roots and register the root types. Called at the end
     of models.py, keeping the import edge one-way (models import expr)."""
     global doc, many, ref
-    from .models import Collection, Document, Field, Reference
+    from .document import Collection, Document, Field, Reference
     LAZY_TYPES["Field"] = Field
     doc = lazy(Document)
     many = lazy(cast(type, Collection))
@@ -212,7 +212,7 @@ def _install_roots() -> None:
 
 
 if TYPE_CHECKING:
-    from .models import Collection, Document, Reference
+    from .document import Collection, Document, Reference
     doc: Document
     many: Collection[Document]
     ref: Reference

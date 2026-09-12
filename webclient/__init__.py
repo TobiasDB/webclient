@@ -35,7 +35,7 @@ from .events import (
     Topic,
     XHREvent,
 )
-from .core.models import (
+from .core.document import (
     LiveDocument,
     LiveNode,
     Collection,

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
-from ..models import _is_xpath
+from ..document import _is_xpath
 from ..base import Capability
 
 if TYPE_CHECKING:

@@ -26,7 +26,7 @@ from pydantic import BaseModel, PrivateAttr
 from typing_extensions import Self
 
 if TYPE_CHECKING:
-    from .models import Document, Reference
+    from .document import Document, Reference
 
 F = TypeVar("F", bound=Callable[..., Any])
 

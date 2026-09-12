@@ -17,7 +17,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 from uuid import uuid4
 
 from ..events import Event
-from .models import Collection, Reference, WebBase
+from .document import Collection, Reference, WebBase
 from .base import RETURN, default_policy
 from .expr import Arg, Expr, Plan, Step
 

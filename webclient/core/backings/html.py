@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from ..models import Collection, Document, Element, Field, Reference, _select_elements
+from ..document import Collection, Document, Element, Field, Reference, _select_elements
 from ..base import Capability
 from .base import Backing
 

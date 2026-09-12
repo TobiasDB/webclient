@@ -29,7 +29,7 @@ from ..engine.loop import EngineLoop
 from ..events import EventBus, EventRegistry
 from . import expr as _lz
 from .expr import Expr, Plan
-from .models import (
+from .document import (
     Document,
     apply_status,
     FetchError,
@@ -533,7 +533,7 @@ class _Facade:
         (``_rooted``). A string becomes ``Reference.from_url``; a given
         Reference is used as-is. (The public ``ref`` is lazy; this is internal
         and stays a real Reference so the plan can embed its source.)"""
-        from .models import Reference
+        from .document import Reference
         return Reference.from_url(ref, **kwargs) if isinstance(ref, str) else ref
 
     def execute(self, expr: Any, context: Any = None, *,
@@ -601,7 +601,7 @@ class _Client(_Facade):
         runs on ``.collect()`` (or ``wc.execute``), on THIS client's core
         (PLAN §8 -- was eager). Build a plain request spec with
         ``Reference.from_url`` if you need to inspect ``.url``/``.path``."""
-        from .models import HttpMethod
+        from .document import HttpMethod
         from .expr import Expr, Plan
         spec = Reference.from_url(url, method=cast(HttpMethod, method),
                                  **kwargs).request_fields()

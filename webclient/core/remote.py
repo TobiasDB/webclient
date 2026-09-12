@@ -26,7 +26,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from .models import Document, Reference
+from .document import Document, Reference
 from .expr import Expr, Plan, lazy
 from .base import EngineCore
 
