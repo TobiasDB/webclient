@@ -49,10 +49,10 @@ from .document import (
     WebError,
 )
 from .core.base import IGNORE, RAISE, RETURN, OpError, UnsupportedOperation
-from .lazy import Plan, field, filter, from_plan, is_empty, is_ok, lazy, when
+from .core.expr import Plan, field, filter, from_plan, is_empty, is_ok, lazy, when
 if TYPE_CHECKING:
-    from .lazy import doc, many, ref
-from .lazy.executor import PlanEvent
+    from .core.expr import doc, many, ref
+from .core.executor import PlanEvent
 from .plugins.base import Plugin, Renderer, Surface, SurfaceKind
 from .pool import ClientPool, Lease, PoolStats
 from .core.remote import RemoteError, RemoteWebClient, RemoteWebClientCore
@@ -61,9 +61,9 @@ from .session import Session
 
 def __getattr__(name: str):
     """doc / many / ref are installed after models loads; read them
-    live (see webclient.lazy.__getattr__)."""
+    live (see webclient.core.expr)."""
     if name in ("doc", "many", "ref"):
-        from .lazy import expr as _expr
+        from .core import expr as _expr
         return getattr(_expr, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

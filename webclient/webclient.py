@@ -23,7 +23,7 @@ from .document import Reference
 if TYPE_CHECKING:
     from collections.abc import Coroutine
 
-    from .lazy.stubs import Lazy, LazyReference
+    from .stubs import Lazy, LazyReference
 
 __all__ = ["WebClient", "AsyncWebClient", "SearchEngine", "WebClientCore",
            "default_client"]
@@ -49,7 +49,7 @@ class _Client(_Facade):
         (PLAN §8 -- was eager). Build a plain request spec with
         ``Reference.from_url`` if you need to inspect ``.url``/``.path``."""
         from .document import HttpMethod
-        from .lazy.expr import Expr, Plan
+        from .core.expr import Expr, Plan
         spec = Reference.from_url(url, method=cast(HttpMethod, method),
                                  **kwargs).request_fields()
         return cast("LazyReference", Expr(Plan(root="Reference", source=spec), self._core))

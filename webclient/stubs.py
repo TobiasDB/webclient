@@ -24,8 +24,8 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, overload
 if TYPE_CHECKING:
     from collections.abc import Sequence  # noqa: F401  (used by generated sigs)
 
-    from ..core.base import Collection, Field
-    from ..document import Document, Reference
+    from .core.base import Collection, Field
+    from .document import Document, Reference
 
 _LINK = Literal["href", "src", "action"]
 _E = Any                                      # error-policy arg (kept loose)

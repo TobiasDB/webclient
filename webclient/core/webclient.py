@@ -456,10 +456,10 @@ class WebClientCore(EngineCore, BaseModel):
     async def execute(self, expr: Any, context: Any = None) -> Any:
         """Evaluate a lazy expression against ``context`` (none needed for a
         plan rooted at ``Reference(url)``)."""
-        from ..lazy import executor
+        from . import executor
         return await executor.evaluate(expr, context, client=self)
 
     def astream(self, expr: Any, context: Any = None) -> Any:
         """The streaming form: an async iterator of rows as they complete."""
-        from ..lazy import executor
+        from . import executor
         return executor.stream(expr, context, client=self)

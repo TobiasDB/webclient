@@ -316,7 +316,7 @@ class WebBase(BaseModel):
         return self._aextract(named_expr)  # type: ignore[return-value]  # @policy settles
 
     async def _aextract(self, named_expr: dict[str, Any]) -> Self:
-        from ..lazy.executor import evaluate
+        from .executor import evaluate
         with default_policy(RETURN):            # a missing field is None, not fatal
             for name, expr in named_expr.items():
                 self._fields[name] = await evaluate(expr, self)
@@ -500,7 +500,7 @@ class Collection[T](WebBase):
         return self._afilter((*expr, *named_expr.values()))  # type: ignore[return-value]
 
     async def _afilter(self, exprs: tuple[Any, ...]) -> Collection[T]:
-        from ..lazy.executor import _truthy, evaluate
+        from .executor import _truthy, evaluate
         kept: list[Any] = []
         with default_policy(RETURN):            # a not-ok predicate is just falsy
             for el in self._items:

@@ -3,7 +3,7 @@ return types, refuses ``_``-names, JSON round-trips, validates on the wire."""
 import pytest
 
 from webclient import Reference, doc, field, from_plan, many, ref
-from webclient.lazy.expr import Expr, Plan, Step
+from webclient.core.expr import Expr, Plan, Step
 
 
 def kinds(expr):

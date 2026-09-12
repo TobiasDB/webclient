@@ -76,7 +76,7 @@ for _card in doc.select_all(".card"):
 # -- Two-tier lazy client surface (PLAN §8): entry points are lazy; collect()
 #    returns the materialised tier. Runtime is a generic Expr; these are stubs.
 from webclient import AsyncWebClient, WebClient
-from webclient.lazy.stubs import LazyDocument, LazyField, LazyReference
+from webclient.stubs import LazyDocument, LazyField, LazyReference
 
 _wc = WebClient()
 assert_type(_wc.ref("https://e.com"), LazyReference)

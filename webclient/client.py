@@ -16,11 +16,11 @@ from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote_plus
 
 from .core.base import RAISE, RETURN
-from .lazy import expr as _lz
-from .lazy.expr import Expr, Plan
+from .core import expr as _lz
+from .core.expr import Expr, Plan
 
 if TYPE_CHECKING:
-    from .lazy.stubs import LazyCollection, LazyDocument, LazyReference
+    from .stubs import LazyCollection, LazyDocument, LazyReference
 
 
 # -- plan builders (shared by the facades and Session) ---------------------- #

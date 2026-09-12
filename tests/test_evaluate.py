@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 from webclient import RAISE, RETURN, Collection, Field, Reference, WebClient, doc, ref
-from webclient.lazy.executor import fan_out
+from webclient.core.executor import fan_out
 
 CARDS = """
 <html><body>

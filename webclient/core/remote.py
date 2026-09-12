@@ -27,7 +27,7 @@ import threading
 from typing import Any
 
 from ..document import Document, Reference
-from ..lazy.expr import Expr, Plan, lazy
+from .expr import Expr, Plan, lazy
 from .base import EngineCore
 
 

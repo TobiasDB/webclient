@@ -4,7 +4,7 @@ Reference, Document.
 These are plain eager classes: a method does the real work and raises on
 failure. The ``@policy`` decorator gives every method the
 ``error=IGNORE|RETURN|RAISE`` envelope and capability checks. Recording is
-NOT here -- it lives in ``lazy.expr.Expr``, which is independent of these
+NOT here -- it lives in ``core.expr.Expr``, which is independent of these
 classes; a lazy chain is an ``Expr``, never one of these. The evaluator
 replays a plan by calling these same methods, so eager and lazy cannot
 drift.
@@ -153,7 +153,7 @@ class Reference(WebBase):
 
     def __new__(cls, url: str | None = None, /, **data: Any) -> Reference:
         if url is not None and cls is Reference:
-            from .lazy.expr import Plan, lazy
+            from .core.expr import Plan, lazy
             spec = Reference.from_url(url).request_fields()
             return lazy(Reference, plan=Plan(root="Reference", source=spec))
         return super().__new__(cls)
@@ -222,7 +222,7 @@ class Reference(WebBase):
         returns a not-ok Document instead of raising on failure."""
         wc = self._client or (self._session._client if self._session else None)
         if wc is None:
-            from .lazy.expr import Expr, Plan
+            from .core.expr import Expr, Plan
             root = Expr(Plan(root="Reference", source=self.request_fields()))
             return root.resolve(browser=browser, optional=optional, **options)  # type: ignore[return-value]
         return wc.resolve(self, browser=browser, optional=optional,  # type: ignore[return-value]
@@ -490,5 +490,5 @@ for _cls in (NetworkEvent, XHREvent, FetchEvent, NavigationEvent, AssetEvent):
 # install the typed lazy roots (doc / many / ref).
 CLASSES.update(WebBase=WebBase, WebError=WebError, Field=Field,
                Collection=Collection, Reference=Reference, Document=Document)
-from .lazy.expr import _install_roots as _install_roots  # noqa: E402
+from .core.expr import _install_roots as _install_roots  # noqa: E402
 _install_roots()

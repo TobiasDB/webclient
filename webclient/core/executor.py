@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from ..events import Event
 from ..document import Collection, Reference, WebBase
-from ..core.base import RETURN, default_policy
+from .base import RETURN, default_policy
 from .expr import Arg, Expr, Plan, Step
 
 DEFAULT_FANOUT = 8
