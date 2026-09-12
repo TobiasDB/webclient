@@ -148,6 +148,10 @@ async def _apply(value: Any, steps: list[Step], i: int, context: Any,
         return _OPS[step.name](value, other), i + 1
     if step.kind == "fn":                       # is_empty(x) == x.is_empty()
         return await _settle(getattr(value, step.name)()), i + 1
+    if step.kind == "when":                     # when(cond).then(a).otherwise(b)
+        cond, then_arg, else_arg = step.args
+        chosen = then_arg if _truthy(await _arg(cond, context, client)) else else_arg
+        return await _arg(chosen, context, client), i + 1
     raise ValueError(f"cannot evaluate step {step.kind!r}")
 
 

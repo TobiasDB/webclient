@@ -234,6 +234,20 @@ def main() -> None:
         bound = wc.lazy(f"{base}/").resolve().select(".title").attr("text")
         print("wc.lazy:    ", bound.collect().get())
 
+        # [§8] Polars-style free when()/filter() on the lazy surface.
+        from webclient import filter as lazy_filter
+        from webclient import when
+        labeled = (ref.resolve().select_all(".card").extract(
+            title=doc.select(".title").attr("text"),
+            tier=when(doc.select(".price").attr("text") != "")
+            .then("priced").otherwise("free")).project())
+        print("free when:  ",
+              [(r["title"], r["tier"]) for r in wc.execute(labeled, wc.ref(f"{base}/"))])
+        priced = lazy_filter(ref.resolve().select_all(".card"),
+                             doc.select(".price").attr("text") != "").extract(
+            title=doc.select(".title").attr("text")).project()
+        print("free filter:", [r["title"] for r in wc.execute(priced, wc.ref(f"{base}/"))])
+
         # [P3] Follow each card's link (reference -> resolve) into its JSON
         #      detail; `when/then/otherwise` branches; a missing select is a
         #      not-ok field under the plan default, never an aborted plan.

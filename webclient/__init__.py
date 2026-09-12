@@ -49,7 +49,7 @@ from .document import (
     WebError,
 )
 from .core.base import IGNORE, RAISE, RETURN, OpError, UnsupportedOperation
-from .lazy import Plan, field, from_plan, is_empty, is_ok, lazy
+from .lazy import Plan, field, filter, from_plan, is_empty, is_ok, lazy, when
 if TYPE_CHECKING:
     from .lazy import doc, many, ref
 from .lazy.executor import PlanEvent
@@ -78,7 +78,8 @@ __all__ = [
     "Plugin", "Renderer", "Surface", "SurfaceKind",
     "ClientPool", "Lease", "PoolStats", "Session",
     "LiveDocument", "LiveNode",
-    "Plan", "doc", "many", "ref", "field", "is_empty", "is_ok", "lazy",
+    "Plan", "doc", "many", "ref", "field", "filter", "is_empty", "is_ok",
+    "lazy", "when",
     "from_plan", "PlanEvent",
     "RemoteWebClient", "RemoteWebClientCore", "RemoteError",
     "WebClient", "AsyncWebClient", "WebClientCore", "SearchEngine",

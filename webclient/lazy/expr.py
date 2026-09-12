@@ -33,7 +33,7 @@ class Arg(BaseModel):
 
 
 class Step(BaseModel):
-    kind: Literal["get", "call", "op", "fn"]
+    kind: Literal["get", "call", "op", "fn", "when"]
     name: str = ""                   # attribute / operator / function name
     args: list[Arg] = []
     kwargs: dict[str, Arg] = {}
@@ -78,7 +78,8 @@ class Plan(BaseModel):
                               *(f"{k}={_show(v)}" for k, v in s.kwargs.items())])
             out = {"get": f"{out}.{s.name}", "call": f"{out}({args})",
                    "op": f"({out} {s.name} {args})",
-                   "fn": f"{s.name}({out}{', ' + args if args else ''})"}[s.kind]
+                   "fn": f"{s.name}({out}{', ' + args if args else ''})",
+                   "when": f"when({args})"}[s.kind]
         return out
 
 
@@ -231,6 +232,41 @@ def is_ok(expr: Any) -> Any:
     return _fn("is_ok", expr)
 
 
+class _When:
+    """Polars-style branching builder: ``when(cond).then(a).otherwise(b)`` --
+    a free construct, not a ``Field`` method. Records a single ``when`` step
+    whose condition / then / else are sub-expressions evaluated against the
+    surrounding context (e.g. per element inside ``extract``)."""
+
+    __slots__ = ("_cond", "_then")
+
+    def __init__(self, cond: Any) -> None:
+        self._cond = cond
+        self._then: Any = _MISSING
+
+    def then(self, value: Any) -> "_When":
+        self._then = value
+        return self
+
+    def otherwise(self, value: Any) -> Expr:
+        if self._then is _MISSING:
+            raise TypeError("when(...).then(...) is required before .otherwise(...)")
+        step = Step(kind="when", args=[to_arg(self._cond), to_arg(self._then),
+                                       to_arg(value)])
+        return Expr(Plan(steps=[step]))
+
+
+def when(cond: Any) -> _When:
+    """Start a Polars-style conditional: ``when(cond).then(a).otherwise(b)``."""
+    return _When(cond)
+
+
+def filter(collection: Any, *predicates: Any) -> Any:
+    """Free-function form of the collection filter (your ``wc.filter``):
+    ``filter(coll, pred)`` == ``coll.filter(pred)``."""
+    return collection.filter(*predicates)
+
+
 __all__ = ["Arg", "Step", "Plan", "Expr", "lazy", "from_plan", "to_arg",
-           "doc", "many", "ref", "field", "is_empty", "is_ok",
+           "doc", "many", "ref", "field", "is_empty", "is_ok", "when", "filter",
            "LAZY_TYPES", "OPERATORS", "FUNCTIONS"]

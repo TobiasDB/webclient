@@ -1,13 +1,14 @@
 from typing import TYPE_CHECKING
 
 from . import expr as _expr
-from .expr import Arg, Plan, Step, field, from_plan, is_empty, is_ok, lazy
+from .expr import (Arg, Plan, Step, field, filter, from_plan, is_empty, is_ok,
+                   lazy, when)
 
 if TYPE_CHECKING:                       # typed for checkers; live at runtime
     from .expr import doc, many, ref
 
-__all__ = ["Plan", "Step", "Arg", "doc", "field", "from_plan", "is_empty",
-           "is_ok", "lazy", "many", "ref"]
+__all__ = ["Plan", "Step", "Arg", "doc", "field", "filter", "from_plan",
+           "is_empty", "is_ok", "lazy", "many", "ref", "when"]
 
 
 def __getattr__(name: str):

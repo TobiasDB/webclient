@@ -60,6 +60,28 @@ def test_collect_is_the_lazy_trigger(site, wc):
     assert expr.collect().get() == wc.execute(expr).get()
 
 
+def test_free_when_and_filter(site, wc):
+    # PLAN §8: Polars-style free when(cond).then(a).otherwise(b), and free
+    # filter(coll, pred) == coll.filter(pred). Usable now on the lazy roots.
+    from webclient import filter as lazy_filter
+    from webclient import when
+    ctx = wc.ref(site.url_for("/cards"))
+    rows = wc.execute(
+        ref.resolve().select_all(".card").extract(
+            title=doc.select(".title").attr("text"),
+            state=when(doc.select(".status").attr("text") == "Active")
+            .then("on").otherwise("off")).project(),
+        ctx)
+    assert [(r["title"], r["state"]) for r in rows] == [
+        ("Aeropress", "on"), ("Grinder", "off"), ("Kettle", "on")]
+
+    kept = lazy_filter(
+        ref.resolve().select_all(".card"),
+        doc.select(".status").attr("text") == "Active").extract(
+        title=doc.select(".title").attr("text")).project()
+    assert [r["title"] for r in wc.execute(kept, ctx)] == ["Aeropress", "Kettle"]
+
+
 def test_client_bound_lazy_root(site, wc):
     # wc.lazy(url): a lazy root bound to THIS client; collect() runs on its core
     # (not the process default). The companion to Expr.collect() (PLAN §8).
