@@ -690,3 +690,20 @@ Until then the lazy client methods are loosely typed (`Any`). `doc.ref()`/
 `reload()` stay eager by design (they act on a materialised Document). The
 addressable module roots (`document`/`reference`/`session`) are naming sugar
 over the existing `doc`/`ref` + `Reference(url)`.
+
+**Migration complete (2026-09-12).** The full-lazy surface is done:
+- Lazy entry points: `wc.fetch`/`search`/`summary`/`ref`, `session.fetch`/`ref`,
+  `Reference(url)`, `doc`/`many`/`ref` -- all build expressions.
+- One evaluation path: `.collect()` (sync) / `await ac.execute` (async) /
+  `wc.execute`; per-call eager `op(..., _collect=True)`.
+- Free `when(cond).then(a).otherwise(b)` and `filter(coll, pred)`.
+- Two-tier typing stubs (`LazyDocument` -> materialised `Document`, etc.); the
+  client/session surface is precisely typed, `collect()` returns the model.
+- Remote is a core backend; sessions threaded via `Plan.session_id`.
+
+Deferred polish (not blocking): generating the Lazy stubs from the model ops
+(hand-written today); precise `render`/`project`/`LazyCollection` element
+typing (loose `Any` today); `doc.ref()`/`reload()` stay eager by design (they
+act on a materialised Document); module-root names `document`/`reference`/
+`session` not adopted (the API is `wc.*` + `doc`/`ref` + `Reference(url)` +
+`wc.session()`).
