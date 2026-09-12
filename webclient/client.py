@@ -76,11 +76,12 @@ class _Facade:
         return ref
 
     def _context(self, ref: Any, session: Any = None, **kwargs: Any) -> Any:
-        """A resolution context: a URL becomes a reference via the session (if
-        any) or this client; a given reference is made usable via ``_bind``."""
-        if isinstance(ref, str):
-            return (session or self).ref(ref, **kwargs)
-        return self._bind(ref, session)
+        """A real ``Reference`` whose request spec roots the lazy plan
+        (``_rooted``). A string becomes ``Reference.from_url``; a given
+        Reference is used as-is. (The public ``ref`` is lazy; this is internal
+        and stays a real Reference so the plan can embed its source.)"""
+        from .document import Reference
+        return Reference.from_url(ref, **kwargs) if isinstance(ref, str) else ref
 
     def execute(self, expr: Any, context: Any = None, *,
                 stream: bool = False) -> Any:

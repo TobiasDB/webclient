@@ -71,5 +71,5 @@ def test_bind_returns_bound_copy():
 def test_bound_reference_carries_client():
     from webclient import WebClient
     with WebClient() as wc:
-        ref = wc.ref("https://example.com/x")
-        assert ref.bound is wc.core
+        ref = wc.ref("https://example.com/x")          # a lazy reference root
+        assert ref._client is wc.core                  # bound to this client's core

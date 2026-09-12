@@ -39,7 +39,7 @@ def rows_of(wc, site, expr):
 
 
 def test_scalar_plan_against_a_context(site, wc):
-    page = wc.ref(site.url_for("/cards")).resolve()
+    page = wc.ref(site.url_for("/cards")).resolve().collect()
     got = wc.execute(doc.select(".title").attr("text"), page)
     assert isinstance(got, Field) and got.get() == "Aeropress"
 
@@ -170,7 +170,7 @@ def test_stream_yields_rows_and_publishes_plan_events(site, wc):
 
 
 def test_eager_and_lazy_agree(site, wc):
-    page = wc.ref(site.url_for("/cards")).resolve()
+    page = wc.ref(site.url_for("/cards")).resolve().collect()
     cards = page.select_all(".card")
     cards.extract(title=doc.select(".title").attr("text"),
                   active=doc.select(".status").attr("text") == "Active")

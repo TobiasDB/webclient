@@ -26,8 +26,8 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from ..document import Document
-from ..lazy.expr import Plan, lazy
+from ..document import Document, Reference
+from ..lazy.expr import Expr, Plan, lazy
 from .base import EngineCore
 
 
@@ -110,13 +110,25 @@ class RemoteWebClientCore(EngineCore):
         its id, so no context is needed."""
         plan = expr if isinstance(expr, Plan) else expr._plan
         body: dict[str, Any] = {"plan": plan.model_dump()}
-        if context is not None and getattr(context, "url", None) is not None:
-            body["url"] = context.url
-            sid = getattr(getattr(context, "_session", None), "id", None) \
-                or getattr(context, "session_id", None)
-            if sid:
-                body["session_id"] = sid
+        url, sid = self._context_ref(context)
+        if url is not None:
+            body["url"] = url
+        if sid:
+            body["session_id"] = sid
         return self._hydrate((await self._acall("POST", "/execute", json=body))["rows"])
+
+    @staticmethod
+    def _context_ref(context: Any) -> tuple[Any, Any]:
+        """The (url, session_id) for an execute context: a RemoteRef-like, or a
+        lazy reference root (``wc.ref(url)``) whose plan carries the spec."""
+        if context is None:
+            return None, None
+        if isinstance(context, Expr):                      # a lazy reference root
+            src = context._plan.source
+            return (Reference(**src).url if src else None), None
+        sid = getattr(getattr(context, "_session", None), "id", None) \
+            or getattr(context, "session_id", None)
+        return getattr(context, "url", None), sid
 
     async def resolve(self, ref: Any, *, browser: bool = False,
                       session: Any = None, optional: bool = False,

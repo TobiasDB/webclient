@@ -19,19 +19,21 @@ def site(httpserver):
 
 
 def test_resolve_names_ref_and_doc_in_the_client_scope(site, wc):
-    ref = wc.ref(site.url_for("/p1"))
-    doc = ref.resolve()
-    assert ref.name == "ref:000-001" and doc.name == "doc:000-002"
-    assert doc.root == ref.name and doc.id == doc.name
+    # Names are assigned when the plan runs (collect), to the real Reference/
+    # Document the engine builds -- not to the lazy wc.ref() expression.
+    doc = wc.ref(site.url_for("/p1")).resolve().collect()
+    assert doc.name == "doc:000-002" and doc.root == "ref:000-001"
+    assert doc.id == doc.name
     assert wc.document(doc.name) is doc
-    assert wc.reference(doc.root) is ref
+    ref = wc.reference(doc.root)                        # the registered reference
+    assert ref is not None and ref.name == doc.root
     assert wc.document(doc.root) is None and wc.reference(doc.name) is None
-    assert doc.ref() is ref
+    assert doc.ref() is ref                             # doc.ref() is that reference
     assert doc.created and doc.accessed >= doc.created
 
 
 def test_ref_roundtrips_request_and_action_chain(site, wc):
-    doc = wc.ref(site.url_for("/p2")).resolve()
+    doc = wc.ref(site.url_for("/p2")).resolve().collect()
     wc._scope.clear()                                  # resolver forgot it
     rebuilt = doc.ref()
     assert rebuilt.name == doc.root and rebuilt.url == doc.url
@@ -42,7 +44,7 @@ def test_ref_roundtrips_request_and_action_chain(site, wc):
 
 
 def test_derived_references_are_unnamed_and_rooted(site, wc):
-    doc = wc.ref(site.url_for("/p1")).resolve()
+    doc = wc.ref(site.url_for("/p1")).resolve().collect()
     derived = doc.ref().with_params(page="2")
     assert derived.name == "" and derived.root == doc.root
 
@@ -60,7 +62,7 @@ def test_session_scope_is_visible_to_client_but_not_to_other_sessions(site, wc):
 
 def test_client_scope_is_capped_lru(site):
     with WebClient(names_cap=4) as wc:
-        docs = [wc.ref(site.url_for(f"/p{i}")).resolve() for i in range(1, 6)]
+        docs = [wc.ref(site.url_for(f"/p{i}")).resolve().collect() for i in range(1, 6)]
         assert len(wc._scope) == 4
         assert wc.document(docs[0].name) is None       # evicted
         assert wc.document(docs[-1].name) is docs[-1]
@@ -68,7 +70,7 @@ def test_client_scope_is_capped_lru(site):
 
 def test_failed_fetch_is_a_not_ok_document(site, wc):
     site.expect_request("/missing").respond_with_data("", status=404)
-    doc = wc.ref(site.url_for("/missing")).resolve(error=RETURN)
+    doc = wc.ref(site.url_for("/missing")).resolve(error=RETURN).collect()
     assert doc.ok is False and doc.error is not None
     assert doc.error.type == "HTTPStatus" and "404" in doc.message
     assert doc.is_ok().get() is False

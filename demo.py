@@ -117,9 +117,9 @@ def main() -> None:
             f"event:       {e.topic} #{e.seq} {e.status_code} {e.request.path}"))
 
         # [M2] Fetch through a redirect; loud by default, optional=True lenient.
-        shop = wc.ref(f"{base}/old").resolve()
+        shop = wc.ref(f"{base}/old").resolve().collect()
         print("final url:  ", shop.final_url)
-        missing = wc.ref(f"{base}/nope").resolve(error=RETURN)
+        missing = wc.ref(f"{base}/nope").resolve(error=RETURN).collect()
         print("optional:   ", missing.status_code, "ok:", missing.ok)
 
         # [P1] Every object is addressable: short scoped names, a root chain
@@ -182,7 +182,7 @@ def main() -> None:
         # [M4] browser=True -> a LiveDocument backed by a real page. Actions
         #      auto-wait and are recorded; the DOM/console/network are
         #      captured onto the document as events.
-        live = wc.ref(f"{base}/app").resolve(browser=True)
+        live = wc.ref(f"{base}/app").resolve(browser=True).collect()
         live.write("#qty", "3").click("#add")
         live.wait_for("#cart li", timeout=5.0)
         print("live dom:   ", live.select("#cart li").text)
@@ -268,7 +268,7 @@ def main() -> None:
                   row["tag"], "| missing:", row["missing"])
 
         # [P3] Eager and lazy agree: the same extract on a resolved page.
-        page = wc.ref(f"{base}/").resolve()
+        page = wc.ref(f"{base}/").resolve().collect()
         cards = page.select_all(".card").extract(title=doc.select(".title").attr("text"))
         print("eager:      ", cards.name, "->", [r["title"] for r in cards.project()])
 

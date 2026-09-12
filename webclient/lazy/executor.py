@@ -49,18 +49,20 @@ async def evaluate(expr: Any, context: Any = None, *, client: Any = None) -> Any
     client = client or expr._client or getattr(context, "_client", None)
     leaves: list[tuple[tuple[int, ...], Any]] = []
     fanned = False
-    with default_policy(RETURN):
-        async for path, value in _walk(_start(expr._plan, context, client),
-                                       expr._plan.steps, 0, context, client):
-            fanned = fanned or bool(path)
-            leaves.append((path, value))
+    # Top-level defaults to RAISE (matching the old eager calls); per-element
+    # fan-out switches to RETURN in the worker for row resilience.
+    async for path, value in _walk(_start(expr._plan, context, client),
+                                   expr._plan.steps, 0, context, client):
+        fanned = fanned or bool(path)
+        leaves.append((path, value))
     if not fanned:
         return leaves[0][1] if leaves else None
     leaves.sort(key=lambda p: p[0])
     values = [v for _, v in leaves]
     if not all(isinstance(v, WebBase) for v in values):
         return values                     # plain leaves (e.g. projected dicts)
-    out: Collection[Any] = Collection(root=getattr(context, "name", None))
+    root_name = None if isinstance(context, Expr) else getattr(context, "name", None)
+    out: Collection[Any] = Collection(root=root_name)
     out._items = values
     out._client = client
     return out
@@ -96,6 +98,13 @@ async def stream(expr: Any, context: Any = None, *,
 # -- the walk ---------------------------------------------------------------
 
 def _start(plan: Plan, context: Any, client: Any) -> Any:
+    # A lazy reference root passed as the execute context (wc.execute(p, wc.ref(
+    # url))) is unwrapped into a real Reference -- its plan is just a Reference
+    # source with no steps.
+    if isinstance(context, Expr):
+        src = context._plan.source
+        context = (Reference(**src).bind(client)
+                   if src is not None and not context._plan.steps else None)
     # A document-source plan (remote handle, source={"document_id": ...}) is
     # resolved to its context by the caller (the service looks up the doc);
     # only a Reference source is reconstructed here.
@@ -221,8 +230,11 @@ async def _fan_out(items: list[Any],
 
     async def worker() -> None:
         for i in pending:
-            async for path, leaf in fn(items[i]):
-                await queue.put(((i, *path), leaf))
+            # per-element resilience: one bad row's RETURN policy must not
+            # abort the fan-out (the top-level default stays RAISE).
+            with default_policy(RETURN):
+                async for path, leaf in fn(items[i]):
+                    await queue.put(((i, *path), leaf))
 
     async def drive() -> None:
         try:

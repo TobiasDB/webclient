@@ -317,8 +317,9 @@ class WebBase(BaseModel):
 
     async def _aextract(self, named_expr: dict[str, Any]) -> Self:
         from ..lazy.executor import evaluate
-        for name, expr in named_expr.items():
-            self._fields[name] = await evaluate(expr, self)
+        with default_policy(RETURN):            # a missing field is None, not fatal
+            for name, expr in named_expr.items():
+                self._fields[name] = await evaluate(expr, self)
         return self
 
     def project[T](self, model: type[T] | None = None, *, error: ErrorPolicy | None = None) -> T | dict[str, Any]:
@@ -501,10 +502,11 @@ class Collection[T](WebBase):
     async def _afilter(self, exprs: tuple[Any, ...]) -> Collection[T]:
         from ..lazy.executor import _truthy, evaluate
         kept: list[Any] = []
-        for el in self._items:
-            results = [await evaluate(e, el) for e in exprs]
-            if all(_truthy(r) for r in results):
-                kept.append(el)
+        with default_policy(RETURN):            # a not-ok predicate is just falsy
+            for el in self._items:
+                results = [await evaluate(e, el) for e in exprs]
+                if all(_truthy(r) for r in results):
+                    kept.append(el)
         out: Collection[T] = Collection()
         out._items = kept
         return out

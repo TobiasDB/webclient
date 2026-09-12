@@ -24,7 +24,7 @@ def test_links_join_against_final_url_after_redirect(httpserver, wc):
         Response(status=302, headers={"Location": httpserver.url_for("/new/page")}))
     httpserver.expect_request("/new/page").respond_with_data(
         "<a href='sibling'>x</a>", content_type="text/html")
-    doc = wc.ref(httpserver.url_for("/old")).resolve()
+    doc = wc.ref(httpserver.url_for("/old")).resolve().collect()
     assert doc.final_url.endswith("/new/page")
     assert doc.select("a").attr("href").path == "/new/sibling"   # not /sibling
 

@@ -51,7 +51,7 @@ def app(httpserver, wc):
     httpserver.expect_request("/two").respond_with_data(
         PAGE_TWO, content_type="text/html")
     httpserver.expect_request("/api").respond_with_json({"ok": True})
-    live = wc.ref(httpserver.url_for("/app")).resolve(browser=True)
+    live = wc.ref(httpserver.url_for("/app")).resolve(browser=True).collect()
     yield live
     wc.release(live)
 
@@ -122,7 +122,7 @@ def test_screenshot(app):
 def test_reload_reproduces_state(httpserver, wc):
     httpserver.expect_request("/app2").respond_with_data(
         APP, content_type="text/html")
-    live = wc.ref(httpserver.url_for("/app2")).resolve(browser=True)
+    live = wc.ref(httpserver.url_for("/app2")).resolve(browser=True).collect()
     live.click("#c1 button").write("#name", "Bob")
     assert [a["op"] for a in live.ref().actions] == ["click", "write"]  # chain recorded
     wc.release(live)
@@ -152,7 +152,7 @@ def test_session_storage_state_persists(httpserver, wc):
 def test_release_returns_page_to_pool(httpserver, wc):
     httpserver.expect_request("/p").respond_with_data(
         "<html><body>p</body></html>", content_type="text/html")
-    live = wc.ref(httpserver.url_for("/p")).resolve(browser=True)
+    live = wc.ref(httpserver.url_for("/p")).resolve(browser=True).collect()
     held = len(wc.pool._pages_held)
     wc.release(live)
     assert len(wc.pool._pages_held) == held - 1
@@ -188,7 +188,7 @@ def test_custom_page_plugin_needs_no_engine_changes(httpserver, wc):
     wc.use(PingPlugin())
     httpserver.expect_request("/ping").respond_with_data(
         "<html><body>ping</body></html>", content_type="text/html")
-    live = wc.ref(httpserver.url_for("/ping")).resolve(browser=True)
+    live = wc.ref(httpserver.url_for("/ping")).resolve(browser=True).collect()
     try:
         pings = live.events_of("custom.ping")
         assert len(pings) == 1
