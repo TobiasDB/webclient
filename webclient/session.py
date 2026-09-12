@@ -8,11 +8,14 @@ from M4.
 from __future__ import annotations
 
 import time
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel, Field, PrivateAttr
 
 from .core.webclient import Proxy
+
+if TYPE_CHECKING:
+    from .lazy.stubs import LazyDocument, LazyReference
 from .document import Document, HttpMethod, Reference
 
 
@@ -32,14 +35,14 @@ class Session(BaseModel):
     _scope: Any = PrivateAttr(default=None)    # NameScope: this session's names
 
     def ref(self, url: str, method: HttpMethod = "get",
-            **kwargs: Any) -> Any:
+            **kwargs: Any) -> "LazyReference":
         """A LAZY reference root scoped to this session: records ops and runs on
         ``.collect()`` (or ``session.execute``), resolving within this session
         (PLAN §8 -- was eager). The plan carries this session's id."""
         from .lazy.expr import Expr, Plan
         spec = Reference.from_url(url, method=method, **kwargs).request_fields()
-        return Expr(Plan(root="Reference", source=spec, session_id=self.id),
-                    self._client)
+        return cast("LazyReference", Expr(
+            Plan(root="Reference", source=spec, session_id=self.id), self._client))
 
     def document(self, name: str) -> Document | None:
         found = self._scope.get(name) if self._scope is not None else None
@@ -54,7 +57,7 @@ class Session(BaseModel):
     # Same plan builders as the WebClient facade, run on the core with this
     # session as the resolution context (see webclient.client).
     def fetch(self, ref: "Reference | str", *, browser: bool = False,
-              optional: bool = False, **options: Any) -> Any:
+              optional: bool = False, **options: Any) -> "LazyDocument":
         """Lazy resolve within this session: a Document expr (session-scoped);
         run with ``.collect()`` / ``session.execute`` (PLAN §8 -- was eager)."""
         from .core.base import RAISE, RETURN
@@ -62,8 +65,9 @@ class Session(BaseModel):
         r = ref if isinstance(ref, Reference) else Reference.from_url(ref)
         root = Expr(Plan(root="Reference", source=r.request_fields(),
                          session_id=self.id), self._client)
-        return root.resolve(browser=browser, optional=optional,
-                            error=RETURN if optional else RAISE, **options)
+        return cast("LazyDocument", root.resolve(
+            browser=browser, optional=optional,
+            error=RETURN if optional else RAISE, **options))
 
     def execute(self, expr: Any, context: Any = None, *,
                 stream: bool = False) -> Any:

@@ -12,12 +12,15 @@ lxml/playwright absent.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote_plus
 
 from .core.base import RAISE, RETURN
 from .lazy import expr as _lz
 from .lazy.expr import Expr, Plan
+
+if TYPE_CHECKING:
+    from .lazy.stubs import LazyCollection, LazyDocument, LazyReference
 
 
 # -- plan builders (shared by the facades and Session) ---------------------- #
@@ -88,16 +91,16 @@ class _Facade:
         """Run a lazy expression. ``stream=True`` yields rows as they land."""
         return self._run(expr, context, stream=stream)
 
-    def _rooted(self, context: Any, **resolve_opts: Any) -> Any:
+    def _rooted(self, context: Any, **resolve_opts: Any) -> "LazyDocument":
         """A lazy Document expr: resolve ``context`` self-contained (its request
         spec is embedded in the plan), bound to this client's core -- so
         ``.collect()`` needs no separate context."""
         root = Expr(Plan(root="Reference", source=context.request_fields()),
                     self._core)
-        return root.resolve(**resolve_opts)
+        return cast("LazyDocument", root.resolve(**resolve_opts))
 
     def fetch(self, ref: Any, *, browser: bool = False, session: Any = None,
-              optional: bool = False, **options: Any) -> Any:
+              optional: bool = False, **options: Any) -> "LazyDocument":
         """Lazy (PLAN §8): a Document expr bound to this client; run with
         ``.collect()`` (sync), ``await ac.execute(...)`` (async), or
         ``wc.execute``. Was eager."""
@@ -106,7 +109,7 @@ class _Facade:
                             error=RETURN if optional else RAISE, **options)
 
     def search(self, term: str, *, engine: Any = None, limit: int = 5,
-               session: Any = None) -> Any:
+               session: Any = None) -> "LazyCollection":
         """Lazy: a rows expr (a title/url record per result); run with
         ``.collect()``."""
         engine = engine or default_engine()

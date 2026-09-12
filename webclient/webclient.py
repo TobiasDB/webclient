@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import atexit
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .client import _Facade, run_on_core
 from .core.webclient import SearchEngine, WebClientCore
 from .document import Reference
+
+if TYPE_CHECKING:
+    from .lazy.stubs import LazyReference
 
 __all__ = ["WebClient", "AsyncWebClient", "SearchEngine", "WebClientCore",
            "default_client"]
@@ -38,14 +41,14 @@ class _Client(_Facade):
     def core(self) -> Any:
         return self._core
 
-    def ref(self, url: str, method: str = "get", **kwargs: Any) -> Any:
+    def ref(self, url: str, method: str = "get", **kwargs: Any) -> "LazyReference":
         """A LAZY reference root bound to this client's core: it records ops and
         runs on ``.collect()`` (or ``wc.execute``), on THIS client's core
         (PLAN §8 -- was eager). Build a plain request spec with
         ``Reference.from_url`` if you need to inspect ``.url``/``.path``."""
         from .lazy.expr import Expr, Plan
         spec = Reference.from_url(url, method=method, **kwargs).request_fields()
-        return Expr(Plan(root="Reference", source=spec), self._core)
+        return cast("LazyReference", Expr(Plan(root="Reference", source=spec), self._core))
 
     #: ``lazy`` is kept as an explicit alias of the (now lazy) ``ref``.
     lazy = ref

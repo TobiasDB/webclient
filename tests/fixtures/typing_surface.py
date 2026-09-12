@@ -71,3 +71,20 @@ assert_type(res_doc.render("links"), Collection[Reference])
 # iterating a Collection yields the element type
 for _card in doc.select_all(".card"):
     assert_type(_card, Document)
+
+
+# -- Two-tier lazy client surface (PLAN §8): entry points are lazy; collect()
+#    returns the materialised tier. Runtime is a generic Expr; these are stubs.
+from webclient import WebClient
+from webclient.lazy.stubs import LazyDocument, LazyField, LazyReference
+
+_wc = WebClient()
+assert_type(_wc.ref("https://e.com"), LazyReference)
+assert_type(_wc.fetch("https://e.com"), LazyDocument)
+assert_type(_wc.fetch("https://e.com").select(".t"), LazyDocument)
+assert_type(_wc.fetch("https://e.com").attr("href"), LazyReference)
+assert_type(_wc.fetch("https://e.com").attr("text"), LazyField[str])
+assert_type(_wc.fetch("https://e.com").collect(), Document)
+assert_type(_wc.fetch("https://e.com").attr("text").collect(), Field[str])
+assert_type(_wc.ref("https://e.com").resolve().collect(), Document)
+assert_type(_wc.ref("https://e.com").resolve().select(".t").attr("text").collect(), Field[str])
