@@ -652,4 +652,4 @@ the engine and materialises the result. `Expr` is already model-independent
 `Expr.collect(context=None)` runs a recorded plan on the bound client's core
 (or the process default) via the engine loop; `collect` is a reserved,
 non-recordable name. `Reference(url).resolve().select(...).attr(...).collect()`
-now works alongside `wc.execute`. Then `wc.lazy(url)` -- a lazy reference root bound to THIS client (not the process default), the companion to collect() for non-default clients. 150 tests green.
+now works alongside `wc.execute`. Then `wc.lazy(url)` -- a lazy reference root bound to THIS client (not the process default), the companion to collect() for non-default clients. Then Polars-style free when(cond).then(a).otherwise(b) (a new "when" plan step) and filter(coll, pred), exported from webclient. Additive cornerstones done; addressable roots + two-tier typing await the entry-point flip. 151 tests green.
