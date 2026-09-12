@@ -662,3 +662,15 @@ remainder): `wc.ref`/`Reference.resolve`/`doc.ref()`/execute-context (37+
 multi-role sites: context, construction, inspection, resolve) and
 `Session.fetch`; plus the addressable `document`/`reference`/`session` roots
 and two-tier typing. 151 tests green.
+
+**Flip progress (stage 2, cont.):** `wc.ref(url)` is now a lazy reference root
+(was eager) -- `wc.ref(url).resolve()` records and runs on `.collect()`. The
+engine stays eager: it builds its own real References internally, and a lazy
+reference used as an execute context is unwrapped back to a real Reference
+(`_start`; the remote core unwraps to a url). Error policy split: the top level
+raises (failed resolve/fetch), while `extract`/`filter` evaluate sub-expressions
+under RETURN and fan-out stays resilient. So the ergonomic surface
+(`fetch`/`search`/`summary`/`ref`) is fully lazy; within a *materialised*
+(collected) Document, chaining stays eager. Remaining: `doc.ref()`/`reload`,
+`Session.fetch`/`ref`, the addressable `document`/`reference`/`session` roots,
+and two-tier typing. 151 tests green.
