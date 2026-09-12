@@ -674,3 +674,19 @@ under RETURN and fan-out stays resilient. So the ergonomic surface
 (collected) Document, chaining stays eager. Remaining: `doc.ref()`/`reload`,
 `Session.fetch`/`ref`, the addressable `document`/`reference`/`session` roots,
 and two-tier typing. 151 tests green.
+
+**Flip progress (stage 2 complete at runtime):** `Session.ref`/`fetch` are now
+lazy too (session threaded via `Plan.session_id`), so WebClient and Session
+share one lazy surface. The full-lazy RUNTIME is done: every ergonomic entry
+(`fetch`/`search`/`summary`/`ref`, client and session) returns an expression;
+`.collect()` (or `execute`) materialises; `when`/`filter`/`collect` are in;
+within a materialised Document chaining stays eager. 151 tests green, both
+checkers clean on the corpus, demo exits 0.
+
+**Remaining (typing layer, stages 1/3-ish):** the two-tier shims
+(`LazyDocument` -> materialised `Document`, `LazyCollection[LazyT, T]`, the
+`_collect` overloads) + gen_stubs emitting them + a lazy-surface typing corpus.
+Until then the lazy client methods are loosely typed (`Any`). `doc.ref()`/
+`reload()` stay eager by design (they act on a materialised Document). The
+addressable module roots (`document`/`reference`/`session`) are naming sugar
+over the existing `doc`/`ref` + `Reference(url)`.
