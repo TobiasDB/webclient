@@ -201,6 +201,26 @@ def title(self: Document) -> str | None:
     return node.text if node.ok else None
 
 
+@prop("Document", "text")
+def text(self: Document) -> str:
+    return self._core.text()
+
+
+@op("Document", "join")
+def document_join(self: Document, href: str) -> Reference:
+    return self._core.join(href)
+
+
+@op("Document", "ref")
+def ref(self: Document) -> Reference:
+    return self._core.ref()
+
+
+@op("Document", "reload")
+def reload(self: Document, **options: Any) -> Document:
+    return self._core.reload(**options)
+
+
 # -- event views (the EventBacking; consolidated off Document, PLAN §9) -------
 
 @op("Document", "events_of")

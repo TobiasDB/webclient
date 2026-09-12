@@ -268,34 +268,8 @@ class Document(WebBase):
     def _is_empty(self) -> bool:
         return not self.content
 
-    @property
-    def text(self) -> str:
-        """Decoded element/body text (delegates to the DocumentCore)."""
-        return self._core.text()
-
-
-    def join(self, href: str) -> Reference:
-        """Resolve ``href`` against the document's final URL (after redirects),
-        not the original request URL."""
-        return Reference.from_url(urljoin(self.final_url or self.url, href))
-
-    def ref(self) -> Reference:
-        """The Reference this document resolves from, reflecting the current
-        action chain (Decision 11): re-resolving it reproduces this state."""
-        if self._client is not None and self.root:
-            found = self._client.reference(self.root)
-            if found is not None:
-                found.actions = list(self.actions)   # current chain
-                found.options = dict(self.options)
-                return found
-        ref = Reference.from_url(self.url)   # best-effort (registry lost it)
-        ref.name, ref.actions, ref.options = self.root or "", list(self.actions), dict(self.options)
-        return ref.bind(self._client, self._session)
-
-    def reload(self, **options: Any) -> "Document":
-        """Re-resolve this document's reference, replaying its recorded action
-        chain (Decision 11) so the result reproduces this state."""
-        return self.ref().resolve(**{**self.options, **options})
+    # text / ref / join / reload live on the DocumentCore now (PLAN §9),
+    # dispatched through core.ops and exposed on the generated interface below.
 
     # -- event views (events_of / action_events / xhr_requests / … / subscribe)
     #    are the EventBacking now (core/backings/events.py), dispatched through
@@ -321,7 +295,10 @@ class Document(WebBase):
         def events_of(self, event: 'type[Event] | Topic') -> Sequence[Event]: ...  # type: ignore[empty-body]
         def execute(self, script: str, *, error: ErrorPolicy | None = None) -> Document: ...  # type: ignore[empty-body]
         def hover(self, selector: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
+        def join(self, href: str) -> Reference: ...  # type: ignore[empty-body]
         def press(self, key: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
+        def ref(self) -> Reference: ...  # type: ignore[empty-body]
+        def reload(self, **options: Any) -> Document: ...  # type: ignore[empty-body]
         @overload
         def render(self, format: Literal['markdown', 'text', 'html'], **options: Any) -> str: ...
         @overload
@@ -346,6 +323,8 @@ class Document(WebBase):
         def console(self) -> 'Sequence[ConsoleEvent]': ...  # type: ignore[empty-body]
         @property
         def dom_mutations(self) -> 'Sequence[DOMUpdateEvent]': ...  # type: ignore[empty-body]
+        @property
+        def text(self) -> str: ...  # type: ignore[empty-body]
         @property
         def title(self) -> str | None: ...  # type: ignore[empty-body]
         @property
@@ -483,6 +462,32 @@ class DocumentCore:
         if self.data is None and not self.is_element:
             self.data = _json.loads(self.text())
         return self.data
+
+    # -- reference / reload (moved off Document, PLAN §9) --------------------
+    def join(self, href: str) -> "Reference":
+        """Resolve ``href`` against the document's final URL (after redirects)."""
+        doc = self.doc
+        return Reference.from_url(urljoin(doc.final_url or doc.url, href))
+
+    def ref(self) -> "Reference":
+        """The Reference this document resolves from, reflecting the current
+        action chain (Decision 11) so re-resolving reproduces this state."""
+        doc = self.doc
+        if doc._client is not None and doc.root:
+            found = doc._client.reference(doc.root)
+            if found is not None:
+                found.actions = list(doc.actions)
+                found.options = dict(doc.options)
+                return found
+        ref = Reference.from_url(doc.url)        # best-effort (registry lost it)
+        ref.name, ref.actions, ref.options = (
+            doc.root or "", list(doc.actions), dict(doc.options))
+        return ref.bind(doc._client, doc._session)
+
+    def reload(self, **options: Any) -> Any:
+        """Re-resolve this document's reference, replaying its action chain."""
+        from .ops import run_op
+        return run_op(self.ref(), "resolve", [], {**self.doc.options, **options})
 
     # -- element / binary construction ---------------------------------------
     def element(self, *, tree: Any = None, data: Any = None,
