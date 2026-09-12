@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from ..base import Capability
 from .base import Backing, pw_selector
+from .events import EventBacking
 from .html import HtmlBacking
 from .json import JsonBacking
 from .live import LiveAction, LiveSelect
@@ -16,19 +17,23 @@ _HTML = HtmlBacking()
 _JSON = JsonBacking()
 _LIVE_SELECT = LiveSelect()
 _LIVE_ACTION = LiveAction()
+_EVENTS = EventBacking()          # gate 'ok': always available
 
 
 def choose(core: "DocumentCore") -> list[Backing]:
     """Order matters: the first backing that provides an op wins. A live page
     gets HtmlBacking too, so ``render`` works on the current snapshot while
-    ``select``/``attr`` stay live."""
+    ``select``/``attr`` stay live. ``EventBacking`` is always last (event
+    views work on any resolved document)."""
     if core.page is not None or core.locator is not None:
-        return [_LIVE_SELECT, _LIVE_ACTION, _HTML]
-    if core.doc.kind == "json":
-        return [_JSON]
-    if core.doc.kind in ("html", "xml"):
-        return [_HTML]
-    return []
+        media: list[Backing] = [_LIVE_SELECT, _LIVE_ACTION, _HTML]
+    elif core.doc.kind == "json":
+        media = [_JSON]
+    elif core.doc.kind in ("html", "xml"):
+        media = [_HTML]
+    else:
+        media = []
+    return [*media, _EVENTS]
 
 
 GATES: dict[str, Capability] = {
@@ -36,4 +41,4 @@ GATES: dict[str, Capability] = {
     **{op: "page" for op in _LIVE_ACTION.provides}}
 
 __all__ = ["Backing", "HtmlBacking", "JsonBacking", "LiveSelect", "LiveAction",
-           "choose", "GATES", "pw_selector"]
+           "EventBacking", "choose", "GATES", "pw_selector"]

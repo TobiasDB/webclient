@@ -17,6 +17,8 @@ from .base import (CLASSES, RETURN, ErrorPolicy, Field, OpError, _gather,
                    _plain, policy)
 
 if TYPE_CHECKING:
+    from ..events import (ActionEvent, ConsoleEvent, DOMUpdateEvent, Event,
+                          Topic, XHREvent)
     from .base import Collection, WebBase
     from .document import Document, Reference
 
@@ -197,6 +199,38 @@ def wait_for(self: Document, selector: str | None = None, *,
 def title(self: Document) -> str | None:
     node = run_op(self, "select", ["title"], {"error": RETURN})
     return node.text if node.ok else None
+
+
+# -- event views (the EventBacking; consolidated off Document, PLAN §9) -------
+
+@op("Document", "events_of")
+def events_of(self: Document, event: "type[Event] | Topic") -> "Sequence[Event]":
+    return self._core.dispatch("events_of", event)
+
+
+@op("Document", "subscribe")
+def subscribe(self: Document, topic: "Topic", handler: Any) -> Any:
+    return self._core.dispatch("subscribe", topic, handler)
+
+
+@prop("Document", "action_events")
+def action_events(self: Document) -> "Sequence[ActionEvent]":
+    return self._core.dispatch("action_events")
+
+
+@prop("Document", "xhr_requests")
+def xhr_requests(self: Document) -> "Sequence[XHREvent]":
+    return self._core.dispatch("xhr_requests")
+
+
+@prop("Document", "dom_mutations")
+def dom_mutations(self: Document) -> "Sequence[DOMUpdateEvent]":
+    return self._core.dispatch("dom_mutations")
+
+
+@prop("Document", "console")
+def console(self: Document) -> "Sequence[ConsoleEvent]":
+    return self._core.dispatch("console")
 
 
 # ========================================================================= #

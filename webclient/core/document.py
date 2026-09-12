@@ -297,27 +297,9 @@ class Document(WebBase):
         chain (Decision 11) so the result reproduces this state."""
         return self.ref().resolve(**{**self.options, **options})
 
-    # -- event store ---------------------------------------------------------
-    @overload
-    def events_of(self, event: type[E]) -> Sequence[E]: ...
-    @overload
-    def events_of(self, event: Topic) -> Sequence[Event]: ...
-    def events_of(self, event: type[Event] | Topic) -> Sequence[Event]:
-        if isinstance(event, str):
-            matches = [e for e in self.events
-                       if e.topic == event or e.topic.startswith(event + ".")]
-        else:
-            matches = [e for e in self.events if isinstance(e, event)]
-        path = self.identity_path if self._core.locator is not None else None
-        if path is None:
-            return matches
-        return [e for e in matches if e.node_id is not None
-                and (e.node_id == path or e.node_id.startswith(path + "/"))]
-
-    @property
-    def action_events(self) -> Sequence[ActionEvent]:
-        """Captured interactions; ``actions`` is the replayable chain."""
-        return self.events_of(ActionEvent)
+    # -- event views (events_of / action_events / xhr_requests / … / subscribe)
+    #    are the EventBacking now (core/backings/events.py), dispatched through
+    #    core.ops like every other op; see the generated block below.
 
     # -- selection / actions / rendering: the ops live in core.ops (PLAN §9);
     #    ``_parsed`` stays as the DocumentCore hook the backings read. Typed
@@ -336,6 +318,7 @@ class Document(WebBase):
         def click(self, selector: str | None = None, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
         def drag(self, source: str, target: str, *, error: ErrorPolicy | None = None) -> Document: ...  # type: ignore[empty-body]
         def evaluate(self, script: str, *, error: ErrorPolicy | None = None) -> Any: ...  # type: ignore[empty-body]
+        def events_of(self, event: 'type[Event] | Topic') -> Sequence[Event]: ...  # type: ignore[empty-body]
         def execute(self, script: str, *, error: ErrorPolicy | None = None) -> Document: ...  # type: ignore[empty-body]
         def hover(self, selector: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
         def press(self, key: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
@@ -353,34 +336,27 @@ class Document(WebBase):
         def select(self, selector: str, *, index: int = 0, wait: float | None = None, error: ErrorPolicy | None = None, optional: bool = False) -> Document: ...  # type: ignore[empty-body]
         def select_all(self, selector: str, limit: int | None = None, offset: int = 0, *, error: ErrorPolicy | None = None) -> Collection[Document]: ...  # type: ignore[empty-body]
         def select_option(self, selector: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
+        def subscribe(self, topic: 'Topic', handler: Any) -> Any: ...  # type: ignore[empty-body]
         def upload(self, selector: str, files: Sequence[str], *, error: ErrorPolicy | None = None) -> Document: ...  # type: ignore[empty-body]
         def wait_for(self, selector: str | None = None, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
         def write(self, selector: str, text: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
         @property
+        def action_events(self) -> 'Sequence[ActionEvent]': ...  # type: ignore[empty-body]
+        @property
+        def console(self) -> 'Sequence[ConsoleEvent]': ...  # type: ignore[empty-body]
+        @property
+        def dom_mutations(self) -> 'Sequence[DOMUpdateEvent]': ...  # type: ignore[empty-body]
+        @property
         def title(self) -> str | None: ...  # type: ignore[empty-body]
+        @property
+        def xhr_requests(self) -> 'Sequence[XHREvent]': ...  # type: ignore[empty-body]
         # <<< eager:Document
         pass
 
-    # -- live event views + element-scoped narrowing (ISSUES #9) -------------
     @property
     def identity_path(self) -> str | None:
         """A live element's capture identity ("n1/n4"), for event narrowing."""
         return self._core.identity_path()
-
-    @property
-    def xhr_requests(self) -> Sequence[XHREvent]:
-        return self.events_of(XHREvent)
-
-    @property
-    def dom_mutations(self) -> Sequence[DOMUpdateEvent]:
-        return self.events_of(DOMUpdateEvent)
-
-    @property
-    def console(self) -> Sequence[ConsoleEvent]:
-        return self.events_of(ConsoleEvent)
-
-    def subscribe(self, topic: Topic, handler: Any) -> Any:
-        return self._client.bus.subscribe(topic, handler, document_id=self.id)
 
 # ``LiveDocument``/``LiveNode`` are now ``Document`` (a live backing / a live
 # element); the typed views (HTMLDocument/JSONDocument/…) are gone -- the
