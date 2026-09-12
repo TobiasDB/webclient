@@ -64,7 +64,7 @@ def remote(httpserver):
 
 def test_fetch_returns_handle(remote):
     rc, server = remote
-    d = rc.fetch(server.url_for("/cards"))
+    d = rc.fetch(server.url_for("/cards")).collect()
     assert d.ok and d.kind == "html" and d.title == "Shop"   # cheap meta
     assert d.id
 
@@ -75,14 +75,14 @@ def test_auth_enforced(httpserver):
     with _Server(app) as base:
         rc = RemoteWebClient(base, token="wrong")
         with pytest.raises(RemoteError, match="401"):
-            rc.fetch(httpserver.url_for("/x"))
+            rc.fetch(httpserver.url_for("/x")).collect()
         rc.close()
     app.state.wc.close()
 
 
 def test_render_over_the_wire(remote):
     rc, server = remote
-    d = rc.fetch(server.url_for("/cards"))             # lazy handle
+    d = rc.fetch(server.url_for("/cards")).collect()   # lazy handle
     assert "# Featured" in rc.execute(d.render("markdown"))
     assert "Curated picks." in rc.execute(d.render("text"))
     assert any(u.endswith("/i/1") for u in rc.execute(d.render("links")))
@@ -91,7 +91,7 @@ def test_render_over_the_wire(remote):
 
 def test_select_is_one_batched_call(remote):
     rc, server = remote
-    d = rc.fetch(server.url_for("/cards"))
+    d = rc.fetch(server.url_for("/cards")).collect()
     assert rc.execute(d.select(".title").attr("text")) == "Aeropress"
     assert rc.execute(d.select_all(".title").attr("text")) == \
         ["Aeropress", "Grinder"]

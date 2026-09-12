@@ -291,7 +291,7 @@ def main() -> None:
 
     async def _async_demo() -> tuple:
         async with AsyncWebClient() as ac:
-            document = await ac.fetch(f"{base}/")
+            document = await ac.execute(ac.fetch(f"{base}/"))   # lazy fetch, awaited
             rows = await ac.execute(
                 ref.resolve().select_all(".card")
                 .extract(title=doc.select(".title").attr("text")).project(),
@@ -349,7 +349,7 @@ def main() -> None:
     port = server.servers[0].sockets[0].getsockname()[1]
 
     with RemoteWebClient(f"http://127.0.0.1:{port}", token="demo") as rc:
-        remote_doc = rc.fetch(f"{base}/")                    # lazy handle + meta
+        remote_doc = rc.fetch(f"{base}/").collect()          # lazy fetch -> handle
         print("\nremote fetch:  ", remote_doc.title, "| ok:", remote_doc.ok)
         print("remote render: ", rc.execute(remote_doc.render("markdown")).splitlines()[0])
         print("remote select: ", rc.execute(remote_doc.select_all(".title").attr("text")))

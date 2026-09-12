@@ -75,8 +75,8 @@ def test_fetch_non_2xx_optional_returns_document(httpserver, wc):
 def test_fetch_transport_error(wc):
     ref = Reference.from_url("http://127.0.0.1:1/nothing")  # port 1: refused
     with pytest.raises(FetchError):
-        wc.fetch(ref)
-    doc = wc.fetch(ref, optional=True)
+        wc.fetch(ref).collect()
+    doc = wc.fetch(ref, optional=True).collect()
     assert doc.status_code == 0 and not doc.ok
 
 

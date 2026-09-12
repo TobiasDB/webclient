@@ -78,7 +78,10 @@ def plan_op(build: Callable[..., Any]) -> Callable[..., Any]:
 
 class _Facade:
     """The user surface: the same plan builders over any execution. A subclass
-    supplies ``ref``/``_run`` (and ``session`` for a session-bound surface)."""
+    supplies ``_core``/``ref``/``_run`` (and ``session`` for a session-bound
+    surface)."""
+
+    _core: Any
 
     def ref(self, url: str, method: str = "get", **kwargs: Any) -> Any:
         raise NotImplementedError
@@ -103,11 +106,17 @@ class _Facade:
         """Run a lazy expression. ``stream=True`` yields rows as they land."""
         return self._run(expr, context, stream=stream)
 
-    @plan_op
     def fetch(self, ref: Any, *, browser: bool = False, session: Any = None,
               optional: bool = False, **options: Any) -> Any:
-        return (fetch_expr(browser=browser, optional=optional, **options),
-                self._context(ref, session))
+        """Lazy (PLAN §8): returns a Document expression bound to this client's
+        core. Run it with ``.collect()`` (or ``wc.execute``) -- was eager. The
+        plan self-carries the request spec, so ``collect()`` needs no context."""
+        from .lazy.expr import Expr, Plan
+        context = self._context(ref, session)              # a bound Reference
+        root = Expr(Plan(root="Reference", source=context.request_fields()),
+                    self._core)
+        return root.resolve(browser=browser, optional=optional,
+                            error=RETURN if optional else RAISE, **options)
 
     @plan_op
     def search(self, term: str, *, engine: Any = None, limit: int = 5,

@@ -19,7 +19,7 @@ def test_async_fetch_execute_and_stream(httpserver):
 
     async def main():
         async with AsyncWebClient() as ac:
-            document = await ac.fetch(url)
+            document = await ac.execute(ac.fetch(url))      # lazy fetch, awaited
             assert document.ok and document.title == "Shop"
 
             rows = await ac.execute(
