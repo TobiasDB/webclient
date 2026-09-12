@@ -227,6 +227,13 @@ def main() -> None:
         for row in wc.execute(plan):
             print(f"  row:       {row['title']} {row['price']} -> {row['link'].path}")
 
+        # [§8] Full-lazy trigger: .collect() runs a recorded plan directly, and
+        #      wc.lazy(url) is a lazy root bound to THIS client (companion to
+        #      collect()). Same result as wc.execute; the surface is moving lazy.
+        print("collect:    ", plan.collect()[0]["title"])
+        bound = wc.lazy(f"{base}/").resolve().select(".title").attr("text")
+        print("wc.lazy:    ", bound.collect().get())
+
         # [P3] Follow each card's link (reference -> resolve) into its JSON
         #      detail; `when/then/otherwise` branches; a missing select is a
         #      not-ok field under the plan default, never an aborted plan.
