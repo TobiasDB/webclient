@@ -194,6 +194,21 @@ def _element_ops() -> list[str]:
         params = ("self, " + _params(fn, IND8)).rstrip(", ")
         lines.append(f"{IND8}def {name}({params}) -> {ret}: "
                      "...  # type: ignore[empty-body]")
+    # whole-collection ops (``_WHOLE``): act on the collection itself, not per
+    # element -- spelled out here since they carry their own (non-lifted) types.
+    lines += [
+        f"{IND8}def extract(self, *, error: ErrorPolicy | None = None, "
+        "**named_expr: Any) -> Collection[T]: ...  # type: ignore[empty-body]",
+        f"{IND8}def filter(self, *expr: Any, error: ErrorPolicy | None = None, "
+        "**named_expr: Any) -> Collection[T]: ...  # type: ignore[empty-body]",
+        f"{IND8}def project[M](self, model: type[M] | None = None, *, "
+        "error: ErrorPolicy | None = None) -> list[M | dict[str, Any]]: "
+        "...  # type: ignore[empty-body]",
+        f"{IND8}def is_ok(self, *, error: ErrorPolicy | None = None) "
+        "-> Field[bool]: ...  # type: ignore[empty-body]",
+        f"{IND8}def is_empty(self, *, error: ErrorPolicy | None = None) "
+        "-> Field[bool]: ...  # type: ignore[empty-body]",
+    ]
     return lines
 
 

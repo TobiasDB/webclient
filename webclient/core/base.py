@@ -462,30 +462,13 @@ class Collection[T](WebBase):
     def _is_empty(self) -> bool:
         return not self._items
 
-    @policy(returns="Field", always=True)
-    def is_empty(self, *, error: ErrorPolicy | None = None) -> Field[bool]:
-        return Field[bool](value=self._is_empty())
-
-    @policy(returns="Field", always=True)
-    def is_ok(self, *, error: ErrorPolicy | None = None) -> Field[bool]:
-        return Field[bool](value=self.ok)
-
-    @policy(returns="Self")
-    def extract(self, *, error: ErrorPolicy | None = None,  # type: ignore[override]
-                **named_expr: Any) -> Collection[T]:
-        return self._aextract_all(named_expr)  # type: ignore[return-value]
-
+    # The ops (extract/filter/project/is_ok/is_empty + the lifted element ops)
+    # live in core.ops (PLAN §9); these stay as the async plumbing they call.
     async def _aextract_all(self, named_expr: dict[str, Any]) -> Collection[T]:
+        from .ops import run_op
         for el in self._items:
-            await el.extract(**named_expr)
+            await run_op(el, "extract", [], named_expr)
         return self
-
-    @policy(returns="Collection")
-    def filter(self, *expr: Any, error: ErrorPolicy | None = None,
-               **named_expr: Any) -> Collection[T]:
-        """Keep the elements for which every expression is truthy (a not-ok
-        result is falsy)."""
-        return self._afilter((*expr, *named_expr.values()))  # type: ignore[return-value]
 
     async def _afilter(self, exprs: tuple[Any, ...]) -> Collection[T]:
         from .executor import _truthy, evaluate
@@ -498,9 +481,6 @@ class Collection[T](WebBase):
         out: Collection[T] = Collection()
         out._items = kept
         return out
-
-    def project[M](self, model: type[M] | None = None, *, error: ErrorPolicy | None = None) -> list[M | dict[str, Any]]:  # type: ignore[override]
-        return [el.project(model) for el in self._items]
 
     def __iter__(self) -> Iterator[T]:
         return iter(self._items)
@@ -564,6 +544,11 @@ class Collection[T](WebBase):
         def wait_for(self, selector: str | None = None, *, error: ErrorPolicy | None = None, **kw: Any) -> Collection[Document]: ...  # type: ignore[empty-body]
         def with_params(self, **params: str) -> Collection[Reference]: ...  # type: ignore[empty-body]
         def write(self, selector: str, text: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Collection[Document]: ...  # type: ignore[empty-body]
+        def extract(self, *, error: ErrorPolicy | None = None, **named_expr: Any) -> Collection[T]: ...  # type: ignore[empty-body]
+        def filter(self, *expr: Any, error: ErrorPolicy | None = None, **named_expr: Any) -> Collection[T]: ...  # type: ignore[empty-body]
+        def project[M](self, model: type[M] | None = None, *, error: ErrorPolicy | None = None) -> list[M | dict[str, Any]]: ...  # type: ignore[empty-body]
+        def is_ok(self, *, error: ErrorPolicy | None = None) -> Field[bool]: ...  # type: ignore[empty-body]
+        def is_empty(self, *, error: ErrorPolicy | None = None) -> Field[bool]: ...  # type: ignore[empty-body]
         # <<< generated
         pass
 
