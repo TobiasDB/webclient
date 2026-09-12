@@ -278,9 +278,10 @@ def main() -> None:
         from webclient import SearchEngine
         engine = SearchEngine(url=f"{base}/?q={{q}}", result=".card",
                               title=".title", link="a")
-        hits = wc.search("coffee", engine=engine, limit=2)
+        hits = wc.search("coffee", engine=engine, limit=2).collect()
         print("search:     ", [(h["title"], h["url"].path) for h in hits])
-        print("summary:    ", {k: wc.summary(f"{base}/")[k] for k in ("title", "ok")})
+        summary = wc.summary(f"{base}/").collect()
+        print("summary:    ", {k: summary[k] for k in ("title", "ok")})
 
     # [async] The same facade helpers, awaited. AsyncWebClient builds the very
     #      same plans as WebClient; only the execution differs -- it bridges the

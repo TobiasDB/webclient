@@ -33,7 +33,7 @@ def test_search_returns_result_rows(httpserver, wc):
     httpserver.expect_request("/s").respond_with_data(
         RESULTS, content_type="text/html")
     engine = SearchEngine(url=httpserver.url_for("/s") + "?q={q}")
-    rows = wc.search("coffee", engine=engine, limit=2)
+    rows = wc.search("coffee", engine=engine, limit=2).collect()
     assert [r["title"] for r in rows] == ["First", "Second"]
     assert rows[0]["url"].path == "/go/1"
 
@@ -42,7 +42,7 @@ def test_summary_returns_title_and_markdown(httpserver, wc):
     httpserver.expect_request("/p").respond_with_data(
         "<html><head><title>Hi</title></head><body><h1>Big</h1></body></html>",
         content_type="text/html")
-    out = wc.summary(httpserver.url_for("/p"))
+    out = wc.summary(httpserver.url_for("/p")).collect()
     assert out["ok"] and out["title"] == "Hi" and "Big" in out["markdown"]
 
 
