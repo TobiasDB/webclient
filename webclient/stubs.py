@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence  # noqa: F401  (used by generated sigs)
 
     from .core.base import Collection, Field
-    from .document import Document, Reference
+    from .core.models import Document, Reference
 
 _LINK = Literal["href", "src", "action"]
 _E = Any                                      # error-policy arg (kept loose)

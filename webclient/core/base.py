@@ -26,7 +26,7 @@ from pydantic import BaseModel, PrivateAttr
 from typing_extensions import Self
 
 if TYPE_CHECKING:
-    from ..document import Document, Reference
+    from .models import Document, Reference
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -198,7 +198,7 @@ def _after(obj: Any, result: Any) -> Any:
 def _client_of(obj: Any) -> Any:
     client = getattr(obj, "_client", None)
     if client is None:
-        from ..webclient import default_client
+        from .client import default_client
         client = default_client()
     return client
 

@@ -159,7 +159,7 @@ class Expr:
         trigger (full-lazy migration, PLAN §8). Runs on the bound client's core
         (or the process default) via its engine loop. ``collect`` is a reserved,
         non-recordable name (like a ``_``-prefixed one)."""
-        from ..webclient import default_client
+        from .client import default_client
         client = self._client
         if client is None:
             client = default_client().core
@@ -204,7 +204,7 @@ def _install_roots() -> None:
     """Expose the typed roots and register the root types. Called at the end
     of models.py, keeping the import edge one-way (models import expr)."""
     global doc, many, ref
-    from ..document import Collection, Document, Field, Reference
+    from .models import Collection, Document, Field, Reference
     LAZY_TYPES["Field"] = Field
     doc = lazy(Document)
     many = lazy(cast(type, Collection))
@@ -212,7 +212,7 @@ def _install_roots() -> None:
 
 
 if TYPE_CHECKING:
-    from ..document import Collection, Document, Reference
+    from .models import Collection, Document, Reference
     doc: Document
     many: Collection[Document]
     ref: Reference

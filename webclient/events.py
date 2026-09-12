@@ -14,7 +14,7 @@ from uuid import uuid4
 from pydantic import BaseModel, PrivateAttr
 
 if TYPE_CHECKING:
-    from .document import Reference
+    from .core.models import Reference
 
 Topic = str
 

@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import webclient.core.base as m  # noqa: E402
-import webclient.document as d  # noqa: E402
+import webclient.core.models as d  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 MODELS = Path(m.__file__)                         # Collection lives in base.py

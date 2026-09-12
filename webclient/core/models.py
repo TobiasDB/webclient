@@ -19,11 +19,11 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 from pydantic import BaseModel, PrivateAttr
 from typing_extensions import Self
 
-from .core.base import (CLASSES, RETURN, Capability, Collection,
+from .base import (CLASSES, RETURN, Capability, Collection,
                         ErrorPolicy, Field, OpError, UnsupportedOperation,
                         WebBase, WebError, policy)
 
-from .events import (
+from ..events import (
     ActionEvent,
     AssetEvent,
     ConsoleEvent,
@@ -153,7 +153,7 @@ class Reference(WebBase):
 
     def __new__(cls, url: str | None = None, /, **data: Any) -> Reference:
         if url is not None and cls is Reference:
-            from .core.expr import Plan, lazy
+            from .expr import Plan, lazy
             spec = Reference.from_url(url).request_fields()
             return lazy(Reference, plan=Plan(root="Reference", source=spec))
         return super().__new__(cls)
@@ -222,7 +222,7 @@ class Reference(WebBase):
         returns a not-ok Document instead of raising on failure."""
         wc = self._client or (self._session._client if self._session else None)
         if wc is None:
-            from .core.expr import Expr, Plan
+            from .expr import Expr, Plan
             root = Expr(Plan(root="Reference", source=self.request_fields()))
             return root.resolve(browser=browser, optional=optional, **options)  # type: ignore[return-value]
         return wc.resolve(self, browser=browser, optional=optional,  # type: ignore[return-value]
@@ -275,7 +275,7 @@ class Document(WebBase):
     def _core(self) -> Any:
         """The DocumentCore holding this document's runtime and op logic."""
         if self._core_obj is None:
-            from .core.document import DocumentCore
+            from .document import DocumentCore
             self._core_obj = DocumentCore(self)
         return self._core_obj
 
@@ -490,5 +490,5 @@ for _cls in (NetworkEvent, XHREvent, FetchEvent, NavigationEvent, AssetEvent):
 # install the typed lazy roots (doc / many / ref).
 CLASSES.update(WebBase=WebBase, WebError=WebError, Field=Field,
                Collection=Collection, Reference=Reference, Document=Document)
-from .core.expr import _install_roots as _install_roots  # noqa: E402
+from .expr import _install_roots as _install_roots  # noqa: E402
 _install_roots()

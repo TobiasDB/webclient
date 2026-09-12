@@ -5,7 +5,7 @@ from __future__ import annotations
 import json as _json
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from ...document import Collection, Document, Element, Field, Reference, _json_path
+from ..models import Collection, Document, Element, Field, Reference, _json_path
 from ..base import Capability
 from .base import Backing
 

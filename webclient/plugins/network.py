@@ -14,7 +14,7 @@ import httpx
 from pydantic import PrivateAttr
 
 from ..events import Event, NavigationEvent, NetworkEvent
-from ..document import Reference
+from ..core.models import Reference
 from .base import Plugin, Surface, SurfaceKind
 
 

@@ -16,14 +16,14 @@ import atexit
 import threading
 from typing import TYPE_CHECKING, Any, cast, overload
 
-from .client import _Facade, run_on_core
-from .core.webclient import SearchEngine, WebClientCore
-from .document import Reference
+from .facade import _Facade, run_on_core
+from .webclient import SearchEngine, WebClientCore
+from .models import Reference
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
 
-    from .stubs import Lazy, LazyReference
+    from ..stubs import Lazy, LazyReference
 
 __all__ = ["WebClient", "AsyncWebClient", "SearchEngine", "WebClientCore",
            "default_client"]
@@ -48,8 +48,8 @@ class _Client(_Facade):
         runs on ``.collect()`` (or ``wc.execute``), on THIS client's core
         (PLAN §8 -- was eager). Build a plain request spec with
         ``Reference.from_url`` if you need to inspect ``.url``/``.path``."""
-        from .document import HttpMethod
-        from .core.expr import Expr, Plan
+        from .models import HttpMethod
+        from .expr import Expr, Plan
         spec = Reference.from_url(url, method=cast(HttpMethod, method),
                                  **kwargs).request_fields()
         return cast("LazyReference", Expr(Plan(root="Reference", source=spec), self._core))

@@ -21,9 +21,9 @@ from typing import Any
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket
 from pydantic import BaseModel
 
-from ..document import Collection, Document, Field, Reference, WebBase
+from ..core.models import Collection, Document, Field, Reference, WebBase
 from ..core.expr import Plan, from_plan
-from ..webclient import WebClient
+from ..core.client import WebClient
 
 
 class SessionBody(BaseModel):

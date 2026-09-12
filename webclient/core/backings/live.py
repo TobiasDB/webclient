@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar, Sequence
 
 from ...events import ActionEvent
-from ...document import Collection, Document, Field, Reference
+from ..models import Collection, Document, Field, Reference
 from ..base import Capability
 from .base import Backing, _timeout_ms, pw_selector
 

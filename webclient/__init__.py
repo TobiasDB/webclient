@@ -9,7 +9,7 @@ maps every remaining name to its milestone.
 from typing import TYPE_CHECKING
 
 from .core.webclient import Proxy
-from .webclient import (
+from .core.client import (
     AsyncWebClient,
     SearchEngine,
     WebClient,
@@ -35,7 +35,7 @@ from .events import (
     Topic,
     XHREvent,
 )
-from .document import (
+from .core.models import (
     LiveDocument,
     LiveNode,
     Collection,
@@ -56,7 +56,7 @@ from .core.executor import PlanEvent
 from .plugins.base import Plugin, Renderer, Surface, SurfaceKind
 from .pool import ClientPool, Lease, PoolStats
 from .core.remote import RemoteError, RemoteWebClient, RemoteWebClientCore
-from .session import Session
+from .core.session import Session
 
 
 def __getattr__(name: str):

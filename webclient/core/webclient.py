@@ -13,7 +13,7 @@ from urllib.parse import quote_plus
 from uuid import uuid4
 
 if TYPE_CHECKING:
-    from ..session import Session
+    from .session import Session
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -23,7 +23,7 @@ from ..engine import http as engine_http
 from ..engine.browser import BrowserHost
 from ..engine.loop import EngineLoop
 from ..events import EventBus, EventRegistry
-from ..document import (
+from .models import (
     Document,
     apply_status,
     FetchError,
@@ -417,7 +417,7 @@ class WebClientCore(EngineCore, BaseModel):
 
     # -- sessions -------------------------------------------------------------
     def session(self, **overrides: Any) -> "Session":
-        from ..session import Session
+        from .session import Session
         import time as _time
         sess = Session(id=uuid4().hex, status="running", **overrides)
         if sess.ttl is not None:

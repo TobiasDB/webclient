@@ -23,7 +23,7 @@ def make_doc(**overrides) -> Document:
         status_code=200,
     )
     values.update(overrides)
-    from webclient.document import apply_status
+    from webclient.core.models import apply_status
     return apply_status(Document(**values))
 
 

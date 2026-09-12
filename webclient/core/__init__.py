@@ -3,7 +3,7 @@ the backings. Isolated from the rest of the package (engine, plugins,
 service, remote) -- they depend on core, not the reverse."""
 from .base import (CLASSES, IGNORE, RAISE, RETURN, Capability, ErrorPolicy,
                   OpError, UnsupportedOperation, default_policy, now, policy)
-from ..document import (Collection, Document, Element, FetchError, Field,
+from .models import (Collection, Document, Element, FetchError, Field,
                         HttpMethod, LiveDocument, LiveNode, Reference,
                         Script, WebBase, WebError, _is_xpath, _json_path,
                         _select_elements)

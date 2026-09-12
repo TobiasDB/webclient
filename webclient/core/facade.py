@@ -15,12 +15,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote_plus
 
-from .core.base import RAISE, RETURN
-from .core import expr as _lz
-from .core.expr import Expr, Plan
+from .base import RAISE, RETURN
+from . import expr as _lz
+from .expr import Expr, Plan
 
 if TYPE_CHECKING:
-    from .stubs import LazyCollection, LazyDocument, LazyReference
+    from ..stubs import LazyCollection, LazyDocument, LazyReference
 
 
 # -- plan builders (shared by the facades and Session) ---------------------- #
@@ -43,7 +43,7 @@ def search_expr(engine: Any, *, limit: int = 5) -> Any:
 
 
 def default_engine() -> Any:
-    from .core.webclient import SearchEngine
+    from .webclient import SearchEngine
     return SearchEngine()
 
 
@@ -83,7 +83,7 @@ class _Facade:
         (``_rooted``). A string becomes ``Reference.from_url``; a given
         Reference is used as-is. (The public ``ref`` is lazy; this is internal
         and stays a real Reference so the plan can embed its source.)"""
-        from .document import Reference
+        from .models import Reference
         return Reference.from_url(ref, **kwargs) if isinstance(ref, str) else ref
 
     def execute(self, expr: Any, context: Any = None, *,

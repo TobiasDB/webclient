@@ -12,11 +12,11 @@ from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 from pydantic import BaseModel, Field, PrivateAttr
 
-from .core.webclient import Proxy
+from .webclient import Proxy
 
 if TYPE_CHECKING:
-    from .stubs import Lazy, LazyDocument, LazyReference
-from .document import Document, HttpMethod, Reference
+    from ..stubs import Lazy, LazyDocument, LazyReference
+from .models import Document, HttpMethod, Reference
 
 
 class Session(BaseModel):
@@ -39,7 +39,7 @@ class Session(BaseModel):
         """A LAZY reference root scoped to this session: records ops and runs on
         ``.collect()`` (or ``session.execute``), resolving within this session
         (PLAN §8 -- was eager). The plan carries this session's id."""
-        from .core.expr import Expr, Plan
+        from .expr import Expr, Plan
         spec = Reference.from_url(url, method=method, **kwargs).request_fields()
         return cast("LazyReference", Expr(
             Plan(root="Reference", source=spec, session_id=self.id), self._client))
@@ -60,8 +60,8 @@ class Session(BaseModel):
               optional: bool = False, **options: Any) -> "LazyDocument":
         """Lazy resolve within this session: a Document expr (session-scoped);
         run with ``.collect()`` / ``session.execute`` (PLAN §8 -- was eager)."""
-        from .core.base import RAISE, RETURN
-        from .core.expr import Expr, Plan
+        from .base import RAISE, RETURN
+        from .expr import Expr, Plan
         r = ref if isinstance(ref, Reference) else Reference.from_url(ref)
         root = Expr(Plan(root="Reference", source=r.request_fields(),
                          session_id=self.id), self._client)
@@ -77,14 +77,14 @@ class Session(BaseModel):
                 stream: bool = False) -> Any:
         """Run a lazy expression within this session (sync bridge); a lazy tier
         materialises to its model via the ``Lazy[T]`` bridge."""
-        from .client import run_on_core
+        from .facade import run_on_core
         return run_on_core(self._client, expr, context, stream=stream)
 
     def search(self, term: str, *, engine: Any = None,
                limit: int = 5) -> list[dict[str, Any]]:
         """Run a search within this session and return result rows."""
         from urllib.parse import quote_plus
-        from .client import default_engine, search_expr
+        from .facade import default_engine, search_expr
         eng = engine or default_engine()
         rows = self.execute(search_expr(eng, limit=limit),
                             self.ref(eng.url.format(q=quote_plus(term))))
