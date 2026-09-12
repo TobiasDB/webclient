@@ -336,121 +336,47 @@ class Document(WebBase):
         """Captured interactions; ``actions`` is the replayable chain."""
         return self.events_of(ActionEvent)
 
-    # -- representations: one render() with per-format typing ----------------
-    @overload
-    def render(self, format: Literal["markdown", "text", "html"],
-               **options: Any) -> str: ...
-    @overload
-    def render(self, format: Literal["elements"], **options: Any) -> list[Element]: ...
-    @overload
-    def render(self, format: Literal["links"], **options: Any) -> Collection[Reference]: ...
-    @overload
-    def render(self, format: str, **options: Any) -> Any: ...
-    @policy(returns="None")
-    def render(self, format: str, **options: Any) -> Any:
-        """Render a representation of this document -- a backing op dispatched
-        by kind (core: markdown / text / elements / links / html for html;
-        elements for json). A client may override a (kind, format) via
-        ``wc.use(Renderer)``; the backing consults that table first. On a live
-        page the backing renders off a fresh snapshot (settled by @policy)."""
-        return self._core.dispatch("render", format, **options)
-
-    @property
-    def title(self) -> str | None:
-        node = self.select("title", error=RETURN)
-        return node.text if node.ok else None
-
-    # -- selection & actions: delegated to the DocumentCore (PLAN §5c) -------
+    # -- selection / actions / rendering: the ops live in core.ops (PLAN §9);
+    #    ``_parsed`` stays as the DocumentCore hook the backings read. Typed
+    #    eager signatures are generated into the block below.
     def _parsed(self) -> Any:
         return self._core.parsed()
 
-    @policy(returns="Document")
-    def select(self, selector: str, *, index: int = 0,
-               wait: float | None = None, error: ErrorPolicy | None = None,
-               optional: bool = False) -> Document:
-        """CSS or XPath on html/xml, a dotted path on json, the live DOM on a
-        page backing (Decision 15). Element selection nests."""
-        return self._core.dispatch("select", selector, index=index, wait=wait)  # type: ignore[return-value]
-
-    @policy(returns="Collection")
-    def select_all(self, selector: str, limit: int | None = None,
-                   offset: int = 0, *, error: ErrorPolicy | None = None
-                   ) -> Collection[Document]:
-        return self._core.dispatch("select_all", selector, limit=limit, offset=offset)  # type: ignore[return-value]
-
-    @overload  # link-likes intentionally narrow to Reference
-    def attr(self, name: Literal["href", "src", "action"], *,  # type: ignore[overload-overlap]
-             error: ErrorPolicy | None = None) -> Reference: ...
-    @overload
-    def attr(self, name: str, *, error: ErrorPolicy | None = None) -> Field[str]: ...
-    @policy(returns="Field")
-    def attr(self, name: str) -> Field[str] | Reference:
-        """An attribute; ``text``/``html`` read the element's text or outer
-        html, a link attribute comes back as a Reference joined against this
-        document."""
-        return self._core.dispatch("attr", name)  # type: ignore[return-value]
-
-    # -- interactions (live backing; @policy settles the coroutine) ----------
-    @policy(returns="Self")
-    def click(self, selector: str | None = None, *, error: ErrorPolicy | None = None,
-              **kw: Any) -> Self:
-        return self._core.dispatch("click", selector, **kw)  # type: ignore[return-value]
-
-    @policy(returns="Self")
-    def write(self, selector: str, text: str, *,
-              error: ErrorPolicy | None = None, **kw: Any) -> Self:
-        return self._core.dispatch("write", selector, text, **kw)  # type: ignore[return-value]
-
-    @policy(returns="Self")
-    def press(self, key: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Self:
-        return self._core.dispatch("press", key, **kw)  # type: ignore[return-value]
-
-    @policy(returns="Self")
-    def hover(self, selector: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Self:
-        return self._core.dispatch("hover", selector, **kw)  # type: ignore[return-value]
-
-    @policy(returns="Self")
-    def check(self, selector: str, checked: bool = True, *,
-              error: ErrorPolicy | None = None, **kw: Any) -> Self:
-        return self._core.dispatch("check", selector, checked, **kw)  # type: ignore[return-value]
-
-    @policy(returns="Self")
-    def select_option(self, selector: str, *,
-                      error: ErrorPolicy | None = None, **kw: Any) -> Self:
-        return self._core.dispatch("select_option", selector, **kw)  # type: ignore[return-value]
-
-    @policy(returns="Self")
-    def upload(self, selector: str, files: Sequence[str], *,
-               error: ErrorPolicy | None = None) -> Self:
-        return self._core.dispatch("upload", selector, files)  # type: ignore[return-value]
-
-    @policy(returns="Self")
-    def drag(self, source: str, target: str, *,
-             error: ErrorPolicy | None = None) -> Self:
-        return self._core.dispatch("drag", source, target)  # type: ignore[return-value]
-
-    @policy(returns="Self")
-    def scroll(self, selector: str | None = None, *, x: int = 0, y: int = 0,
-               error: ErrorPolicy | None = None) -> Self:
-        return self._core.dispatch("scroll", selector, x=x, y=y)  # type: ignore[return-value]
-
-    @policy(returns="Self")
-    def execute(self, script: str, *, error: ErrorPolicy | None = None) -> Self:
-        return self._core.dispatch("execute", script)  # type: ignore[return-value]
-
-    @policy(returns="Field")
-    def evaluate(self, script: str, *, error: ErrorPolicy | None = None) -> Any:
-        return self._core.dispatch("evaluate", script)
-
-    @policy(returns="Document")
-    def screenshot(self, selector: str | None = None, *,
-                   error: ErrorPolicy | None = None, **kw: Any) -> Document:
-        return self._core.dispatch("screenshot", selector, **kw)  # type: ignore[return-value]
-
-    @policy(returns="Self")
-    def wait_for(self, selector: str | None = None, *,
-                 error: ErrorPolicy | None = None, **kw: Any) -> Self:
-        return self._core.dispatch("wait_for", selector, **kw)  # type: ignore[return-value]
+    if TYPE_CHECKING:
+        # >>> eager:Document generated by scripts/gen_stubs.py -- do not edit
+        @overload  # type: ignore[overload-overlap]
+        def attr(self, name: Literal['href', 'src', 'action'], *, error: ErrorPolicy | None = None) -> Reference: ...
+        @overload
+        def attr(self, name: str, *, error: ErrorPolicy | None = None) -> Field[str]: ...
+        def attr(self, name: str, *, error: ErrorPolicy | None = None) -> Any: ...  # type: ignore[empty-body]
+        def check(self, selector: str, checked: bool = True, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
+        def click(self, selector: str | None = None, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
+        def drag(self, source: str, target: str, *, error: ErrorPolicy | None = None) -> Document: ...  # type: ignore[empty-body]
+        def evaluate(self, script: str, *, error: ErrorPolicy | None = None) -> Any: ...  # type: ignore[empty-body]
+        def execute(self, script: str, *, error: ErrorPolicy | None = None) -> Document: ...  # type: ignore[empty-body]
+        def hover(self, selector: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
+        def press(self, key: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
+        @overload
+        def render(self, format: Literal['markdown', 'text', 'html'], **options: Any) -> str: ...
+        @overload
+        def render(self, format: Literal['elements'], **options: Any) -> list[Element]: ...
+        @overload
+        def render(self, format: Literal['links'], **options: Any) -> Collection[Reference]: ...
+        @overload
+        def render(self, format: str, **options: Any) -> Any: ...
+        def render(self, format: str, **options: Any) -> Any: ...  # type: ignore[empty-body]
+        def screenshot(self, selector: str | None = None, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
+        def scroll(self, selector: str | None = None, *, x: int = 0, y: int = 0, error: ErrorPolicy | None = None) -> Document: ...  # type: ignore[empty-body]
+        def select(self, selector: str, *, index: int = 0, wait: float | None = None, error: ErrorPolicy | None = None, optional: bool = False) -> Document: ...  # type: ignore[empty-body]
+        def select_all(self, selector: str, limit: int | None = None, offset: int = 0, *, error: ErrorPolicy | None = None) -> Collection[Document]: ...  # type: ignore[empty-body]
+        def select_option(self, selector: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
+        def upload(self, selector: str, files: Sequence[str], *, error: ErrorPolicy | None = None) -> Document: ...  # type: ignore[empty-body]
+        def wait_for(self, selector: str | None = None, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
+        def write(self, selector: str, text: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Document: ...  # type: ignore[empty-body]
+        @property
+        def title(self) -> str | None: ...  # type: ignore[empty-body]
+        # <<< eager:Document
+        pass
 
     # -- live event views + element-scoped narrowing (ISSUES #9) -------------
     @property
