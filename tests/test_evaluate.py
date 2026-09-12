@@ -211,3 +211,10 @@ def test_failing_row_cancels_siblings(wc):
     with pytest.raises(RuntimeError, match="row 2"):
         wc._ensure_loop().run(fan_out(list(range(6)), work, limit=6))
     assert len(finished) < 5           # siblings were cancelled, not drained
+
+
+def test_per_call_collect_is_eager(site, wc):
+    # op(..., _collect=True) records then collects immediately (one path).
+    title = wc.ref(site.url_for("/cards")).resolve().select(
+        ".title", _collect=True)                     # a materialised Document
+    assert title.attr("text").get() == "Aeropress"   # eager from here

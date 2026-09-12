@@ -119,9 +119,13 @@ class Expr:
             raise AttributeError(name)
         return self._extend(Step(kind="get", name=name))
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Expr:
-        return self._extend(Step(kind="call", args=[to_arg(a) for a in args],
-                                 kwargs={k: to_arg(v) for k, v in kwargs.items()}))
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        # per-call eager (PLAN §8): op(..., _collect=True) records then collects
+        # immediately through the one evaluation path. Otherwise stays lazy.
+        eager = kwargs.pop("_collect", False)
+        nxt = self._extend(Step(kind="call", args=[to_arg(a) for a in args],
+                                kwargs={k: to_arg(v) for k, v in kwargs.items()}))
+        return nxt.collect() if eager else nxt
 
     def _op(self, name: str, other: Any = _MISSING) -> Expr:
         args = [] if other is _MISSING else [to_arg(other)]
