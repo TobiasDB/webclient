@@ -307,6 +307,21 @@ class WebBase(BaseModel):
     def _is_empty(self) -> bool:
         return not self._fields
 
+    if not TYPE_CHECKING:
+        def __getattr__(self, name: str) -> Any:
+            """Ops live in ``core.ops``, not on this data class (PLAN §9): a
+            bare eager call (e.g. on a collected Document) is dispatched to the
+            registry. ``_``-names and model fields are pydantic's; an
+            unregistered name raises as usual."""
+            if name.startswith("_"):
+                return super().__getattr__(name)
+            from .ops import CALL_OPS, PROP_OPS, _lookup, read_prop, run_op
+            if _lookup(PROP_OPS, self, name) is not None:
+                return read_prop(self, name)
+            if _lookup(CALL_OPS, self, name) is not None:
+                return lambda *a, **k: run_op(self, name, list(a), k)
+            return super().__getattr__(name)
+
     # -- extraction -----------------------------------------------------------
     @policy(returns="Self")
     def extract(self, *, error: ErrorPolicy | None = None,
@@ -527,13 +542,14 @@ class Collection[T](WebBase):
             Flattens when an element op returns a Collection."""
             if name.startswith("_"):
                 return super().__getattr__(name)   # pydantic private attrs
-            if name in type(self)._WHOLE:
-                raise AttributeError(name)
+            from .ops import run_op
+            if name in type(self)._WHOLE:           # acts on the collection itself
+                return lambda *a, **k: run_op(self, name, list(a), k)
 
             def lifted(*args: Any, **kwargs: Any) -> Any:
                 items: list[Any] = []
                 for el in self._items:
-                    r = getattr(el, name)(*args, **kwargs)
+                    r = run_op(el, name, list(args), kwargs)
                     items.extend(r) if isinstance(r, Collection) else items.append(r)
                 if items and not all(isinstance(x, WebBase) for x in items):
                     return items          # plain values (e.g. projected dicts)
