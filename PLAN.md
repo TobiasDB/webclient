@@ -653,3 +653,12 @@ the engine and materialises the result. `Expr` is already model-independent
 (or the process default) via the engine loop; `collect` is a reserved,
 non-recordable name. `Reference(url).resolve().select(...).attr(...).collect()`
 now works alongside `wc.execute`. Then `wc.lazy(url)` -- a lazy reference root bound to THIS client (not the process default), the companion to collect() for non-default clients. Then Polars-style free when(cond).then(a).otherwise(b) (a new "when" plan step) and filter(coll, pred), exported from webclient. Additive cornerstones done; addressable roots + two-tier typing await the entry-point flip. 151 tests green.
+
+**Flip progress (stage 2):** the ergonomic helpers are now lazy --
+`fetch`/`search`/`summary` return expressions (via a shared `_rooted`), run
+with `.collect()` / `await ac.execute(...)` / `wc.execute`. The dead `plan_op`
+decorator and `summary_expr` were removed. Still eager (the entangled
+remainder): `wc.ref`/`Reference.resolve`/`doc.ref()`/execute-context (37+
+multi-role sites: context, construction, inspection, resolve) and
+`Session.fetch`; plus the addressable `document`/`reference`/`session` roots
+and two-tier typing. 151 tests green.
