@@ -8,8 +8,8 @@ maps every remaining name to its milestone.
 """
 from typing import TYPE_CHECKING
 
-from .core.webclient import Proxy
-from .core.client import (
+from .core.engine import Proxy
+from .core.engine import (
     AsyncWebClient,
     SearchEngine,
     WebClient,
@@ -56,7 +56,7 @@ from .core.executor import PlanEvent
 from .plugins.base import Plugin, Renderer, Surface, SurfaceKind
 from .pool import ClientPool, Lease, PoolStats
 from .core.remote import RemoteError, RemoteWebClient, RemoteWebClientCore
-from .core.session import Session
+from .core.engine import Session
 
 
 def __getattr__(name: str):

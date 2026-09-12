@@ -198,7 +198,7 @@ def _after(obj: Any, result: Any) -> Any:
 def _client_of(obj: Any) -> Any:
     client = getattr(obj, "_client", None)
     if client is None:
-        from .client import default_client
+        from .engine import default_client
         client = default_client()
     return client
 

@@ -134,7 +134,7 @@ class RemoteWebClientCore(EngineCore):
                       session: Any = None, optional: bool = False,
                       **options: Any) -> Any:
         """Resolve a reference server-side; returns a lazy handle."""
-        from .facade import fetch_expr
+        from .engine import fetch_expr
         return await self.execute(
             fetch_expr(browser=browser, optional=optional, **options), ref)
 
@@ -156,7 +156,7 @@ class RemoteWebClientCore(EngineCore):
     # -- sessions (backend-agnostic Session bound to this core) --------------
     def session(self, *, ttl: float | None = None, keep_alive: bool = False,
                 headers: dict[str, str] | None = None) -> Any:
-        from .session import Session
+        from .engine import Session
         data = self._ensure_loop().run(self._acall("POST", "/sessions", json={
             "ttl": ttl, "keep_alive": keep_alive, "headers": headers or {}}))
         sess = Session(id=data["id"], status=data.get("status", "running"),
@@ -188,6 +188,6 @@ class RemoteWebClientCore(EngineCore):
 def RemoteWebClient(base_url: str, *, token: str | None = None,
                     transport: Any = None, timeout: float = 60.0) -> Any:
     """Convenience: a sync ``WebClient`` over a ``RemoteWebClientCore``."""
-    from .client import WebClient
+    from .engine import WebClient
     return WebClient(core=RemoteWebClientCore(
         base_url, token=token, transport=transport, timeout=timeout))

@@ -159,7 +159,7 @@ class Expr:
         trigger (full-lazy migration, PLAN §8). Runs on the bound client's core
         (or the process default) via its engine loop. ``collect`` is a reserved,
         non-recordable name (like a ``_``-prefixed one)."""
-        from .client import default_client
+        from .engine import default_client
         client = self._client
         if client is None:
             client = default_client().core

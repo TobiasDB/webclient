@@ -1,19 +1,23 @@
-"""WebClientCore: the engine (pool, bus, plugins, loop, name scopes) and
-all resolve/fetch/execute logic. The shallow ``WebClient`` facade
-(webclient/webclient.py) forwards to it; every internal object's ``_client``
-points here."""
+"""The engine: ``WebClientCore`` (pool, bus, plugins, loop, name scopes +
+all resolve/fetch/execute logic), the plan-building facades ``WebClient`` /
+``AsyncWebClient`` over it, and ``Session``. Everything the user drives folds
+into this one module (PLAN §9); every internal object's ``_client`` points at
+a ``WebClientCore``."""
 from __future__ import annotations
 
 import atexit
 import logging
 import threading
+import time
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Literal, Sequence, overload
+from typing import TYPE_CHECKING, Any, Literal, Sequence, cast, overload
 from urllib.parse import quote_plus
 from uuid import uuid4
 
 if TYPE_CHECKING:
-    from .session import Session
+    from collections.abc import Coroutine
+
+    from ..stubs import Lazy, LazyCollection, LazyDocument, LazyReference
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -23,6 +27,8 @@ from ..engine import http as engine_http
 from ..engine.browser import BrowserHost
 from ..engine.loop import EngineLoop
 from ..events import EventBus, EventRegistry
+from . import expr as _lz
+from .expr import Expr, Plan
 from .models import (
     Document,
     apply_status,
@@ -32,7 +38,7 @@ from .models import (
     Script,
     WebBase,
 )
-from .base import EngineCore, NameScope, now
+from .base import RAISE, RETURN, EngineCore, NameScope, now
 from ..plugins.base import Plugin, Renderer, Surface, SurfaceKind
 from ..plugins.network import HttpNetworkPlugin
 from ..plugins.page import PageConsolePlugin, PageDomPlugin, PageNetworkPlugin
@@ -417,7 +423,6 @@ class WebClientCore(EngineCore, BaseModel):
 
     # -- sessions -------------------------------------------------------------
     def session(self, **overrides: Any) -> "Session":
-        from .session import Session
         import time as _time
         sess = Session(id=uuid4().hex, status="running", **overrides)
         if sess.ttl is not None:
@@ -463,3 +468,331 @@ class WebClientCore(EngineCore, BaseModel):
         """The streaming form: an async iterator of rows as they complete."""
         from . import executor
         return executor.stream(expr, context, client=self)
+
+
+# ========================================================================= #
+# Plan builders + the client facades (merged from facade.py + client.py)
+# ========================================================================= #
+
+# -- plan builders (shared by the facades and Session) ---------------------- #
+
+def fetch_expr(*, browser: bool = False, optional: bool = False,
+               **options: Any) -> Any:
+    """``ref.resolve(...)``. The explicit error policy makes a plan (RETURN by
+    default) still raise on a hard fetch unless the caller opted out."""
+    return _lz.ref.resolve(browser=browser, optional=optional,
+                           error=RETURN if optional else RAISE, **options)
+
+
+def search_expr(engine: Any, *, limit: int = 5) -> Any:
+    """Resolve the search page, then project a title/url row per result."""
+    doc = _lz.doc
+    return (_lz.ref.resolve().select_all(engine.result, limit=limit)
+            .extract(title=doc.select(engine.title).attr("text"),
+                     url=doc.select(engine.link).attr("href"))
+            .project())
+
+
+def default_engine() -> Any:
+    return SearchEngine()
+
+
+def run_on_core(core: Any, expr: Any, context: Any = None, *,
+                stream: bool = False) -> Any:
+    """Bridge a lazy expression onto the core's engine loop and block (sync)."""
+    loop = core._ensure_loop()
+    if stream:
+        pool = getattr(core, "pool", None)
+        return loop.stream(core.astream(expr, context),
+                           buffer=max(1, getattr(pool, "max_http", 8)))
+    return loop.run(core.execute(expr, context))
+
+
+# -- the shared facade ------------------------------------------------------ #
+
+class _Facade:
+    """The user surface: the same plan builders over any execution. A subclass
+    supplies ``_core``/``ref``/``_run`` (and ``session`` for a session-bound
+    surface)."""
+
+    _core: Any
+
+    def ref(self, url: str, method: str = "get", **kwargs: Any) -> Any:
+        raise NotImplementedError
+
+    def _run(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
+        raise NotImplementedError
+
+    def _bind(self, ref: Any, session: Any = None) -> Any:
+        """Make a caller-supplied reference resolvable against this client;
+        remote refs already carry what they need. Overridden locally."""
+        return ref
+
+    def _context(self, ref: Any, session: Any = None, **kwargs: Any) -> Any:
+        """A real ``Reference`` whose request spec roots the lazy plan
+        (``_rooted``). A string becomes ``Reference.from_url``; a given
+        Reference is used as-is. (The public ``ref`` is lazy; this is internal
+        and stays a real Reference so the plan can embed its source.)"""
+        from .models import Reference
+        return Reference.from_url(ref, **kwargs) if isinstance(ref, str) else ref
+
+    def execute(self, expr: Any, context: Any = None, *,
+                stream: bool = False) -> Any:
+        """Run a lazy expression. The precise ``Lazy[T] -> T`` typing lives on
+        the concrete clients (``WebClient`` sync, ``AsyncWebClient`` awaitable),
+        since their return shapes differ; here it stays ``Any``. ``stream=True``
+        yields rows as they land."""
+        return self._run(expr, context, stream=stream)
+
+    def _rooted(self, context: Any, **resolve_opts: Any) -> "LazyDocument":
+        """A lazy Document expr: resolve ``context`` self-contained (its request
+        spec is embedded in the plan), bound to this client's core -- so
+        ``.collect()`` needs no separate context."""
+        root = Expr(Plan(root="Reference", source=context.request_fields()),
+                    self._core)
+        return cast("LazyDocument", root.resolve(**resolve_opts))
+
+    def fetch(self, ref: Any, *, browser: bool = False, session: Any = None,
+              optional: bool = False, **options: Any) -> "LazyDocument":
+        """Lazy (PLAN §8): a Document expr bound to this client; run with
+        ``.collect()`` (sync), ``await ac.execute(...)`` (async), or
+        ``wc.execute``. Was eager."""
+        ctx = self._context(ref, session)
+        return self._rooted(ctx, browser=browser, optional=optional,
+                            error=RETURN if optional else RAISE, **options)
+
+    def search(self, term: str, *, engine: Any = None, limit: int = 5,
+               session: Any = None) -> "LazyCollection":
+        """Lazy: a rows expr (a title/url record per result); run with
+        ``.collect()``."""
+        engine = engine or default_engine()
+        ctx = self._context(engine.url.format(q=quote_plus(term)), session)
+        rows = (self._rooted(ctx).select_all(engine.result, limit=limit)
+                .extract(title=_lz.doc.select(engine.title).attr("text"),
+                         url=_lz.doc.select(engine.link).attr("href")).project())
+        return cast("LazyCollection", rows)
+
+    def summary(self, url: str, *, browser: bool = False,
+                session: Any = None, **reference_like: Any) -> Any:
+        """Lazy: a compact title + markdown record; run with ``.collect()``."""
+        ctx = self._context(url, session, **reference_like)
+        return (self._rooted(ctx, browser=browser)
+                .extract(url=_lz.doc.final_url, ok=_lz.doc.is_ok(),
+                         title=_lz.doc.title, markdown=_lz.doc.render("markdown"))
+                .project())
+
+
+class _Client(_Facade):
+    """A facade over a core backend: it owns (or is given) a core and forwards
+    the core's lifecycle/registry surface (``session``/``document``/``use`` …).
+    ``core`` defaults to a local :class:`WebClientCore`; pass ``core=`` to run
+    against another backend (e.g. ``RemoteWebClientCore``)."""
+
+    def __init__(self, core: Any = None, **policy: Any) -> None:
+        object.__setattr__(self, "_core",
+                           core if core is not None else WebClientCore(**policy))
+
+    @property
+    def core(self) -> Any:
+        return self._core
+
+    def ref(self, url: str, method: str = "get", **kwargs: Any) -> "LazyReference":
+        """A LAZY reference root bound to this client's core: it records ops and
+        runs on ``.collect()`` (or ``wc.execute``), on THIS client's core
+        (PLAN §8 -- was eager). Build a plain request spec with
+        ``Reference.from_url`` if you need to inspect ``.url``/``.path``."""
+        from .models import HttpMethod
+        from .expr import Expr, Plan
+        spec = Reference.from_url(url, method=cast(HttpMethod, method),
+                                 **kwargs).request_fields()
+        return cast("LazyReference", Expr(Plan(root="Reference", source=spec), self._core))
+
+    #: ``lazy`` is kept as an explicit alias of the (now lazy) ``ref``.
+    lazy = ref
+
+    def close(self) -> None:
+        self._core.close()
+
+    def __enter__(self) -> "_Client":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._core.close()
+
+    def __getattr__(self, name: str) -> Any:
+        # session / document / reference / release / use / pool / bus / …
+        if name == "_core":
+            raise AttributeError(name)
+        return getattr(object.__getattribute__(self, "_core"), name)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(core={self._core!r})"
+
+
+class AsyncWebClient(_Client):
+    """The async client -- the core's native form. ``await ac.fetch(url)`` /
+    ``await ac.execute(plan, ctx)`` run the async core directly on the
+    caller's event loop (no engine thread, no bridge);
+    ``execute(..., stream=True)`` is an async iterator of rows."""
+
+    def _run(self, expr: Any, context: Any = None, *,
+             stream: bool = False) -> Any:
+        if stream:
+            return self._core.astream(expr, context)    # async iterator
+        return self._core.execute(expr, context)        # coroutine
+
+    @overload  # async: materialising awaits to T
+    def execute[T](self, expr: "Lazy[T]", context: Any = ...) -> "Coroutine[Any, Any, T]": ...
+    @overload
+    def execute(self, expr: Any, context: Any = ..., *, stream: bool = ...) -> Any: ...
+    def execute(self, expr: Any, context: Any = None, *,
+                stream: bool = False) -> Any:
+        """Await to materialise: ``await ac.execute(ac.fetch(u))`` -> ``Document``
+        (the ``Lazy[T]`` bridge, awaited). ``stream=True`` is an async iterator."""
+        return self._run(expr, context, stream=stream)
+
+    async def __aenter__(self) -> "AsyncWebClient":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        if not self._core._closed:
+            await self._core.aclose()
+            self._core._closed = True
+
+
+class WebClient(_Client):
+    """The synchronous client: the one surface that bridges the async core
+    onto a dedicated engine loop and blocks for the result. ``wc.core`` is
+    the async engine underneath."""
+
+    def _run(self, expr: Any, context: Any = None, *,
+             stream: bool = False) -> Any:
+        return run_on_core(self._core, expr, context, stream=stream)
+
+    @overload
+    def execute[T](self, expr: "Lazy[T]", context: Any = ...) -> T: ...
+    @overload
+    def execute(self, expr: Any, context: Any = ..., *, stream: bool = ...) -> Any: ...
+    def execute(self, expr: Any, context: Any = None, *,
+                stream: bool = False) -> Any:
+        """Run a lazy expression and materialise it: a lazy tier (``LazyDocument``
+        / ``LazyField[str]`` / …) comes back as its model (``Document`` /
+        ``Field[str]`` / …) via the ``Lazy[T]`` bridge. ``stream=True`` yields
+        rows as they land (typed ``Any``)."""
+        return self._run(expr, context, stream=stream)
+
+
+_default: WebClient | None = None
+_default_lock = threading.Lock()
+
+
+def default_client() -> WebClient:
+    """Lazily-created process default; recreated after close; closed
+    best-effort at interpreter exit."""
+    global _default
+    with _default_lock:
+        if _default is None or _default._core._closed:
+            _default = WebClient()
+        return _default
+
+
+@atexit.register
+def _close_default() -> None:
+    with _default_lock:
+        if _default is not None and not _default._core._closed:
+            try:
+                _default.close()
+            except Exception:  # best-effort teardown only
+                pass
+
+
+# ========================================================================= #
+# Session (merged from session.py)
+# ========================================================================= #
+
+class Session(BaseModel):
+    id: str = ""
+    status: Literal["pending", "running", "expired", "closed"] = "pending"
+    ttl: float | None = None
+    keep_alive: bool = False
+    expires_at: float | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    cookies: dict[str, str] = Field(default_factory=dict)
+    proxy: Proxy | None = None
+    storage_state: dict[str, Any] | None = None
+    timeout: float | None = None
+
+    _client: Any = PrivateAttr(default=None)   # owning WebClient
+    _scope: Any = PrivateAttr(default=None)    # NameScope: this session's names
+
+    def ref(self, url: str, method: HttpMethod = "get",
+            **kwargs: Any) -> "LazyReference":
+        """A LAZY reference root scoped to this session: records ops and runs on
+        ``.collect()`` (or ``session.execute``), resolving within this session
+        (PLAN §8 -- was eager). The plan carries this session's id."""
+        from .expr import Expr, Plan
+        spec = Reference.from_url(url, method=method, **kwargs).request_fields()
+        return cast("LazyReference", Expr(
+            Plan(root="Reference", source=spec, session_id=self.id), self._client))
+
+    def document(self, name: str) -> Document | None:
+        found = self._scope.get(name) if self._scope is not None else None
+        return found if isinstance(found, Document) else None
+
+    def reference(self, name: str) -> Reference | None:
+        found = self._scope.get(name) if self._scope is not None else None
+        return found if isinstance(found, Reference) and not isinstance(
+            found, Document) else None
+
+    # -- client surface bound to this session (WebSession, PLAN §5d) ---------
+    # Same plan builders as the WebClient facade, run on the core with this
+    # session as the resolution context (see webclient.client).
+    def fetch(self, ref: "Reference | str", *, browser: bool = False,
+              optional: bool = False, **options: Any) -> "LazyDocument":
+        """Lazy resolve within this session: a Document expr (session-scoped);
+        run with ``.collect()`` / ``session.execute`` (PLAN §8 -- was eager)."""
+        from .base import RAISE, RETURN
+        from .expr import Expr, Plan
+        r = ref if isinstance(ref, Reference) else Reference.from_url(ref)
+        root = Expr(Plan(root="Reference", source=r.request_fields(),
+                         session_id=self.id), self._client)
+        return cast("LazyDocument", root.resolve(
+            browser=browser, optional=optional,
+            error=RETURN if optional else RAISE, **options))
+
+    @overload
+    def execute[T](self, expr: "Lazy[T]", context: Any = ...) -> T: ...
+    @overload
+    def execute(self, expr: Any, context: Any = ..., *, stream: bool = ...) -> Any: ...
+    def execute(self, expr: Any, context: Any = None, *,
+                stream: bool = False) -> Any:
+        """Run a lazy expression within this session (sync bridge); a lazy tier
+        materialises to its model via the ``Lazy[T]`` bridge."""
+        return run_on_core(self._client, expr, context, stream=stream)
+
+    def search(self, term: str, *, engine: Any = None,
+               limit: int = 5) -> list[dict[str, Any]]:
+        """Run a search within this session and return result rows."""
+        from urllib.parse import quote_plus
+        eng = engine or default_engine()
+        rows = self.execute(search_expr(eng, limit=limit),
+                            self.ref(eng.url.format(q=quote_plus(term))))
+        return cast("list[dict[str, Any]]", rows)
+
+    def check(self) -> None:
+        """Raise unless the session is usable; lazily expires on ttl."""
+        if self.expires_at is not None and time.time() > self.expires_at:
+            if self.status == "running":
+                self.status = "expired"
+        if self.status in ("expired", "closed"):
+            raise RuntimeError(f"session {self.id} is {self.status}")
+
+    def close(self) -> None:
+        if self.status == "closed":
+            return
+        if self._client is not None:
+            try:
+                self._client._teardown_session(self)
+            except RuntimeError:
+                pass                       # engine already stopped
+        self.status = "closed"

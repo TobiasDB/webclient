@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from ..core.models import Collection, Document, Field, Reference, WebBase
 from ..core.expr import Plan, from_plan
-from ..core.client import WebClient
+from ..core.engine import WebClient
 
 
 class SessionBody(BaseModel):

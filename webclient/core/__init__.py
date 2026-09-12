@@ -8,7 +8,7 @@ from .models import (Collection, Document, Element, FetchError, Field,
                         Script, WebBase, WebError, _is_xpath, _json_path,
                         _select_elements)
 from .document import DocumentCore
-from .webclient import Proxy
+from .engine import Proxy
 from . import backings
 
 __all__ = ["CLASSES", "IGNORE", "RAISE", "RETURN", "Capability", "ErrorPolicy",
