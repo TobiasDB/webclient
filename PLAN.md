@@ -564,3 +564,92 @@ reached only via the sync facade).
 The async-core migration is complete: one async core with a shared base and
 local/remote backends, one `Document`/`Reference`/`Session`, a thin sync
 client and a native async client.
+
+## 8. Full-lazy surface migration (planned)
+
+**Reference shape:** `example.py` (a runnable design sketch of the target
+surface). This section turns it into a staged migration.
+
+**What it is, honestly:** a *rewrite of the surface layer and the typing
+corpus* -- not a refactor. Nearly every test changes. Per
+[[refactor-not-rewrite]] I flag it as rewrite-shaped; the user has directed it
+across many turns. The green-tree rule still holds: each stage below ends with
+a green tree (tests rewritten *within* the stage that flips them), no long red
+period.
+
+**Key enabler (verified):** the executor drives real *engine* objects with
+`getattr(value, op)(...)` (`webclient/lazy/executor.py`), and eager already
+runs through that engine. So the engine -- `Document`/`Reference`/`Collection`/
+`Field` + `@policy` + backings + executor -- **stays**. The migration makes the
+*surface* always lazy (a generic `Expr`) and adds a `collect()` layer that runs
+the engine and materialises the result. `Expr` is already model-independent
+([[expr-independent-of-models]]) -- that invariant is preserved, not rebuilt.
+
+**Settled decisions (from the design turns):**
+- Everything on the surface is a generic `Expr`; `collect()` is the single
+  evaluation trigger; nothing runs until then.
+- Two-tier typing: `LazyDocument` (records; `collect() -> Document`) and a
+  materialised `Document` (response data + still-chainable lazy methods).
+  `LazyCollection[LazyT, T]` (`collect() -> list[T]`). Runtime is one `Expr`;
+  the tiers are typing shims via `lazy(cls)`.
+- Eager is **per-call `_collect=True`**, typed by a generated overload that
+  returns the materialised tier directly (verified: pyright + mypy resolve it).
+  No separate `Eager*` type family.
+- Branching is Polars-style free `when(cond).then(a).otherwise(b)` (off `Field`);
+  `filter` is a free function / lazy op (off `Collection`).
+- `Field` kept only as an opt-in `.field()` envelope; default `collect()`
+  returns plain Python.
+- Three addressable roots, symmetric: `document`/`reference`/`session` --
+  bare (unbound/context), `x(id)` (by stable id), `reference(url, ...)`
+  (construct). A resolved document's only structural metadata is its id.
+- Remote stays a core backend; **eager remote uses a websocket** so each op can
+  round-trip and keep server-side state (eager parity with local); lazy remote
+  stays one batched `Plan` over HTTP `/execute`.
+
+**Stages (each ends green):**
+
+- **1. Typed shims + generator (additive).** Author the target typing corpus
+  (`Lazy*`/materialised/`LazyCollection[LazyT, T]`/roots/`when`/`filter`/opt-in
+  `Field`). Extend `scripts/gen_stubs.py` to emit, from one op-signature source,
+  both the lazy shims and the `_collect=True` overload pairs (the same generator
+  that already emits the `Collection` twin). No runtime change; new corpus
+  passes both checkers; old suite untouched.
+- **2. `collect()` + lazy entry points (the flip).** `wc.fetch`, the roots
+  `document`/`reference`/`session`, and `wc.execute` return lazy `Expr`s (typed
+  as the shims). Add `collect()`: run the plan through the existing engine, then
+  materialise -- a document result becomes the materialised `Document` (data +
+  lazy chaining rooted at its id), a scalar becomes the value, a collection a
+  list. Rewrite the suite to the lazy surface. **The large stage;** ends green
+  on the new surface.
+- **3. Branching / filter / Field surface.** Add free `when(...)` and `filter`;
+  make `Field` opt-in via `.field()` (default collect returns plain values).
+  Remove `Field.when/then/otherwise` and `Collection.filter` as the surface.
+  Update tests. Green.
+- **4. Internalise the eager engine classes.** The eager `@policy` methods on
+  `Document`/`Reference`/`Collection` are now executor-only. Make the public
+  `Document`/`Reference`/`Collection`/`Session` names the typing shims; the
+  runtime engine classes become internal. Delete any eager surface no longer
+  reachable. Measure the budget (surface shrinks; generated stubs grow -- net
+  to be measured).
+- **5. Eager execution paths.** Per-call `_collect=True` routes through
+  `collect()` (one path). For a remote core, an eager op opens/uses a websocket
+  session and evaluates op-by-op server-side (state preserved between ops);
+  lazy remote keeps the single batched `/execute`. Same surface either way.
+- **6. Docs + demo + gates.** Update Architecture.md and `demo.py` to the lazy
+  surface; final full suite + both checkers + stub check + demo.
+
+**Open items / watch:**
+- `attr`'s link overload overlaps the general one -> `# type:
+  ignore[overload-overlap]` (as today).
+- `project()` stays lazy: it returns a lazy rows expr that `collect()`s to
+  `list[dict]`, not a `list` directly (the sketch's return type there is a
+  rough edge).
+- Budget: measure at stage 4; the surface should shrink, generated stubs grow.
+- Websocket eager remote (stage 5) is the most novel piece; keep it behind the
+  same core interface so lazy remote and local are unaffected.
+
+**Progress:** the `collect()` trigger landed first (additive) --
+`Expr.collect(context=None)` runs a recorded plan on the bound client's core
+(or the process default) via the engine loop; `collect` is a reserved,
+non-recordable name. `Reference(url).resolve().select(...).attr(...).collect()`
+now works alongside `wc.execute`. 149 tests green.

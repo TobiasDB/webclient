@@ -146,6 +146,19 @@ class Expr:
     def __len__(self) -> int: return self._coerce("length")
     def __iter__(self) -> Any: return self._coerce("iterator")
 
+    # -- evaluation ----------------------------------------------------------
+    def collect(self, context: Any = None) -> Any:
+        """Evaluate this recorded plan and return the result -- the single lazy
+        trigger (full-lazy migration, PLAN §8). Runs on the bound client's core
+        (or the process default) via its engine loop. ``collect`` is a reserved,
+        non-recordable name (like a ``_``-prefixed one)."""
+        from ..webclient import default_client
+        client = self._client
+        if client is None:
+            client = default_client().core
+        loop = client._ensure_loop()
+        return loop.run(client.execute(self, context))
+
     @property
     def is_lazy(self) -> bool:
         return True

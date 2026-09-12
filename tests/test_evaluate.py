@@ -51,6 +51,15 @@ def test_rooted_plan_needs_no_context(site, wc):
         wc.execute(doc.select(".title"))
 
 
+def test_collect_is_the_lazy_trigger(site, wc):
+    # PLAN §8 stage: .collect() runs a rooted plan (via the process default
+    # client) -- the single evaluation trigger, additive to wc.execute.
+    expr = Reference(site.url_for("/cards")).resolve().select(".title").attr("text")
+    assert expr.collect().get() == "Aeropress"
+    # equivalent to executing it explicitly
+    assert expr.collect().get() == wc.execute(expr).get()
+
+
 def test_extract_rows_and_project(site, wc):
     rows = rows_of(wc, site, ref.resolve().select_all(".card").extract(
         title=doc.select(".title").attr("text"),
