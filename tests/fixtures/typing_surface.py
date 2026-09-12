@@ -75,7 +75,7 @@ for _card in doc.select_all(".card"):
 
 # -- Two-tier lazy client surface (PLAN §8): entry points are lazy; collect()
 #    returns the materialised tier. Runtime is a generic Expr; these are stubs.
-from webclient import WebClient
+from webclient import AsyncWebClient, WebClient
 from webclient.lazy.stubs import LazyDocument, LazyField, LazyReference
 
 _wc = WebClient()
@@ -88,3 +88,19 @@ assert_type(_wc.fetch("https://e.com").collect(), Document)
 assert_type(_wc.fetch("https://e.com").attr("text").collect(), Field[str])
 assert_type(_wc.ref("https://e.com").resolve().collect(), Document)
 assert_type(_wc.ref("https://e.com").resolve().select(".t").attr("text").collect(), Field[str])
+
+# execute() materialises a lazy tier to its model via the Lazy[T] bridge
+assert_type(_wc.execute(_wc.fetch("https://e.com")), Document)
+assert_type(_wc.execute(_wc.ref("https://e.com")), Reference)
+assert_type(_wc.execute(_wc.fetch("https://e.com").attr("text")), Field[str])
+
+# the async client awaits to the same materialised model
+_ac = AsyncWebClient()
+assert_type(_ac.fetch("https://e.com"), LazyDocument)
+
+
+async def _async_surface() -> None:
+    # awaiting execute() materialises the lazy tier to its model
+    assert_type(await _ac.execute(_ac.fetch("https://e.com")), Document)
+    assert_type(await _ac.execute(_ac.ref("https://e.com").resolve()), Document)
+    assert_type(await _ac.execute(_ac.fetch("https://e.com").attr("text")), Field[str])

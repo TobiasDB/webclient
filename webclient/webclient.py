@@ -14,14 +14,16 @@ from __future__ import annotations
 
 import atexit
 import threading
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, overload
 
 from .client import _Facade, run_on_core
 from .core.webclient import SearchEngine, WebClientCore
 from .document import Reference
 
 if TYPE_CHECKING:
-    from .lazy.stubs import LazyReference
+    from collections.abc import Coroutine
+
+    from .lazy.stubs import Lazy, LazyReference
 
 __all__ = ["WebClient", "AsyncWebClient", "SearchEngine", "WebClientCore",
            "default_client"]
@@ -46,8 +48,10 @@ class _Client(_Facade):
         runs on ``.collect()`` (or ``wc.execute``), on THIS client's core
         (PLAN §8 -- was eager). Build a plain request spec with
         ``Reference.from_url`` if you need to inspect ``.url``/``.path``."""
+        from .document import HttpMethod
         from .lazy.expr import Expr, Plan
-        spec = Reference.from_url(url, method=method, **kwargs).request_fields()
+        spec = Reference.from_url(url, method=cast(HttpMethod, method),
+                                 **kwargs).request_fields()
         return cast("LazyReference", Expr(Plan(root="Reference", source=spec), self._core))
 
     #: ``lazy`` is kept as an explicit alias of the (now lazy) ``ref``.
@@ -84,6 +88,16 @@ class AsyncWebClient(_Client):
             return self._core.astream(expr, context)    # async iterator
         return self._core.execute(expr, context)        # coroutine
 
+    @overload  # async: materialising awaits to T
+    def execute[T](self, expr: "Lazy[T]", context: Any = ...) -> "Coroutine[Any, Any, T]": ...
+    @overload
+    def execute(self, expr: Any, context: Any = ..., *, stream: bool = ...) -> Any: ...
+    def execute(self, expr: Any, context: Any = None, *,
+                stream: bool = False) -> Any:
+        """Await to materialise: ``await ac.execute(ac.fetch(u))`` -> ``Document``
+        (the ``Lazy[T]`` bridge, awaited). ``stream=True`` is an async iterator."""
+        return self._run(expr, context, stream=stream)
+
     async def __aenter__(self) -> "AsyncWebClient":
         return self
 
@@ -101,6 +115,18 @@ class WebClient(_Client):
     def _run(self, expr: Any, context: Any = None, *,
              stream: bool = False) -> Any:
         return run_on_core(self._core, expr, context, stream=stream)
+
+    @overload
+    def execute[T](self, expr: "Lazy[T]", context: Any = ...) -> T: ...
+    @overload
+    def execute(self, expr: Any, context: Any = ..., *, stream: bool = ...) -> Any: ...
+    def execute(self, expr: Any, context: Any = None, *,
+                stream: bool = False) -> Any:
+        """Run a lazy expression and materialise it: a lazy tier (``LazyDocument``
+        / ``LazyField[str]`` / …) comes back as its model (``Document`` /
+        ``Field[str]`` / …) via the ``Lazy[T]`` bridge. ``stream=True`` yields
+        rows as they land (typed ``Any``)."""
+        return self._run(expr, context, stream=stream)
 
 
 _default: WebClient | None = None

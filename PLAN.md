@@ -701,9 +701,21 @@ over the existing `doc`/`ref` + `Reference(url)`.
   client/session surface is precisely typed, `collect()` returns the model.
 - Remote is a core backend; sessions threaded via `Plan.session_id`.
 
-Deferred polish (not blocking): generating the Lazy stubs from the model ops
-(hand-written today); precise `render`/`project`/`LazyCollection` element
-typing (loose `Any` today); `doc.ref()`/`reload()` stay eager by design (they
-act on a materialised Document); module-root names `document`/`reference`/
-`session` not adopted (the API is `wc.*` + `doc`/`ref` + `Reference(url)` +
-`wc.session()`).
+**Typing follow-up done (2026-09-12).** The Lazy stubs are now GENERATED from
+the model ops by `scripts/gen_stubs.py` (second target alongside the
+`Collection[T]` block), so they cannot drift: each op's signature is derived
+from the real method and its return mapped to the lazy tier (`Document`/`Self`
+-> `LazyDocument`, `Collection` -> `LazyCollection`, `Field[X]` ->
+`LazyField[X]`, link-`attr` -> `LazyReference`). A generic `Lazy[T]` base
+(`collect() -> T`) is the bridge the clients use to type `execute`:
+`wc.execute(lazy) -> T` (sync), `await ac.execute(lazy) -> T` (async),
+`session.execute(lazy) -> T`. The base `_Facade.execute` stays `Any` (the sync
+and async return shapes differ, so the precise overloads live on the leaf
+clients). `gen_stubs.py --check` gates both generated blocks; mypy + pyright
+stay clean on the corpus.
+
+Deferred polish (not blocking): precise `render`/`project`/`LazyCollection`
+element typing (loose `Any` today -- genuinely polymorphic); `doc.ref()`/
+`reload()` stay eager by design (they act on a materialised Document);
+module-root names `document`/`reference`/`session` not adopted (the API is
+`wc.*` + `doc`/`ref` + `Reference(url)` + `wc.session()`).

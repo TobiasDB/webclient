@@ -8,14 +8,14 @@ from M4.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 from pydantic import BaseModel, Field, PrivateAttr
 
 from .core.webclient import Proxy
 
 if TYPE_CHECKING:
-    from .lazy.stubs import LazyDocument, LazyReference
+    from .lazy.stubs import Lazy, LazyDocument, LazyReference
 from .document import Document, HttpMethod, Reference
 
 
@@ -69,9 +69,14 @@ class Session(BaseModel):
             browser=browser, optional=optional,
             error=RETURN if optional else RAISE, **options))
 
+    @overload
+    def execute[T](self, expr: "Lazy[T]", context: Any = ...) -> T: ...
+    @overload
+    def execute(self, expr: Any, context: Any = ..., *, stream: bool = ...) -> Any: ...
     def execute(self, expr: Any, context: Any = None, *,
                 stream: bool = False) -> Any:
-        """Run a lazy expression within this session (sync bridge)."""
+        """Run a lazy expression within this session (sync bridge); a lazy tier
+        materialises to its model via the ``Lazy[T]`` bridge."""
         from .client import run_on_core
         return run_on_core(self._client, expr, context, stream=stream)
 
@@ -81,8 +86,9 @@ class Session(BaseModel):
         from urllib.parse import quote_plus
         from .client import default_engine, search_expr
         eng = engine or default_engine()
-        return self.execute(search_expr(eng, limit=limit),
+        rows = self.execute(search_expr(eng, limit=limit),
                             self.ref(eng.url.format(q=quote_plus(term))))
+        return cast("list[dict[str, Any]]", rows)
 
     def check(self) -> None:
         """Raise unless the session is usable; lazily expires on ttl."""

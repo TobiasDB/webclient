@@ -88,7 +88,10 @@ class _Facade:
 
     def execute(self, expr: Any, context: Any = None, *,
                 stream: bool = False) -> Any:
-        """Run a lazy expression. ``stream=True`` yields rows as they land."""
+        """Run a lazy expression. The precise ``Lazy[T] -> T`` typing lives on
+        the concrete clients (``WebClient`` sync, ``AsyncWebClient`` awaitable),
+        since their return shapes differ; here it stays ``Any``. ``stream=True``
+        yields rows as they land."""
         return self._run(expr, context, stream=stream)
 
     def _rooted(self, context: Any, **resolve_opts: Any) -> "LazyDocument":
@@ -114,9 +117,10 @@ class _Facade:
         ``.collect()``."""
         engine = engine or default_engine()
         ctx = self._context(engine.url.format(q=quote_plus(term)), session)
-        return (self._rooted(ctx).select_all(engine.result, limit=limit)
+        rows = (self._rooted(ctx).select_all(engine.result, limit=limit)
                 .extract(title=_lz.doc.select(engine.title).attr("text"),
                          url=_lz.doc.select(engine.link).attr("href")).project())
+        return cast("LazyCollection", rows)
 
     def summary(self, url: str, *, browser: bool = False,
                 session: Any = None, **reference_like: Any) -> Any:
