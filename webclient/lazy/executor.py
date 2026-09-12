@@ -97,19 +97,26 @@ async def stream(expr: Any, context: Any = None, *,
 
 # -- the walk ---------------------------------------------------------------
 
+def _session_of(plan: Plan, client: Any) -> Any:
+    sid = getattr(plan, "session_id", None)
+    sessions = getattr(client, "_sessions", None)
+    return sessions.get(sid) if sid and sessions is not None else None
+
+
 def _start(plan: Plan, context: Any, client: Any) -> Any:
     # A lazy reference root passed as the execute context (wc.execute(p, wc.ref(
     # url))) is unwrapped into a real Reference -- its plan is just a Reference
-    # source with no steps.
+    # source (with an optional session) and no steps.
     if isinstance(context, Expr):
         src = context._plan.source
-        context = (Reference(**src).bind(client)
+        context = (Reference(**src).bind(client, _session_of(context._plan, client))
                    if src is not None and not context._plan.steps else None)
     # A document-source plan (remote handle, source={"document_id": ...}) is
     # resolved to its context by the caller (the service looks up the doc);
     # only a Reference source is reconstructed here.
     if plan.source is not None and "document_id" not in plan.source:
-        return Reference(**plan.source).bind(client, getattr(context, "_session", None))
+        sess = _session_of(plan, client) or getattr(context, "_session", None)
+        return Reference(**plan.source).bind(client, sess)
     if context is None:
         raise ValueError(
             f"plan rooted at {plan.root or 'a context'} needs a context; pass "

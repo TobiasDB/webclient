@@ -24,9 +24,9 @@ def test_session_cookies_persist_across_fetches(httpserver, wc):
     httpserver.expect_request("/whoami").respond_with_handler(whoami)
 
     session = wc.session()
-    session.ref(httpserver.url_for("/login")).resolve()
+    session.ref(httpserver.url_for("/login")).resolve().collect()
     assert session.cookies == {"token": "abc123"}
-    doc = session.ref(httpserver.url_for("/whoami")).resolve()
+    doc = session.ref(httpserver.url_for("/whoami")).resolve().collect()
     assert doc.text == "cookie=abc123"
 
 
@@ -40,8 +40,8 @@ def test_sessions_are_isolated(httpserver, wc):
     httpserver.expect_request("/whoami").respond_with_handler(whoami)
 
     s1, s2 = wc.session(), wc.session()
-    s1.ref(httpserver.url_for("/login")).resolve()
-    doc = s2.ref(httpserver.url_for("/whoami")).resolve()
+    s1.ref(httpserver.url_for("/login")).resolve().collect()
+    doc = s2.ref(httpserver.url_for("/whoami")).resolve().collect()
     assert doc.text == "cookie=None"      # s1's cookie must not leak into s2
 
 
@@ -52,7 +52,7 @@ def test_session_headers_merge_over_client_defaults(httpserver):
     httpserver.expect_request("/echo").respond_with_handler(echo)
     with WebClient(default_headers={"x-app": "client"}) as wc:
         session = wc.session(headers={"x-app": "session"})
-        assert session.ref(httpserver.url_for("/echo")).resolve().text == "session"
+        assert session.ref(httpserver.url_for("/echo")).resolve().collect().text == "session"
 
 
 def test_session_metadata_and_document_binding(httpserver, wc):
@@ -60,7 +60,7 @@ def test_session_metadata_and_document_binding(httpserver, wc):
     session = wc.session(ttl=60)
     assert session.status == "running"
     assert session.expires_at is not None
-    doc = session.ref(httpserver.url_for("/a")).resolve()
+    doc = session.ref(httpserver.url_for("/a")).resolve().collect()
     assert doc.session_id == session.id
     assert doc.events[0].session_id == session.id
 
@@ -70,7 +70,7 @@ def test_expired_session_refuses(httpserver, wc):
     session = wc.session(ttl=0.01)
     time.sleep(0.05)
     with pytest.raises(RuntimeError, match="expired"):
-        session.ref(httpserver.url_for("/a")).resolve()
+        session.ref(httpserver.url_for("/a")).resolve().collect()
     assert session.status == "expired"
 
 
@@ -79,7 +79,7 @@ def test_closed_session_refuses_and_client_close_closes_sessions(httpserver):
     session = wc.session()
     session.close()
     with pytest.raises(RuntimeError, match="closed"):
-        session.ref(httpserver.url_for("/a")).resolve()
+        session.ref(httpserver.url_for("/a")).resolve().collect()
     other = wc.session()
     wc.close()
     assert other.status == "closed"

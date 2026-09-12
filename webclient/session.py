@@ -32,10 +32,14 @@ class Session(BaseModel):
     _scope: Any = PrivateAttr(default=None)    # NameScope: this session's names
 
     def ref(self, url: str, method: HttpMethod = "get",
-            **kwargs: Any) -> Reference:
-        """A Reference bound to this session (and its WebClient)."""
-        return Reference.from_url(url, method=method, **kwargs).bind(
-            self._client, self)
+            **kwargs: Any) -> Any:
+        """A LAZY reference root scoped to this session: records ops and runs on
+        ``.collect()`` (or ``session.execute``), resolving within this session
+        (PLAN §8 -- was eager). The plan carries this session's id."""
+        from .lazy.expr import Expr, Plan
+        spec = Reference.from_url(url, method=method, **kwargs).request_fields()
+        return Expr(Plan(root="Reference", source=spec, session_id=self.id),
+                    self._client)
 
     def document(self, name: str) -> Document | None:
         found = self._scope.get(name) if self._scope is not None else None
@@ -50,12 +54,16 @@ class Session(BaseModel):
     # Same plan builders as the WebClient facade, run on the core with this
     # session as the resolution context (see webclient.client).
     def fetch(self, ref: "Reference | str", *, browser: bool = False,
-              optional: bool = False, **options: Any) -> Document:
-        """Eager resolve within this session (sync)."""
-        from .client import fetch_expr, run_on_core
-        r = ref if isinstance(ref, Reference) else self.ref(ref)
-        return run_on_core(self._client, fetch_expr(
-            browser=browser, optional=optional, **options), r)
+              optional: bool = False, **options: Any) -> Any:
+        """Lazy resolve within this session: a Document expr (session-scoped);
+        run with ``.collect()`` / ``session.execute`` (PLAN §8 -- was eager)."""
+        from .core.base import RAISE, RETURN
+        from .lazy.expr import Expr, Plan
+        r = ref if isinstance(ref, Reference) else Reference.from_url(ref)
+        root = Expr(Plan(root="Reference", source=r.request_fields(),
+                         session_id=self.id), self._client)
+        return root.resolve(browser=browser, optional=optional,
+                            error=RETURN if optional else RAISE, **options)
 
     def execute(self, expr: Any, context: Any = None, *,
                 stream: bool = False) -> Any:

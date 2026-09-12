@@ -176,7 +176,7 @@ def main() -> None:
         #      ttl'd lifecycle. Cookies set by responses persist; sessions
         #      are isolated from each other.
         session = wc.session(ttl=300, headers={"x-app": "demo"})
-        session.ref(f"{base}/login").resolve()
+        session.ref(f"{base}/login").resolve().collect()
         print("session:    ", session.status, "cookies:", session.cookies)
 
         # [M4] browser=True -> a LiveDocument backed by a real page. Actions

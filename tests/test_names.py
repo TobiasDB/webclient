@@ -51,7 +51,7 @@ def test_derived_references_are_unnamed_and_rooted(site, wc):
 
 def test_session_scope_is_visible_to_client_but_not_to_other_sessions(site, wc):
     a, b = wc.session(), wc.session()
-    doc = a.ref(site.url_for("/p3")).resolve()
+    doc = a.ref(site.url_for("/p3")).resolve().collect()
     assert doc.name == "doc:001-002"                   # scope 001, after its ref
     assert a.document(doc.name) is doc
     assert wc.document(doc.name) is doc

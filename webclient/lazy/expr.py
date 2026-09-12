@@ -41,11 +41,13 @@ class Step(BaseModel):
 
 class Plan(BaseModel):
     """A root type name ('' = the evaluation context itself), an optional
-    source (the request spec a ``Reference`` root starts from) and steps."""
+    source (the request spec a ``Reference`` root starts from), an optional
+    session id (binds resolution to a session), and steps."""
 
     version: int = 1
     root: str = ""
     source: dict[str, Any] | None = None
+    session_id: str | None = None
     steps: list[Step] = []
 
     def extend(self, step: Step) -> Plan:

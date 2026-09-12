@@ -139,7 +139,7 @@ def test_session_storage_state_persists(httpserver, wc):
     httpserver.expect_request("/store").respond_with_data(
         "<html><body>store</body></html>", content_type="text/html")
     session = wc.session()
-    live = session.ref(httpserver.url_for("/store")).resolve(browser=True)
+    live = session.ref(httpserver.url_for("/store")).resolve(browser=True).collect()
     live.execute("localStorage.setItem('k', 'v1')")
     session.close()
     assert session.storage_state is not None
