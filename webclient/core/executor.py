@@ -20,6 +20,7 @@ from ..events import Event
 from .document import Collection, Reference, WebBase
 from .base import RETURN, default_policy
 from .expr import Arg, Expr, Plan, Step
+from .ops import read_prop, run_op
 
 DEFAULT_FANOUT = 8
 
@@ -154,16 +155,16 @@ async def _apply(value: Any, steps: list[Step], i: int, context: Any,
         nxt = steps[i + 1] if i + 1 < len(steps) else None
         if nxt is not None and nxt.kind == "call":
             args, kwargs = await _call_args(step.name, nxt, context, client)
-            result = getattr(value, step.name)(*args, **kwargs)
+            result = run_op(value, step.name, args, kwargs)
             return await _settle(result), i + 2
-        return getattr(value, step.name), i + 1
+        return read_prop(value, step.name), i + 1
     if step.kind == "op":
         if step.name == "not":
             return _OPS["not"](value), i + 1
         other = await _arg(step.args[0], context, client) if step.args else None
         return _OPS[step.name](value, other), i + 1
     if step.kind == "fn":                       # is_empty(x) == x.is_empty()
-        return await _settle(getattr(value, step.name)()), i + 1
+        return await _settle(run_op(value, step.name, [], {})), i + 1
     if step.kind == "when":                     # when(cond).then(a).otherwise(b)
         cond, then_arg, else_arg = step.args
         chosen = then_arg if _truthy(await _arg(cond, context, client)) else else_arg
