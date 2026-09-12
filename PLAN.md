@@ -719,3 +719,57 @@ element typing (loose `Any` today -- genuinely polymorphic); `doc.ref()`/
 `reload()` stay eager by design (they act on a materialised Document);
 module-root names `document`/`reference`/`session` not adopted (the API is
 `wc.*` + `doc`/`ref` + `Reference(url)` + `wc.session()`).
+
+---
+
+## 9. Surface = stubs; everything defers to core (2026-09-12, in progress)
+
+**User directive.** The surface objects -- `Reference` / `Document` /
+`Collection` / `Field` -- are *lazy expression builders* (runtime: one generic
+`Expr`; types: generated stubs). **All execution happens in the Core objects +
+Backings.** The §8 work layered a lazy surface on top but kept the model
+classes as the execution target (`executor.py` calls `getattr(model, op)()`);
+§9 removes that layer. End-state the user named: the only root-level modules
+left are `stubs.py` + `events.py` + `pool.py`; everything else is flat under
+`core/` and deferred to it.
+
+### Target layout
+```
+webclient/
+  __init__.py      public re-exports (WebClient, Document-stub, ...)
+  stubs.py         typing: Expr-backed builder stubs -- LAZY tier + EAGER tier (generated)
+  events.py        (unchanged)
+  pool.py          (unchanged)
+  core/            expr, executor, facade, client, session, models (data),
+                   webclient-core, document-core, remote, base, registry, backings/
+  engine/  plugins/  service/   (unchanged subpackages)
+```
+
+### The two generated stub tiers (one source of truth)
+An op is defined once (name, params, materialised return). `gen_stubs.py`
+emits both tiers from it, runtime dispatches by op name:
+- **Lazy tier** (`LazyDocument`/`LazyReference`/`LazyCollection`/`LazyField`):
+  ops return the lazy type; `.collect()` (on `Lazy[T]`) -> the materialised
+  model. Default mode.
+- **Eager tier** (the *eager stubs*): ops return the materialised type
+  directly (`Document.select -> Document`, `attr("text") -> Field[str]`), no
+  `.collect()`. `WebClient(eager=True)` casts to this tier; the executor
+  auto-collects each op. This is "`LazyDocument` collapses to `Document`".
+
+### Stages (each stays green + committed; no net new files; budget down)
+1. **Flatten to core (relocation).** Move `lazy/{expr,executor}.py` ->
+   `core/`; `document.py` -> `core/models.py`; `client.py` -> `core/facade.py`;
+   `webclient.py` -> `core/client.py`; `session.py` -> `core/session.py`;
+   `lazy/stubs.py` -> `stubs.py` (root). Fix imports; `__init__` re-exports keep
+   the public API. Behaviour unchanged.
+2. **Op registry** (`core/registry.py`): the declarative op specs (harvested
+   from today's `@policy` signatures), the single source for generation +
+   dispatch.
+3. **Generate both tiers** from the registry; corpus gains eager-mode
+   `assert_type`s; `gen_stubs.py --check` gates both.
+4. **Execution into cores.** Relocate `WebBase`/`Field`/`Collection` op logic
+   onto the cores; executor dispatches `op -> core`, not `getattr(model, op)`;
+   the `@policy` envelope moves to core dispatch.
+5. **Surface -> pure stubs/data.** `Reference/Document/Collection/Field` reduce
+   to builders + data (methods gone); eager mode casts to the eager tier.
+6. **Close out:** budget <= target, refresh demo.py + memories.
