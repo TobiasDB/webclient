@@ -39,8 +39,18 @@ class _Client(_Facade):
         return self._core
 
     def ref(self, url: str, method: str = "get", **kwargs: Any) -> Reference:
-        """A Reference bound to this client's core."""
+        """A Reference bound to this client's core (eager: methods resolve)."""
         return Reference.from_url(url, method=method, **kwargs).bind(self._core)
+
+    def lazy(self, url: str, method: str = "get", **kwargs: Any) -> Any:
+        """A LAZY reference root bound to this client: it records ops and runs
+        on ``.collect()`` (or ``wc.execute``), on THIS client's core -- not the
+        process default. Contrast ``wc.ref(url)`` (eager). The full-lazy surface
+        (PLAN §8) will make lazy the default; ``wc.lazy`` is the bound entry
+        today, and the companion to ``Expr.collect()``."""
+        from .lazy.expr import Expr, Plan
+        spec = Reference.from_url(url, method=method, **kwargs).request_fields()
+        return Expr(Plan(root="Reference", source=spec), self._core)
 
     def _bind(self, ref: Any, session: Any = None) -> Any:
         """Bind a bare Reference to this core so ``resolve`` runs eagerly."""

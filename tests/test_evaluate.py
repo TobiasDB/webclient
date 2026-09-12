@@ -60,6 +60,16 @@ def test_collect_is_the_lazy_trigger(site, wc):
     assert expr.collect().get() == wc.execute(expr).get()
 
 
+def test_client_bound_lazy_root(site, wc):
+    # wc.lazy(url): a lazy root bound to THIS client; collect() runs on its core
+    # (not the process default). The companion to Expr.collect() (PLAN §8).
+    rows = (wc.lazy(site.url_for("/cards")).resolve().select_all(".card")
+            .extract(title=doc.select(".title").attr("text")).project().collect())
+    assert [r["title"] for r in rows] == ["Aeropress", "Grinder", "Kettle"]
+    one = wc.lazy(site.url_for("/cards")).resolve().select(".title").attr("text")
+    assert one.collect().get() == "Aeropress"
+
+
 def test_extract_rows_and_project(site, wc):
     rows = rows_of(wc, site, ref.resolve().select_all(".card").extract(
         title=doc.select(".title").attr("text"),
