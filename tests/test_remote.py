@@ -1,12 +1,21 @@
-"""RemoteWebClient tests: drive the service over a real (in-process) uvicorn
-server on an ephemeral port -- no browser, exercising the true HTTP path."""
+"""Remote-backend tests: the same WebClient over a RemoteWebClientCore,
+driving a real (in-process) uvicorn server on an ephemeral port -- no local
+browser/lxml, exercising the true HTTP path. Remote documents are lazy
+handles; value ops run through ``rc.execute`` (deferred/batched)."""
 import threading
 import time
 
 import pytest
 import uvicorn
 
-from webclient import RemoteError, RemoteWebClient, q
+from webclient import (
+    RemoteError,
+    RemoteWebClient,
+    RemoteWebClientCore,
+    WebClient,
+    doc,
+    ref,
+)
 from webclient.service import create_app
 
 
@@ -55,9 +64,9 @@ def remote(httpserver):
 
 def test_fetch_returns_handle(remote):
     rc, server = remote
-    doc = rc.ref(server.url_for("/cards")).fetch()
-    assert doc.ok and doc.kind == "html" and doc.title == "Shop"
-    assert doc.id
+    d = rc.fetch(server.url_for("/cards"))
+    assert d.ok and d.kind == "html" and d.title == "Shop"   # cheap meta
+    assert d.id
 
 
 def test_auth_enforced(httpserver):
@@ -66,52 +75,60 @@ def test_auth_enforced(httpserver):
     with _Server(app) as base:
         rc = RemoteWebClient(base, token="wrong")
         with pytest.raises(RemoteError, match="401"):
-            rc.ref(httpserver.url_for("/x")).fetch()
+            rc.fetch(httpserver.url_for("/x"))
         rc.close()
     app.state.wc.close()
 
 
 def test_render_over_the_wire(remote):
     rc, server = remote
-    doc = rc.ref(server.url_for("/cards")).fetch()
-    assert "# Featured" in doc.markdown
-    assert "Curated picks." in doc.text
-    assert any(u.endswith("/i/1") for u in doc.links())
-    assert isinstance(doc.elements, list)
+    d = rc.fetch(server.url_for("/cards"))             # lazy handle
+    assert "# Featured" in rc.execute(d.render("markdown"))
+    assert "Curated picks." in rc.execute(d.render("text"))
+    assert any(u.endswith("/i/1") for u in rc.execute(d.render("links")))
+    assert isinstance(rc.execute(d.render("elements")), list)
 
 
-def test_select_one_level(remote):
+def test_select_is_one_batched_call(remote):
     rc, server = remote
-    doc = rc.ref(server.url_for("/cards")).fetch()
-    assert doc.select(".title") == "Aeropress"
-    assert doc.select_all(".title") == ["Aeropress", "Grinder"]
-    hrefs = doc.select_all("a", attr="href")
+    d = rc.fetch(server.url_for("/cards"))
+    assert rc.execute(d.select(".title").attr("text")) == "Aeropress"
+    assert rc.execute(d.select_all(".title").attr("text")) == \
+        ["Aeropress", "Grinder"]
+    hrefs = rc.execute(d.select_all("a").attr("href"))
     assert all(u.startswith("http") for u in hrefs)
 
 
 def test_plan_execution_is_portable(remote):
     rc, server = remote
     plan = (
-        q.ref.fetch().select_all(".card")
-        .map(title=q.node.select(".title").text,
-             link=q.node.select("a").attr("href"))
-        .then(name=q.col("link").fetch().json.query("name"))
+        ref.resolve().select_all(".card")
+        .extract(title=doc.select(".title").attr("text"),
+                 link=doc.select("a").attr("href"))
+        .extract(name=doc.reference("link").resolve().select("name").attr("value"))
+        .project()
     )
-    rows = plan.collect(rc.ref(server.url_for("/cards")))
+    rows = rc.execute(plan, rc.ref(server.url_for("/cards")))
     assert sorted(r["name"] for r in rows) == ["Aeropress", "Grinder"]
 
 
 def test_plan_matches_local_client(remote, httpserver):
-    from webclient import WebClient
     rc, server = remote
-    plan = q.ref.fetch().select_all(".card").map(
-        title=q.node.select(".title").text)
-    remote_rows = sorted(r["title"] for r in plan.collect(
-        rc.ref(server.url_for("/cards"))))
+    plan = ref.resolve().select_all(".card").extract(
+        title=doc.select(".title").attr("text")).project()
+    remote_rows = sorted(r["title"] for r in rc.execute(
+        plan, rc.ref(server.url_for("/cards"))))
     with WebClient() as local:
-        local_rows = sorted(r["title"] for r in plan.collect(
-            local.ref(server.url_for("/cards"))))
+        local_rows = sorted(r["title"] for r in local.execute(
+            plan, local.ref(server.url_for("/cards"))))
     assert remote_rows == local_rows == ["Aeropress", "Grinder"]
+
+
+def test_same_facade_over_a_remote_core(remote):
+    """The remote client is literally a WebClient over a remote core."""
+    rc, server = remote
+    assert isinstance(rc, WebClient)
+    assert isinstance(rc.core, RemoteWebClientCore)
 
 
 def test_sessions(remote, httpserver):
@@ -126,9 +143,9 @@ def test_sessions(remote, httpserver):
     server.expect_request("/whoami").respond_with_handler(whoami)
     session = rc.session(ttl=60)
     assert session.status == "running"
-    session.ref(server.url_for("/login")).fetch()
-    doc = session.ref(server.url_for("/whoami")).fetch()
-    assert doc.text == "t=1"
+    session.fetch(server.url_for("/login"))             # sets a cookie server-side
+    d = session.fetch(server.url_for("/whoami"))
+    assert rc.execute(d.render("text")).strip() == "t=1"
     session.close()
     assert session.status == "closed"
 
@@ -148,9 +165,9 @@ def test_remote_needs_no_browser_or_lxml():
         "        raise ImportError(name)\n"
         "    return _real(name, *a, **k)\n"
         "builtins.__import__ = guard\n"
-        "from webclient import RemoteWebClient, q\n"
-        "plan = q.ref.fetch().select_all('.card').map(t=q.node.select('.t').text)\n"
-        "assert plan.to_query().root == 'Reference'\n"
+        "from webclient import RemoteWebClient, doc, ref\n"
+        "plan = ref.resolve().select_all('.card').extract(t=doc.select('.t').attr('text'))\n"
+        "assert plan._plan.root == 'Reference'\n"
         "import sys\n"
         "assert 'lxml' not in sys.modules and 'playwright' not in sys.modules\n"
         "print('ok')\n"

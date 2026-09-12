@@ -23,11 +23,13 @@ library. Chose **`charset-normalizer`** (httpx's own optional dependency, pure
 Python, actively maintained). Alternatives: `chardet`, `cchardet` (faster, C).
 Added to `pyproject.toml` dependencies.
 
-### 3. Fate of the root `models.py` / `models.py.orig` — 🟢 DECIDED
+### 3. Fate of the root `models.py` / `models.py.orig` — 🟢 DECIDED (superseded at P0)
 `models.py.orig` deleted (git history at `a21da85` is its archive). Root
-`models.py` stays as the frozen spec (option a) until the package reaches
-interface parity (~M6), then gets deleted; no `import *` shim — two
-importable sources of the same names is how drift starts.
+`models.py` was the v0 spec until `754a83b`; the P0 refactor deleted it
+(git history keeps it) and `/spec.py` is now the frozen spec. It was named
+`types.py` for one commit and shadowed the stdlib module — pytest could not
+start. No `import *` shim — two importable sources of the same names is how
+drift starts.
 
 ### 4. `Reference.replace()` validation — 🟢
 Implemented with `model_copy(update=...)`, which does **not** re-validate —

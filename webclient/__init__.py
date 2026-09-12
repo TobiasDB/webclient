@@ -3,10 +3,19 @@
 M1: pure core (Reference, Document + typed views, Node) and the event
 taxonomy. M2: WebClient (http fetch via the engine loop + ClientPool),
 EventBus/EventRegistry, plugin framework, core network capture and core
-renderers. The interface spec lives in /models.py at the repo root; PLAN.md
+renderers. The interface spec lives in /spec.py at the repo root; PLAN.md
 maps every remaining name to its milestone.
 """
-from .client import WebClient, default_client
+from typing import TYPE_CHECKING
+
+from .core.webclient import Proxy
+from .webclient import (
+    AsyncWebClient,
+    SearchEngine,
+    WebClient,
+    WebClientCore,
+    default_client,
+)
 from .events import (
     ActionEvent,
     AssetEvent,
@@ -26,47 +35,52 @@ from .events import (
     Topic,
     XHREvent,
 )
-from .models import (
-    BinaryDocument,
+from .document import (
+    LiveDocument,
+    LiveNode,
+    Collection,
     Document,
     Element,
     FetchError,
-    HTMLDocument,
-    JSONDocument,
-    Node,
-    Proxy,
+    Field,
     Reference,
     Script,
-    XMLDocument,
+    WebBase,
+    WebError,
 )
-from .lazy import Expr, Lazy, QueryPlan, col, lit, q
-from .lazy.executor import ExecutionGraph, ExecutionStep, Executor, RunStats
-from .live import LiveDocument, LiveNode
-from .models import OnError
+from .core.base import IGNORE, RAISE, RETURN, OpError, UnsupportedOperation
+from .lazy import Plan, field, from_plan, is_empty, is_ok, lazy
+if TYPE_CHECKING:
+    from .lazy import doc, many, ref
+from .lazy.executor import PlanEvent
 from .plugins.base import Plugin, Renderer, Surface, SurfaceKind
 from .pool import ClientPool, Lease, PoolStats
-from .remote import (
-    RemoteDocument,
-    RemoteError,
-    RemoteRef,
-    RemoteSession,
-    RemoteWebClient,
-)
+from .core.remote import RemoteError, RemoteWebClient, RemoteWebClientCore
 from .session import Session
+
+
+def __getattr__(name: str):
+    """doc / many / ref are installed after models loads; read them
+    live (see webclient.lazy.__getattr__)."""
+    if name in ("doc", "many", "ref"):
+        from .lazy import expr as _expr
+        return getattr(_expr, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "ActionEvent", "AssetEvent", "ConsoleEvent", "DOMEvent", "DOMLoadEvent",
     "DOMSnapshotEvent", "DOMUnloadEvent", "DOMUpdateEvent", "Event",
     "EventBus", "EventRegistry", "FetchEvent", "NavigationEvent",
     "NetworkEvent", "Subscription", "Topic", "XHREvent",
-    "BinaryDocument", "Document", "Element", "FetchError", "HTMLDocument",
-    "JSONDocument", "Node", "Proxy", "Reference", "Script", "XMLDocument",
+    "Document", "Element", "FetchError", "Proxy", "Reference", "Script",
+    "WebBase", "WebError", "Field", "Collection",
+    "IGNORE", "RETURN", "RAISE", "OpError", "UnsupportedOperation",
     "Plugin", "Renderer", "Surface", "SurfaceKind",
     "ClientPool", "Lease", "PoolStats", "Session",
     "LiveDocument", "LiveNode",
-    "Expr", "Lazy", "QueryPlan", "OnError", "col", "lit", "q",
-    "Executor", "ExecutionGraph", "ExecutionStep", "RunStats",
-    "RemoteWebClient", "RemoteDocument", "RemoteSession", "RemoteRef",
-    "RemoteError",
-    "WebClient", "default_client",
+    "Plan", "doc", "many", "ref", "field", "is_empty", "is_ok", "lazy",
+    "from_plan", "PlanEvent",
+    "RemoteWebClient", "RemoteWebClientCore", "RemoteError",
+    "WebClient", "AsyncWebClient", "WebClientCore", "SearchEngine",
+    "default_client",
 ]

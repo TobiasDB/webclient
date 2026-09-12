@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from webclient import WebClient, q
+from webclient import WebClient, doc, ref
 from webclient.service import create_app
 
 CARDS = """
@@ -31,50 +31,50 @@ def client_and_server(httpserver):
 AUTH = {"Authorization": "Bearer secret"}
 
 
+def _handle(api, url):
+    """Fetch = execute ``ref.resolve()``; the Document comes back as a handle."""
+    rows = api.post("/execute", headers=AUTH, json={
+        "plan": ref.resolve()._plan.model_dump(), "url": url}).json()["rows"]
+    return rows["__doc__"]
+
+
 def test_auth_required(client_and_server):
     api, server = client_and_server
-    assert api.post("/fetch", json={"url": server.url_for("/cards")}).status_code == 401
+    assert api.post("/execute", json={
+        "plan": ref.resolve()._plan.model_dump(),
+        "url": server.url_for("/cards")}).status_code == 401
 
 
 def test_fetch_returns_handle_not_html(client_and_server):
     api, server = client_and_server
-    resp = api.post("/fetch", json={"url": server.url_for("/cards")}, headers=AUTH)
-    assert resp.status_code == 200
-    meta = resp.json()
+    meta = _handle(api, server.url_for("/cards"))
     assert meta["ok"] and meta["kind"] == "html" and meta["title"] == "Shop"
     assert "content" not in meta and "html" not in meta   # handle only
     assert meta["id"]
 
 
-def test_render_endpoint(client_and_server):
-    api, server = client_and_server
-    doc_id = api.post("/fetch", json={"url": server.url_for("/cards")},
-                      headers=AUTH).json()["id"]
-    md = api.get(f"/documents/{doc_id}/render", params={"format": "markdown"},
-                 headers=AUTH).json()
-    assert "Aeropress" in md["result"]
-    links = api.get(f"/documents/{doc_id}/render", params={"format": "links"},
-                    headers=AUTH).json()
-    assert any(u.endswith("/i/1") for u in links["result"])
-    elements = api.get(f"/documents/{doc_id}/render", params={"format": "elements"},
-                       headers=AUTH).json()
-    assert isinstance(elements["result"], list)
+def _exec(api, doc_id, expr):
+    return api.post("/execute", headers=AUTH, json={
+        "plan": expr._plan.model_dump(), "document_id": doc_id}).json()["rows"]
 
 
-def test_select_endpoint(client_and_server):
+def test_render_via_execute(client_and_server):
     api, server = client_and_server
-    doc_id = api.post("/fetch", json={"url": server.url_for("/cards")},
-                      headers=AUTH).json()["id"]
-    one = api.post(f"/documents/{doc_id}/select",
-                   json={"selector": ".title"}, headers=AUTH).json()
-    assert one["value"] == "Aeropress"
-    many = api.post(f"/documents/{doc_id}/select",
-                    json={"selector": ".title", "all": True}, headers=AUTH).json()
-    assert many["values"] == ["Aeropress", "Grinder"]
-    hrefs = api.post(f"/documents/{doc_id}/select",
-                     json={"selector": "a", "all": True, "attr": "href"},
-                     headers=AUTH).json()
-    assert all(u.startswith("http") for u in hrefs["values"])
+    doc_id = _handle(api, server.url_for("/cards"))["id"]
+    assert "Aeropress" in _exec(api, doc_id, doc.render("markdown"))
+    links = _exec(api, doc_id, doc.render("links"))
+    assert any(u.endswith("/i/1") for u in links)
+    assert isinstance(_exec(api, doc_id, doc.render("elements")), list)
+
+
+def test_select_via_execute(client_and_server):
+    api, server = client_and_server
+    doc_id = _handle(api, server.url_for("/cards"))["id"]
+    assert _exec(api, doc_id, doc.select(".title").attr("text")) == "Aeropress"
+    assert _exec(api, doc_id, doc.select_all(".title").attr("text")) == \
+        ["Aeropress", "Grinder"]
+    hrefs = _exec(api, doc_id, doc.select_all("a").attr("href"))
+    assert all(u.startswith("http") for u in hrefs)
 
 
 def test_session_lifecycle(client_and_server):
@@ -89,28 +89,63 @@ def test_session_lifecycle(client_and_server):
 def test_plan_submission(client_and_server):
     api, server = client_and_server
     plan = (
-        q.ref.fetch().select_all(".card")
-        .map(title=q.node.select(".title").text,
-             link=q.node.select("a").attr("href"))
-        .then(name=q.col("link").fetch().json.query("name"))
-    ).to_query()
-    resp = api.post("/plans", params={"url": server.url_for("/cards")},
-                    json=plan.model_dump(), headers=AUTH)
+        ref.resolve().select_all(".card")
+        .extract(title=doc.select(".title").attr("text"),
+                 link=doc.select("a").attr("href"))
+        .extract(name=doc.reference("link").resolve().select("name").attr("value"))
+        .project()
+    )._plan
+    resp = api.post("/execute", headers=AUTH, json={
+        "plan": plan.model_dump(), "url": server.url_for("/cards")})
     rows = resp.json()["rows"]
     names = sorted(r["name"] for r in rows)
     assert names == ["Aeropress", "Grinder"]
 
 
+def test_plan_with_unknown_op_is_rejected_not_dispatched(client_and_server):
+    api, server = client_and_server
+    plan = {"root": "Document", "steps": [{"kind": "get", "name": "__class__"}]}
+    resp = api.post("/execute", headers=AUTH, json={
+        "plan": plan, "url": server.url_for("/cards")})
+    assert resp.status_code == 422 and "__class__" in resp.text
+
+
 def test_missing_document_404(client_and_server):
     api, _ = client_and_server
-    assert api.get("/documents/nope", headers=AUTH).status_code == 404
+    assert api.get("/document/nope", headers=AUTH).status_code == 404
 
 
 def test_events_websocket_streams_and_resumes(client_and_server):
     api, server = client_and_server
     with api.websocket_connect("/events?topic=network") as ws:
-        api.post("/fetch", json={"url": server.url_for("/cards")}, headers=AUTH)
+        api.post("/execute", headers=AUTH, json={
+            "plan": ref.resolve()._plan.model_dump(),
+            "url": server.url_for("/cards")})
         msg = ws.receive_json()
         assert msg["topic"].startswith("network")
         assert msg["seq"] is not None
         assert msg["source"] == "core-network"
+
+
+def test_search_as_a_plan(httpserver):
+    """Search is not a special endpoint: it is a projected plan submitted to
+    /execute, exactly as the client's ``search`` builds it."""
+    httpserver.expect_request("/s").respond_with_data(
+        '<div class="result"><a class="result__a" href="/g/1">First</a></div>',
+        content_type="text/html")
+    plan = (ref.resolve().select_all(".result", limit=1)
+            .extract(title=doc.select(".result__a").attr("text"),
+                     url=doc.select(".result__a").attr("href")).project())
+    wc = WebClient()
+    app = create_app(wc, token="secret")
+    with TestClient(app) as api:
+        rows = api.post("/execute", headers=AUTH, json={
+            "plan": plan._plan.model_dump(),
+            "url": httpserver.url_for("/s") + "?q=x"}).json()["rows"]
+        assert [r["title"] for r in rows] == ["First"]
+    wc.close()
+
+
+def test_crawl_is_not_implemented(client_and_server):
+    api, _ = client_and_server
+    assert api.post("/crawl", headers=AUTH).status_code == 501

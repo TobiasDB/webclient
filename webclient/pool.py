@@ -28,10 +28,6 @@ class Lease(BaseModel):
     _client: Any = PrivateAttr(default=None)   # httpx.AsyncClient (http kind)
     _page: Any = PrivateAttr(default=None)     # playwright Page (page kind)
 
-    def release(self) -> None:
-        if self._pool is not None:
-            self._pool.release(self)
-
 
 class PoolStats(BaseModel):
     http_total: int = 0
@@ -57,15 +53,7 @@ class ClientPool(BaseModel):
     _pages_held: dict[str, Any] = PrivateAttr(default_factory=dict)
     _pages_created: int = PrivateAttr(default=0)
 
-    # -- sync facade ---------------------------------------------------------
-    def acquire(self, kind: LeaseKind, *, session: Any = None,
-                timeout: float | None = None) -> Lease:
-        return self._owner._ensure_loop().run(
-            self._acquire(kind, session=session, timeout=timeout))
-
-    def release(self, lease: Lease) -> None:
-        self._owner._ensure_loop().run(self._release(lease))
-
+    # -- sync facade (acquire/release are async-only; the core drives them) --
     def stats(self) -> PoolStats:
         return PoolStats(
             http_total=self._created,

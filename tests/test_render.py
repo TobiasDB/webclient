@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from webclient import Document, Element, JSONDocument, Reference, Renderer
+from webclient import Document, Element, Reference, Renderer
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -38,7 +38,7 @@ def test_markdown_renderer():
 
 
 def test_markdown_via_view_sugar():
-    assert "# Big News" in make_doc().html.markdown
+    assert "# Big News" in make_doc().render("markdown")
 
 
 def test_text_renderer_is_readable():
@@ -49,7 +49,7 @@ def test_text_renderer_is_readable():
 
 
 def test_elements_renderer_sections_under_titles():
-    elements = make_doc().html.elements
+    elements = make_doc().render("elements")
     types = [e.type for e in elements]
     assert types == ["title", "text", "list_item", "list_item", "code", "image"]
     title = elements[0]
@@ -61,12 +61,12 @@ def test_links_and_html_formats():
     doc = make_doc()
     links = doc.render("links")
     assert [ref.path for ref in links] == ["/home", "/more"]
-    assert isinstance(links[0], Reference)
+    assert isinstance(list(links)[0], Reference)
     assert "<main>" in doc.render("html")
 
 
 def test_json_elements_renderer():
-    doc = JSONDocument(hostname="e.com", status_code=200,
+    doc = Document(kind="json", hostname="e.com", status_code=200,
                        content=b'{"a": {"b": 1}, "c": [true, "x"]}')
     elements = doc.render("elements")
     by_id = {e.id: e for e in elements}
@@ -75,9 +75,9 @@ def test_json_elements_renderer():
 
 
 def test_json_query():
-    doc = JSONDocument(hostname="e.com", status_code=200,
+    doc = Document(kind="json", hostname="e.com", status_code=200,
                        content=b'{"items": [{"name": "n0"}, {"name": "n1"}]}')
-    assert doc.query("items[1].name") == "n1"
+    assert doc.select("items[1].name").text == "n1"
 
 
 def test_unknown_format_raises():
@@ -85,7 +85,10 @@ def test_unknown_format_raises():
         make_doc().render("pdf")
 
 
-def test_custom_renderer_shadows_core_with_warning(caplog):
+def test_custom_renderer_overrides_backing_builtin(caplog):
+    """A custom Renderer for a (kind, format) overrides the backing's built-in
+    render. Core rendering is now a backing (not a registered renderer), so
+    nothing is shadowed and no warning is logged."""
     from webclient import WebClient
 
     class Upper(Renderer):
@@ -99,7 +102,36 @@ def test_custom_renderer_shadows_core_with_warning(caplog):
     with WebClient() as wc:
         with caplog.at_level("WARNING", logger="webclient"):
             wc.use(Upper())
-        assert any("shadows" in r.message for r in caplog.records)
+        assert not any("shadows" in r.message for r in caplog.records)
         doc = make_doc()
         doc._client = wc
         assert doc.render("markdown") == "UPPER"
+
+
+def test_second_custom_renderer_shadows_first_with_warning(caplog):
+    """Two custom renderers claiming the same (kind, format): the second
+    shadows the first, and that shadowing is warned (ISSUES #16)."""
+    from webclient import WebClient
+
+    class Upper(Renderer):
+        name: str = "upper"
+        kind: str = "html"  # type: ignore[assignment]
+        formats: list[str] = ["markdown"]
+
+        def render(self, document, format, **options):
+            return "UPPER"
+
+    class Lower(Upper):
+        name: str = "lower"
+
+        def render(self, document, format, **options):
+            return "lower"
+
+    with WebClient() as wc:
+        wc.use(Upper())
+        with caplog.at_level("WARNING", logger="webclient"):
+            wc.use(Lower())
+        assert any("shadows" in r.message for r in caplog.records)
+        doc = make_doc()
+        doc._client = wc
+        assert doc.render("markdown") == "lower"

@@ -5,7 +5,7 @@ from typing import Literal
 
 import httpx
 
-from ..models import Reference
+from ..document import Reference
 
 
 async def request(client: httpx.AsyncClient, ref: Reference, *,

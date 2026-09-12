@@ -1,363 +1,223 @@
-"""Lazy expression DSL (polars-style) -- the recorder.
+"""The expression language: ``Expr``, ``lazy()``, the plan IR.
 
-Every attribute access or call on a lazy value records an op and returns
-another Expr; nothing executes until ``collect`` (the Executor, M6). A
-recorded pipeline serializes to a JSON ``QueryPlan`` -- the wire format for
-the eventual HTTP/websocket API. Completion in a REPL comes from ``__dir__``
-delegating to the wrapped eager class; record-time validation catches typos
-that ``Expr.__getattr__`` typing cannot.
+``Expr`` is independent of the models (spec.py): it records attribute
+access, calls and operators into a ``Plan`` and knows nothing about
+Document, Reference or Collection. Static types come from ``lazy(cls) ->
+T``; at runtime every value in a chain is an ``Expr``. ``lazy(cls)``
+registers ``cls`` as a plan root -- what a plan from the wire is validated
+against, together with the rule that no recorded name starts with ``_``
+(the whole safety model: the ``__subclasses__`` escape needs a dunder).
+
+Return types are for validation only and are not needed to record. The
+seams for that (Self / unions / overloads) are deferred; recording works
+without them.
 """
 from __future__ import annotations
 
-import inspect
-import types
-import typing
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from pydantic import BaseModel
 
-from ..models import Document, Node, Reference
+T = TypeVar("T")
 
-# Combinator / control names handled by Expr itself (never recorded as ops
-# against the wrapped eager class).
-_COMBINATORS = {"map", "filter", "then", "otherwise"}
-_TERMINALS = {"collect", "to_query", "explain"}
-_DUNDER_PASSTHROUGH = {"as_expr"}
-
-# Eager classes a chain can be rooted at / transition through, by name.
-_TYPES: dict[str, type] = {}
+LAZY_TYPES: dict[str, type] = {}
+#: operators recordable as steps (the dunders below map onto these names)
+OPERATORS = {"eq", "ne", "lt", "le", "gt", "ge", "and", "or", "not"}
+#: free functions recordable as steps (spec.py: is_empty / is_ok / ...)
+FUNCTIONS = {"is_empty", "is_ok"}
 
 
-def _register_types() -> None:
-    from ..live import LiveDocument, LiveNode
-    _TYPES.update(Reference=Reference, Document=Document, Node=Node,
-                  LiveDocument=LiveDocument, LiveNode=LiveNode)
+class Arg(BaseModel):
+    value: Any = None
+    plan: Plan | None = None         # a sub-expression, bound to the context
 
 
-class QueryPlan(BaseModel):
-    """Serialized form of an Expr: the query-syntax / wire representation."""
+class Step(BaseModel):
+    kind: Literal["get", "call", "op", "fn"]
+    name: str = ""                   # attribute / operator / function name
+    args: list[Arg] = []
+    kwargs: dict[str, Arg] = {}
+
+
+class Plan(BaseModel):
+    """A root type name ('' = the evaluation context itself), an optional
+    source (the request spec a ``Reference`` root starts from) and steps."""
 
     version: int = 1
-    root: str | None = None          # root context type name, if known
-    steps: list[dict[str, Any]] = []
+    root: str = ""
+    source: dict[str, Any] | None = None
+    steps: list[Step] = []
+
+    def extend(self, step: Step) -> Plan:
+        return self.model_copy(update={"steps": [*self.steps, step]})
+
+    def validate_names(self) -> Plan:
+        """Reject a plan that could not have been recorded: an unknown root,
+        a private name, an unknown operator/function. Any *public* method
+        name is allowed -- the executor calls it by getattr (Decision: no
+        whitelist; ``_``-refusal is the safety boundary)."""
+        if self.root and self.root not in LAZY_TYPES:
+            raise ValueError(f"unknown plan root {self.root!r}")
+        for step in self.steps:
+            if step.name.startswith("_"):
+                raise ValueError(f"private name {step.name!r} in plan")
+            if step.kind == "op" and step.name not in OPERATORS:
+                raise ValueError(f"unknown operator {step.name!r} in plan")
+            if step.kind == "fn" and step.name not in FUNCTIONS:
+                raise ValueError(f"unknown function {step.name!r} in plan")
+            for arg in (*step.args, *step.kwargs.values()):
+                if arg.plan is not None:
+                    arg.plan.validate_names()
+        return self
+
+    def describe(self) -> str:
+        out = f"{self.root}({self.source.get('hostname', '')})" if self.source \
+            else (self.root or "·")
+        for s in self.steps:
+            args = ", ".join([*map(_show, s.args),
+                              *(f"{k}={_show(v)}" for k, v in s.kwargs.items())])
+            out = {"get": f"{out}.{s.name}", "call": f"{out}({args})",
+                   "op": f"({out} {s.name} {args})",
+                   "fn": f"{s.name}({out}{', ' + args if args else ''})"}[s.kind]
+        return out
 
 
-class _Return(typing.NamedTuple):
-    cls: type | None                 # resolved element/return class, or None
-    many: bool                       # True if the method returns a collection
+def _show(arg: Arg) -> str:
+    return arg.plan.describe() if arg.plan is not None else repr(arg.value)
 
 
-def _resolve_return(owner: type, method_name: str) -> _Return:
-    """Best-effort return type of ``owner.method_name`` from its annotation,
-    for validation and to know what element type ``map`` iterates. Overloaded
-    stubs annotate the implementation; unions collapse to the non-None arm."""
-    if not _TYPES:
-        _register_types()
-    member = getattr(owner, method_name, None)
-    if member is None:
-        return _Return(None, False)
-    if isinstance(member, property):
-        func: Any = member.fget
-    else:
-        func = member
-    try:
-        # localns carries LiveDocument/LiveNode, which models only imports
-        # under TYPE_CHECKING, so their string annotations resolve.
-        hints = typing.get_type_hints(func, localns=dict(_TYPES))
-    except Exception:
-        return _Return(None, False)
-    annotation = hints.get("return")
-    if annotation is None:
-        return _Return(None, False)
-    origin = typing.get_origin(annotation)
-    args = typing.get_args(annotation)
-    if origin in (list, typing.Sequence) or str(origin).endswith("Sequence"):
-        inner = args[0] if args else None
-        return _Return(_as_type(inner), True)
-    if origin is typing.Union or origin is types.UnionType:
-        non_none = [a for a in args if a is not type(None)]
-        # For a union like Document | LiveDocument, validate against the most
-        # permissive resolvable arm (a base class exposes the common surface).
-        resolved: list[type] = [c for c in (_as_type(a) for a in non_none)
-                                if c is not None]
-        for candidate in resolved:
-            if all(issubclass(other, candidate) or issubclass(candidate, other)
-                   for other in resolved):
-                # pick the base (the one others subclass)
-                base = candidate
-                for other in resolved:
-                    if issubclass(base, other):
-                        base = other
-                return _Return(base, False)
-        return _Return(resolved[0] if resolved else None, False)
-    return _Return(_as_type(annotation), False)
+Arg.model_rebuild()
 
 
-def _as_type(annotation: Any) -> type | None:
-    if isinstance(annotation, type) and annotation in _TYPES.values():
-        return annotation
-    name = getattr(annotation, "__name__", None)
-    return _TYPES.get(name) if name else None
+class _Missing:
+    pass
+
+
+_MISSING: Any = _Missing()
 
 
 class Expr:
-    """A recorded chain. Immutable: every op returns a new Expr."""
+    """A recorded chain. Every attribute access, call or operator returns a
+    new ``Expr`` extending the plan; nothing runs until the evaluator walks
+    it (or an eager ``extract``/``filter`` binds it to a real object)."""
 
-    __slots__ = ("_steps", "_type", "_many", "_root")
+    __slots__ = ("_plan", "_client")
 
-    def __init__(self, steps: list[dict[str, Any]], type_: type | None,
-                 many: bool = False, root: str | None = None) -> None:
-        self._steps = steps
-        self._type = type_            # current known class (None = unknown)
-        self._many = many             # current value is a collection
-        self._root = root
+    def __init__(self, plan: Plan, client: Any = None) -> None:
+        object.__setattr__(self, "_plan", plan)
+        object.__setattr__(self, "_client", client)
 
     # -- recording -----------------------------------------------------------
-    def _extend(self, step: dict[str, Any], type_: type | None,
-                many: bool) -> Expr:
-        return Expr(self._steps + [step], type_, many, self._root)
+    def _extend(self, step: Step) -> Expr:
+        return Expr(self._plan.extend(step), self._client)
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> Expr:
         if name.startswith("_"):
             raise AttributeError(name)
-        if name in _COMBINATORS or name in _TERMINALS:
-            return _BoundCombinator(self, name)
-        # Validate against the current known class (element class if we're on
-        # a collection -- attribute access maps over it).
-        owner = self._type
-        if owner is not None and not hasattr(owner, name):
-            raise AttributeError(
-                f"{owner.__name__} has no attribute {name!r} "
-                f"(recording a lazy chain)")
-        ret = _resolve_return(owner, name) if owner is not None else _Return(None, False)
-        return _Access(self, name, ret)
+        return self._extend(Step(kind="get", name=name))
 
     def __call__(self, *args: Any, **kwargs: Any) -> Expr:
-        raise TypeError("this Expr is not callable; call a method on it")
+        return self._extend(Step(kind="call", args=[to_arg(a) for a in args],
+                                 kwargs={k: to_arg(v) for k, v in kwargs.items()}))
 
-    # -- comparisons / logic -> boolean Expr ---------------------------------
-    def _binop(self, op: str, other: Any) -> Expr:
-        value = other._steps if isinstance(other, Expr) else other
-        is_expr = isinstance(other, Expr)
-        return self._extend(
-            {"binop": op, "value": value, "value_is_expr": is_expr},
-            bool, False)
+    def _op(self, name: str, other: Any = _MISSING) -> Expr:
+        args = [] if other is _MISSING else [to_arg(other)]
+        return self._extend(Step(kind="op", name=name, args=args))
 
-    def __eq__(self, other: Any) -> Expr:  # type: ignore[override]
-        return self._binop("eq", other)
-
-    def __ne__(self, other: Any) -> Expr:  # type: ignore[override]
-        return self._binop("ne", other)
-
-    def __lt__(self, other: Any) -> Expr:
-        return self._binop("lt", other)
-
-    def __gt__(self, other: Any) -> Expr:
-        return self._binop("gt", other)
-
-    def __and__(self, other: Any) -> Expr:
-        return self._binop("and", other)
-
-    def __or__(self, other: Any) -> Expr:
-        return self._binop("or", other)
-
-    def __invert__(self) -> Expr:
-        return self._extend({"binop": "not"}, bool, False)
+    def __eq__(self, o: Any) -> Expr: return self._op("eq", o)   # type: ignore[override]
+    def __ne__(self, o: Any) -> Expr: return self._op("ne", o)   # type: ignore[override]
+    def __lt__(self, o: Any) -> Expr: return self._op("lt", o)
+    def __le__(self, o: Any) -> Expr: return self._op("le", o)
+    def __gt__(self, o: Any) -> Expr: return self._op("gt", o)
+    def __ge__(self, o: Any) -> Expr: return self._op("ge", o)
+    def __and__(self, o: Any) -> Expr: return self._op("and", o)
+    def __or__(self, o: Any) -> Expr: return self._op("or", o)
+    def __invert__(self) -> Expr: return self._op("not")
 
     __hash__ = None  # type: ignore[assignment]
 
-    # -- combinators (recorded as structured steps) --------------------------
-    def _record_combinator(self, name: str, args: tuple,
-                           kwargs: dict) -> Expr:
-        if name == "map":
-            fields = {k: _to_steps(v) for k, v in kwargs.items()}
-            # map iterates the current collection; fields see the element type
-            return self._extend(
-                {"op": "map", "fields": fields}, dict, True)
-        if name == "then":
-            fields = {k: _to_steps(v) for k, v in kwargs.items()}
-            return self._extend({"op": "then", "fields": fields},
-                                self._type, self._many)
-        if name == "filter":
-            predicate = _to_steps(args[0])
-            return self._extend({"op": "filter", "predicate": predicate},
-                                self._type, self._many)
-        if name == "otherwise":
-            state = args[0]
-            value = state.value if hasattr(state, "value") else state
-            return self._extend({"op": "otherwise", "state": value},
-                                self._type, self._many)
-        raise AssertionError(name)
+    def _coerce(self, what: str) -> Any:
+        raise TypeError(
+            f"a lazy expression has no {what}: it records, it does not run. "
+            "Use it inside extract(...) / filter(...), is_empty()/is_ok(), "
+            "or `& | ~` -- not and/or/not/bool/len/iter.")
 
-    # -- terminals -----------------------------------------------------------
-    def to_query(self) -> QueryPlan:
-        return QueryPlan(root=self._root, steps=list(self._steps))
+    def __bool__(self) -> bool: return self._coerce("truth value")
+    def __len__(self) -> int: return self._coerce("length")
+    def __iter__(self) -> Any: return self._coerce("iterator")
 
-    @classmethod
-    def from_query(cls, plan: "QueryPlan | dict[str, Any]") -> Expr:
-        if isinstance(plan, dict):
-            plan = QueryPlan(**plan)
-        root_cls = _TYPES.get(plan.root) if plan.root else None
-        return cls(list(plan.steps), root_cls, False, plan.root)
-
-    def explain(self) -> str:
-        lines = [f"root: {self._root or '?'}"]
-        for step in self._steps:
-            lines.append("  " + _explain_step(step))
-        return "\n".join(lines)
-
-    def collect(self, context: Any, *, stream: bool = False,
-                client: Any = None) -> Any:
-        from ..models import Reference as _Ref
-        wc = client
-        if wc is None:
-            bound = getattr(context, "bound", None) or getattr(
-                context, "_client", None)
-            if bound is not None:
-                wc = bound
-            else:
-                from ..client import default_client
-                wc = default_client()
-        return wc.execute(self, context, stream=stream)
+    @property
+    def is_lazy(self) -> bool:
+        return True
 
     def __repr__(self) -> str:
-        return f"Expr({self._root or '?'}, {len(self._steps)} steps)"
+        return f"lazy {self._plan.describe()}"
 
 
-class _Access:
-    """A recorded-but-not-yet-called attribute. Acts as the attribute value
-    (property access) if used directly, or records a method call if
-    invoked."""
-
-    __slots__ = ("_expr", "_name", "_ret")
-
-    def __init__(self, expr: Expr, name: str, ret: _Return) -> None:
-        self._expr = expr
-        self._name = name
-        self._ret = ret
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Expr:
-        s_args = [_arg(a) for a in args]
-        s_kwargs = {k: _arg(v) for k, v in kwargs.items()}
-        return self._expr._extend(
-            {"op": "call", "name": self._name, "args": s_args,
-             "kwargs": s_kwargs},
-            self._ret.cls, self._ret.many)
-
-    def _as_expr(self) -> Expr:
-        # property / attribute access, e.g. `.text`
-        return self._expr._extend(
-            {"op": "get", "name": self._name}, self._ret.cls, self._ret.many)
-
-    # make property access chain-able and comparable transparently
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._as_expr(), name)
-
-    def __eq__(self, other: Any) -> Expr:  # type: ignore[override]
-        return self._as_expr() == other
-
-    def __ne__(self, other: Any) -> Expr:  # type: ignore[override]
-        return self._as_expr() != other
-
-    __hash__ = None  # type: ignore[assignment]
-
-
-class _BoundCombinator:
-    __slots__ = ("_expr", "_name")
-
-    def __init__(self, expr: Expr, name: str) -> None:
-        self._expr = expr
-        self._name = name
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        if self._name in _TERMINALS:
-            return getattr(Expr, self._name)(self._expr, *args, **kwargs)
-        return self._expr._record_combinator(self._name, args, kwargs)
-
-
-def _arg(value: Any) -> Any:
+def to_arg(value: Any) -> Arg:
     if isinstance(value, Expr):
-        return {"__expr__": value._steps}
-    if isinstance(value, _Access):
-        return {"__expr__": value._as_expr()._steps}
-    return value
+        return Arg(plan=value._plan)
+    return Arg(value=value)
 
 
-def _to_steps(value: Any) -> Any:
-    if isinstance(value, Expr):
-        return {"root": value._root, "steps": value._steps}
-    if isinstance(value, _Access):
-        e = value._as_expr()
-        return {"root": e._root, "steps": e._steps}
-    return {"literal": value}
+def lazy(cls: type[T], *, plan: Plan | None = None, client: Any = None) -> T:
+    """A recording root for ``cls``: statically ``cls``, at runtime an
+    ``Expr``. Registers ``cls`` as a valid plan root."""
+    origin = getattr(cls, "__pydantic_generic_metadata__", {}).get("origin") or cls
+    LAZY_TYPES[origin.__name__] = origin
+    return cast(T, Expr(plan or Plan(root=origin.__name__), client))
 
 
-def _explain_step(step: dict[str, Any]) -> str:
-    if "op" in step:
-        if step["op"] == "call":
-            return f".{step['name']}(...)"
-        if step["op"] == "get":
-            return f".{step['name']}"
-        if step["op"] == "map":
-            return f"map({', '.join(step['fields'])})"
-        return step["op"]
-    if "binop" in step:
-        return f"{step['binop']} {step.get('value', '')}"
-    return str(step)
+def from_plan(plan: Plan | dict[str, Any], client: Any = None) -> Expr:
+    """Rebuild an ``Expr`` from its wire form; validates names first."""
+    if isinstance(plan, dict):
+        plan = Plan.model_validate(plan)
+    plan.validate_names()
+    return Expr(plan, client)
 
 
 # --------------------------------------------------------------------------- #
-# Lazy proxy + q namespace
+# Roots and free functions
 # --------------------------------------------------------------------------- #
 
-class Lazy:
-    """Chain entry point: wraps an eager class so attribute access starts
-    recording. The wrapped class is the plan's root context type."""
-
-    __slots__ = ("_cls",)
-
-    def __init__(self, cls: type) -> None:
-        self._cls = cls
-
-    def __getattr__(self, name: str) -> Any:
-        if name.startswith("_"):
-            raise AttributeError(name)
-        root = Expr([], self._cls, False, self._cls.__name__)
-        return getattr(root, name)
-
-    def __dir__(self) -> list[str]:
-        return dir(self._cls)
+def _install_roots() -> None:
+    """Expose the typed roots and register the root types. Called at the end
+    of models.py, keeping the import edge one-way (models import expr)."""
+    global doc, many, ref
+    from ..document import Collection, Document, Field, Reference
+    LAZY_TYPES["Field"] = Field
+    doc = lazy(Document)
+    many = lazy(cast(type, Collection))
+    ref = lazy(Reference)
 
 
-def col(name: str) -> Expr:
-    """Reference a field produced earlier in the pipeline."""
-    return Expr([{"op": "col", "name": name}], None, False)
+if TYPE_CHECKING:
+    from ..document import Collection, Document, Reference
+    doc: Document
+    many: Collection[Document]
+    ref: Reference
+else:
+    doc = many = ref = None
 
 
-def lit(value: Any) -> Expr:
-    """Wrap a literal value as an Expr."""
-    return Expr([{"op": "lit", "value": value}], None, False)
+def field(name: str) -> Any:
+    """A value already extracted in this context (Decision 12)."""
+    return doc.field(name)
 
 
-class q:
-    """The lazy namespace (polars style)."""
-
-    ref = Lazy(Reference)
-    doc = Lazy(Document)
-    node = Lazy(Node)
-    col = staticmethod(col)
-    lit = staticmethod(lit)
-
-    def __init__(self) -> None:  # pragma: no cover - namespace, not instantiated
-        raise TypeError("q is a namespace, not a type")
+def _fn(name: str, expr: Any) -> Expr:
+    base = expr if isinstance(expr, Expr) else Expr(Plan())
+    return base._extend(Step(kind="fn", name=name))
 
 
-def _install_live_proxies() -> None:
-    """live / live_node reference LiveDocument/LiveNode, imported lazily to
-    avoid a cycle (live.py imports models, not the lazy layer)."""
-    from ..live import LiveDocument, LiveNode
-    q.live = Lazy(LiveDocument)        # type: ignore[attr-defined]
-    q.live_node = Lazy(LiveNode)       # type: ignore[attr-defined]
+def is_empty(expr: Any) -> Any:
+    return _fn("is_empty", expr)
 
 
-_install_live_proxies()
+def is_ok(expr: Any) -> Any:
+    return _fn("is_ok", expr)
+
+
+__all__ = ["Arg", "Step", "Plan", "Expr", "lazy", "from_plan", "to_arg",
+           "doc", "many", "ref", "field", "is_empty", "is_ok",
+           "LAZY_TYPES", "OPERATORS", "FUNCTIONS"]

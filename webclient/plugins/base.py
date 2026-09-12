@@ -12,7 +12,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from ..events import Event
-from ..models import Document, Script
+from ..document import Document, Script
 
 SurfaceKind = Literal["client", "session", "transport", "page", "document",
                       "node", "plan"]

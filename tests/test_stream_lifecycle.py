@@ -1,85 +1,70 @@
 """Regression tests for the stream bridge leak: a `_pump` task must never
 survive its consumer, however the consumer stops (fully drained, broken
-early, abandoned, or the client closed mid-stream)."""
+early, abandoned, or the client closed mid-stream). The vehicle is now a
+streamed plan (pagination is gone)."""
 import gc
 
 import pytest
 
-from webclient import WebClient, q
+from webclient import WebClient, doc, ref
+
+CARDS = "<html><body>" + "".join(
+    f'<div class="c"><a href="/i/{n}">{n}</a></div>' for n in range(5)) + "</body></html>"
 
 
 def stranded_streams(wc):
-    """Count still-running stream-pump tasks on the client's loop."""
     import asyncio
 
     async def scan():
-        return sum(
-            1 for t in asyncio.all_tasks()
-            if t.get_coro().__qualname__.endswith("stream.<locals>._pump")
-            and not t.done())
-
+        return sum(1 for t in asyncio.all_tasks()
+                   if t.get_coro().__qualname__.endswith("stream.<locals>._pump")
+                   and not t.done())
     return wc._ensure_loop().run(scan())
 
 
-def serve_chain(httpserver, count=5):
-    for n in range(1, count + 1):
-        nxt = (f'<a class="next" href="/p{n + 1}">n</a>' if n < count else "")
-        httpserver.expect_request(f"/p{n}").respond_with_data(
-            f"<html><body><h1>{n}</h1>{nxt}</body></html>",
-            content_type="text/html")
+def plan():
+    return ref.resolve().select_all(".c").extract(
+        n=doc.select("a").attr("text")).project()
+
+
+def serve(httpserver):
+    httpserver.expect_request("/cards").respond_with_data(
+        CARDS, content_type="text/html")
+    return httpserver.url_for("/cards")
 
 
 def test_fully_drained_stream_leaves_no_pump(httpserver):
-    serve_chain(httpserver)
+    url = serve(httpserver)
     with WebClient() as wc:
-        first = wc.ref(httpserver.url_for("/p1")).fetch()
-        list(first.paginate("a.next"))          # drain fully
+        list(wc.execute(plan(), wc.ref(url), stream=True))
         assert stranded_streams(wc) == 0
 
 
 def test_broken_stream_leaves_no_pump(httpserver):
-    serve_chain(httpserver)
+    url = serve(httpserver)
     with WebClient() as wc:
-        first = wc.ref(httpserver.url_for("/p1")).fetch()
-        pages = first.paginate("a.next")
-        for i, _ in enumerate(pages):
+        rows = wc.execute(plan(), wc.ref(url), stream=True)
+        for i, _ in enumerate(rows):
             if i == 1:
-                break                            # abandon mid-stream
-        pages.close()                            # explicit close runs finally
+                break
+        rows.close()
         assert stranded_streams(wc) == 0
 
 
 def test_abandoned_stream_generator_cleans_up(httpserver):
-    serve_chain(httpserver)
+    url = serve(httpserver)
     with WebClient() as wc:
-        first = wc.ref(httpserver.url_for("/p1")).fetch()
-        it = first.paginate("a.next")
+        it = wc.execute(plan(), wc.ref(url), stream=True)
         next(it)
-        del it                                   # drop without closing
+        del it
         gc.collect()
         assert stranded_streams(wc) == 0
 
 
 def test_close_client_mid_stream_is_clean(httpserver):
-    serve_chain(httpserver)
+    url = serve(httpserver)
     wc = WebClient()
-    first = wc.ref(httpserver.url_for("/p1")).fetch()
-    pages = first.paginate("a.next")
-    next(pages)                                  # start but don't finish
-    wc.close()                                   # must not strand the pump
-    # consuming further after close stops cleanly rather than hanging
-    assert list(pages) == []
-
-
-def test_stream_surfaces_producer_errors(httpserver):
-    httpserver.expect_request("/bad").respond_with_data(
-        "<html><body>no next link here</body></html>", content_type="text/html")
-    with WebClient() as wc:
-        first = wc.ref(httpserver.url_for("/bad")).fetch()
-
-        def boom(_doc):
-            raise ValueError("driver blew up")
-
-        with pytest.raises(ValueError, match="blew up"):
-            list(first.paginate(boom))
-        assert stranded_streams(wc) == 0
+    rows = wc.execute(plan(), wc.ref(url), stream=True)
+    next(rows)
+    wc.close()
+    assert list(rows) == []

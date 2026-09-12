@@ -1,361 +1,566 @@
-# Implementation Plan
+# Implementation Plan — the `spec.py` refactor
 
-The interface in `models.py` is the frozen v0 surface. This plan turns it into
-a working engine. Guiding rule: **KISS** — one async engine, one event bus,
-one sync facade, one plugin pathway for all capture and rendering, an id for
-every long-lived object. No abstraction that isn't forced by the interface.
+`/spec.py` (was `types.py`) is the frozen v0 surface. This plan turns it into
+a working engine by **refactoring the current tree in place** (`main` @
+`754a83b` + P0).
 
-## 0. Architecture
+**This is a refactor, not a rewrite.** The `redesign` branch was a rewrite: it
+tripled the file count and replaced a working base wholesale. We keep the
+lean, working parts (the async engine loop, the http/browser backends, the
+pool, the event bus, the plugins, sessions) and change only what the new
+object model forces: collapse `Document`/`LiveDocument`/`Node` into one
+capability-driven `Document`, add `WebBase` + `Collection` + `Field`, and turn
+the two-implementation lazy layer into one op-registry-driven language.
 
-```
-user code (sync) ──┐
-REPL / scripts     ├──> WebClient (facade, registries, lifecycle root)
-HTTP/WS service ───┘        │
-     ┌──────────┬───────────┼───────────┬──────────────┐
-  Sessions   ClientPool   EventBus   Plugins        Executor
-     │          │            ▲       (attach to        │
-     │          ▼            │        surfaces,        │ schedules
-     │    engine (one asyncio loop,   emit events,     │
-     │          daemon thread)        render docs)     │
-     │    ├── engine/http.py     httpx.AsyncClient per http lease
-     │    └── engine/browser.py  1 playwright browser,
-     │                           1 BrowserContext per session,
-     └───────────────────────────1 Page per page lease
-```
+Two rules make that claim checkable rather than aspirational:
 
-### Threading model (the KISS bridge)
+1. **The tree stays green at every milestone.** Every PR leaves the current
+   test suite passing (159 tests at P3, browser suite included where
+   playwright is installed) and `demo.py` runnable. No "red from P1 until the cut-over".
+   A milestone that needs the tree red is a rewrite step and is rejected.
+2. **The package does not grow.** Budget below. Every PR deletes what it
+   replaces in the same PR; the P0 skeleton is a loan repaid by P2–P4.
 
-- One asyncio event loop **per WebClient**, in a daemon thread, started
-  lazily. All I/O is async inside the engine. (Isolation: closing one
-  client can never starve another; ISSUES #18.)
-- Every public facade method is implemented as `async def _method` on the
-  engine side plus a thin sync wrapper:
-  `asyncio.run_coroutine_threadsafe(coro, loop).result(timeout)`.
-- Streaming (paginate, `collect(stream=True)`, `run(stream=True)`) bridges
-  with a `queue.Queue` fed from the async side; the sync iterator blocks on
-  `queue.get()`; a sentinel closes it. Backpressure = bounded queue.
-- The service (M7) is async-native: FastAPI handlers await the same
-  `_method` coroutines directly, skipping the bridge. This is why the split
-  into `async _method` + sync wrapper is mandatory from day one.
-- Bus handlers run on the publisher's thread (the loop thread for engine
-  events). Handlers must not block and must not call sync facade methods
-  (documented; enforced with a loop-reentrancy assert in debug mode).
+Guiding rule, unchanged: **KISS**. One async engine, one sync facade, one
+expression language in two modes, one op registry as the single source of
+truth for dispatch, typing, and the wire format.
 
-## 1. Package layout
+---
 
-Single-file `models.py` splits at M1 into:
+## 0. Budget, and what we keep / change / delete
+
+| | lines (`webclient/`) |
+|---|---|
+| `main` @ `754a83b` | 3 871 |
+| after P0 (skeleton loan: `ops.py` 142, `models.py` +174, `lazy()` +14) | 4 208 |
+| after P1 (policy engine, `NameScope`, `ref()`/`request_fields`; nothing deleted yet) | 4 419 |
+| after P2+P3, independent-Expr rebuild (recorder −140, executor −9, `Node` −83; `models.py` +349, `ops.py` 193 as a plain `@policy` decorator) | **4 414 — still over the P0 figure** |
+| **ceiling at P6** | **≤ 3 871** |
+| ~~expected at P6 ~3 400~~ — re-projected at P3 with the scope as written | **~4 000–4 100: misses the ceiling** |
+| after P4 (Backings: `live.py` −399 deleted, `backings.py` +372, page-op dispatchers on `Document`) | **4 514** |
+| after cleanup (typed views removed) + `core/` submodule + P5 (join fix, WebClientCore) + P6 (search/summary) | **4 548** |
+
+**Budget status at P3 — raised, awaiting a decision (see §7).** P2+P3
+deleted the two-implementation lazy layer and `Node` (−369 lines), but the
+v0 surface that replaces them costs more: `WebBase`/`Field`/`Collection`,
+comparison and branching ops, the op registry with both sync and async
+policy paths, and the generated `Collection` block. Re-projection to P6:
+P4 deletes `live.py` (−399) and adds page ops (~+110); P5 removes
+`optional=`/`fetch` overloads (~−50) and adds the core split (~+15); P6 thins
+remote/service (~−60). That lands near 4 050.
+
+Measured with `wc -l webclient/*.py webclient/*/*.py`. Tests and `demo.py`
+are outside the budget and are expected to grow.
+
+**Keep as-is:** `engine/loop.py`, `engine/http.py`, `engine/browser.py`,
+`pool.py`, `events.py` (+ `plugins/`) — reused, rework deferred — and
+`session.py` (gains name-scoping only).
+
+**Refactor in place:**
+- `models.py` → `WebBase` is the base of `Reference`, `Document`,
+  `Collection[T]`, `Field[T]`; `WebError` on the wire. `Document` no longer
+  subclasses `Reference`; capability comes from its backing. **P0 landed the
+  four new classes as signatures next to the old ones**; P1 rebases the old
+  ones onto them.
+- `live.py` → **deleted** (P4); `LiveDocument`/`LiveNode` fold into
+  `Document` (browser ops raise `UnsupportedOperation` naming the fix when the
+  backing can't serve them). `Node` folds into `Document`/`Collection` (P3).
+- `lazy/expr.py` + `lazy/executor.py` → one recorder + one evaluator over the
+  **same** `@op` implementations (P2). Today they are two implementations of
+  one language — the source of the nested-`map` drop and the leaked-Expr-arg
+  bug. `lazy()` already lives in `expr.py`.
+- `client.py` → `WebClientCore` (async `resolve`/`execute`) + `WebClient`
+  (sync facade). Trim the god-object: page setup / cookie priming /
+  subscription ordering move behind the backing.
+- `remote.py`, `service/api.py` → built on the `WebClient` op surface;
+  session-scoped.
+
+**Added (P0, done):** `ops.py` — `@op`, `OpSpec`, `REGISTRY`, `bind_ops`,
+capability check, the error-policy constants, `record`/`run` entry points.
+One file, 142 lines, no package imports (no cycles).
+
+**Seed, don't re-derive:** `git show redesign:webclient/plan.py` is a typed
+discriminated-union IR that matches P2's "typed IR"; lift it into `expr.py`
+rather than writing a second one. Nothing else from `redesign` comes back:
+not `surfaces/`, `values.py`, `records.py`, `telemetry.py`, `explain.py`,
+`roots.py`, nor `backing.py`-as-five-files. Backings are three classes in one
+place; roots and functions live in `lazy/expr.py`.
+
+---
+
+## 1. Language mechanics (verified)
+
+- **Recordable operators:** comparisons (`== != < > <= >=`) and `& | ~`
+  return `Field[bool]` — logic composes with these.
+- **Non-recordable:** `and`/`or`/`not`, `bool()`, `len()`, `for … in`,
+  `x in y` — Python coerces these at the C level. **Rule (P0):** on a
+  **lazy** object these raise `TypeError` naming the recordable form; on an
+  **eager** object they evaluate (`bool(field)` is `bool(field.get())`,
+  `for d in collection` iterates). Verified: a pydantic model whose `__eq__`
+  returns a wrapper is otherwise *always truthy* — `if doc.attr("x") == "y":`
+  would silently take the branch, so `__bool__` is mandatory, not optional.
+- `__eq__` recording ⇒ `Field` is unhashable (`__hash__ = None`); never a
+  dict key or set member.
+- **Typing idiom, verified in mypy `--strict` and pyright (P0 gate):**
+  `def lazy[T](cls: type[T]) -> T` with `lazy(Collection[Document])`;
+  `attr("href") -> Reference` via a `Literal` overload (needs
+  `# type: ignore[overload-overlap]`, as today); `Field[bool]` from `==`;
+  `Collection[T].filter -> Collection[T]`; `extract -> Self`.
+- **Checker divergence, found at P0:** pyright *applies* a class decorator's
+  return type, mypy ignores it. `bind_ops` must be typed identity
+  (`(cls: C) -> C`) or every decorated class becomes `type` under pyright.
+  Both checkers run in `tests/test_typing.py` for exactly this reason.
+- **`lazy()` construction:** `cls.model_construct()` + private `_lazy` flag.
+  `cls.__new__(cls)` leaves a pydantic instance with no fields (verified:
+  `AttributeError` on first field access).
+- **Dispatch is the op table only.** The evaluator resolves names through
+  `REGISTRY.resolve(obj, name)`; there is no generic `getattr` path, so there
+  is no `_`-name mitigation to maintain and nothing on pydantic's public
+  surface is reachable from a plan. (The only thing that needed generic
+  attribute access was `.params.get("uddg")`; see Decision 6.)
+
+## 2. Decisions (amended at P0; ▲ marks a change from the previous plan)
+
+1. **One class, two modes; eager runs through the core.** `resolve`/`select`/
+   `extract`/`filter`/`project`/`click`/… are `@op` methods on the real
+   classes. Module roots `doc`, `many`, `ref` are `lazy(Document)`,
+   `lazy(Collection[Document])`, `lazy(Reference)`. An eager call evaluates
+   *through the async core* — the same path lazy and remote take — so they
+   cannot drift.
+2. ▲ **Typing via `lazy()`; the `Collection[T]` twin is a committed generated
+   stub.** Static checkers read source, so "generated from the registry at
+   runtime" cannot type-check. `Collection[T]`'s lifted element methods
+   (`many.select(...).attr("href") -> Collection[Reference]`) live in a
+   generated block inside `class Collection` under `if TYPE_CHECKING:`
+   (▲ not a `models.pyi`: a stub file would hide all of `models.py` from the
+   checkers), produced from `REGISTRY` by
+   `scripts/gen_stubs.py`; `tests/test_typing.py` runs it with `--check`, so
+   drift fails CI. The stub is the *only* hand-free twin; the runtime lifting
+   is one generic `__getattr__`-free mechanism in `Collection` driven by
+   `OpSpec.cardinality`.
+3. ▲ **Ops return wrappers; `Field` is unregistered.** `attr -> Field[str] |
+   Reference`; `select -> Document`; `select_all -> Collection[Document]`.
+   `Field[T]` is a `WebBase` so combinators and comparisons are type-visible
+   in both modes; `.get()` unwraps on the eager path (the accepted tax). But a
+   `Field` **never enters the name registry** and gets `name`/`root` lazily on
+   first read — otherwise a 1000-row × 5-field extract registers 5000 objects,
+   the growth Section 6 warns about. Only `Reference`, `Document`,
+   `Collection` are registered.
+4. **Naming is by keyword; `.alias()` is dropped.** `extract(title=…, price=…)`.
+5. **Conditionals are polars-style `when/then/otherwise`** on a `Field`:
+   `expr.when(cond).then(a).otherwise(b)`. This is *branching*; error handling
+   is Decision 7.
+6. ▲ **Safe dispatch from P2, not deferred.** The op table is the only
+   dispatch (Section 1). `search_expr`'s `.params.get("uddg")` becomes the
+   `Reference.param("uddg") -> Field[str]` op. No generic attribute access, no
+   `_`-name blocklist, no "trusted network" caveat for code execution. What
+   remains deferred is *authorization* (who may resolve what), not
+   *safety*. Deserializing an unknown op or root raises.
+7. ▲ **Error policy — mode-dependent defaults, IGNORE always explicit, not-ok
+   short-circuits.** Every `WebBase`-returning op takes
+   `error=IGNORE|RETURN|RAISE`. The object always comes back carrying
+   `error: WebError | None`, `ok: bool`, `message`.
+   - **Default: eager → RAISE; lazy-plan execution → RETURN.**
+   - `RETURN` → `ok=False`, `error` set. `filter(doc.is_ok())` drops failures.
+   - `IGNORE` → `ok=True`; `error`/`message` retained for diagnostics only.
+     **`ok` is the only truth**; nothing may branch on `error is None`.
+   - ▲ **An op on a not-ok receiver does not execute**: under RAISE it
+     raises the carried error (`OpError`); under RETURN it returns the
+     receiver unchanged (Self ops) or a not-ok result carrying the same
+     `WebError`, so `doc.click(error=RETURN).write(...)` cannot hide the
+     click failure. Inspection ops (`is_ok`, `is_empty`; `@op(always=True)`)
+     still run. Error state is cleared only by an op that *succeeds on an ok
+     receiver* or by explicit `IGNORE`.
+   - ▲ **A failed field inside `extract` marks that `Field` not-ok, not the
+     row.** `is_ok(doc.field("title"))` is per-field; the row stays ok so
+     sibling fields survive. (`filter(doc.field("title").is_ok())`.)
+   - ▲ **Non-`WebBase`-returning ops are terminals and take no `error=`:**
+     `project`, `fields`, `Field.get`, `evaluate`. They raise the carried
+     `WebError` if the receiver is not ok (IGNOREd objects are ok, so they
+     project). This replaces the spec's "IGNORE→None / RETURN→Exception" rule
+     for such methods; it removes a three-overload signature per op and the
+     `T | WebError | None` return unions that would have leaked into every
+     caller. **Spec deviation, recorded.**
+   - ▲ Decision 16's "a failing row cancels its siblings" applies to
+     **RAISE only**. Under the lazy RETURN default a bad row is a not-ok row.
+   One decorator (`ops.run`), not per-method code.
+8. **Runtime capability checks.** Ops declare `require="tree"|"ok"|"page"`;
+   `ops.check` raises `UnsupportedOperation` naming the fix when the backing
+   can't serve it. Capability is **live backing state**, checked every call.
+9. **Addressability.** Every registered object has `name` (short, e.g.
+   `doc:000-001`), `kind`, `root`, forming a chain `wc:… → ref:… → doc:… →
+   doc:…`. Names are **scoped to the resolver** (`wc.resolve` → client scope;
+   `session.resolve` → session scope) and retained while that scope lives
+   (session/ttl). `wc.document(id)`/`wc.reference(id)` recover in scope.
+   ▲ Every `WebBase` carries `is_lazy` and shows it in `repr`, so a plan that
+   was never bound is diagnosable rather than silent.
+10. **Collections hold one address, not N.** `select_all` returns a
+    `Collection[Document]` backed by one selector over a snapshot; elements
+    are addressed lazily (`root` = the collection).
+11. **Reference is the action chain.** Request spec **plus** the ordered
+    actions taken from a Document (`select`/`click`/`write`/`wait`) **plus**
+    the resolve options (`browser`/`proxy`/`anti_bot`) and their outcome
+    telemetry. `doc.ref()` rebuilds the reference for the document's *current*
+    state. A mutating action makes a new action chain under the same document
+    name. Replay is best-effort and must fail loudly on a changed page.
+12. **`extract` merges; same name overrides.** `field("name")` means "a value
+    already extracted in this context", identical in both modes.
+13. **Context binding inside `extract`.** Expressions are bound to the
+    document `extract` was called on; over a `Collection`, `doc` is each
+    element. No separate `el` root in v0.
+14. **Reference hidden outside the lazy interface.** Eager users go through
+    `wc.fetch(**reference_like)`/`wc.resolve(...)`; a bare `Reference(...)` is
+    a lazy root and unbound `.resolve()` returns a lazy object (`is_lazy`).
+15. ▲ **`select(sel, wait=…)` and snapshot invalidation.** With `wait` on a
+    page backing, auto-wait the DOM; without it, the current snapshot. **A
+    mutating action invalidates the tree snapshot**; the next tree op
+    re-snapshots from the page, so `doc.click("#more").select(".row")` sees
+    the post-click rows. A document that *navigated away* keeps its last
+    snapshot and loses `page` (Decision 8). Dialect (css/xpath/jsonpath) is
+    chosen from document kind and selector shape; a binary element inherits
+    `url`/`status_code` and its `content` is the element bytes.
+16. **Streaming + bounded fan-out.** Plan execution streams rows as subgraphs
+    complete; fan-out is a bounded work queue sized by the pool; under RAISE a
+    failing row cancels its siblings and orphans nothing; page-`resource`
+    steps in one `page_group` serialize on one lease.
+17. ▲ **`is_ok`/`is_empty` are ops, not module functions.** They return
+    `Field[bool]`, so `many.filter(doc.is_ok())` records; the `is_ok(expr)`
+    function form in `spec.py` is redundant and not provided. **Spec
+    deviation, recorded.**
+
+## 3. Spec coverage and deferrals
+
+Spec items with a milestone: everything in `WebBase`/`Field`/`Collection`
+(P0 signatures → P1–P3 bodies), `Document` tree ops (P3), page ops (P4),
+`events(kind)` (P1, over the existing bus), `screenshot -> Document(kind=
+"binary")` (P4), `fields()/references()/documents()` (P2/P3).
+
+**Deferred:** render (`render`/markdown/elements/links stay as today on
+`Document`), pagination (`paginate` — on `Reference`), secrets redaction,
+binary `save`, proxy pools, retry beyond transport errors, authorization,
+event-bus rework, document kinds beyond html/xml/json/binary (csv, excel,
+parquet, pdf are `kind` values the sniffer may emit; no ops on them).
+**Dropped:** `back`/`forward`. `search`/`summary`/`crawl` are sketched
+interfaces, built last.
+
+## 4. Target layout (delta from current, kept small)
 
 ```
 webclient/
-  __init__.py       # public API: WebClient, q, col, lit, model re-exports
-  models.py         # data: Reference, Document(+views), Node, LiveNode, Element
-  events.py         # Event taxonomy, EventBus, EventRegistry, Subscription
-  plugins/
-    base.py         # Surface, Plugin, Renderer
-    core.py         # core capture plugins: network, console, action, dom
-    render.py       # core renderers: html->markdown/text/elements/links, ...
-    rrweb.py        # RRWeb dom-capture plugin (replaces core dom plugin)
-  pool.py           # ClientPool, Lease
-  session.py        # Session
-  client.py         # WebClient facade, registries, default_client()
-  engine/
-    loop.py         # loop thread, sync<->async bridge, stream bridge
-    http.py         # request(lease, ref) -> Document
-    browser.py      # page management, surface creation, actions, replay
+  __init__.py     public API: WebClient, wc.fetch, lazy roots (doc/many/ref), IGNORE/RETURN/RAISE
+  models.py       WebBase, WebError, Reference, Document, Collection[T], Field[T]
+  ops.py          @op, OpSpec, REGISTRY, bind_ops, check, record, run     [NEW, P0 done]
+  client.py       WebClientCore (async resolve/execute) + WebClient (sync facade) + name registry
+  session.py      WebSession (+ name scope)
+  pool.py         reused
+  events.py       reused (rework deferred)
+  engine/         loop.py http.py browser.py — reused
   lazy/
-    expr.py         # Expr recorder, Lazy, q, QueryPlan (de)serialization
-    executor.py     # compile() + scheduler
-  service/
-    api.py          # M7: FastAPI app mapping REST/WS onto WebClient
-tests/
+    expr.py       lazy(), roots, typed IR (lifted from redesign:plan.py), functions
+    executor.py   one evaluator over the @op implementations; streaming; fan-out
+  plugins/        reused
+  remote.py       refactor → session-scoped WebClient surface
+  service/api.py  refactor → session-scoped, methods-as-endpoints
+scripts/gen_stubs.py   regenerates the Collection block in models.py from REGISTRY (P2, done)
 ```
 
-## 2. Wiring
+Net new: `ops.py` and `scripts/gen_stubs.py` (both done). Net deleted:
+`live.py`, root `models.py` (old spec, done). Everything else edited in place.
 
-### 2.1 fetch, http path
+## 5. Milestones (strangler order — green at every step)
 
-```
-ref.fetch()
- └─ resolve client: ref.bound or default_client(); session: ref binding or wc default
- └─ wc.fetch(ref, session=...)  →  bridge  →  engine._fetch:
-     1. lease = await pool.acquire("http", session)     # bounded, FIFO queue
-     2. request = merge(ref, session.headers/cookies/proxy, wc.default_headers)
-     3. resp = await lease.httpx_client.request(...)    # retries per wc.retries
-     4. the core network plugin (attached to the "transport" surface)
-        emits NetworkEvent/NavigationEvent via surface.emit
-     5. doc = Document(id=uuid4().hex, session_id=s.id, kind=sniff(content_type),
-                       content=..., final_url=..., **ref fields)
-     6. "document" surface created → document-kind plugins attach
-     7. wc._documents[doc.id] = weakref(doc);  pool.release(lease)
-```
-HTTP leases are held only for the duration of the request. `Document.kind`
-sniffing: content-type header first, leading bytes as fallback.
+Each ships importable, tested, type-checked (mypy **and** pyright on
+`tests/fixtures/typing_surface.py`), inside the budget, with `demo.py`
+extended to exercise everything landed (standing rule).
 
-### 2.2 fetch, browser path
+- **P0 — spec + typing gate. ✅ done.** `types.py` → `spec.py` (it shadowed
+  the stdlib `types` module and broke pytest startup on 3.10 and 3.12); root
+  `models.py` (previous spec) deleted; `pyproject` finds subpackages,
+  `requires-python >=3.12`, `pyright` in `dev`; `env/` rebuilt on 3.12 with
+  `dev`. `ops.py`; `WebBase`/`WebError`/`Field`/`Collection` signatures in
+  `models.py` beside the old classes; `lazy()`; typing corpus passing both
+  checkers. Suite: 123 passed.
+- **P1 — error policy + addressability, on the existing classes. ✅ done.**
+  `ops.run` (policy table, eager-RAISE default, not-ok short-circuit,
+  coroutine ops settle through the owning client's loop), `Field.get`/
+  `is_ok`/`is_empty`. `Reference` rebased onto `WebBase` and carries the
+  action chain (`actions`, `options`); `Document` inherits it (`ok` is the
+  field, derived from `status_code` at build time; `ref()`;
+  `request_fields()`). Scoped `NameScope` registry in `client.py` replaces
+  the weakref dict: client scope `000` LRU-capped by `names_cap`, one scope
+  per session dropped on close, `wc.document/reference(name)` and
+  `session.document/reference(name)`; `id` mirrors `name` until P5.
+  Amendments: `Document` **stays a `Reference` subclass until P3** (that is
+  where elements become Documents, which is what forces the split — doing it
+  in P1 would have reddened the tree for nothing); the spec's `events(kind)`
+  is today's `events_of` and is renamed at P5 when the `events` list field
+  goes; the `ActionEvent` property is now `action_events` (the `actions`
+  field is the replayable chain). Suite: 139 passed.
+- **P2 + P3 — one expression language, one evaluator, `Node` folded. ✅
+  done functionally; ❌ budget target missed (4 452 vs < 4 208).** Landed as
+  one step: the recorder is unusable until `select`/`attr`/`resolve` are
+  ops, and the tests that execute plans need the new evaluator, so splitting
+  them would have reddened the tree. What landed:
+  - `lazy/expr.py` (363 → 118): typed IR `Plan`/`Step`/`Arg` (lifted from
+    `redesign:plan.py`, trimmed), `lazy()`, `from_plan()` with registry
+    validation, roots `doc`/`many`/`ref`, `field()`. `ops.record` appends a
+    step and returns a lazy wrapper of the declared return class.
+  - `lazy/executor.py` (269 → 228): one walk dispatching only through
+    `REGISTRY.resolve`; a Collection fans the rest of the chain out per
+    element through a bounded `TaskGroup` worker pool (a failure cancels
+    siblings); `filter` drops inline; rows stream; plan events kept.
+  - `models.py`: `Document.select`/`select_all`/`attr` and
+    `Reference.resolve`/`param` are ops. `Node` is deleted: an element is a
+    `Document` whose backing is a subtree (html/xml) or a JSON sub-value,
+    `content` is the element bytes, `root` is the parent. JSON documents
+    have a tree (`select("items[0].n")`). `attr("text"|"html"|"value")`
+    replace the old `.text` property access in plans. `Field` has
+    `eq/ne/lt/le/gt/ge/and_/or_/not_` ops behind the operators and
+    `when/then/otherwise`. `Collection` lifts element ops at runtime and via
+    the generated block for checkers. `extract` merges, `project` is a
+    recordable op, `field/reference/document(s)` read extracted values.
+  - `Reference("url")` is a lazy root carrying the request spec as
+    `plan.source`; keyword construction stays eager.
+  - `client.execute(expr, context=None, stream=False)`; service `/plans`
+    takes `Plan` JSON and answers 422 on an unknown op; remote sends `Plan`.
+  - ▲ `q`/`col`/`lit`/`Expr`/`QueryPlan`/`OnError` are **deleted, not
+    aliased**: porting the tests and demo was smaller than an alias layer.
+  - ▲ `OpSpec.cardinality/resource/mutates` removed: nothing read them. P4
+    re-adds exactly what its scheduler reads.
+  *Gates met:* unknown op/root raises on deserialize, dunder ops refused;
+  eager and lazy agree on the same extract/filter/project; nested
+  collections flatten; bounded fan-out (peak = limit); failing row cancels
+  siblings; explicit `error=RAISE` aborts a plan; stub drift test; both
+  checkers on the corpus; `expr.py` and `executor.py` smaller. Suite: 159
+  passed (browser included); `demo.py` exits 0.
+- **P4 — page backing via Backings; `live.py` deleted. ✅ done.** Implemented
+  as PLAN §5b: `backings.py` holds `HTMLSelect`/`JSONSelect`/`LiveSelect`/
+  `LiveAction`; `Document._backing(op)` (the switch) dispatches select/attr
+  and the full interaction set to the provider for the document's current
+  medium, raising `UnsupportedOperation` (naming the gate) when none applies.
+  A live element is a `Document` with a locator backing, so selection nests
+  and `events_of` narrows by node identity. `LiveDocument`/`LiveNode` are
+  aliases of `Document` for one release. `optional=` kept as a shim (removed
+  P5); `back`/`forward` dropped. *Gates met:* all 13 browser tests pass
+  (click/write/live-select/xhr+console capture/dom snapshot/narrowing/
+  screenshot/navigate/replay/session storage/pool release/custom plugin);
+  eager+lazy still agree; both checkers clean incl. `backings.py`; demo
+  exits 0. **Budget: 4 514 — over the ≤4 300 re-baseline by ~210.** The page-op
+  dispatchers on `Document` are boilerplate; generating them (as the
+  `Collection` block is generated) or removing typed views would recover it.
 
-```
-1. lease = await pool.acquire("page", session)
-   - playwright browser started lazily (one per WebClient)
-   - one BrowserContext per session, created on first page lease for that
-     session, storage_state loaded if the Session carries one
-   - Page created/reused up to pool.max_pages (global bound)
-2. "page" surface created BEFORE goto: engine installs each attached
-   plugin's `scripts`, then calls plugin.attach(surface). Core page plugins:
-   - network: page.on(request/response) + CDP session → XHR/Fetch/
-     Navigation/AssetEvent
-   - console: page.on(console) → ConsoleEvent
-   - dom (default): MutationObserver init script reporting via a binding →
-     DOMLoad/Update/UnloadEvent. Replaced by the rrweb plugin when
-     registered: rrweb source as init script, emits DOMSnapshotEvent
-     (full snapshots + digest, periodic checkpoints) and DOMUpdateEvent
-     subclasses (incrementals)
-   - action: interactions record + emit ActionEvent (emitted facade-side)
-   Emit contract (ISSUES #15): the surface OVERWRITES correlation ids with
-   its own and sets `source` to the plugin name; the bus stamps `seq` and
-   `ts` unconditionally.
-   Event scoping: dom/action capture plugins additionally stamp
-   `Event.node_id` — a stable node identity (rrweb node ids) — which is
-   what LiveNode.events_of narrows on (ancestor-path prefix: an event
-   matches a node when its node_id is the node or a descendant). Static
-   Node.events_of stays document-scoped; narrowing exists only where live
-   capture assigned identities.
-3. wc registers routing subscriptions for the new document id:
-   bus.subscribe(topic, doc_append_handler, document_id=id)
-   -> the ONLY mechanism filling Document.events (typed views read it)
-4. await page.goto(ref.url, wait_until=...)
-5. LiveDocument(id, session_id, lease_id) registered with a STRONG ref
-   (a leased page must never depend on gc)
-```
+- **P5 — `WebClientCore` + the final-URL bug. ✅ done (partial).** `WebClient.core`
+  exposes the async surface (`await wc.core.resolve/execute`) for callers on
+  the loop; the sync facade still raises there via the loop guard. `Document.join`
+  now resolves relative links against `final_url` (after redirects), not the
+  request URL — the recorded bug, fixed with a regression test. `optional=`
+  is **kept** as a documented shim (removing it is churn with no capability
+  change); it can go in a later pass.
+- **P6 — high-level helpers. ✅ done (crawl out of scope, per the user).**
+  service `/plans` and the remote client already ride the plan surface (done
+  at P2/P3). `wc.search(term, engine=…, limit=…)` runs a query against a
+  configurable `SearchEngine` (url template + selectors) and returns result
+  rows; `wc.summary(url, browser=…)` resolves a page to `{title, markdown}`.
+  Both build a plan and run it through `execute`; fixture-tested. `crawl` is
+  intentionally not implemented.
 
-- Every interaction (`click`, `write`, …): record + emit `ActionEvent`,
-  then perform the playwright call with auto-wait; return self.
-- `navigate()`: same page object, new document id — detach page plugins for
-  the old surface / attach for the new, swap routing subs, return a new
-  LiveDocument carrying the same lease.
-- `wc.release(live)`: detach plugins, cancel routing subs, release lease
-  (page cleared and parked, context kept). `Session.close()`: persist
-  storage_state, close context, release its leases. `wc.close()`: all
-  sessions, browser, loop tasks. A gc finalizer on LiveDocument is a
-  warn+release backstop only.
+## 5d. Issue triage (user review, P8)
 
-### 2.3 Surfaces & plugins
+**Done this pass (green):**
+- **CRITICAL bug fixed** — a mutating action now records on the reference
+  action chain (`core.doc.actions`), `doc.ref()` reflects the *current*
+  chain, and `reload()` re-resolves that reference (replaying the chain) to
+  reproduce state. Was: actions only emitted `ActionEvent`s, so `ref()`
+  carried an empty chain and re-resolution lost the mutations.
+- `Reference`: `fetch` removed (bloat); `resolve` is now a thin delegate to
+  the bound client's `resolve` (or a lazy plan when unbound); `param` removed.
+- `Document`: `navigate` dropped, `paginate` dropped, `save` removed, `query`
+  removed (json is `select("a.b[0]")`), `replay` folded into `reload`;
+  `links` returns a `Collection[Reference]`.
+- `WebClientCore`: added the single `resolve(reference, *, browser, session,
+  **opts)` decision point; removed `_navigate`, `_swap_document`, `_paginate`.
+- `_LINK_ATTRS` removed; `Proxy` moved out of `document.py` to
+  `core/webclient.py` (with the proxy pool).
 
-- Surface instances are created by the engine at these points:
-  `client` (WebClient start), `session` (session()), `transport` (httpx
-  client creation), `page` (page lease, pre-goto), `document` (Document
-  construction), `node` (selection, lazily), `plan` (executor run start).
-- `wc.use(plugin)`: appends to `wc.plugins`, registers `plugin.events`
-  with the EventRegistry, and — for Renderers — registers
-  `(kind, format) -> renderer` in a render table. Attach order ==
-  registration order; core plugins are pre-registered and replaced by
-  registering a plugin with the same `name`. A different-named plugin
-  claiming an occupied `(kind, format)` shadows it — last-registered wins,
-  with a warning log (ISSUES #16).
-- **All capture is plugins** (§2.2); the engine only creates surfaces and
-  calls attach/detach. One pathway to maintain, and swapping naive DOM
-  capture for RRWeb is pure registration.
-- **Representations are Renderer plugins per document kind**:
-  `HTMLDocument.markdown/.elements`, `Document.render("markdown")` and the
-  service's `GET /documents/{id}/render?format=...` all resolve through
-  the render table. Core renderers (pure functions over the parsed doc):
-  html → markdown, text (readability), elements (Unstructured-style typed
-  blocks), links, html; json → elements; xml → text, elements.
-- Plugin events integrate with the lazy layer via the EventRegistry:
-  `events_of` ops in plans name event types by topic; compile resolves
-  them through the registry (server-side too), so plans referencing plugin
-  events (de)serialize and validate.
+**Done (P8 continued):**
+- **WebClientCore = resolve + execute (async).** The user-facing builders
+  `ref`/`fetch`/`search`/`summary` moved to the `WebClient` facade (sync
+  bridges over the core's two async primitives); `execute` is now async on
+  the core (`astream` for streaming), the facade bridges to sync. The core
+  keeps the registry/session/scope machinery and the private `_fetch`/
+  `_fetch_browser`/`_build_document` internals.
+- **Document shims dropped.** The `_page`/`_lease`/`_routing`/`_attached`
+  properties are gone; `WebClientCore` binds/reads `live._core` directly, so
+  runtime state lives only on the `DocumentCore`.
 
-### 2.4 EventBus
+**Done (P8 cont'd):**
+- **Document ≠ Reference.** `Document` is now a sibling of `Reference` under
+  `WebBase`: it holds the response (`url`/`final_url`/`content`/`status_code`/
+  …) plus its own `actions`/`options` chain, and `ref()` returns the
+  Reference it resolves from (registry lookup, else `Reference.from_url(url)`).
+  Construction sites (`_build_document`, `_wrap_live_page`, element/binary)
+  build from `url`, not the old `request_fields`. `model_post_init` sets
+  ok/error from the status (0 = no response).
 
-- In-process, synchronous dispatch: `dict[topic-prefix, list[_Sub]]` under
-  a lock; publish walks subs whose topic is a dotted prefix of the event's
-  and whose correlation filters match.
-- The bus stamps `seq` (per-document counter) at publish; events without a
-  document id get a per-client stream counter. Consumers that need
-  buffering (the WS API) bring their own `asyncio.Queue` in their handler.
-- Deliberately the simplest thing satisfying "everything shares one bus";
-  revisit only if a real bottleneck shows.
+**Remaining (staged; each is a substantial, coupled change):**
+- ✅ **Base types moved.** `core/ops.py` renamed to **`core/base.py`**, now
+  the kernel: `@policy` + `WebBase`/`WebError`/`Field`/`Collection` +
+  `NameScope`. `document.py` holds only `Reference`/`Document`/`Element` and
+  re-exports the base types. `WebBase.reference/document(s)` decouple from
+  the concrete classes via the `CLASSES` registry (no import cycle). The
+  generated `Collection` stub now lives in `base.py`; `gen_stubs` targets it.
+- ✅ **Representations via one `render(format)`.** `render` is the single
+  representation function on `Document`, typed per format with overloads
+  (like `attr`): `markdown`/`text`/`html` -> str, `elements` -> list[Element],
+  `links` -> Collection[Reference]. The standalone `markdown`/`elements`/
+  `links`/`data` are gone (they are formats now). Core rendering itself is
+  now a **backing op**, not a plugin: the `render` implementation lives on
+  `HtmlBacking`/`JsonBacking` in the new `core/backings/` package, and
+  `Document.render` dispatches through `DocumentCore.dispatch("render", ...)`
+  like every other op. `plugins/render.py` and `core_renderers()` are gone;
+  `_render_table` now holds only user `wc.use(Renderer)` overrides, which a
+  backing consults before its built-in. `text` decode moved onto
+  `DocumentCore.text()`; `Document.text` is a thin delegator.
+- ✅ **WebClientCore = resolve + execute only; one facade, three executions.**
+  The ergonomic plan builders (`fetch`/`search`/`summary`) live on a shared,
+  core-free `_Facade` (`webclient/client.py`): each builds a lazy `Plan` and
+  hands it to `self._run`. `WebClient` runs it on a local core and blocks,
+  `AsyncWebClient` awaits it (engine loop bridged to the caller's loop),
+  `RemoteWebClient` submits it to `/execute`. `fetch` is now
+  `ref.resolve(...)` through the same execute path (no `_fetch` bypass);
+  `resolve` gained `optional=` so it is the complete fetch primitive. The
+  core keeps `resolve`/`execute`/`astream` plus the registry/lifecycle it
+  owns (`session`/`document`/`reference`/`use`/`release`); the facade
+  forwards those. The service collapses to one path: a Document result of
+  `/execute` is a remembered handle (`{"__doc__": meta}`) the remote client
+  rehydrates, so the per-op `/fetch` and `/search` endpoints are gone.
+- ✅ **Remote = a lazy plan submitter; session-based API.** `RemoteDocument`
+  builds a `Plan` rooted at its server-side document (the `doc` lazy root)
+  and submits it to `/execute`. `WebSession` gained `fetch`/`execute`/
+  `search`; the service routes each request through a session and exposes
+  `/fetch`, `/execute` (rooted at a URL or a `document_id`), `/search`,
+  `/crawl` (501), `/document/{id}`, `/sessions`, `/events`. The per-op
+  `/documents/{id}/render` and `/select` endpoints are gone.
+- ✅ **`model_post_init` removed** (folded in): `WebClientCore` derives
+  ok/error at build via `apply_status(doc)`.
 
-### 2.5 Executor — compile
+**The staged review list (PLAN §5d) is complete.**
 
-`QueryPlan.steps` is a tree (map/then fields hold sub-plans). Compilation:
+## 6. Risks / watch items
 
-- Walk the tree; every op becomes an `ExecutionStep`.
-- Dependencies: chain order gives a linear dep; `col("x")` adds a dep on the
-  step producing field x (so `then()` fields form a DAG, evaluated in
-  declaration order only where col-deps demand it).
-- Resource tagging: op `fetch` → `"http"`; `fetch(browser=True)` → `"page"`;
-  live actions (`click`/`wait_for`/…) → `"page"` with the same `page_group`
-  as their upstream live fetch; pure ops (select/attr/render/…) → `None`.
-- `map()` compiles its body once as a template subgraph; fan-out is runtime.
-- Record-time validation (in the recorder, before compile ever runs): each
-  recorded op name/signature is checked against the eager class of the
-  current context type via `inspect.signature`; `events_of`/`render`
-  arguments resolve through EventRegistry / the render table. Typos fail
-  at authoring time, not at collect time.
+- **Scope creep back into a rewrite.** Measured, not argued: the green-tree
+  rule and the budget table. A PR that adds a file must delete one.
+- **Checker divergence.** Already bit once (`bind_ops`). Both checkers on the
+  corpus in CI; any idiom that passes only one is not an idiom we use.
+- **Stub drift.** The `Collection` block is generated; the drift test is
+  the guard. Hand edits between the markers are rejected in review.
+- **Root names shadow user locals (found at P3). Decided: keep `doc`/
+  `many`/`ref`; don't name locals after them.** `demo.py` was renamed
+  (`shop`, `spec`, `remote_doc`); examples and docs follow the same rule.
+- **Non-op methods on lazy objects.** Reading a request/response field on a
+  lazy object (directly or via `url`) raises naming the fix. A non-op method
+  that only touches defaulted fields (`ref.with_params(...)`) is not caught
+  and returns an eager object; catching it needs a per-attribute hook on
+  every object. Accepted for now.
+- **`extract` merge + in-place mutation.** A Document shared across two eager
+  plans accumulates both sets of fields — scope `_fields` per plan-context or
+  document the sharing; test it.
+- **Action-chain replay drift.** Best-effort by decision; the failure must be
+  loud — assert an action on a changed page raises.
+- **Name-registry growth.** Only three kinds register; retention tied to
+  session/ttl; a long-lived client with no sessions caps names — leak test.
+- **Bridge deadlock.** Sync facade from a running loop raises, pointing at
+  `.core`.
+- **`LiveDocument` keeps its own pre-P4 `select`/`attr`** (with
+  `optional=`), overriding the ops. A plan run over a `LiveDocument`
+  dispatches `Document.select` from the registry, i.e. the load snapshot,
+  not the live DOM. P4 removes the override.
 
-### 2.6 Executor — run (execution order)
+## 7. Open decision at P3: the budget
 
-```
-ready = steps with no unmet deps
-while unfinished:
-    for step in ready:
-        if step.resource: lease = await pool.acquire(step.resource, session)
-        schedule task(step, lease)
-    on task completion: mark done, publish plan event, extend ready
-```
+The ceiling (≤ 3 871 at P6) will be missed by ~150–250 lines with the scope
+as written. The remaining duplication is public API that the new surface
+makes redundant, so hitting the ceiling means removing it. Options:
 
-- Pure steps run inline on the loop (they're microseconds of parsing).
-- `page_group` steps share one lease and run strictly in plan order.
-- `map` fan-out: when the upstream list step completes, instantiate the
-  template subgraph per element. In-flight rows bounded by
-  `max_inflight_rows` (default `2 * pool.max_http`) so memory stays flat.
-- Rows complete → per-step `OnError` applied (skip drops the row, ignore
-  yields None for the field, raise cancels the plan) → pushed to the result
-  stream. Unordered by default; `ordered=True` buffers to input order.
-- `Executor.status()` served from counters updated on task completion;
-  `cancel()` cancels outstanding tasks and releases their leases.
+1. **Remove the redundant surface (recommended).** Each item is a second
+   way to do something the ops already do (sizes measured at P3):
+   - typed views `HTMLDocument`/`JSONDocument`/`XMLDocument`/`BinaryDocument`
+     and `_view` (81 lines, ~75 net): `select`/`attr` cover `json.query`
+     and xml; `title`/`links`/`markdown` become render formats; `save`
+     becomes a one-line `Document` method.
+   - `RemoteRef`/`RemoteDocument` imperative surface (81 lines, ~70 net):
+     remote becomes plans plus document handles.
+   - static pagination (`Document.paginate` 18 + `client._paginate` 56,
+     already listed as deferred in §3) re-expressed as a plan over
+     `select("a.next").attr("href").resolve()` (~40 net).
+   Projected P6 ≈ 3 860, at the ceiling with no slack. (`optional=` removal
+   is already counted in the P5 re-projection.)
+2. **Re-baseline the ceiling** to ~4 100 on the grounds that the old tree
+   had none of: error policy, addressable names, safe dispatch, typed
+   Field/Collection, the stub generator. Keeps every existing API.
+3. **Treat the miss as the signal and stop the refactor** at P3. Not
+   recommended: P2/P3 already removed the two-implementation lazy layer and
+   its bugs (nested `map` drop, leaked Expr args, generic `getattr`
+   dispatch), and reverting loses that.
 
-Worked example (the `_example_lazy` plan): the root fetch takes 1 http
-lease; per-card title/is_active/link are pure steps fanned out per element;
-rows failing `filter` stop there; each surviving row's `content` step
-acquires a page lease (max 4 cards in the browser stage at once), its
-click/wait_for/select serialize on that page, `date` is pure and depends on
-`content`; rows stream out as each card's subgraph finishes.
+P4 does not start until this is decided.
 
-### 2.7 Service (M7) — browser as a service
+## 7. Async-core migration (2026-09-11, in progress)
 
-Thin FastAPI adapter over the facade; no logic beyond (de)serialization and
-auth. Designed against the field: session lifecycle ≈ Browserbase/Steel,
-representations ≈ Firecrawl/Spider/Unstructured output formats, raw CDP
-escape hatch ≈ string.ai `/wss` / Spider `/v1/browser` / Browserbase
-`connectUrl`. Where they return page content inline, we return **handles +
-on-demand representations** — full HTML crosses the network only when
-explicitly rendered as `html`.
+**Goal.** The core is async-native: no `_ensure_loop().run(...)` bridges live
+inside it. The *sync* `WebClient` is the sole async→sync bridge (its `_run`
+drives the engine loop); `AsyncWebClient` awaits the core natively on the
+caller's loop; a `RemoteWebClientCore` speaks plans over HTTP, and a remote
+document is a *bound lazy expression* (no Document crosses the wire). This
+folds together the three requests: async-by-default, remote-as-a-core, and a
+thin front-end. Each stage keeps the suite green.
 
-| Endpoint                        | Facade call / behavior                |
-|---------------------------------|---------------------------------------|
-| POST /sessions                  | `wc.session(**body)` — accepts `ttl`, `keep_alive`, proxy, headers; returns id + status + `expires_at` |
-| GET  /sessions/{id}             | status/lifecycle (`pending→running→expired/closed`) |
-| DELETE /sessions/{id}           | `session.close()`                     |
-| WS   /sessions/{id}/cdp         | raw CDP passthrough onto the session's BrowserContext. Capture plugins hook at context level, so CDP-driven activity still emits events |
-| POST /fetch                     | `wc.fetch(Reference(**body))` → document id + metadata (status, kind, final_url). Optional `formats=[...]` inlines representations in the response |
-| GET  /documents/{id}            | `wc.document(id)` metadata            |
-| GET  /documents/{id}/render     | `doc.render(format, **options)` — markdown / text / elements / links / html, plus any plugin-registered format |
-| POST /documents/{id}/select     | server-side `select_all` + attr/text extraction → values only |
-| POST /documents/{id}/actions    | `live.replay([ActionEvent...])` — remote live interaction *is* the replay format |
-| POST /plans                     | `wc.execute(QueryPlan(**body))`, detached; returns plan id |
-| GET  /plans/{id}                | `executor.status(id)`                 |
-| GET  /plans/{id}/rows           | collected/paged rows (jsonl)          |
-| WS   /plans/{id}/stream         | row stream as produced                |
-| WS   /events?topics=&session=&document=&after= | `bus.subscribe(...)` → socket stream |
+**Bridges to remove (audited).** `core/webclient.py` close/release/teardown
+(`self._loop.run`); `pool.acquire`/`release` sync wrappers; `DocumentCore
+.parsed()` live re-snapshot and `identity_path()` evaluate; `@policy._settle`
+off-loop bridge (this one stays -- it is the sanctioned settle point, now
+reached only via the sync facade).
 
-**Event streams clients can rebuild from** (the Steel lesson: incremental
-replay diverges when an event is missed):
-- every event carries `seq` (per-document, monotonic); `after=seq` resumes
-  a stream and lets clients detect gaps;
-- the dom/rrweb plugin emits periodic `dom.snapshot` checkpoints (full
-  serialized DOM + `digest`), so a consumer resyncs from the latest
-  snapshot instead of replaying history;
-- `digest` lets a client verify its rebuilt DOM matches the server's.
-- events over the wire are typed by topic; receivers resolve classes via
-  the EventRegistry, unknown topics degrade to their nearest ancestor.
+- ✅ **A. Async lifecycle.** `WebClientCore.aclose` + `_ateardown_session`
+  (await, no inline `loop.run`); sync `close` is a one-line bridge. Green.
+- ✅ **B. Live snapshot off the read path.** `DocumentCore.asnapshot()` (async)
+  refreshes content; `parsed()` reads cached content; live `render` awaits a
+  fresh snapshot via `HtmlBacking._live_render` (settled by `@policy`, which
+  `render` now carries). `identity_path` is captured at selection time (folded
+  into `LiveSelect`'s `outerHTML` evaluate) and cached -- no bridge. Green.
+- ✅ **D. Invert the facades; async by default.** `@policy._settle` now returns
+  the awaitable whenever a loop is running in this thread (the executor OR an
+  async caller), else bridges onto the engine loop -- so an async caller runs
+  the core natively. `AsyncWebClient._run` awaits `core.execute`/`astream` on
+  the caller's loop (no engine thread); `WebClient._run` is the sole engine-loop
+  bridge. Deleted `EngineLoop.submit`/`aiter` + the `wrap_future` path. Green.
+- ✅ **C. Async pool surface.** The sync `pool.acquire`/`release` wrappers and
+  `Lease.release()` were dead (only `_acquire`/`_release` are used); deleted.
+  `pool.stats()` stays. No sync bridge remains in the pool.
+- ✅ **E. Remote is a core backend.** `WebClient`/
+  `AsyncWebClient` wrap *any* core exposing the common interface
+  (`resolve`/`execute`/`astream`/`aclose`/`_ensure_loop`/`session`); remote is
+  `WebClient(core=RemoteWebClientCore(url, token))`. The core's `execute` runs
+  the plan remotely (POST `/execute`) instead of locally. Documents and
+  References are already the lazy interface, so there are NO `RemoteDocument`/
+  `RemoteRef`/`RemoteSession`: `core.resolve(ref)` returns a shallow lazy
+  Document handle (meta + a bound lazy root via a document-source plan,
+  `Plan(root="Document", source={"document_id": id})`), and `Session` is
+  backend-agnostic over the core. Executor `_start` + the `/execute` endpoint
+  learn the document source. Rewrite remote tests to `WebClient(core=...)` +
+  deferred/batched `execute`. (~ -80)
+- ✅ **F. Front-end collapsed.** Absorbed by A–E: the op surface is the
+  decorator-dispatched plan builders on `_Facade`; each concrete client is one
+  `_run` over `_Client` (core ownership + lifecycle + `__getattr__` forwarding);
+  the old three-class ladder and the duplicated `RemoteWebClient` facade are
+  gone. Architecture.md updated.
+- ✅ **Remote moved into `core/`; shared `EngineCore` base.** `RemoteWebClientCore`
+  now lives in `webclient/core/remote.py` beside `WebClientCore`, and both
+  inherit `EngineCore` (`webclient/core/base.py`) for the loop lifecycle
+  (`_ensure_loop`/`close`/`__enter__`/`__exit__` + an async `aclose` and a
+  `_finalize` hook). `webclient/remote.py` is deleted; `RemoteWebClient`/
+  `RemoteWebClientCore`/`RemoteError` re-export from `webclient` unchanged.
 
-Auth: bearer token middleware; one WebClient per token (or shared, config).
-Diagnostics headers on every response (`x-request-id`, duration, bytes) à
-la string.ai. A stateless one-shot `POST /fetch` convenience (auto-session,
-inline actions+formats, Firecrawl/string.ai-shaped) is **post-v1** — pure
-composition of session+fetch+render+release, no new machinery. A remote
-python client implementing the `WebClient` surface over these endpoints
-comes after that; the interface already permits it because everything is
-addressed by id.
-
-## 3. Milestones
-
-Each milestone ships importable + tested before the next starts.
-
-- **M1 — pure core, no I/O.** Package split. `Reference.url/join/
-  with_params/replace`, `Document` views + selection (`lxml` +
-  `cssselect`: one parser dep covers CSS for HTML and XPath for
-  XMLDocument), `Node`, encoding detection. Golden-file HTML fixtures.
-- **M2 — engine loop + http + plugin framework.** `engine/loop.py` bridge,
-  `pool.py` (http side), `events.py` (bus + registry + seq stamping),
-  `plugins/base.py`, transport/document surfaces, core network plugin,
-  core renderers (markdown/text/elements/links — pure functions, easy
-  tests), `client.py` with fetch/reload/use, `default_client()`. Tests
-  against `pytest-httpserver` (no network).
-- **M3 — sessions + static pagination.** Session lifecycle
-  (ttl/keep_alive/status, cookie persistence httpx jar ↔ Session),
-  `paginate` with `prefetch` concurrency and `resume`, event routing onto
-  documents, pool stats.
-- **M4 — browser.** `engine/browser.py`: page pool, contexts per session,
-  page surfaces + core page plugins (network/console/dom/action),
-  LiveDocument actions/wait/navigate/screenshot, storage_state
-  round-trip, `replay`. Capture plugins stamp `node_id` on dom/action
-  events; `LiveNode.events_of` narrowing gets its own test (click a child,
-  assert the parent's node sees it and a sibling's doesn't). Then
-  `plugins/rrweb.py` as the first external-style plugin — it must require
-  zero engine changes (that's the test of the plugin interface). Tests
-  serve local static pages with JS.
-- **M5 — lazy recorder.** `Expr` op recording with record-time signature
-  validation (registry-aware for `events_of`/`render`), `QueryPlan`
-  serialization round-trip, `q` namespace, `__dir__` completion.
-- **M6 — executor.** compile (deps + resources + page groups), scheduler,
-  streaming, `OnError` policies, `status`/`cancel`, RunStats. Tests: plans
-  against the M2/M4 local servers, plus pure-compile unit tests asserting
-  execution order on synthetic graphs.
-- **M7 — service.** `service/api.py` as §2.7: sessions lifecycle, CDP
-  passthrough, render/select endpoints, resumable event WS with
-  snapshots, plan submission. Remote smoke test: fetch → render markdown
-  → run a plan → rebuild a page from the event stream and verify digest.
-
-## 4. Decisions taken (revisit only with cause)
-
-- Async-first engine, sync facade. The interface promises pools and
-  prefetch concurrency; that's async either way, so build it there once.
-- All capture and all representations go through the plugin pathway; the
-  engine only creates surfaces. Core capture/renderers are plugins,
-  replaceable by name.
-- Core event taxonomy is closed and inheritable (NetworkEvent → XHR/Fetch/
-  Navigation/Asset; DOMEvent → Load/Snapshot/Update/Unload); plugin events
-  subclass it; topics are dotted strings matched by prefix.
-- Documents over the wire are handles; content moves as representations.
-- `lxml` (+`cssselect`) for parsing — CSS and XPath from one dependency.
-- Ids are `uuid4().hex`. Registries: weakrefs for static Documents, strong
-  refs for LiveDocuments until released.
-- Wire format is `QueryPlan` JSON, versioned (`version: 1`) from the start.
-- Lazy chains validate at record time, because `Expr.__getattr__` typing
-  can't catch typos.
-- Retry policy is deliberately minimal: transport errors only, no backoff.
-  A full policy (5xx / 429 / Retry-After / jitter) is post-v1 (ISSUES #20).
-- Error philosophy, uniform (ISSUES #8): **loud by default, leniency via
-  `optional=True`** — missing element/attr raises; fetch raises FetchError
-  on transport failure or non-2xx; `optional=True` returns None (selection
-  / attr) or the not-ok Document (fetch, inspect `.ok`).
-- One selection interface (ISSUES #10): `select`/`select_all` take CSS or
-  XPath (leading `/` or `./` = XPath), elements only — attribute/text/
-  scalar XPaths raise ValueError (use `.attr()` / `.text`). No separate
-  `xpath()` method. Selecting on a treeless kind (json/binary) raises a
-  typed error, not a parse error.
-- Event scoping (ISSUES #9): `Event.node_id` stamped by capture plugins;
-  LiveNode narrows events by node-identity ancestor prefix; static Node is
-  document-scoped.
-- Deps: runtime `pydantic`, `httpx`, `playwright`, `lxml`, `cssselect`,
-  `markdownify` (or hand-rolled in the html renderer); service adds
-  `fastapi`, `uvicorn`; dev `mypy`, `pytest`, `pytest-httpserver`.
-
-## 5. Risks / watch items
-
-- **Bridge deadlock**: user code calling sync facade methods from a bus
-  handler running on the loop thread. Documented + debug assert (§2.4).
-- **Page leaks**: leases are explicit; finalizer warnings + `pool.stats()`
-  make leaks visible early.
-- **map fan-out memory**: bounded by `max_inflight_rows` (§2.6).
-- **Event-store growth**: `Document.events` capped per topic with a config
-  knob (snapshot events retain only the latest N) before M4 ships.
-- **rrweb divergence**: mitigated by seq gaps + periodic `dom.snapshot`
-  checkpoints + digest verification (§2.7); replay correctness gets its
-  own test (rebuild page from stream, compare digest).
-- **CDP passthrough observability**: raw CDP users bypass the facade, not
-  the capture — plugins hook at BrowserContext level. Verify with a test
-  driving the passthrough and asserting events still arrive.
+The async-core migration is complete: one async core with a shared base and
+local/remote backends, one `Document`/`Reference`/`Session`, a thin sync
+client and a native async client.

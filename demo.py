@@ -1,7 +1,7 @@
 """demo.py -- one clean tour of every implemented webclient feature.
 
-Maintained with every milestone. Sections marked [M<n>] appear as their
-milestone lands; the interface spec is /models.py, the roadmap PLAN.md.
+Maintained with every milestone. Sections marked [M<n>]/[P<n>] appear as
+their milestone lands; the interface spec is /spec.py, the roadmap PLAN.md.
 
 Runs fully offline: it serves its own demo site on localhost.
 
@@ -13,12 +13,14 @@ import http.server
 import threading
 
 from webclient import (
+    RETURN,
     DOMUpdateEvent,
     NavigationEvent,
     Reference,
     Renderer,
     WebClient,
-    q,
+    doc,
+    ref,
 )
 
 PAGE = b"""
@@ -50,7 +52,7 @@ APP = b"""
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
-        if self.path == "/":                       # html page
+        if self.path == "/" or self.path.startswith("/?"):  # html (query ignored)
             body, ctype = PAGE, "text/html; charset=utf-8"
         elif self.path == "/items/1":              # json documents
             body, ctype = ITEM % (1, b"Aeropress"), "application/json"
@@ -102,10 +104,10 @@ def main() -> None:
     base = serve()
 
     # [M1] References are pure request specs -- build, derive, inspect.
-    ref = Reference.from_url(f"{base}/?utm=x", params={"page": "1"})
-    print("url:        ", ref.url)
-    print("derived:    ", ref.with_params(page="2").replace(fragment="top").url)
-    print("joined:     ", ref.join("items/1").url)
+    spec = Reference.from_url(f"{base}/?utm=x", params={"page": "1"})
+    print("url:        ", spec.url)
+    print("derived:    ", spec.with_params(page="2").replace(fragment="top").url)
+    print("joined:     ", spec.join("items/1").url)
 
     # [M2] A WebClient owns the pool, bus, plugins; it is the lifecycle root.
     with WebClient(default_headers={"user-agent": "webclient-demo"}) as wc:
@@ -115,33 +117,48 @@ def main() -> None:
             f"event:       {e.topic} #{e.seq} {e.status_code} {e.request.path}"))
 
         # [M2] Fetch through a redirect; loud by default, optional=True lenient.
-        doc = wc.ref(f"{base}/old").fetch()
-        print("final url:  ", doc.final_url)
-        missing = wc.ref(f"{base}/nope").fetch(optional=True)
+        shop = wc.ref(f"{base}/old").resolve()
+        print("final url:  ", shop.final_url)
+        missing = wc.ref(f"{base}/nope").resolve(error=RETURN)
         print("optional:   ", missing.status_code, "ok:", missing.ok)
 
+        # [P1] Every object is addressable: short scoped names, a root chain
+        #      (ref -> doc), recovery by name from the resolver, shop.ref().
+        print("names:      ", shop.root, "->", shop.name,
+              "| recovered:", wc.document(shop.name) is shop,
+              wc.reference(shop.root) is shop.ref())
+        # [P1] Error policy: a not-ok object carries a serializable WebError;
+        #      `ok` is the truth, is_ok()/is_empty() run even when not ok.
+        print("not ok:     ", missing.error.type, "|", missing.message,
+              "| is_ok:", missing.is_ok().get(), "| empty:", bool(missing.is_empty()))
+
         # [M1] Selection: css or xpath, elements only; index/optional knobs.
-        for card in doc.select_all(".card"):
+        for card in shop.select_all(".card"):
             title = card.select(".title").text
             price = card.select("./span[@class='price']").text     # xpath
             link = card.select("a").attr("href")                   # -> Reference
-            # [M2] Follow the link: json documents get typed access + query.
-            item = link.fetch()
+            # [M2] Follow the link: json selection uses a dotted path.
+            item = link.resolve()
             print(f"card:        {title} {price} -> "
-                  f"{item.json.data['name']} (stock {item.json.query('stock.count')})")
+                  f"{item.select('name').text} (stock {item.select('stock.count').text})")
 
-        # [M1] Typed views + [M2] plugin-backed representations.
-        page = doc.html
+        # [render] One render(format) surface, dispatched to the backing for
+        # the doc's kind. html gives markdown/text/elements/links/html; json
+        # gives elements. Good cross-kind smoke test.
+        page = shop
         print("title:      ", page.title)
-        print("markdown:   ", page.markdown.splitlines()[0])
+        print("markdown:   ", page.render("markdown").splitlines()[0])
         print("text:       ", page.render("text", main_content_only=True)[:40])
-        print("elements:   ", [(e.type, e.text) for e in page.elements][:3])
-        print("links:      ", [r.path for r in page.links()])
+        print("elements:   ", [(e.type, e.text) for e in page.render("elements")][:3])
+        print("links:      ", [r.path for r in page.render("links")])
+        print("html:       ", page.render("html").strip()[:40])
+        item = shop.select(".card a").attr("href").resolve()   # a json document
+        print("json render:", [(e.type, e.text) for e in item.render("elements")][:3])
 
         # [M2] Events routed onto the document that caused them.
-        print("doc events: ", [e.topic for e in doc.events])
-        print("navigations:", [e.status_code for e in doc.events_of(NavigationEvent)])
-        print("actions:    ", list(doc.actions))   # empty until browser (M4)
+        print("doc events: ", [e.topic for e in shop.events])
+        print("navigations:", [e.status_code for e in shop.events_of(NavigationEvent)])
+        print("actions:    ", list(shop.action_events))   # empty until browser (M4)
 
         # [M2] Plugins: replace a core renderer by registration alone.
         class Shouty(Renderer):
@@ -150,28 +167,22 @@ def main() -> None:
             formats: list[str] = ["markdown"]
 
             def render(self, document, format, **options):
-                return document.html.title.upper()
+                return document.title.upper()
 
         wc.use(Shouty())
-        print("plugin:     ", doc.render("markdown"))
+        print("plugin:     ", shop.render("markdown"))
 
         # [M3] Sessions: identity (cookies/headers) spanning fetches, with a
         #      ttl'd lifecycle. Cookies set by responses persist; sessions
         #      are isolated from each other.
         session = wc.session(ttl=300, headers={"x-app": "demo"})
-        session.ref(f"{base}/login").fetch()
+        session.ref(f"{base}/login").resolve()
         print("session:    ", session.status, "cookies:", session.cookies)
-
-        # [M3] paginate(): walk a next-link chain (selector, callable, or
-        #      iterable of params), with until/limit/offset/resume knobs.
-        feed = session.ref(f"{base}/feed").fetch()
-        for page_doc in feed.paginate("a.next", limit=3):
-            print("page:       ", page_doc.select("h1").text)
 
         # [M4] browser=True -> a LiveDocument backed by a real page. Actions
         #      auto-wait and are recorded; the DOM/console/network are
         #      captured onto the document as events.
-        live = wc.ref(f"{base}/app").fetch(browser=True)
+        live = wc.ref(f"{base}/app").resolve(browser=True)
         live.write("#qty", "3").click("#add")
         live.wait_for("#cart li", timeout=5.0)
         print("live dom:   ", live.select("#cart li").text)
@@ -182,79 +193,125 @@ def main() -> None:
         cart = live.select("#cart")
         print("narrowed:   ", len(cart.events_of(DOMUpdateEvent)), "under #cart")
 
-        # [M4] A recording replays onto a fresh page to reproduce state.
-        actions = list(live.actions)
+        # [P7] The reference carries the action chain, so re-resolving it
+        #      (reload) reproduces the mutated state on a fresh page.
+        print("chain:      ", [a["op"] for a in live.ref().actions])
         wc.release(live)                            # page back to the pool
-        replayed = wc.ref(f"{base}/app").fetch(browser=True)
-        replayed.replay(actions)
-        print("replayed:   ", replayed.select("#cart li", optional=True) is not None)
-        wc.release(replayed)
+        reloaded = live.reload()
+        print("reloaded:   ", reloaded.select("#cart li", error=RETURN).ok)
+        wc.release(reloaded)
 
         # [M2] Pool stats: bounded leases over http clients AND browser pages.
         print("pool:       ", wc.pool.stats())
 
-    # [M5] Lazy plans: the same interface, recorded not executed. Build a
-    #      declarative extraction pipeline; it serializes to a QueryPlan --
-    #      the wire format for the future HTTP/websocket API.
+    # [P2] One expression language: the same classes, recorded not executed.
+    #      `doc`/`ref` are lazy roots; every op call appends a step to a typed
+    #      Plan -- the wire form for the service. Reference(url) roots a plan.
     plan = (
-        q.ref.fetch().select_all(".card")
-        .map(
-            title=q.node.select(".title").text,
-            price=q.node.select(".price").text,
-            link=q.node.select("a").attr("href"),
+        Reference(f"{base}/").resolve().select_all(".card")
+        .extract(
+            title=doc.select(".title").attr("text"),
+            price=doc.select(".price").attr("text"),
+            link=doc.select("a").attr("href"),
         )
-        .filter(q.col("price") != "")
+        .filter(doc.field("price") != "")
+        .project()
     )
-    print("\nlazy plan:")
-    print("  " + plan.explain().replace("\n", "\n  "))
-    print("wire form:  ", plan.to_query().model_dump_json()[:70], "...")
+    print("\nlazy plan:  ", plan._plan.describe()[:60], "...")
+    print("wire form:  ", plan._plan.model_dump_json()[:70], "...")
 
-    # [M6] Executor: run the plan. Fetches lease from the pool, map() fans
-    #      out per element with bounded concurrency, rows stream as ready.
+    # [P3] One evaluator: the plan runs through the same @op implementations
+    #      the eager calls use; a Collection fans out per element (bounded by
+    #      the pool) and rows stream as they complete.
     with WebClient() as wc:
-        rows = plan.collect(wc.ref(f"{base}/"))
-        for row in rows:
-            print(f"  row:       {row['title']} {row['price']} "
-                  f"-> {row['link'].path}")
+        for row in wc.execute(plan):
+            print(f"  row:       {row['title']} {row['price']} -> {row['link'].path}")
 
-        # [M6] A pipeline that follows each card's link (then + col) and
-        #      pulls a field from the JSON detail page -- streamed.
+        # [P3] Follow each card's link (reference -> resolve) into its JSON
+        #      detail; `when/then/otherwise` branches; a missing select is a
+        #      not-ok field under the plan default, never an aborted plan.
         enriched = (
-            q.ref.fetch().select_all(".card")
-            .map(title=q.node.select(".title").text,
-                 link=q.node.select("a.link").attr("href"))
-            .then(name=q.col("link").fetch().json.query("name"))
+            ref.resolve().select_all(".card")
+            .extract(title=doc.select(".title").attr("text"),
+                     link=doc.select("a.link").attr("href"),
+                     missing=doc.select(".nope").attr("text"))
+            .extract(name=doc.reference("link").resolve().select("name").attr("value"),
+                     stock=doc.reference("link").resolve().select("stock.count").attr("value"),
+                     tag=doc.field("title").when(doc.field("title") == "Grinder")
+                         .then("bulky").otherwise("small"))
+            .project()
         )
         print("streamed:")
-        for row in enriched.collect(wc.ref(f"{base}/"), stream=True):
-            print("  detail:   ", row["title"], "->", row["name"])
+        for row in wc.execute(enriched, wc.ref(f"{base}/"), stream=True):
+            print("  detail:   ", row["title"], "->", row["name"], row["stock"],
+                  row["tag"], "| missing:", row["missing"])
+
+        # [P3] Eager and lazy agree: the same extract on a resolved page.
+        page = wc.ref(f"{base}/").resolve()
+        cards = page.select_all(".card").extract(title=doc.select(".title").attr("text"))
+        print("eager:      ", cards.name, "->", [r["title"] for r in cards.project()])
+
+        # [P6] High-level helpers built on the plan surface. search() runs a
+        #      query against a configurable engine; summary() resolves a page
+        #      to title + markdown. (crawl is intentionally out of scope.)
+        from webclient import SearchEngine
+        engine = SearchEngine(url=f"{base}/?q={{q}}", result=".card",
+                              title=".title", link="a")
+        hits = wc.search("coffee", engine=engine, limit=2)
+        print("search:     ", [(h["title"], h["url"].path) for h in hits])
+        print("summary:    ", {k: wc.summary(f"{base}/")[k] for k in ("title", "ok")})
+
+    # [async] The same facade helpers, awaited. AsyncWebClient builds the very
+    #      same plans as WebClient; only the execution differs -- it bridges the
+    #      engine loop to the caller's loop instead of blocking on it.
+    import asyncio
+
+    from webclient import AsyncWebClient
+
+    async def _async_demo() -> tuple:
+        async with AsyncWebClient() as ac:
+            document = await ac.fetch(f"{base}/")
+            rows = await ac.execute(
+                ref.resolve().select_all(".card")
+                .extract(title=doc.select(".title").attr("text")).project(),
+                ac.ref(f"{base}/"))
+            return document.title, [r["title"] for r in rows]
+
+    title, async_rows = asyncio.run(_async_demo())
+    print("async fetch:", title, "| async plan:", async_rows)
+
     # [M7] The same WebClient behind an HTTP API -- browser as a service.
-    #      Documents are handles; content crosses the wire only via /render
-    #      or /select, and plans are submitted as QueryPlan JSON.
+    #      Every operation is one Plan submitted to /execute; a Document comes
+    #      back as a handle ({"__doc__": meta}) and its content crosses the
+    #      wire only via a further plan rooted at that handle's id.
     from fastapi.testclient import TestClient
 
     from webclient.service import create_app
 
     with TestClient(create_app(token="demo")) as api:
         auth = {"Authorization": "Bearer demo"}
-        meta = api.post("/fetch", json={"url": f"{base}/"}, headers=auth).json()
-        print("\nservice fetch:", {k: meta[k] for k in ("kind", "ok", "title")})
-        md = api.get(f"/documents/{meta['id']}/render",
-                     params={"format": "markdown"}, headers=auth).json()
-        print("service render:", md["result"].splitlines()[0])
-        titles = api.post(f"/documents/{meta['id']}/select",
-                          json={"selector": ".title", "all": True},
-                          headers=auth).json()
-        print("service select:", titles["values"])
-        plan = q.ref.fetch().select_all(".card").map(
-            title=q.node.select(".title").text).to_query()
-        rows = api.post("/plans", params={"url": f"{base}/"},
-                        json=plan.model_dump(), headers=auth).json()
+        handle = api.post("/execute", headers=auth, json={
+            "plan": ref.resolve()._plan.model_dump(),
+            "url": f"{base}/"}).json()["rows"]["__doc__"]
+        print("\nservice fetch:", {k: handle[k] for k in ("kind", "ok", "title")})
+        did = handle["id"]
+        md = api.post("/execute", headers=auth, json={
+            "plan": doc.render("markdown")._plan.model_dump(), "document_id": did}).json()
+        print("service render:", md["rows"].splitlines()[0])
+        titles = api.post("/execute", headers=auth, json={
+            "plan": doc.select_all(".title").attr("text")._plan.model_dump(),
+            "document_id": did}).json()
+        print("service select:", titles["rows"])
+        plan = ref.resolve().select_all(".card").extract(
+            title=doc.select(".title").attr("text")).project()._plan
+        rows = api.post("/execute", headers=auth, json={
+            "plan": plan.model_dump(), "url": f"{base}/"}).json()
         print("service plan:  ", rows["rows"])
 
-    # [remote] The RemoteWebClient drives that same service over HTTP with no
-    #      local browser or lxml -- httpx + pydantic only. The plan API is
-    #      identical to the local client; documents are handles.
+    # [remote] Remote is just a different backend: the same WebClient over a
+    #      RemoteWebClientCore, so execute runs server-side over HTTP with no
+    #      local browser or lxml (httpx + pydantic only). A fetched document is
+    #      a lazy handle; value ops run via rc.execute (one round trip each).
     import threading
     import time
 
@@ -271,14 +328,14 @@ def main() -> None:
     port = server.servers[0].sockets[0].getsockname()[1]
 
     with RemoteWebClient(f"http://127.0.0.1:{port}", token="demo") as rc:
-        doc = rc.ref(f"{base}/").fetch()
-        print("\nremote fetch:  ", doc.title, "| ok:", doc.ok)
-        print("remote render: ", doc.markdown.splitlines()[0])
-        print("remote select: ", doc.select_all(".title"))
+        remote_doc = rc.fetch(f"{base}/")                    # lazy handle + meta
+        print("\nremote fetch:  ", remote_doc.title, "| ok:", remote_doc.ok)
+        print("remote render: ", rc.execute(remote_doc.render("markdown")).splitlines()[0])
+        print("remote select: ", rc.execute(remote_doc.select_all(".title").attr("text")))
         # identical plan API -- runs server-side, no local browser/lxml
-        same_plan = q.ref.fetch().select_all(".card").map(
-            title=q.node.select(".title").text)
-        print("remote plan:   ", same_plan.collect(rc.ref(f"{base}/")))
+        same_plan = ref.resolve().select_all(".card").extract(
+            title=doc.select(".title").attr("text")).project()
+        print("remote plan:   ", rc.execute(same_plan, rc.ref(f"{base}/")))
     server.should_exit = True
     app.state.wc.close()
 

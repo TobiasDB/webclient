@@ -29,7 +29,7 @@ from ..events import (
     NavigationEvent,
     XHREvent,
 )
-from ..models import Reference, Script
+from ..document import Reference, Script
 from .base import Plugin, Surface, SurfaceKind
 
 _CONSOLE_LEVELS = {"log": "log", "info": "info", "warning": "warning",

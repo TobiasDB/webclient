@@ -28,6 +28,11 @@ class EngineLoop:
     def closed(self) -> bool:
         return not self._thread.is_alive()
 
+    def on_loop_thread(self) -> bool:
+        """True when the caller is already on the engine loop (the evaluator),
+        so a coroutine should be awaited rather than bridged."""
+        return threading.current_thread() is self._thread
+
     def run(self, coro: Coroutine[Any, Any, T], timeout: float | None = None) -> T:
         # Re-entrancy guard, unconditional (ISSUES #28): a bus handler runs
         # on this thread and must never block on it.

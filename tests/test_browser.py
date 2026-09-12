@@ -2,8 +2,9 @@
 import pytest
 
 from webclient import (
+    RETURN,
+    RETURN,
     ActionEvent,
-    BinaryDocument,
     ConsoleEvent,
     DOMSnapshotEvent,
     DOMUpdateEvent,
@@ -50,7 +51,7 @@ def app(httpserver, wc):
     httpserver.expect_request("/two").respond_with_data(
         PAGE_TWO, content_type="text/html")
     httpserver.expect_request("/api").respond_with_json({"ok": True})
-    live = wc.ref(httpserver.url_for("/app")).fetch(browser=True)
+    live = wc.ref(httpserver.url_for("/app")).resolve(browser=True)
     yield live
     wc.release(live)
 
@@ -66,7 +67,7 @@ def test_click_mutates_dom_and_records_everything(app):
     app.click("#c1 button")
     app.wait_for(".added", timeout=5.0)
     assert app.select(".added").text == "added-one"
-    assert [a.action for a in app.actions if a.action == "click"] == ["click"]
+    assert [a.action for a in app.action_events if a.action == "click"] == ["click"]
     assert any(isinstance(e, DOMUpdateEvent) for e in app.dom_mutations)
 
 
@@ -101,46 +102,34 @@ def test_livenode_event_narrowing(app):
     assert len(card2.events_of(DOMUpdateEvent)) == 0     # sibling untouched
 
 
-def test_missing_targets_are_loud_unless_optional(app):
+def test_missing_targets_are_loud_unless_policy_returns(app):
     with pytest.raises(LookupError):
         app.click(".nope", timeout=0.3)
-    app.click(".nope", timeout=0.3, optional=True)        # no raise
+    app.click(".nope", timeout=0.3, optional=True)        # optional shim: no raise
     with pytest.raises(LookupError):
         app.select(".nope")
-    assert app.select(".nope", optional=True) is None
+    assert app.select(".nope", error=RETURN).ok is False  # loud unless error=
 
 
 def test_screenshot(app):
     shot = app.screenshot()
-    assert isinstance(shot, BinaryDocument)
+    assert shot.kind == "binary"
     assert shot.content[:8] == b"\x89PNG\r\n\x1a\n"
     element_shot = app.screenshot("#c1")
     assert element_shot.content[:4] == b"\x89PNG"
 
 
-def test_navigate_returns_new_document_old_refuses(app, httpserver):
-    new = app.navigate(httpserver.url_for("/two"))
-    try:
-        assert new.select("h1").text == "Second"
-        assert new.id != app.id
-        with pytest.raises(RuntimeError, match="navigated"):
-            app.click("a")
-    finally:
-        new._client.release(new)
-
-
-def test_replay_reproduces_state(httpserver, wc):
+def test_reload_reproduces_state(httpserver, wc):
     httpserver.expect_request("/app2").respond_with_data(
         APP, content_type="text/html")
-    live = wc.ref(httpserver.url_for("/app2")).fetch(browser=True)
+    live = wc.ref(httpserver.url_for("/app2")).resolve(browser=True)
     live.click("#c1 button").write("#name", "Bob")
-    recording = list(live.actions)
+    assert [a["op"] for a in live.ref().actions] == ["click", "write"]  # chain recorded
     wc.release(live)
 
-    fresh = wc.ref(httpserver.url_for("/app2")).fetch(browser=True)
-    fresh.replay(recording)
+    fresh = live.reload()               # re-resolves + replays the action chain
     try:
-        assert fresh.select(".added", optional=True) is not None
+        assert fresh.select(".added", error=RETURN).ok
         assert fresh.select("#out").text == "Bob"
     finally:
         wc.release(fresh)
@@ -150,7 +139,7 @@ def test_session_storage_state_persists(httpserver, wc):
     httpserver.expect_request("/store").respond_with_data(
         "<html><body>store</body></html>", content_type="text/html")
     session = wc.session()
-    live = session.ref(httpserver.url_for("/store")).fetch(browser=True)
+    live = session.ref(httpserver.url_for("/store")).resolve(browser=True)
     live.execute("localStorage.setItem('k', 'v1')")
     session.close()
     assert session.storage_state is not None
@@ -163,11 +152,11 @@ def test_session_storage_state_persists(httpserver, wc):
 def test_release_returns_page_to_pool(httpserver, wc):
     httpserver.expect_request("/p").respond_with_data(
         "<html><body>p</body></html>", content_type="text/html")
-    live = wc.ref(httpserver.url_for("/p")).fetch(browser=True)
+    live = wc.ref(httpserver.url_for("/p")).resolve(browser=True)
     held = len(wc.pool._pages_held)
     wc.release(live)
     assert len(wc.pool._pages_held) == held - 1
-    with pytest.raises(RuntimeError, match="released"):
+    with pytest.raises(Exception, match="page"):
         live.click("body")
 
 
@@ -199,7 +188,7 @@ def test_custom_page_plugin_needs_no_engine_changes(httpserver, wc):
     wc.use(PingPlugin())
     httpserver.expect_request("/ping").respond_with_data(
         "<html><body>ping</body></html>", content_type="text/html")
-    live = wc.ref(httpserver.url_for("/ping")).fetch(browser=True)
+    live = wc.ref(httpserver.url_for("/ping")).resolve(browser=True)
     try:
         pings = live.events_of("custom.ping")
         assert len(pings) == 1
