@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable, Sequence, cast
 
 from .base import (CLASSES, RETURN, Collection, ErrorPolicy, Field, OpError,
-                   _gather, _plain, policy)
+                   _extracted, _gather, _plain, default_policy, policy)
 
 if TYPE_CHECKING:
     from ..events import (ActionEvent, ConsoleEvent, DOMUpdateEvent, Event,
@@ -79,6 +79,38 @@ def core_of(doc: Any) -> Any:
         from .document import DocumentCore
         doc._core_obj = DocumentCore(doc)
     return doc._core_obj
+
+
+async def _aextract(obj: Any, named_expr: dict[str, Any]) -> Any:
+    """Evaluate each expression against ``obj`` and store it under its name;
+    later names see earlier ones. A missing field is None, not fatal."""
+    from .executor import evaluate
+    with default_policy(RETURN):
+        for name, expr in named_expr.items():
+            obj._fields[name] = await evaluate(expr, obj)
+    return obj
+
+
+async def _aextract_all(coll: Any, named_expr: dict[str, Any]) -> Any:
+    """Extract across every element of a collection."""
+    for el in coll._items:
+        await run_op(el, "extract", [], named_expr)
+    return coll
+
+
+async def _afilter(coll: Any, exprs: tuple[Any, ...]) -> Any:
+    """Keep the elements for which every expression is truthy (a not-ok result
+    is falsy)."""
+    from .executor import _truthy, evaluate
+    kept: list[Any] = []
+    with default_policy(RETURN):
+        for el in coll._items:
+            results = [await evaluate(e, el) for e in exprs]
+            if all(_truthy(r) for r in results):
+                kept.append(el)
+    out: Any = Collection()
+    out._items = kept
+    return out
 
 
 def _is_empty_of(obj: Any) -> bool:
@@ -329,7 +361,7 @@ def join(self: Reference, href: str) -> Reference:
 @policy(returns="Self")
 def extract(self: WebBase, *, error: ErrorPolicy | None = None,
             **named_expr: Any) -> WebBase:
-    return self._aextract(named_expr)
+    return _aextract(self, named_expr)
 
 
 @op("WebBase", "project")
@@ -357,7 +389,7 @@ def is_ok(self: WebBase, *, error: ErrorPolicy | None = None) -> "Field[bool]":
 @policy(returns="Field")
 def field(self: WebBase, name: str, *,
           error: ErrorPolicy | None = None) -> "Field[Any]":
-    value = self._extracted(name)
+    value = _extracted(self, name)
     return value if isinstance(value, Field) else Field[Any](value=value)
 
 
@@ -365,7 +397,7 @@ def field(self: WebBase, name: str, *,
 @policy(returns="Reference")
 def reference(self: WebBase, name: str, *,
               error: ErrorPolicy | None = None) -> Reference:
-    return cast("Reference", self._extracted(name, CLASSES["Reference"]))
+    return cast("Reference", _extracted(self, name, CLASSES["Reference"]))
 
 
 @op("WebBase", "references")
@@ -379,7 +411,7 @@ def references(self: WebBase, *names: str,
 @policy(returns="Document")
 def document(self: WebBase, name: str, *,
              error: ErrorPolicy | None = None) -> Document:
-    return cast("Document", self._extracted(name, CLASSES["Document"]))
+    return cast("Document", _extracted(self, name, CLASSES["Document"]))
 
 
 @op("WebBase", "documents")
@@ -397,7 +429,7 @@ def documents(self: WebBase, *names: str,
 @policy(returns="Self")
 def collection_extract(self: Collection, *, error: ErrorPolicy | None = None,
                        **named_expr: Any) -> Collection:
-    return self._aextract_all(named_expr)
+    return _aextract_all(self, named_expr)
 
 
 @op("Collection", "filter")
@@ -405,7 +437,7 @@ def collection_extract(self: Collection, *, error: ErrorPolicy | None = None,
 def collection_filter(self: Collection, *exprs: Any,
                       error: ErrorPolicy | None = None,
                       **named_expr: Any) -> Collection:
-    return self._afilter((*exprs, *named_expr.values()))
+    return _afilter(self, (*exprs, *named_expr.values()))
 
 
 @op("Collection", "project")
