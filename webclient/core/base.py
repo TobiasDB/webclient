@@ -95,7 +95,9 @@ def policy(*, returns: str = "Self", require: Capability | None = None,
             pol: ErrorPolicy = kwargs.pop("error", None) or _DEFAULT.get()
             self.accessed = now()
             if require is not None:
-                have = self._capabilities()
+                # the only ``require`` is 'ok' (resolve); backing capabilities
+                # (tree/page) are enforced by DocumentCore.backing, not here.
+                have = frozenset({"ok"}) if self.ok else frozenset()
                 if require not in have:
                     exc = UnsupportedOperation(fn.__name__, require, have)
                     return _fail(self, returns, exc, pol)
@@ -301,12 +303,6 @@ class WebBase(BaseModel):
                     if getattr(self, k))
         yield "ok", self.ok
 
-    def _capabilities(self) -> frozenset[Capability]:
-        return frozenset({"ok"}) if self.ok else frozenset()
-
-    def _is_empty(self) -> bool:
-        return not self._fields
-
     if not TYPE_CHECKING:
         def __getattr__(self, name: str) -> Any:
             """Ops live in ``core.ops``, not on this data class (PLAN §9): a
@@ -396,9 +392,6 @@ class Field[T](WebBase):
             raise OpError(self.error)
         return cast(T, self.value)
 
-    def _is_empty(self) -> bool:
-        return self.value is None or self.value in ("", [], {}, b"")
-
     def _cmp(self, name: str, other: object) -> Field[bool]:
         mine = self.get()
         theirs = other.get() if isinstance(other, Field) else other
@@ -458,9 +451,6 @@ class Collection[T](WebBase):
     #: ops that act on the collection itself; everything else maps per element
     _WHOLE: ClassVar[frozenset[str]] = frozenset(
         {"extract", "filter", "project", "is_ok", "is_empty"})
-
-    def _is_empty(self) -> bool:
-        return not self._items
 
     # The ops (extract/filter/project/is_ok/is_empty + the lifted element ops)
     # live in core.ops (PLAN §9); these stay as the async plumbing they call.
@@ -525,13 +515,16 @@ class Collection[T](WebBase):
         def documents(self, *names: str, error: ErrorPolicy | None = None) -> Collection[Document]: ...  # type: ignore[empty-body]
         def drag(self, source: str, target: str, *, error: ErrorPolicy | None = None) -> Collection[Document]: ...  # type: ignore[empty-body]
         def evaluate(self, script: str, *, error: ErrorPolicy | None = None) -> Collection[Any]: ...  # type: ignore[empty-body]
+        def events_of(self, event: 'type[Event] | Topic') -> Collection[Sequence[Event]]: ...  # type: ignore[empty-body]
         def execute(self, script: str, *, error: ErrorPolicy | None = None) -> Collection[Document]: ...  # type: ignore[empty-body]
         def field(self, name: str, *, error: ErrorPolicy | None = None) -> Collection[Field[Any]]: ...  # type: ignore[empty-body]
         def hover(self, selector: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Collection[Document]: ...  # type: ignore[empty-body]
         def join(self, href: str) -> Collection[Reference]: ...  # type: ignore[empty-body]
         def press(self, key: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Collection[Document]: ...  # type: ignore[empty-body]
+        def ref(self) -> Collection[Reference]: ...  # type: ignore[empty-body]
         def reference(self, name: str, *, error: ErrorPolicy | None = None) -> Collection[Reference]: ...  # type: ignore[empty-body]
         def references(self, *names: str, error: ErrorPolicy | None = None) -> Collection[Reference]: ...  # type: ignore[empty-body]
+        def reload(self, **options: Any) -> Collection[Document]: ...  # type: ignore[empty-body]
         def render(self, format: str, **options: Any) -> Collection[Any]: ...  # type: ignore[empty-body]
         def replace(self, **fields: Any) -> Collection[Reference]: ...  # type: ignore[empty-body]
         def resolve(self, *, browser: bool = False, session: Any = None, optional: bool = False, error: ErrorPolicy | None = None, **options: Any) -> Collection[Document]: ...  # type: ignore[empty-body]
@@ -540,6 +533,7 @@ class Collection[T](WebBase):
         def select(self, selector: str, *, index: int = 0, wait: float | None = None, error: ErrorPolicy | None = None, optional: bool = False) -> Collection[Document]: ...  # type: ignore[empty-body]
         def select_all(self, selector: str, limit: int | None = None, offset: int = 0, *, error: ErrorPolicy | None = None) -> Collection[Document]: ...  # type: ignore[empty-body]
         def select_option(self, selector: str, *, error: ErrorPolicy | None = None, **kw: Any) -> Collection[Document]: ...  # type: ignore[empty-body]
+        def subscribe(self, topic: 'Topic', handler: Any) -> Collection[Any]: ...  # type: ignore[empty-body]
         def upload(self, selector: str, files: Sequence[str], *, error: ErrorPolicy | None = None) -> Collection[Document]: ...  # type: ignore[empty-body]
         def wait_for(self, selector: str | None = None, *, error: ErrorPolicy | None = None, **kw: Any) -> Collection[Document]: ...  # type: ignore[empty-body]
         def with_params(self, **params: str) -> Collection[Reference]: ...  # type: ignore[empty-body]

@@ -29,6 +29,7 @@ from ..engine.loop import EngineLoop
 from ..events import EventBus, EventRegistry
 from . import expr as _lz
 from .expr import Expr, Plan
+from .ops import core_of
 from .document import (
     Document,
     apply_status,
@@ -208,7 +209,7 @@ class WebClientCore(EngineCore, BaseModel):
                 ref, session=session, scripts=options.get("scripts"),
                 wait_until=options.get("wait_until", "load"), optional=optional)
             if ref.actions:
-                await doc._core.dispatch("replay", list(ref.actions))
+                await core_of(doc).dispatch("replay", list(ref.actions))
             return doc
         return await self._fetch(ref, optional=optional, session=session)
 
@@ -290,14 +291,14 @@ class WebClientCore(EngineCore, BaseModel):
         apply_status(live)
         live._client = self
         live._session = session
-        live._core.page = page
-        live._core.lease = lease
-        live._core.attached = attached
-        live._core.routing = routing
+        core_of(live).page = page
+        core_of(live).lease = lease
+        core_of(live).attached = attached
+        core_of(live).routing = routing
         live.events.extend(events)           # events captured during goto
         # keep routing appending to the live document's own list
         routing.cancel()
-        live._core.routing = self._route_events(document_id, live.events)
+        core_of(live).routing = self._route_events(document_id, live.events)
         if session is not None:
             live.session_id = session.id
             for cookie in await page.context.cookies():
@@ -307,16 +308,16 @@ class WebClientCore(EngineCore, BaseModel):
         return live                          # never depend on gc
 
     async def _release_live(self, live: Document) -> None:
-        if live._core.routing is not None:
-            live._core.routing.cancel()
-            live._core.routing = None
-        if live._core.attached:
-            self._detach(live._core.attached)
-            live._core.attached = []
-        if live._core.lease is not None:
-            await self.pool._release(live._core.lease)
-            live._core.lease = None
-        live._core.page = None
+        if core_of(live).routing is not None:
+            core_of(live).routing.cancel()
+            core_of(live).routing = None
+        if core_of(live).attached:
+            self._detach(core_of(live).attached)
+            core_of(live).attached = []
+        if core_of(live).lease is not None:
+            await self.pool._release(core_of(live).lease)
+            core_of(live).lease = None
+        core_of(live).page = None
         self._live.pop(live.id, None)
 
     async def _fetch(self, ref: Reference, *, optional: bool,
@@ -437,7 +438,8 @@ class WebClientCore(EngineCore, BaseModel):
     # -- lease release (sync bridges over async core primitives) --------------
     def release(self, doc: Any) -> None:
         """Return a live page's lease to the pool (sync bridge)."""
-        if getattr(doc, "_core", None) is None or doc._core.page is None:
+        core = getattr(doc, "_core_obj", None)
+        if core is None or core.page is None:
             return                       # already released or never live
         self._ensure_loop().run(self._release_live(doc))
 

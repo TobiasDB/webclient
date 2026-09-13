@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Sequence, cast
 
-from .base import (CLASSES, RETURN, ErrorPolicy, Field, OpError, _gather,
-                   _plain, policy)
+from .base import (CLASSES, RETURN, Collection, ErrorPolicy, Field, OpError,
+                   _gather, _plain, policy)
 
 if TYPE_CHECKING:
     from ..events import (ActionEvent, ConsoleEvent, DOMUpdateEvent, Event,
@@ -71,6 +71,30 @@ def read_prop(value: Any, name: str) -> Any:
     return getattr(value, name)
 
 
+def core_of(doc: Any) -> Any:
+    """The ``DocumentCore`` for a document -- lazily created and cached on the
+    document's ``_core_obj`` slot. The runtime/op machinery lives on the core,
+    not on the (data-only) Document (PLAN §9)."""
+    if doc._core_obj is None:
+        from .document import DocumentCore
+        doc._core_obj = DocumentCore(doc)
+    return doc._core_obj
+
+
+def _is_empty_of(obj: Any) -> bool:
+    """Per-kind emptiness (was ``_is_empty`` on the data classes): a Field is
+    empty when its value is falsy-ish, a Collection when it has no elements, a
+    Document when it has no content, anything else when it has no fields."""
+    from .document import Document
+    if isinstance(obj, Field):
+        return obj.value is None or obj.value in ("", [], {}, b"")
+    if isinstance(obj, Collection):
+        return not obj._items
+    if isinstance(obj, Document):
+        return not obj.content
+    return not obj._fields
+
+
 # ========================================================================= #
 # Document ops -- delegate to the DocumentCore / backings.
 # ========================================================================= #
@@ -80,7 +104,7 @@ def read_prop(value: Any, name: str) -> Any:
 def select(self: Document, selector: str, *, index: int = 0,
            wait: float | None = None, error: ErrorPolicy | None = None,
            optional: bool = False) -> Document:
-    return self._core.dispatch("select", selector, index=index, wait=wait)
+    return core_of(self).dispatch("select", selector, index=index, wait=wait)
 
 
 @op("Document", "select_all")
@@ -88,111 +112,111 @@ def select(self: Document, selector: str, *, index: int = 0,
 def select_all(self: Document, selector: str, limit: int | None = None,
                offset: int = 0, *, error: ErrorPolicy | None = None
                ) -> "Collection[Document]":
-    return self._core.dispatch("select_all", selector, limit=limit, offset=offset)
+    return core_of(self).dispatch("select_all", selector, limit=limit, offset=offset)
 
 
 @op("Document", "attr")
 @policy(returns="Field")
 def attr(self: Document, name: str, *,
          error: ErrorPolicy | None = None) -> "Field[str] | Reference":
-    return self._core.dispatch("attr", name)
+    return core_of(self).dispatch("attr", name)
 
 
 @op("Document", "render")
 @policy(returns="None")
 def render(self: Document, format: str, **options: Any) -> Any:
-    return self._core.dispatch("render", format, **options)
+    return core_of(self).dispatch("render", format, **options)
 
 
 @op("Document", "click")
 @policy(returns="Self")
 def click(self: Document, selector: str | None = None, *,
           error: ErrorPolicy | None = None, **kw: Any) -> Document:
-    return self._core.dispatch("click", selector, **kw)
+    return core_of(self).dispatch("click", selector, **kw)
 
 
 @op("Document", "write")
 @policy(returns="Self")
 def write(self: Document, selector: str, text: str, *,
           error: ErrorPolicy | None = None, **kw: Any) -> Document:
-    return self._core.dispatch("write", selector, text, **kw)
+    return core_of(self).dispatch("write", selector, text, **kw)
 
 
 @op("Document", "press")
 @policy(returns="Self")
 def press(self: Document, key: str, *,
           error: ErrorPolicy | None = None, **kw: Any) -> Document:
-    return self._core.dispatch("press", key, **kw)
+    return core_of(self).dispatch("press", key, **kw)
 
 
 @op("Document", "hover")
 @policy(returns="Self")
 def hover(self: Document, selector: str, *,
           error: ErrorPolicy | None = None, **kw: Any) -> Document:
-    return self._core.dispatch("hover", selector, **kw)
+    return core_of(self).dispatch("hover", selector, **kw)
 
 
 @op("Document", "check")
 @policy(returns="Self")
 def check(self: Document, selector: str, checked: bool = True, *,
           error: ErrorPolicy | None = None, **kw: Any) -> Document:
-    return self._core.dispatch("check", selector, checked, **kw)
+    return core_of(self).dispatch("check", selector, checked, **kw)
 
 
 @op("Document", "select_option")
 @policy(returns="Self")
 def select_option(self: Document, selector: str, *,
                   error: ErrorPolicy | None = None, **kw: Any) -> Document:
-    return self._core.dispatch("select_option", selector, **kw)
+    return core_of(self).dispatch("select_option", selector, **kw)
 
 
 @op("Document", "upload")
 @policy(returns="Self")
 def upload(self: Document, selector: str, files: Sequence[str], *,
            error: ErrorPolicy | None = None) -> Document:
-    return self._core.dispatch("upload", selector, files)
+    return core_of(self).dispatch("upload", selector, files)
 
 
 @op("Document", "drag")
 @policy(returns="Self")
 def drag(self: Document, source: str, target: str, *,
          error: ErrorPolicy | None = None) -> Document:
-    return self._core.dispatch("drag", source, target)
+    return core_of(self).dispatch("drag", source, target)
 
 
 @op("Document", "scroll")
 @policy(returns="Self")
 def scroll(self: Document, selector: str | None = None, *, x: int = 0,
            y: int = 0, error: ErrorPolicy | None = None) -> Document:
-    return self._core.dispatch("scroll", selector, x=x, y=y)
+    return core_of(self).dispatch("scroll", selector, x=x, y=y)
 
 
 @op("Document", "execute")
 @policy(returns="Self")
 def execute(self: Document, script: str, *,
             error: ErrorPolicy | None = None) -> Document:
-    return self._core.dispatch("execute", script)
+    return core_of(self).dispatch("execute", script)
 
 
 @op("Document", "evaluate")
 @policy(returns="Field")
 def evaluate(self: Document, script: str, *,
              error: ErrorPolicy | None = None) -> Any:
-    return self._core.dispatch("evaluate", script)
+    return core_of(self).dispatch("evaluate", script)
 
 
 @op("Document", "screenshot")
 @policy(returns="Document")
 def screenshot(self: Document, selector: str | None = None, *,
                error: ErrorPolicy | None = None, **kw: Any) -> Document:
-    return self._core.dispatch("screenshot", selector, **kw)
+    return core_of(self).dispatch("screenshot", selector, **kw)
 
 
 @op("Document", "wait_for")
 @policy(returns="Self")
 def wait_for(self: Document, selector: str | None = None, *,
              error: ErrorPolicy | None = None, **kw: Any) -> Document:
-    return self._core.dispatch("wait_for", selector, **kw)
+    return core_of(self).dispatch("wait_for", selector, **kw)
 
 
 @prop("Document", "title")
@@ -203,54 +227,59 @@ def title(self: Document) -> str | None:
 
 @prop("Document", "text")
 def text(self: Document) -> str:
-    return self._core.text()
+    return core_of(self).text()
+
+
+@prop("Document", "identity_path")
+def identity_path(self: Document) -> str | None:
+    return core_of(self).identity_path()
 
 
 @op("Document", "join")
 def document_join(self: Document, href: str) -> Reference:
-    return self._core.join(href)
+    return core_of(self).join(href)
 
 
 @op("Document", "ref")
 def ref(self: Document) -> Reference:
-    return self._core.ref()
+    return core_of(self).ref()
 
 
 @op("Document", "reload")
 def reload(self: Document, **options: Any) -> Document:
-    return self._core.reload(**options)
+    return core_of(self).reload(**options)
 
 
 # -- event views (the EventBacking; consolidated off Document, PLAN §9) -------
 
 @op("Document", "events_of")
 def events_of(self: Document, event: "type[Event] | Topic") -> "Sequence[Event]":
-    return self._core.dispatch("events_of", event)
+    return core_of(self).dispatch("events_of", event)
 
 
 @op("Document", "subscribe")
 def subscribe(self: Document, topic: "Topic", handler: Any) -> Any:
-    return self._core.dispatch("subscribe", topic, handler)
+    return core_of(self).dispatch("subscribe", topic, handler)
 
 
 @prop("Document", "action_events")
 def action_events(self: Document) -> "Sequence[ActionEvent]":
-    return self._core.dispatch("action_events")
+    return core_of(self).dispatch("action_events")
 
 
 @prop("Document", "xhr_requests")
 def xhr_requests(self: Document) -> "Sequence[XHREvent]":
-    return self._core.dispatch("xhr_requests")
+    return core_of(self).dispatch("xhr_requests")
 
 
 @prop("Document", "dom_mutations")
 def dom_mutations(self: Document) -> "Sequence[DOMUpdateEvent]":
-    return self._core.dispatch("dom_mutations")
+    return core_of(self).dispatch("dom_mutations")
 
 
 @prop("Document", "console")
 def console(self: Document) -> "Sequence[ConsoleEvent]":
-    return self._core.dispatch("console")
+    return core_of(self).dispatch("console")
 
 
 # ========================================================================= #
@@ -315,7 +344,7 @@ def project(self: WebBase, model: Any = None, *,
 @op("WebBase", "is_empty")
 @policy(returns="Field", always=True)
 def is_empty(self: WebBase, *, error: ErrorPolicy | None = None) -> "Field[bool]":
-    return Field[bool](value=self._is_empty())
+    return Field[bool](value=_is_empty_of(self))
 
 
 @op("WebBase", "is_ok")
