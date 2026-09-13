@@ -32,7 +32,8 @@ class Backing:
     capability it grants when chosen; ``applies`` decides if it is in play for a
     given core's current state (default: always)."""
 
-    provides: ClassVar[frozenset[str]] = frozenset()
+    provides: ClassVar[frozenset[str]] = frozenset()    # call ops: obj.op(...)
+    props: ClassVar[frozenset[str]] = frozenset()       # property ops: obj.op
     gate: ClassVar[str] = "ok"
 
     def applies(self, core: "WebCore") -> bool:
@@ -62,9 +63,10 @@ class WebCore:
 
     # -- dispatch ------------------------------------------------------------
     def backing(self, op: str) -> Backing:
-        """The first chosen backing that provides ``op`` (else ``UnsupportedOp``)."""
+        """The first chosen backing that provides ``op`` (call or prop) else
+        ``UnsupportedOp``."""
         for b in self.choose():
-            if op in b.provides:
+            if op in b.provides or op in b.props:
                 return b
         raise UnsupportedOp(op, self.capabilities())
 
@@ -72,19 +74,26 @@ class WebCore:
         """Run ``op`` on its backing, passing this core as the receiver."""
         return getattr(self.backing(op), op)(self, *args, **kwargs)
 
-    def provides(self, op: str) -> bool:
-        """Whether any chosen backing provides ``op`` (without raising)."""
-        return any(op in b.provides for b in self.choose())
+    def has_op(self, op: str) -> bool:
+        """Whether any chosen backing provides ``op`` (call or prop)."""
+        return any(op in b.provides or op in b.props for b in self.choose())
 
     # -- op surface (for generation) ----------------------------------------
     @classmethod
     def ops(cls) -> dict[str, Backing]:
-        """Every op this core can dispatch, op-name -> the backing that owns
-        it (first wins). The generator reads this (+ the Core Fields) to build
-        the Lazy / eager surface classes."""
+        """Every *call* op, op-name -> owning backing (first wins)."""
         table: dict[str, Backing] = {}
         for backing in cls.BACKINGS:
             for op in backing.provides:
+                table.setdefault(op, backing)
+        return table
+
+    @classmethod
+    def prop_ops(cls) -> dict[str, Backing]:
+        """Every *property* op, name -> owning backing (first wins)."""
+        table: dict[str, Backing] = {}
+        for backing in cls.BACKINGS:
+            for op in backing.props:
                 table.setdefault(op, backing)
         return table
 
