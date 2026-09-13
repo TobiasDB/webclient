@@ -10,10 +10,13 @@ and DOM mutations are captured onto the document as events (so ``console`` /
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..events import ActionEvent, ConsoleEvent, DOMUpdateEvent
 from .web_core import Backing
+
+if TYPE_CHECKING:
+    from .document_core import DocumentCore
 
 #: installed on every navigation (before page scripts) -- an id-path-tagging
 #: MutationObserver feeding ``window.__wc_mutations``.
@@ -98,7 +101,7 @@ class LiveBacking(Backing):
         *,
         timeout: float | None = None,
         optional: bool = False,
-    ) -> Any:
+    ) -> "DocumentCore":
         self._loop(core).run(
             self._aact(
                 core, "click", selector=selector, timeout=timeout, optional=optional
@@ -114,7 +117,7 @@ class LiveBacking(Backing):
         *,
         timeout: float | None = None,
         optional: bool = False,
-    ) -> Any:
+    ) -> "DocumentCore":
         self._loop(core).run(
             self._aact(
                 core,
@@ -129,22 +132,22 @@ class LiveBacking(Backing):
 
     def wait_for(
         self, core: Any, selector: str | None = None, *, timeout: float | None = None
-    ) -> Any:
+    ) -> "DocumentCore":
         self._loop(core).run(self._await_for(core, selector, timeout))
         return core
 
     def select(
         self, core: Any, selector: str, *, index: int = 0, error: Any = None
-    ) -> Any:
+    ) -> "DocumentCore":
         return self._loop(core).run(self._aselect(core, selector, index, error))
 
-    def select_all(self, core: Any, selector: str) -> Any:
+    def select_all(self, core: Any, selector: str) -> "list[DocumentCore]":
         return self._loop(core).run(self._aselect_all(core, selector))
 
     def evaluate(self, core: Any, script: str) -> Any:
         return self._loop(core).run(core._page.evaluate(script))
 
-    def screenshot(self, core: Any, selector: str | None = None) -> Any:
+    def screenshot(self, core: Any, selector: str | None = None) -> "DocumentCore":
         return self._loop(core).run(self._ashot(core, selector))
 
     # -- async bodies --------------------------------------------------------

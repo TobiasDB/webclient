@@ -12,11 +12,12 @@ from __future__ import annotations
 import copy
 import json as _json
 import re
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, overload
 from urllib.parse import urljoin
 
 from pydantic import BaseModel, PrivateAttr
 
+from ..collection import Field
 from ..errors import WebError
 from .live import LiveBacking
 from .reference_core import ReferenceCore, from_url
@@ -208,14 +209,10 @@ class StatusBacking(Backing):
             out["markdown"] = core.dispatch("render", "markdown")
         return out
 
-    def is_ok(self, core: "DocumentCore") -> Any:
-        from ..collection import Field
-
+    def is_ok(self, core: "DocumentCore") -> "Field[bool]":
         return Field(core.ok)
 
-    def is_empty(self, core: "DocumentCore") -> Any:
-        from ..collection import Field
-
+    def is_empty(self, core: "DocumentCore") -> "Field[bool]":
         empty = core._missing or not core.ok or not (core.content or core._element)
         return Field(bool(empty))
 
@@ -265,6 +262,17 @@ class HtmlBacking(Backing):
     def title(self, core: "DocumentCore") -> str | None:
         node = self._find(core, "title")
         return _norm("".join(node[0].itertext())) if node else None
+
+    @overload
+    def render(
+        self, core: "DocumentCore", format: Literal["elements"]
+    ) -> "list[Element]": ...  # noqa: E501
+    @overload
+    def render(
+        self, core: "DocumentCore", format: Literal["links"]
+    ) -> "list[ReferenceCore]": ...  # noqa: E501
+    @overload
+    def render(self, core: "DocumentCore", format: str, **options: Any) -> str: ...
 
     def render(self, core: "DocumentCore", format: str, **options: Any) -> Any:
         override = _override(core, format)
@@ -341,9 +349,16 @@ class HtmlBacking(Backing):
             els = els[:limit]
         return [_element(core, el) for el in els]
 
-    def attr(self, core: "DocumentCore", name: str, *, error: Any = None) -> Any:
-        from ..collection import Field
+    @overload  # link attrs narrow to a Reference (overlaps the str overload)
+    def attr(
+        self, core: "DocumentCore", name: Literal["href", "src", "action"]
+    ) -> "ReferenceCore": ...  # type: ignore[overload-overlap]  # noqa: E501
+    @overload
+    def attr(
+        self, core: "DocumentCore", name: str, *, error: Any = None
+    ) -> "Field[str]": ...  # noqa: E501
 
+    def attr(self, core: "DocumentCore", name: str, *, error: Any = None) -> Any:
         if core._missing:
             return Field(None, ok=False)
         if name == "text":
@@ -421,8 +436,6 @@ class JsonBacking(Backing):
         return _element(core, value)
 
     def attr(self, core: "DocumentCore", name: str, *, error: Any = None) -> Any:
-        from ..collection import Field
-
         if core._missing:
             return Field(None, ok=False)
         data = self._data(core)

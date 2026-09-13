@@ -1,11 +1,16 @@
-"""Regenerate the typed surface stubs from the cores + backing registry.
+"""Regenerate the typed surface stubs from the cores + their backings.
 
-The surface classes dispatch via ``__getattr__`` at runtime and carry no op
-methods; static checkers get their signatures from generated blocks that cannot
-drift. Each block lives between ``>>> generated: ... <<<`` and ``>>> end
-generated <<<`` markers and is rewritten here from a core's data fields
-(``model_fields``) plus the op contract below, mapped into the eager tier
-(Document / Field[T] / Collection[T]).
+One function -- ``members`` -- reads a Core's data fields, its class properties
+and its backings' typed ops (via ``webclient.typeinfo``) and renders each into a
+tier's vocabulary:
+
+    Core subtype   ->  Document / Reference   (eager) | LazyDocument / ...  (lazy)
+    scalar T       ->  T  or  Field[T]        (eager) | LazyField[T]        (lazy)
+    Iterable[Core] ->  Collection[Surface]    (eager) | LazyCollection[...] (lazy)
+
+The op signatures live on the backings -- the single source of truth -- so the
+same ``members`` walk emits every surface (Reference / Document, eager + lazy)
+plus the Collection element-op lift. Nothing is duplicated in a table here.
 
     python scripts/gen_stubs.py          # rewrite the blocks
     python scripts/gen_stubs.py --check  # exit 1 if any block is stale (CI)
@@ -13,134 +18,253 @@ generated <<<`` markers and is rewritten here from a core's data fields
 
 from __future__ import annotations
 
+import inspect
 import sys
 import types as _types
 import typing
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from webclient.core.document_core import DocumentCore  # noqa: E402
+from webclient import typeinfo  # noqa: E402
+from webclient.collection import Field  # noqa: E402
+from webclient.core.document_core import DocumentCore, Element  # noqa: E402
 from webclient.core.reference_core import ReferenceCore  # noqa: E402
+from webclient.core.web_core import WebCore  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SURFACES = ROOT / "webclient" / "surfaces.py"
 COLLECTION = ROOT / "webclient" / "collection.py"
 MODELS = ROOT / "webclient" / "models.py"
 
-_SCALAR = {str: "str", int: "int", float: "float", bytes: "bytes", bool: "bool"}
+#: the cores that map to a surface class (a Core-typed result -> its surface).
+CORES: tuple[type, ...] = (ReferenceCore, DocumentCore)
+SURFACE = {ReferenceCore: "Reference", DocumentCore: "Document"}
+LAZY = {ReferenceCore: "LazyReference", DocumentCore: "LazyDocument"}
+#: bare core-surface names -- an overload returning one overlaps a later ``str``
+#: overload and needs the ``overload-overlap`` ignore.
+_CORE_SURFACES = set(SURFACE.values()) | set(LAZY.values())
 
-
-def _type_of(ann: object) -> str:
-    if ann in _SCALAR:
-        return _SCALAR[ann]
-    if typing.get_origin(ann) is typing.Literal:
-        return "str"
-    if typing.get_origin(ann) in (typing.Union, getattr(_types, "UnionType", None)):
-        rest = [a for a in typing.get_args(ann) if a is not type(None)]
-        if len(rest) == 1 and rest[0] in _SCALAR:
-            return f"{_SCALAR[rest[0]]} | None"
-    return "Any"
-
-
-def _fields(core: type, skip: set[str]) -> list[str]:
-    return [
-        f"        {name}: {_type_of(f.annotation)}"
-        for name, f in core.model_fields.items()
-        if name not in skip
-    ]
-
-
-# The op contract: fully-rendered method/attribute lines. ``{D}``/``{R}``/
-# ``{FS}``/``{FB}``/``{CD}``/``{CR}`` expand to the tier's type names.
-_REFERENCE_OPS = [
-    "@property",
-    "def url(self) -> str: ...",
-    "@property",
-    "def ok(self) -> bool: ...",
-    "def resolve(self, *, browser: bool = ..., optional: bool = ...,",
-    '            error: Any = ...) -> "{D}": ...',
-    'def with_params(self, **params: str) -> "{R}": ...',
-    'def replace(self, **fields: Any) -> "{R}": ...',
-    'def join(self, href: str) -> "{R}": ...',
-]
-
-_DOCUMENT_OPS = [
-    "@property",
-    "def ok(self) -> bool: ...",
-    "@property",
-    "def text(self) -> str: ...",
-    "@property",
-    "def title(self) -> str: ...",
-    "@property",
-    "def message(self) -> str: ...",
-    "@property",
-    "def events(self) -> list[Any]: ...",
-    "@property",
-    "def action_events(self) -> list[Any]: ...",
-    "@property",
-    "def dom_mutations(self) -> list[Any]: ...",
-    "def select(self, selector: str, *, index: int = ...,",
-    '           error: Any = ...) -> "{D}": ...',
-    "def select_all(self, selector: str, *, limit: int | None = ...,",
-    '               offset: int = ...) -> "{CD}": ...',
-    "@overload",
-    'def attr(self, name: Literal["href", "src", "action"]) -> "{R}": ...  # type: ignore[overload-overlap]',
-    "@overload",
-    'def attr(self, name: str, *, error: Any = ...) -> "{FS}": ...',
-    'def is_ok(self) -> "{FB}": ...',
-    'def is_empty(self) -> "{FB}": ...',
-    'def ref(self) -> "{R}": ...',
-    "def events_of(self, event_type: Any) -> list[Any]: ...",
-    'def reload(self) -> "{D}": ...',
-    "def summary(self) -> dict[str, Any]: ...",
-    "def click(self, selector: str | None = ..., *, timeout: float = ...,",
-    '          optional: bool = ...) -> "{D}": ...',
-    "def write(self, selector: str, text: str, *, timeout: float = ...,",
-    '          optional: bool = ...) -> "{D}": ...',
-    "def wait_for(self, selector: str | None = ..., *,",
-    '             timeout: float = ...) -> "{D}": ...',
-    "def evaluate(self, script: str) -> Any: ...",
-    'def screenshot(self, selector: str | None = ...) -> "{D}": ...',
-    "@overload",
-    'def render(self, format: Literal["elements"]) -> "list[Element]": ...',
-    "@overload",
-    'def render(self, format: Literal["links"]) -> "{CR}": ...',
-    "@overload",
-    "def render(self, format: str, **options: Any) -> str: ...",
-]
-
-_COLLECTION_LIFT = [
-    "def select(self, selector: str, *, index: int = ...,",
-    '           error: Any = ...) -> "Collection[Document]": ...',
-    "def select_all(self, selector: str, *, limit: int | None = ...,",
-    '               offset: int = ...) -> "Collection[Document]": ...',
-    'def attr(self, name: str, *, error: Any = ...) -> "Collection[Field[str]]": ...',
-    'def text(self) -> "Collection[Field[str]]": ...',
-    'def render(self, format: str, **options: Any) -> "Collection[Field[Any]]": ...',
-]
-
-EAGER = {
-    "D": "Document",
-    "R": "Reference",
-    "FS": "Field[str]",
-    "FB": "Field[bool]",
-    "CD": "Collection[Document]",
-    "CR": "Collection[Reference]",
+#: names the resolved annotations may reference (TYPE_CHECKING-only in their own
+#: modules), merged into each fn's globals for ``get_type_hints``.
+_NS = {
+    "DocumentCore": DocumentCore,
+    "ReferenceCore": ReferenceCore,
+    "Field": Field,
+    "Element": Element,
+    "Any": Any,
 }
+_SCALAR = {str: "str", int: "int", float: "float", bytes: "bytes", bool: "bool"}
+_UNION = (typing.Union, getattr(_types, "UnionType", None))
+_SKIP_FIELDS = {ReferenceCore: {"actions"}, DocumentCore: set[str]()}
 
 
-def _expand(lines: list[str], tier: dict[str, str]) -> list[str]:
-    out = []
-    for line in lines:
-        for key, val in tier.items():
-            line = line.replace("{" + key + "}", val)
-        out.append("        " + line if line else line)
-    return out
+# -- type rendering -----------------------------------------------------------
 
 
-_LAZY_TIER = """# fmt: off
-class LazyField(Lazy["Field[S]"], Generic[S]):
+def _return(fn: Any) -> Any:
+    """The resolved return annotation of ``fn`` (``Any`` on failure)."""
+    try:
+        ns = {**getattr(fn, "__globals__", {}), **_NS}
+        return typing.get_type_hints(fn, globalns=ns).get("return", Any)
+    except Exception:
+        return Any
+
+
+def _name(tp: Any) -> str:
+    """A plain type name for annotations that are not surface-mapped."""
+    if tp is Any or tp is inspect.Parameter.empty:
+        return "Any"
+    if tp is Element:
+        return "Element"
+    if tp in _SCALAR:
+        return _SCALAR[tp]
+    if isinstance(tp, str):
+        return tp
+    origin = typing.get_origin(tp)
+    if origin in _UNION:
+        return " | ".join(_name(a) for a in typing.get_args(tp))
+    if origin is not None:
+        base = {list: "list", dict: "dict", tuple: "tuple", set: "set"}.get(
+            origin, getattr(origin, "__name__", "Any")
+        )
+        args = ", ".join(_name(a) for a in typing.get_args(tp))
+        return f"{base}[{args}]" if args else base
+    return getattr(tp, "__name__", None) or "Any"
+
+
+def _render(tp: Any, tier: str) -> str:
+    """Map an op's return type into the tier's vocabulary (see module docstring)."""
+    inner = typeinfo.unwrap_union(tp)
+    cat = typeinfo.classify(inner, CORES)
+    if cat == "core":
+        return (SURFACE if tier == "eager" else LAZY)[inner]
+    if cat == "iterable":
+        el = typeinfo.unwrap_union(typeinfo.element_type(inner))
+        if typeinfo.classify(el, CORES) == "core":
+            sub = (SURFACE if tier == "eager" else LAZY)[el]
+            box = "Collection" if tier == "eager" else "LazyCollection"
+            return f"{box}[{sub}]"
+        return f"list[{_name(el)}]"  # an iterable of non-cores stays a list
+    if typing.get_origin(inner) is Field:  # a value leaf
+        base = _name(typeinfo.element_type(inner))
+        return f"Field[{base}]" if tier == "eager" else f"LazyField[{base}]"
+    base = _name(inner)  # a plain scalar
+    return base if tier == "eager" else f"LazyField[{base}]"
+
+
+def _field(tp: Any, tier: str) -> str:
+    """A Core data field: eager keeps the (scalar) python type, lazy wraps it."""
+    origin = typing.get_origin(tp)
+    if tp in _SCALAR:
+        name = _SCALAR[tp]
+    elif origin is typing.Literal:
+        name = "str"
+    elif origin in _UNION:
+        rest = [a for a in typing.get_args(tp) if a is not type(None)]
+        name = (
+            f"{_SCALAR[rest[0]]} | None"
+            if len(rest) == 1 and rest[0] in _SCALAR
+            else "Any"
+        )
+    else:
+        name = "Any"
+    return name if tier == "eager" else f"LazyField[{name}]"
+
+
+# -- signature reading --------------------------------------------------------
+
+
+def _params(fn: Any) -> str:
+    """The op's parameter list (dropping ``self``/``core``), defaults as ``...``.
+    Annotations are the source strings (PEP 563), used verbatim."""
+    parts: list[str] = []
+    star = False
+    for name, p in inspect.signature(fn).parameters.items():
+        if name in ("self", "core"):
+            continue
+        ann = "" if p.annotation is inspect.Parameter.empty else f": {p.annotation}"
+        if p.kind is p.VAR_POSITIONAL:
+            parts.append(f"*{name}{ann}")
+            star = True
+        elif p.kind is p.VAR_KEYWORD:
+            parts.append(f"**{name}{ann}")
+        else:
+            if p.kind is p.KEYWORD_ONLY and not star:
+                parts.append("*")
+                star = True
+            default = " = ..." if p.default is not inspect.Parameter.empty else ""
+            parts.append(f"{name}{ann}{default}")
+    return ", ".join(parts)
+
+
+def _fn(backing: Any, op: str) -> Any:
+    return getattr(type(backing), op)
+
+
+def _provider(core: type, op: str, kind: str) -> Any:
+    """The backing that provides ``op`` with the richest signature (so a shared
+    op like ``select_all`` shows its full form, not a narrower live variant).
+    ``kind`` is ``'provides'`` (call ops) or ``'props'`` (property ops)."""
+    cands = [b for b in core.BACKINGS if op in getattr(b, kind)]
+    return max(cands, key=lambda b: len(inspect.signature(_fn(b, op)).parameters))
+
+
+def _method(op: str, fn: Any, tier: str) -> list[str]:
+    """One call op -> its def line(s), expanding ``@overload`` sets."""
+    overloads = typing.get_overloads(fn)
+    if len(overloads) <= 1:
+        ret = _render(_return(fn), tier)
+        return [
+            f'def {op}(self, {_params(fn)}) -> "{ret}": ...'.replace(
+                "(self, )", "(self)"
+            )
+        ]
+    lines: list[str] = []
+    for i, ov in enumerate(overloads):
+        ret = _render(_return(ov), tier)
+        ignore = "  # type: ignore[overload-overlap]" if ret in _CORE_SURFACES else ""
+        line = f'def {op}(self, {_params(ov)}) -> "{ret}": ...{ignore}'.replace(
+            "(self, )", "(self)"
+        )
+        lines += ["@overload", line]
+    return lines
+
+
+# -- the one surface walk -----------------------------------------------------
+
+
+def _class_props(core: type) -> dict[str, Any]:
+    """Plain ``@property`` members on the core class (e.g. ``ok``)."""
+    return {
+        name: val.fget
+        for name, val in vars(core).items()
+        if isinstance(val, property) and not name.startswith("model_")
+    }
+
+
+def members(core: type, tier: str) -> list[str]:
+    """Every surface member for ``core`` in ``tier`` -- data fields, class
+    properties, then the backings' property ops and call ops. This is the whole
+    generator: the eager surface, the lazy surface and the lift all come from it."""
+    lines: list[str] = []
+    # data fields
+    for name in core.model_fields:
+        if name in _SKIP_FIELDS.get(core, set()):
+            continue
+        lines.append(f"{name}: {_field(typeinfo.field_type(core, name), tier)}")
+    # property ops (class @property + backing props) -- an attribute when lazy,
+    # a @property when eager.
+    props = {**_class_props(core), **{op: None for op in core.prop_ops()}}
+    for op in sorted(props):
+        fn = props[op] or _fn(_provider(core, op, "props"), op)
+        ret = _render(_return(fn), tier)
+        if tier == "eager":
+            lines += ["@property", f"def {op}(self) -> {ret}: ..."]
+        else:
+            lines.append(f'{op}: "{ret}"')
+    # call ops
+    for op in sorted(core.ops()):
+        lines += _method(op, _fn(_provider(core, op, "provides"), op), tier)
+    return lines
+
+
+def _lift(op: str, fn: Any) -> str | None:
+    """The Collection-lifted form of a Document op: ``T -> Collection[T]`` /
+    ``scalar -> Collection[Field[scalar]]``; ``None`` to skip (non-liftable).
+    An overloaded op lifts by its broadest (last) overload."""
+    overloads = typing.get_overloads(fn)
+    ret = _render(_return(overloads[-1] if overloads else fn), "eager")
+    if ret in SURFACE.values() or ret.startswith("Collection["):
+        inner = ret[len("Collection[") : -1] if ret.startswith("Collection[") else ret
+        lifted = f"Collection[{inner}]"
+    elif ret.startswith("Field["):
+        lifted = f"Collection[{ret}]"
+    elif ret in _SCALAR.values():
+        lifted = f"Collection[Field[{ret}]]"
+    else:
+        return None  # Any / list / dict -- nothing sensible to lift
+    params = _params(typing.get_overloads(fn)[-1] if typing.get_overloads(fn) else fn)
+    sig = f"self, {params}" if params else "self"
+    return f'def {op}({sig}) -> "{lifted}": ...'
+
+
+def lift_members() -> list[str]:
+    """Element ops lifted onto a Collection (fan-out keeps the element type)."""
+    lines: list[str] = []
+    for op in sorted(set(DocumentCore.ops()) | set(DocumentCore.prop_ops())):
+        kind = "provides" if op in DocumentCore.ops() else "props"
+        row = _lift(op, _fn(_provider(DocumentCore, op, kind), op))
+        if row is not None:
+            lines.append(row)
+    return lines
+
+
+# -- lazy leaf helpers (value/iterable leaves; hand-written like Field/Collection)
+
+
+_LAZY_FIELD = """class LazyField(Lazy["Field[S]"], Generic[S]):
     def get(self, default: Any = ...) -> S: ...
     def is_ok(self) -> "LazyField[bool]": ...
     def is_empty(self) -> "LazyField[bool]": ...
@@ -149,67 +273,61 @@ class LazyField(Lazy["Field[S]"], Generic[S]):
     def __and__(self, o: Any) -> "LazyField[bool]": ...
     def __or__(self, o: Any) -> "LazyField[bool]": ...
     def __invert__(self) -> "LazyField[bool]": ...
-    def collect(self, context: Any = ...) -> "Field[S]": ...
+    def collect(self, context: Any = ...) -> "Field[S]": ..."""
 
-
-class LazyReference(Lazy["Reference"]):
-    url: "LazyField[str]"
-    def resolve(self, *, browser: bool = ..., optional: bool = ..., error: Any = ...) -> "LazyDocument": ...
-    def with_params(self, **params: str) -> "LazyReference": ...
-    def replace(self, **fields: Any) -> "LazyReference": ...
-    def join(self, href: str) -> "LazyReference": ...
-    def collect(self, context: Any = ...) -> "Reference": ...
-
-
-class LazyDocument(Lazy["Document"]):
-    def select(self, selector: str, *, index: int = ..., error: Any = ...) -> "LazyDocument": ...
-    def select_all(self, selector: str, *, limit: int | None = ..., offset: int = ...) -> "LazyCollection[LazyDocument]": ...
-    @overload
-    def attr(self, name: Literal["href", "src", "action"]) -> "LazyReference": ...  # type: ignore[overload-overlap]
-    @overload
-    def attr(self, name: str, *, error: Any = ...) -> "LazyField[str]": ...
-    def field(self, name: str) -> "LazyField[Any]": ...
-    def reference(self, name: str) -> "LazyReference": ...
-    def is_ok(self) -> "LazyField[bool]": ...
-    def is_empty(self) -> "LazyField[bool]": ...
-    def render(self, format: str, **options: Any) -> "LazyField[Any]": ...
-    def collect(self, context: Any = ...) -> "Document": ...
-
-
-class LazyCollection(Lazy["Collection[T]"], Generic[T]):
+_LAZY_COLLECTION = """class LazyCollection(Lazy["Collection[T]"], Generic[T]):
     def extract(self, **exprs: Any) -> "LazyCollection[T]": ...
     def filter(self, *predicates: Any) -> "LazyCollection[T]": ...
     def limit(self, n: int) -> "LazyCollection[T]": ...
     def documents(self, column: str) -> "LazyCollection[LazyDocument]": ...
     def project(self) -> "list[dict[str, Any]]": ...
-    def collect(self, context: Any = ...) -> "Collection[T]": ...
-# fmt: on"""
+    def collect(self, context: Any = ...) -> "Collection[T]": ..."""
+
+
+def _lazy_class(core: type) -> str:
+    """A derived lazy surface: the same members as eager, in lazy vocabulary,
+    plus the recorder-only helpers (``field``/``reference``) and ``collect``."""
+    extras: list[str] = []
+    if core is DocumentCore:
+        extras += [
+            'def field(self, name: str) -> "LazyField[Any]": ...',
+            'def reference(self, name: str) -> "LazyReference": ...',
+        ]
+    extras.append(f'def collect(self, context: Any = ...) -> "{SURFACE[core]}": ...')
+    body = members(core, "lazy") + extras
+    head = f'class {LAZY[core]}(Lazy["{SURFACE[core]}"]):'
+    return head + "\n" + "\n".join("    " + line for line in body)
+
+
+def _lazy_tier() -> str:
+    blocks = [
+        _LAZY_FIELD,
+        _lazy_class(ReferenceCore),
+        _lazy_class(DocumentCore),
+        _LAZY_COLLECTION,
+    ]
+    return "# fmt: off\n" + "\n\n\n".join(blocks) + "\n# fmt: on"
+
+
+# -- block assembly / rewrite -------------------------------------------------
+
+
+def _indented(lines: list[str], indent: int) -> str:
+    pad = " " * indent
+    rows = [pad + "# fmt: off", *(pad + line for line in lines), pad + "# fmt: on"]
+    return "\n".join(rows)
 
 
 def _body(region: str) -> str:
     if region == "lazy-tier":
-        return _LAZY_TIER
+        return _lazy_tier()
     if region == "Reference eager surface":
-        # fields that are ops (url/ok props, actions unused in stub) are skipped
-        rows = _fields(ReferenceCore, {"actions"}) + _expand(_REFERENCE_OPS, EAGER)
-    elif region == "Document eager surface":
-        rows = (
-            _fields(DocumentCore, {"final_url", "error", "text", "title"})
-            + _expand(_DOCUMENT_OPS, EAGER)
-            + [
-                "        @property",
-                "        def final_url(self) -> str | None: ...",
-                "        @property",
-                "        def error(self) -> Any: ...",
-            ]
-        )
-    elif region == "collection element-op lifting":
-        rows = _expand(_COLLECTION_LIFT, EAGER)
-    else:
-        raise KeyError(region)
-    # fmt guards keep black off the generated block, so its exact text (and
-    # thus --check) stays stable regardless of formatting runs.
-    return "        # fmt: off\n" + "\n".join(rows) + "\n        # fmt: on"
+        return _indented(members(ReferenceCore, "eager"), 8)
+    if region == "Document eager surface":
+        return _indented(members(DocumentCore, "eager"), 8)
+    if region == "collection element-op lifting":
+        return _indented(lift_members(), 8)
+    raise KeyError(region)
 
 
 REGIONS = [
@@ -226,9 +344,8 @@ def main(check: bool) -> int:
         text = path.read_text()
         start = f"# >>> generated: {region} <<<\n"
         lo = text.index(start) + len(start)
-        # end marker, indent-agnostic: back up to the start of its line
         e = text.index(">>> end generated <<<", lo)
-        hi = text.rindex("\n", lo, e) + 1
+        hi = text.rindex("\n", lo, e) + 1  # start of the end-marker line
         body = _body(region) + "\n"
         if text[lo:hi] != body:
             if check:
