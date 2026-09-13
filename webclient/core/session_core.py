@@ -38,6 +38,9 @@ class WebSessionCore(WebClientCore):
         if self.ttl is not None and self.expires_at is None:
             self.expires_at = time.time() + self.ttl
 
+    def _init_transport(self) -> None:
+        """A session shares the parent's pool (set in ``bind``)."""
+
     def bind(self, parent: WebClientCore) -> "WebSessionCore":
         """Share ``parent``'s engine (loop / http / browser / bus / plugins) and
         take a fresh name scope from it."""

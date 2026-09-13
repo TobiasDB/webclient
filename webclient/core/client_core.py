@@ -84,6 +84,19 @@ class WebClientCore(WebCore, BaseModel):
 
     def model_post_init(self, _ctx: Any) -> None:
         self._scope = NameScope(0, cap=self.names_cap)
+        self._init_transport()
+
+    def _init_transport(self) -> None:
+        """Build the transport pool eagerly (cheap -- no browser launch until a
+        page is leased) so it is never lazily created from two threads at once.
+        Sessions override this to share the parent's pool."""
+        from ..engine.clients import BrowserFactory, HTTPXFactory
+        from ..pool import ClientPool
+
+        self._pool = ClientPool(
+            {"http": HTTPXFactory(), "page": BrowserFactory(init_script=_live.INIT_JS)},
+            limits={"http": 10, "page": 4},
+        )
 
     def new_scope(self) -> NameScope:
         """A fresh scope for a session (index 1, 2, ...)."""
@@ -127,17 +140,6 @@ class WebClientCore(WebCore, BaseModel):
     @property
     def pool(self) -> Any:
         """The transport-lease pool (http clients + browser pages)."""
-        if self._pool is None:
-            from ..engine.clients import BrowserFactory, HTTPXFactory
-            from ..pool import ClientPool
-
-            self._pool = ClientPool(
-                {
-                    "http": HTTPXFactory(),
-                    "page": BrowserFactory(init_script=_live.INIT_JS),
-                },
-                limits={"http": 10, "page": 4},
-            )
         return self._pool
 
     def close(self) -> None:

@@ -38,7 +38,7 @@ class Backing:
     props: ClassVar[frozenset[str]] = frozenset()  # property ops: obj.op
     gate: ClassVar[str] = "ok"
 
-    def applies(self, core: "WebCore") -> bool:
+    def applies(self, core: Any) -> bool:  # Any: subclasses narrow to their core
         return True
 
 
