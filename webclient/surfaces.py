@@ -48,22 +48,110 @@ class Reference(Surface):
 
     if TYPE_CHECKING:
         # >>> generated: Reference eager surface <<<
+        kind: str
         name: str
         root: str
         hostname: str
+        method: str
+        scheme: str
+        port: int | None
         path: str
-        params: dict[str, Any]
+        fragment: str
+        params: Any
+        headers: Any
+        cookies: Any
+        body: bytes | None
+        json_body: Any
+        form: Any
+        follow_redirects: bool
+        timeout: float | None
         @property
         def url(self) -> str: ...
         @property
         def ok(self) -> bool: ...
-        @property
-        def actions(self) -> list[dict[str, Any]]: ...
         def resolve(self, *, browser: bool = ..., optional: bool = ...,
                     error: Any = ...) -> "Document": ...
         def with_params(self, **params: str) -> "Reference": ...
         def replace(self, **fields: Any) -> "Reference": ...
         def join(self, href: str) -> "Reference": ...
+        # >>> end generated <<<
+
+
+@surface(DocumentCore)
+class Document(Surface):
+    """A resolved document (eager): ``select``/``select_all``/``attr``/``text``/
+    ``render``/events, plus the live interaction set when backed by a page.
+    Construct from a core (``Document(core)``) or from core-field kwargs
+    (unknown keys are ignored)."""
+
+    def __init__(self, core: Any = None, **fields: Any) -> None:
+        if not isinstance(core, DocumentCore):
+            known = {k: v for k, v in fields.items()
+                     if k in DocumentCore.model_fields}
+            core = DocumentCore(**known)
+        super().__init__(core)
+
+    if TYPE_CHECKING:
+        # >>> generated: Document eager surface <<<
+        id: str
+        name: str
+        root: str
+        session_id: str
+        kind: str
+        url: str
+        content: bytes
+        status_code: int
+        response_headers: Any
+        encoding: str | None
+        elapsed: float | None
+        created: float
+        accessed: float
+        @property
+        def ok(self) -> bool: ...
+        @property
+        def text(self) -> str: ...
+        @property
+        def title(self) -> str: ...
+        @property
+        def message(self) -> str: ...
+        @property
+        def events(self) -> list[Any]: ...
+        @property
+        def action_events(self) -> list[Any]: ...
+        @property
+        def dom_mutations(self) -> list[Any]: ...
+        def select(self, selector: str, *, index: int = ...,
+                   error: Any = ...) -> "Document": ...
+        def select_all(self, selector: str, *, limit: int | None = ...,
+                       offset: int = ...) -> "Collection[Document]": ...
+        @overload
+        def attr(self, name: Literal["href", "src", "action"]) -> "Reference": ...  # type: ignore[overload-overlap]
+        @overload
+        def attr(self, name: str, *, error: Any = ...) -> "Field[str]": ...
+        def is_ok(self) -> "Field[bool]": ...
+        def is_empty(self) -> "Field[bool]": ...
+        def ref(self) -> "Reference": ...
+        def events_of(self, event_type: Any) -> list[Any]: ...
+        def reload(self) -> "Document": ...
+        def summary(self) -> dict[str, Any]: ...
+        def click(self, selector: str | None = ..., *, timeout: float = ...,
+                  optional: bool = ...) -> "Document": ...
+        def write(self, selector: str, text: str, *, timeout: float = ...,
+                  optional: bool = ...) -> "Document": ...
+        def wait_for(self, selector: str | None = ..., *,
+                     timeout: float = ...) -> "Document": ...
+        def evaluate(self, script: str) -> Any: ...
+        def screenshot(self, selector: str | None = ...) -> "Document": ...
+        @overload
+        def render(self, format: Literal["elements"]) -> "list[Element]": ...
+        @overload
+        def render(self, format: Literal["links"]) -> "Collection[Reference]": ...
+        @overload
+        def render(self, format: str, **options: Any) -> str: ...
+        @property
+        def final_url(self) -> str | None: ...
+        @property
+        def error(self) -> Any: ...
         # >>> end generated <<<
 
 
