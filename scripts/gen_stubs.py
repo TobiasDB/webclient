@@ -96,7 +96,10 @@ def _name(tp: Any) -> str:
 
 
 def _render(tp: Any, tier: str) -> str:
-    """Map an op's return type into the tier's vocabulary (see module docstring)."""
+    """Map an op's return type into the tier's vocabulary (see module docstring).
+    ``client`` is like ``lazy`` (a Core maps to its lazy surface) but a value
+    return is a ``Lazy[T]`` handle -- a client verb records a plan you collect,
+    not a chainable field/list."""
     inner = typeinfo.unwrap_union(tp)
     cat = typeinfo.classify(inner, CORES)
     if cat == "core":
@@ -107,11 +110,14 @@ def _render(tp: Any, tier: str) -> str:
             sub = (SURFACE if tier == "eager" else LAZY)[el]
             box = "Collection" if tier == "eager" else "LazyCollection"
             return f"{box}[{sub}]"
-        return f"list[{_name(el)}]"  # an iterable of non-cores stays a list
+        listed = f"list[{_name(el)}]"  # an iterable of non-cores stays a list
+        return f"Lazy[{listed}]" if tier == "client" else listed
     if typing.get_origin(inner) is Field:  # a value leaf
         base = _name(typeinfo.element_type(inner))
         return f"Field[{base}]" if tier == "eager" else f"LazyField[{base}]"
     base = _name(inner)  # a plain scalar
+    if tier == "client":
+        return f"Lazy[{base}]"
     return base if tier == "eager" else f"LazyField[{base}]"
 
 
@@ -334,9 +340,10 @@ def _body(region: str) -> str:
     if region == "collection element-op lifting":
         return _indented(lift_members(), 8)
     if region == "WebClient surface":
-        # an authoring root: only its verbs, in the lazy vocabulary (ref ->
-        # LazyReference, fetch -> LazyDocument); no data model.
-        verbs = members(WebClientCore, "lazy", fields=False, class_props=False)
+        # an authoring root: only its verbs, in the client vocabulary (ref ->
+        # LazyReference, fetch -> LazyDocument, search -> Lazy[list[...]]); no
+        # data model.
+        verbs = members(WebClientCore, "client", fields=False, class_props=False)
         return _indented(verbs, 8)
     raise KeyError(region)
 
