@@ -9,10 +9,12 @@ supply the static types; this is the one runtime behind all of them.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar
 
 
 from .core.web_core import WebCore
+
+C = TypeVar("C", bound=WebCore)
 
 #: core class -> its eager Surface class (filled by ``@surface``)
 _REGISTRY: dict[type, type] = {}
@@ -47,12 +49,15 @@ def wrap(value: Any, *, client: Any = None) -> Any:
     return value
 
 
-class Surface:
-    """Runtime eager object: dispatches ops on ``_core``, wraps Core results."""
+class Surface(Generic[C]):
+    """Runtime eager object: dispatches ops on ``_core``, wraps Core results.
+    Generic over its core type so subclasses (``Reference``/``Document``) get a
+    precisely-typed ``_core`` (set via object.__setattr__, so declared here)."""
 
     __slots__ = ("_core",)
+    _core: C
 
-    def __init__(self, core: WebCore) -> None:
+    def __init__(self, core: C) -> None:
         object.__setattr__(self, "_core", core)
 
     def __setattr__(self, name: str, value: Any) -> None:

@@ -40,10 +40,32 @@ strict = true
 # Checking their DEFINITIONS trips codes that are inherent to stub form; suppress
 # only those, only here -- every other strict check still applies to these files.
 [[tool.mypy.overrides]]
-module = ["webclient.models", "webclient.surfaces", "webclient.collection"]
-disable_error_code = ["empty-body", "no-overload-impl", "overload-overlap"]
+module = [
+    "webclient.models",
+    "webclient.surfaces",
+    "webclient.collection",
+    # document_core hand-writes the same intentionally-overlapping backing
+    # overloads (attr href->Reference vs str->Field; render by format) the stubs
+    # are generated from -- the overlap is by design.
+    "webclient.core.document_core",
+]
+disable_error_code = [
+    "empty-body",
+    "no-overload-impl",
+    "overload-overlap",
+    "unused-ignore",  # the codegen'd/backing overlap ignores are moot under the above
+]
 
 [tool.pyright]
 # The project targets 3.12 (requires-python). Pin it so pyright does not fall
 # back to the system interpreter's version for stdlib typing (assert_type etc.).
 pythonVersion = "3.12"
+# Resolve optional deps (lxml, playwright) from the uv-managed venv.
+venvPath = "."
+venv = "env"
+# The library's core pattern is value-dependent overloads (attr href->Reference
+# vs str->Field; render by format) -- intentionally overlapping -- and the
+# code-generated surface stubs declare overloads without an implementation body
+# (validated at their use-site by tests/fixtures/typing_surface.py).
+reportOverlappingOverload = false
+reportNoOverloadImplementation = false

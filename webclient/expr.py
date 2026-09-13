@@ -11,7 +11,7 @@ are cast to (see ``scripts.gen_stubs``); at runtime every value in a chain is an
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, NoReturn, TypeVar, cast
 
 from .plan import Arg, Plan, Step
 
@@ -29,6 +29,8 @@ class Expr:
     """A recorded chain rooted at a ``Plan`` (optionally bound to a client)."""
 
     __slots__ = ("_plan", "_client")
+    _plan: Plan  # declared so mypy reads these, not the recording __getattr__
+    _client: Any
 
     def __init__(self, plan: Plan, client: Any = None) -> None:
         object.__setattr__(self, "_plan", plan)
@@ -58,11 +60,11 @@ class Expr:
         args = [] if other is _MISSING else [to_arg(other)]
         return self._extend(Step(kind="op", name=name, args=args))
 
-    def __eq__(self, o: Any) -> "Expr":
-        return self._op("eq", o)  # type: ignore[override]
+    def __eq__(self, o: Any) -> "Expr":  # type: ignore[override]
+        return self._op("eq", o)
 
-    def __ne__(self, o: Any) -> "Expr":
-        return self._op("ne", o)  # type: ignore[override]
+    def __ne__(self, o: Any) -> "Expr":  # type: ignore[override]
+        return self._op("ne", o)
 
     def __lt__(self, o: Any) -> "Expr":
         return self._op("lt", o)
@@ -87,7 +89,7 @@ class Expr:
 
     __hash__ = None  # type: ignore[assignment]
 
-    def _coerce(self, what: str) -> Any:
+    def _coerce(self, what: str) -> NoReturn:
         raise TypeError(
             f"a lazy expression has no {what}: it records, it does not run. "
             "Use it inside extract(...) / filter(...) or with `& | ~` -- not "
@@ -155,12 +157,12 @@ def reference(url: str, **kwargs: Any) -> "Reference":
     from .core.reference_core import from_url
 
     spec = from_url(url, **kwargs).model_dump()
-    return Expr(Plan(root="Reference", source=spec))
+    return cast("Reference", Expr(Plan(root="Reference", source=spec)))
 
 
 def field(name: str) -> Any:
     """A value already extracted in the surrounding row/context."""
-    return doc.field(name)
+    return cast(Any, doc).field(name)
 
 
 def _fn(name: str, expr: Any) -> Expr:

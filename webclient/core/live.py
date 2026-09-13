@@ -10,7 +10,7 @@ and DOM mutations are captured onto the document as events (so ``console`` /
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ..events import ActionEvent, ConsoleEvent, DOMUpdateEvent
 from .web_core import Backing
@@ -60,14 +60,14 @@ async def drain(doc: Any) -> None:
     for r in await doc._page.evaluate(_DRAIN_JS):
         doc._events.append(
             DOMUpdateEvent(
-                kind=_kind(r), detail={"ids": r["ids"]}, document_id=doc.name
+                kind=cast(Any, _kind(r)), detail={"ids": r["ids"]}, document_id=doc.name
             )
         )
 
 
 def console_event(level: str, text: str, doc: Any) -> ConsoleEvent:
     return ConsoleEvent(
-        level=_LEVELS.get(level, "log"), text=text, document_id=doc.name
+        level=cast(Any, _LEVELS.get(level, "log")), text=text, document_id=doc.name
     )
 
 
@@ -107,7 +107,7 @@ class LiveBacking(Backing):
                 core, "click", selector=selector, timeout=timeout, optional=optional
             )
         )
-        return core
+        return cast("DocumentCore", core)
 
     def write(
         self,
@@ -128,27 +128,33 @@ class LiveBacking(Backing):
                 optional=optional,
             )
         )
-        return core
+        return cast("DocumentCore", core)
 
     def wait_for(
         self, core: Any, selector: str | None = None, *, timeout: float | None = None
     ) -> "DocumentCore":
         self._loop(core).run(self._await_for(core, selector, timeout))
-        return core
+        return cast("DocumentCore", core)
 
     def select(
         self, core: Any, selector: str, *, index: int = 0, error: Any = None
     ) -> "DocumentCore":
-        return self._loop(core).run(self._aselect(core, selector, index, error))
+        return cast(
+            "DocumentCore",
+            self._loop(core).run(self._aselect(core, selector, index, error)),
+        )
 
     def select_all(self, core: Any, selector: str) -> "list[DocumentCore]":
-        return self._loop(core).run(self._aselect_all(core, selector))
+        return cast(
+            "list[DocumentCore]",
+            self._loop(core).run(self._aselect_all(core, selector)),
+        )
 
     def evaluate(self, core: Any, script: str) -> Any:
         return self._loop(core).run(core._page.evaluate(script))
 
     def screenshot(self, core: Any, selector: str | None = None) -> "DocumentCore":
-        return self._loop(core).run(self._ashot(core, selector))
+        return cast("DocumentCore", self._loop(core).run(self._ashot(core, selector)))
 
     # -- async bodies --------------------------------------------------------
     async def _aact(

@@ -64,7 +64,7 @@ class EngineLoop:
         to GC. Backpressure comes from the bounded queue; the consumer pulls
         each item with its own ``run_coroutine_threadsafe(get())``.
         """
-        q: asyncio.Queue = asyncio.Queue(maxsize=max(1, buffer))
+        q: asyncio.Queue[Any] = asyncio.Queue(maxsize=max(1, buffer))
         box: dict[str, Any] = {}
 
         async def _pump() -> None:

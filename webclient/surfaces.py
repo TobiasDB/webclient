@@ -4,7 +4,7 @@ signature blocks (marked ``>>> generated <<<``) are produced by
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Coroutine, Literal, TypeVar, cast, overload
 
 from .core.client_core import WebClientCore
 from .core.document_core import DocumentCore
@@ -22,7 +22,7 @@ T = TypeVar("T")
 
 
 @surface(ReferenceCore)
-class Reference(Surface):
+class Reference(Surface[ReferenceCore]):
     """A request spec (eager): ``url``/``with_params``/``replace``/``join``/
     ``resolve``. Construct from a core (``Reference(core)``) or directly from
     spec fields (``Reference(hostname=..., path=...)``)."""
@@ -80,7 +80,7 @@ class Reference(Surface):
 
 
 @surface(DocumentCore)
-class Document(Surface):
+class Document(Surface[DocumentCore]):
     """A resolved document (eager): ``select``/``select_all``/``attr``/``text``/
     ``render``/events, plus the live interaction set when backed by a page.
     Construct from a core (``Document(core)``) or from core-field kwargs
@@ -227,11 +227,11 @@ class Session:
 
     @property
     def id(self) -> str:
-        return self._core.id
+        return cast(str, self._core.id)
 
     @property
     def status(self) -> str:
-        return self._core.status
+        return cast(str, self._core.status)
 
     @property
     def expires_at(self) -> Any:
@@ -239,11 +239,11 @@ class Session:
 
     @property
     def cookies(self) -> dict[str, str]:
-        return self._core.cookies
+        return cast("dict[str, str]", self._core.cookies)
 
 
 @surface(WebClientCore)
-class _ClientDispatch(Surface):
+class _ClientDispatch(Surface[WebClientCore]):
     """The eager view the executor uses to run a ``WebClient``-rooted plan: it
     dispatches the client's authoring backings (ref/fetch/summary) to real
     cores. Users always hold the lazy ``WebClient``; this is internal."""
@@ -378,7 +378,6 @@ class AsyncWebClient(_ClientBase):
     not block it."""
 
     if TYPE_CHECKING:
-        from typing import Coroutine
 
         @overload
         def execute(

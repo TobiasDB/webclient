@@ -132,7 +132,7 @@ def create_app(wc: WebClient | None = None, token: str | None = None) -> FastAPI
         await ws.accept()
         topic = ws.query_params.get("topic", "")
         loop = asyncio.get_event_loop()
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue[Any] = asyncio.Queue()
 
         def handler(event: Any) -> None:  # engine thread -> server loop
             loop.call_soon_threadsafe(queue.put_nowait, event.model_dump(mode="json"))

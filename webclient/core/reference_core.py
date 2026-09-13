@@ -7,7 +7,7 @@ Pure data + dispatch, like every core.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from pydantic import BaseModel, PrivateAttr
@@ -87,7 +87,7 @@ class ResolveBacking(Backing):
         loop = target.loop()
         # On the engine loop (the async executor) hand back the coroutine to
         # await; off it (a sync caller) bridge onto the loop.
-        return coro if loop.on_loop_thread() else loop.run(coro)
+        return cast("DocumentCore", coro if loop.on_loop_thread() else loop.run(coro))
 
 
 class ReferenceCore(WebCore, BaseModel):

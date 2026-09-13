@@ -11,17 +11,17 @@ round-trip -- so the surface is unchanged; only the core differs.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from ..engine import http as engine_http
 from ..engine.loop import EngineLoop
-from ..errors import WebException, error_for
+from ..errors import WebError, WebException, error_for
 from ..events import EventBus, NavigationEvent, NetworkEvent
 from . import live as _live
 from .document_core import DocumentCore
-from .reference_core import ReferenceCore, from_url
+from .reference_core import HttpMethod, ReferenceCore, from_url
 from .web_core import Backing, WebCore
 
 
@@ -89,7 +89,7 @@ class FetchBacking(Backing):
         surface, or a ``ReferenceCore``."""
         spec = getattr(url, "_core", url)  # unwrap a Reference surface
         if not isinstance(spec, ReferenceCore):
-            spec = from_url(url, method, **kw)
+            spec = from_url(url, cast(HttpMethod, method), **kw)
         spec._client = core
         return spec
 
@@ -108,7 +108,9 @@ class FetchBacking(Backing):
         """Resolve ``ref(url)`` into a document (via the reference's resolve op,
         so it is async-aware on the engine loop)."""
         ref = self.ref(core, url, **kw)
-        return ref.dispatch("resolve", optional=optional, error=error)
+        return cast(
+            DocumentCore, ref.dispatch("resolve", optional=optional, error=error)
+        )
 
     def summary(self, core: "WebClientCore", url: Any, **kw: Any) -> "dict[str, Any]":
         """Resolve ``url`` to a title + markdown digest (async-aware)."""
@@ -116,10 +118,12 @@ class FetchBacking(Backing):
 
         async def run() -> "dict[str, Any]":
             doc = await core.afetch(ref)
-            return doc.dispatch("summary")
+            return cast("dict[str, Any]", doc.dispatch("summary"))
 
         loop = core.loop()
-        return run() if loop.on_loop_thread() else loop.run(run())
+        return cast(
+            "dict[str, Any]", run() if loop.on_loop_thread() else loop.run(run())
+        )
 
 
 class WebClientCore(WebCore, BaseModel):
@@ -142,13 +146,13 @@ class WebClientCore(WebCore, BaseModel):
     _scope: Any = PrivateAttr(default=None)  # the client's NameScope (000)
     _scope_counter: int = PrivateAttr(default=0)  # next session scope index
     _bus: Any = PrivateAttr(default=None)  # EventBus (lazy)
-    _sessions: list = PrivateAttr(default_factory=list)  # sessions to close
+    _sessions: list[Any] = PrivateAttr(default_factory=list)  # sessions to close
 
     @property
     def bus(self) -> EventBus:
         if self._bus is None:
             self._bus = EventBus()
-        return self._bus
+        return cast(EventBus, self._bus)
 
     def model_post_init(self, _ctx: Any) -> None:
         self._scope = NameScope(0, cap=self.names_cap)
@@ -171,7 +175,7 @@ class WebClientCore(WebCore, BaseModel):
         self._scope_counter += 1
         return NameScope(self._scope_counter)
 
-    def _scopes(self) -> list:
+    def _scopes(self) -> list[Any]:
         """The client scope plus every live session scope."""
         return [
             self._scope,
@@ -203,7 +207,7 @@ class WebClientCore(WebCore, BaseModel):
     def loop(self) -> EngineLoop:
         if self._loop is None:
             self._loop = EngineLoop()
-        return self._loop
+        return cast(EngineLoop, self._loop)
 
     @property
     def pool(self) -> Any:
@@ -249,7 +253,7 @@ class WebClientCore(WebCore, BaseModel):
             doc._client = self
             self._register(doc, ref)
             if not optional:
-                raise WebException(doc.error, document=doc) from exc
+                raise WebException(cast(WebError, doc.error), document=doc) from exc
             return doc
         kind = engine_http.sniff_kind(resp.headers.get("content-type"), resp.content)
         doc = DocumentCore(
@@ -372,7 +376,7 @@ class WebClientCore(WebCore, BaseModel):
     async def _areload(self, core: DocumentCore) -> DocumentCore:
         if core._page is not None or (core._ref is not None and core._ref.actions):
             return await self._alive(core._ref, replay=list(core._ref.actions))
-        return await self.afetch(core._ref)  # plain HTTP refetch
+        return await self.afetch(cast(ReferenceCore, core._ref))  # plain HTTP refetch
 
     def release(self, doc: DocumentCore) -> None:
         """Return a live document's page lease to the pool."""

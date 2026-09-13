@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import operator
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable, cast
 
 from .expr import Expr
 from .plan import Arg, Step
@@ -44,7 +44,7 @@ def _iscoro(value: Any) -> bool:
 def _fanout_limit(client: Any) -> int:
     pool = getattr(client, "_pool", None)
     limits = getattr(pool, "_limits", None) if pool is not None else None
-    return (limits or {}).get("http", DEFAULT_FANOUT)
+    return cast(int, (limits or {}).get("http", DEFAULT_FANOUT))
 
 
 def _row_of(value: Any) -> dict[str, Any] | None:
@@ -125,7 +125,7 @@ async def _aapply(
         if _iscoro(result):
             from .surface import wrap
 
-            result = wrap(await result)
+            result = wrap(await cast(Any, result))
         return result, i + 1
     raise ValueError(f"cannot evaluate step {step.kind!r}")
 

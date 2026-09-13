@@ -11,7 +11,7 @@ op a plan rooted at the server-side document id, run with one more round trip.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from pydantic import PrivateAttr
@@ -19,12 +19,12 @@ from pydantic import PrivateAttr
 from ..expr import Expr
 from ..plan import Plan
 from .client_core import WebClientCore
-from .reference_core import ReferenceCore
+from .reference_core import HttpMethod, ReferenceCore
 from .reference_core import from_url as _core_from_url
 
 
 def _url_of(source: dict[str, Any]) -> str:
-    return ReferenceCore(**source).dispatch("url")
+    return cast(str, ReferenceCore(**source).dispatch("url"))
 
 
 class _RemoteDoc:
@@ -124,7 +124,7 @@ class RemoteSession:
         self._status = "running"
 
     def ref(self, url: str, method: str = "get", **kw: Any) -> Any:
-        spec = _core_from_url(url, method, **kw).model_dump()
+        spec = _core_from_url(url, cast(HttpMethod, method), **kw).model_dump()
         return Expr(
             Plan(root="Reference", source=spec, session_id=self._id), self._core
         )

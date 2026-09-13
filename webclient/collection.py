@@ -10,7 +10,7 @@ is the value leaf (``get`` + ``is_ok``/``is_empty`` + comparisons + truthiness).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, Iterator, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Iterator, TypeVar, cast
 
 T = TypeVar("T")
 
@@ -28,11 +28,11 @@ class Field(Generic[T]):
         self._ok = ok and value is not None
 
     def get(self, default: Any = None) -> T:
-        return self._value if self._ok else default
+        return cast(T, self._value if self._ok else default)
 
     @property
     def value(self) -> T:
-        return self._value
+        return cast(T, self._value)
 
     @property
     def ok(self) -> bool:
@@ -48,7 +48,7 @@ class Field(Generic[T]):
         return bool(self._value) if self._ok else False
 
     def __eq__(self, o: Any) -> bool:  # type: ignore[override]
-        return self.get() == (o.get() if isinstance(o, Field) else o)
+        return bool(self.get() == (o.get() if isinstance(o, Field) else o))
 
     def __ne__(self, o: Any) -> bool:  # type: ignore[override]
         return not self.__eq__(o)
@@ -75,7 +75,7 @@ def _row_of(element: Any, *, create: bool = True) -> dict[str, Any] | None:
         return None
     if core._row is None and create:
         core._row = {}
-    return core._row
+    return cast("dict[str, Any] | None", core._row)
 
 
 class Collection(Generic[T]):
@@ -100,7 +100,7 @@ class Collection(Generic[T]):
         return len(self._items)
 
     def __getitem__(self, i: int) -> T:
-        return self._items[i]
+        return cast(T, self._items[i])
 
     def __repr__(self) -> str:
         return f"Collection({len(self._items)} items)"
@@ -189,11 +189,11 @@ class Collection(Generic[T]):
 
     def extract(self, **exprs: Any) -> "Collection[T]":
         """Eager form of :meth:`aextract` (bridged onto the engine loop)."""
-        return self._loop().run(self.aextract(**exprs))
+        return cast("Collection[T]", self._loop().run(self.aextract(**exprs)))
 
     def filter(self, *predicates: Any) -> "Collection[T]":
         """Eager form of :meth:`afilter` (bridged onto the engine loop)."""
-        return self._loop().run(self.afilter(*predicates))
+        return cast("Collection[T]", self._loop().run(self.afilter(*predicates)))
 
     def documents(self, column: str) -> "Collection[Any]":
         """Flatten a column whose values are Collections/lists of documents
@@ -218,7 +218,7 @@ class Collection(Generic[T]):
         return out
 
     def _derive(self, items: list[Any]) -> "Collection[T]":
-        out = Collection(items, client=self._client, root=self.root)
+        out: Collection[T] = Collection(items, client=self._client, root=self.root)
         out.name = self.name
         return out
 

@@ -9,6 +9,7 @@ import pytest
 
 ROOT = Path(__file__).parent.parent
 FIXTURE = ROOT / "tests" / "fixtures" / "typing_surface.py"
+PACKAGE = ROOT / "webclient"
 BIN = Path(sys.executable).parent
 
 
@@ -25,6 +26,20 @@ def test_surface_type_checks_under_mypy_strict():
 @pytest.mark.skipif(not (BIN / "pyright").exists(), reason="pyright not installed")
 def test_surface_type_checks_under_pyright():
     _run([str(BIN / "pyright"), str(FIXTURE)])
+
+
+@pytest.mark.skipif(not (BIN / "mypy").exists(), reason="mypy not installed")
+def test_whole_package_is_mypy_strict_clean():
+    """Full strictness: the entire package (not just the fixture) type-checks
+    under mypy --strict (config in pyproject carves out only the codegen'd
+    stub-inherent codes)."""
+    _run([str(BIN / "mypy"), "--strict", str(PACKAGE)])
+
+
+@pytest.mark.skipif(not (BIN / "pyright").exists(), reason="pyright not installed")
+def test_whole_package_is_pyright_clean():
+    """Full strictness: the entire package passes pyright."""
+    _run([str(BIN / "pyright"), str(PACKAGE)])
 
 
 def test_collection_stub_is_generated_from_the_registry():

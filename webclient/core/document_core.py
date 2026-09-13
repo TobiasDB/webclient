@@ -12,7 +12,7 @@ from __future__ import annotations
 import copy
 import json as _json
 import re
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, overload
 from urllib.parse import urljoin
 
 from pydantic import BaseModel, PrivateAttr
@@ -193,12 +193,14 @@ class StatusBacking(Backing):
 
     def ref(self, core: "DocumentCore") -> "ReferenceCore | None":
         """The reference that produced this document (for reload / recovery)."""
-        return core._ref
+        return cast("ReferenceCore | None", core._ref)
 
     def reload(self, core: "DocumentCore") -> "DocumentCore":
         """Re-resolve on a fresh page, replaying the recorded action chain --
         available even after the page was released."""
-        return core._client.loop().run(core._client._areload(core))
+        return cast(
+            "DocumentCore", core._client.loop().run(core._client._areload(core))
+        )
 
     def summary(self, core: "DocumentCore") -> dict[str, Any]:
         """A page digest: url / ok, plus title + markdown when available."""
@@ -539,7 +541,7 @@ class DocumentCore(WebCore, BaseModel):
     _tree: Any = PrivateAttr(default=None)  # cached lxml parse
     _data: Any = PrivateAttr(default=None)  # cached json
     _missing: bool = PrivateAttr(default=False)  # a selection that missed
-    _events: list = PrivateAttr(default_factory=list)  # events routed here
+    _events: list[Any] = PrivateAttr(default_factory=list)  # events routed here
     _page: Any = PrivateAttr(default=None)  # playwright Page (live document)
     _lease: Any = PrivateAttr(default=None)  # the page's pool lease (live document)
     _row: Any = PrivateAttr(default=None)  # extracted columns (extract/field)
