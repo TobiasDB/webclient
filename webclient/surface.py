@@ -3,13 +3,14 @@
 A ``Surface`` holds a core and turns attribute access into behaviour: a Core
 data field reads through; a property op dispatches; a call op returns a
 dispatcher. Every Core-typed result is auto-wrapped back into its surface, so
-chaining stays on the surface. The generated stub classes (``webclient.gen``)
+chaining stays on the surface. The generated stub classes (``scripts.gen_stubs``)
 supply the static types; this is the one runtime behind all of them.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, TypeVar
+
 
 from .core.web_core import WebCore
 
@@ -19,9 +20,9 @@ _REGISTRY: dict[type, type] = {}
 
 def wrap(value: Any, *, client: Any = None) -> Any:
     """Core -> its Surface; a list of cores -> a ``Collection`` of surfaces;
-    any other list/tuple -> the same with items wrapped; else as-is. A core's
-    surface is cached on it, so wrapping the same core twice yields the same
-    surface object (identity: ``wc.document(name) is shop``)."""
+    any other list/tuple -> the same with items wrapped; else as-is. The core
+    owns its single surface (``_surface``), so wrapping the same core twice
+    yields the same object (identity: ``wc.document(name) is shop``)."""
     if isinstance(value, WebCore):
         cached = getattr(value, "_surface", None)
         if cached is not None:

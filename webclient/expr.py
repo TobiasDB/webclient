@@ -5,7 +5,7 @@ extending its plan; nothing runs until the executor walks it (via
 ``Expr.collect`` / ``WebClient.execute``). The recorder knows nothing about the
 cores or surfaces -- the one safety boundary is that a ``_``-prefixed name is
 never recordable. Static types come from the generated surface stubs the roots
-are cast to (see ``webclient.gen``); at runtime every value in a chain is an
+are cast to (see ``scripts.gen_stubs``); at runtime every value in a chain is an
 ``Expr``.
 """
 

@@ -19,8 +19,6 @@ from typing import Any, Awaitable, Callable
 from .expr import Expr
 from .plan import Arg, Step
 
-DEFAULT_FANOUT = 8
-
 
 def _row_of(value: Any) -> dict[str, Any] | None:
     """The extracted-columns dict for an element (a row dict is its own; a

@@ -23,8 +23,7 @@ DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443}
 
 def _derive(original: "ReferenceCore", copy: "ReferenceCore") -> "ReferenceCore":
     """A derived reference: unnamed, rooted at the original, and with a fresh
-    surface slot (model_copy carries private attrs, which would otherwise
-    return the stale surface)."""
+    surface slot (model_copy carries private attrs, else the stale surface)."""
     copy._surface = None
     copy.name = ""
     copy.root = original.name or original.root
@@ -115,7 +114,7 @@ class ReferenceCore(WebCore, BaseModel):
 
     _client: Any = PrivateAttr(default=None)
     _session: Any = PrivateAttr(default=None)
-    _surface: Any = PrivateAttr(default=None)  # cached eager surface (identity)
+    _surface: Any = PrivateAttr(default=None)  # the core's single eager surface
 
     @property
     def ok(self) -> bool:

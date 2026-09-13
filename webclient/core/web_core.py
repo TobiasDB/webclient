@@ -9,7 +9,7 @@ dispatch that ``DocumentCore`` used, so all four cores share one mechanism.
 
 The cores carry data ("Core Fields") and talk to each other; the user-facing
 surface (``LazyDocument`` / ``Document`` / ...) is GENERATED from a core's
-fields + its backings' ops (see ``webclient.gen``), never hand-written.
+fields + its backings' ops (see ``scripts.gen_stubs``), never hand-written.
 """
 
 from __future__ import annotations

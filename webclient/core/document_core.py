@@ -527,10 +527,10 @@ class DocumentCore(WebCore, BaseModel):
     _tree: Any = PrivateAttr(default=None)  # cached lxml parse
     _data: Any = PrivateAttr(default=None)  # cached json
     _missing: bool = PrivateAttr(default=False)  # a selection that missed
-    _surface: Any = PrivateAttr(default=None)  # cached eager surface (identity)
     _events: list = PrivateAttr(default_factory=list)  # events routed here
     _page: Any = PrivateAttr(default=None)  # playwright Page (live document)
     _row: Any = PrivateAttr(default=None)  # extracted columns (extract/field)
+    _surface: Any = PrivateAttr(default=None)  # the core's single eager surface
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (
         StatusBacking(),
