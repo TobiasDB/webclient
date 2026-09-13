@@ -35,13 +35,12 @@ def wrap(value: Any, *, client: Any = None) -> Any:
             pass
         return surf
     if isinstance(value, (list, tuple)):
-        wrapped = [wrap(v) for v in value]
-        if value and all(isinstance(v, WebCore) for v in value):
-            from .collection import Collection
-            owner = client or getattr(value[0], "_client", None)
-            name = getattr(value[0], "root", "") or getattr(value[0], "name", "")
-            return Collection(wrapped, client=owner, name=name)
-        return type(value)(wrapped)
+        if not any(isinstance(v, WebCore) for v in value):
+            return value                 # nothing to wrap; preserve identity
+        from .collection import Collection
+        owner = client or getattr(value[0], "_client", None)
+        root = getattr(value[0], "root", "") or getattr(value[0], "name", "")
+        return Collection([wrap(v) for v in value], client=owner, root=root)
     return value
 
 

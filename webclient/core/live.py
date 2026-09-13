@@ -61,7 +61,8 @@ def console_event(level: str, text: str, doc: Any) -> ConsoleEvent:
 class LiveBacking(Backing):
     """Interaction + live selection on a browser page (capability ``page``)."""
 
-    provides = frozenset({"click", "write", "wait_for", "select", "select_all"})
+    provides = frozenset({"click", "write", "wait_for", "select", "select_all",
+                          "evaluate", "screenshot"})
     props = frozenset({"dom_mutations", "console"})
     gate = "page"
 
@@ -80,17 +81,18 @@ class LiveBacking(Backing):
 
     # -- interactions (sync; bridge onto the engine loop) --------------------
     def click(self, core: Any, selector: str | None = None, *,
-              timeout: float | None = None) -> Any:
-        self._loop(core).run(self._aact(core, "click", selector=selector, timeout=timeout))
+              timeout: float | None = None, optional: bool = False) -> Any:
+        self._loop(core).run(self._aact(core, "click", selector=selector,
+                                        timeout=timeout, optional=optional))
         return core
 
     def write(self, core: Any, selector: str, text: str, *,
-              timeout: float | None = None) -> Any:
+              timeout: float | None = None, optional: bool = False) -> Any:
         self._loop(core).run(self._aact(core, "write", selector=selector,
-                                        text=text, timeout=timeout))
+                                        text=text, timeout=timeout, optional=optional))
         return core
 
-    def wait_for(self, core: Any, selector: str, *,
+    def wait_for(self, core: Any, selector: str | None = None, *,
                  timeout: float | None = None) -> Any:
         self._loop(core).run(self._await_for(core, selector, timeout))
         return core
@@ -102,9 +104,16 @@ class LiveBacking(Backing):
     def select_all(self, core: Any, selector: str) -> Any:
         return self._loop(core).run(self._aselect_all(core, selector))
 
+    def evaluate(self, core: Any, script: str) -> Any:
+        return self._loop(core).run(core._page.evaluate(script))
+
+    def screenshot(self, core: Any, selector: str | None = None) -> Any:
+        return self._loop(core).run(self._ashot(core, selector))
+
     # -- async bodies --------------------------------------------------------
     async def _aact(self, core: Any, action: str, *, selector: str | None = None,
-                    text: str | None = None, timeout: float | None = None) -> None:
+                    text: str | None = None, timeout: float | None = None,
+                    optional: bool = False) -> None:
         ms = (timeout or 30.0) * 1000
         core._client.bus.publish(ActionEvent(
             action=action, args={"selector": selector, "text": text},
@@ -114,22 +123,45 @@ class LiveBacking(Backing):
                 k: v for k, v in (("selector", selector), ("text", text))
                 if v is not None}})
         loc = core._page.locator(selector or "*").first
-        if action == "click":
-            await loc.click(timeout=ms)
-        elif action == "write":
-            await loc.fill(text or "", timeout=ms)
+        try:
+            if action == "click":
+                await loc.click(timeout=ms)
+            elif action == "write":
+                await loc.fill(text or "", timeout=ms)
+        except Exception as exc:
+            if optional and "Timeout" in type(exc).__name__:
+                return
+            if "Timeout" in type(exc).__name__:
+                raise LookupError(
+                    f"{action}: no target for {selector!r}") from exc
+            raise
         await drain(core)
 
-    async def _await_for(self, core: Any, selector: str,
+    async def _await_for(self, core: Any, selector: str | None,
                          timeout: float | None) -> None:
-        await core._page.wait_for_selector(selector, timeout=(timeout or 30.0) * 1000)
+        if selector is not None:
+            await core._page.wait_for_selector(selector, timeout=(timeout or 30.0) * 1000)
+        elif timeout is not None:
+            await core._page.wait_for_timeout(timeout * 1000)
         await drain(core)
+
+    async def _ashot(self, core: Any, selector: str | None) -> Any:
+        from .document_core import DocumentCore
+        target = core._page if selector is None else core._page.locator(selector).first
+        data = await target.screenshot(type="png")
+        shot = DocumentCore(url=core.url, kind="binary", content=data,
+                            status_code=core.status_code)
+        shot._client = core._client
+        return shot
 
     async def _aselect(self, core: Any, selector: str, index: int,
                        error: Any) -> Any:
+        from ..errors import RETURN
         from .document_core import DocumentCore
         loc = core._page.locator(selector)
         if await loc.count() <= index:
+            if error is not RETURN:                  # live select is loud by default
+                raise LookupError(f"no match for {selector!r}")
             sub = DocumentCore(url=core.url, kind="html",
                                status_code=core.status_code)
             sub._client = core._client

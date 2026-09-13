@@ -1,16 +1,27 @@
 """webclient -- declarative web client (ground-up rewrite in progress)."""
 from .collection import Collection, Field
-from .errors import RAISE, RETURN, WebError, WebException
-from .events import (ActionEvent, ConsoleEvent, DOMUpdateEvent, Event,
-                     NavigationEvent, NetworkEvent)
-from .expr import doc, field, filter, many, ref, reference, when
-from .remote import RemoteWebClient
-from .surfaces import (AsyncWebClient, Document, Reference, Renderer,
-                       SearchEngine, Session, WebClient, from_url)
+from .core.client_core import WebClientCore
+from .core.document_core import Element
+from .errors import (RAISE, RETURN, FetchError, RemoteError, WebError,
+                     WebException)
+from .events import (ActionEvent, AssetEvent, ConsoleEvent, DOMEvent,
+                     DOMLoadEvent, DOMSnapshotEvent, DOMUnloadEvent,
+                     DOMUpdateEvent, Event, EventBus, EventRegistry, FetchEvent,
+                     NavigationEvent, NetworkEvent, PlanEvent, XHREvent)
+from .expr import (doc, field, filter, from_plan, is_empty, is_ok, many, ref,
+                   reference, when)
+from .remote import RemoteWebClient, RemoteWebClientCore
+from .surfaces import (AsyncWebClient, Document, LiveDocument, Reference,
+                       Renderer, SearchEngine, Session, WebClient,
+                       default_client, from_url)
 
-__all__ = ["WebClient", "AsyncWebClient", "RemoteWebClient", "Session",
-           "SearchEngine", "Document", "Reference", "Renderer", "from_url",
-           "Collection", "Field", "reference", "doc", "ref", "many", "field",
-           "when", "filter", "RAISE", "RETURN", "WebError", "WebException",
-           "Event", "NetworkEvent", "NavigationEvent", "DOMUpdateEvent",
-           "ActionEvent", "ConsoleEvent"]
+__all__ = ["WebClient", "AsyncWebClient", "RemoteWebClient", "WebClientCore",
+           "RemoteWebClientCore", "Session", "SearchEngine", "Document",
+           "LiveDocument", "Reference", "Element", "Renderer", "from_url", "from_plan",
+           "default_client", "Collection", "Field", "reference", "doc", "ref",
+           "many", "field", "when", "filter", "is_empty", "is_ok", "RAISE",
+           "RETURN", "WebError", "WebException", "FetchError", "RemoteError",
+           "Event", "EventBus", "EventRegistry", "NetworkEvent", "NavigationEvent",
+           "XHREvent", "FetchEvent", "AssetEvent", "DOMEvent", "DOMLoadEvent",
+           "DOMUpdateEvent", "DOMUnloadEvent", "DOMSnapshotEvent", "ActionEvent",
+           "ConsoleEvent", "PlanEvent"]

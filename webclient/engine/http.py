@@ -48,6 +48,8 @@ def sniff_kind(content_type: str | None,
         return "json"
     if mime in ("text/xml", "application/xml") or mime.endswith("+xml"):
         return "xml"
+    if mime.startswith("text/"):          # text/plain etc. -> parse as html
+        return "html"
     head = content[:256].lstrip().lower()
     if head.startswith((b"<!doctype", b"<html")):
         return "html"

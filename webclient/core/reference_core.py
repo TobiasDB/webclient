@@ -20,6 +20,16 @@ HttpMethod = Literal["get", "post", "put", "patch", "delete", "head", "options"]
 DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443}
 
 
+def _derive(original: "ReferenceCore", copy: "ReferenceCore") -> "ReferenceCore":
+    """A derived reference: unnamed, rooted at the original, and with a fresh
+    surface slot (model_copy carries private attrs, which would otherwise
+    return the stale surface)."""
+    copy._surface = None
+    copy.name = ""
+    copy.root = original.name or original.root
+    return copy
+
+
 class DeriveBacking(Backing):
     """Pure request-spec derivations (no IO). ``url`` is a property op; the
     rest return a fresh ``ReferenceCore``."""
@@ -40,10 +50,11 @@ class DeriveBacking(Backing):
         return out
 
     def replace(self, core: "ReferenceCore", **fields: Any) -> "ReferenceCore":
-        return core.model_copy(update=fields)
+        return _derive(core, core.model_copy(update=fields))
 
     def with_params(self, core: "ReferenceCore", **params: str) -> "ReferenceCore":
-        return core.model_copy(update={"params": {**core.params, **params}})
+        return _derive(core, core.model_copy(
+            update={"params": {**core.params, **params}}))
 
     def join(self, core: "ReferenceCore", href: str) -> "ReferenceCore":
         return from_url(urljoin(self.url(core), href))
@@ -73,6 +84,7 @@ class ReferenceCore(WebCore, BaseModel):
     # -- Core Fields (the request spec) --------------------------------------
     kind: str = "webpage"
     name: str = ""                       # scoped name (the doc's `root`)
+    root: str = ""                       # the reference this was derived from
     hostname: str = ""
     method: HttpMethod = "get"
     scheme: str = "https"
@@ -92,6 +104,10 @@ class ReferenceCore(WebCore, BaseModel):
     _client: Any = PrivateAttr(default=None)
     _session: Any = PrivateAttr(default=None)
     _surface: Any = PrivateAttr(default=None)     # cached eager surface (identity)
+
+    @property
+    def ok(self) -> bool:
+        return bool(self.hostname)                # a well-formed request spec
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (DeriveBacking(), ResolveBacking())
 

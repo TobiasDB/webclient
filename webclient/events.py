@@ -105,6 +105,12 @@ class ConsoleEvent(Event):
     text: str
 
 
+class PlanEvent(Event):
+    topic: Topic = "plan"
+    phase: str = "started"           # started / row / done
+    detail: dict[str, Any] = {}
+
+
 CORE_EVENTS: tuple[type[Event], ...] = (
     NetworkEvent, XHREvent, FetchEvent, NavigationEvent, AssetEvent,
     DOMEvent, DOMLoadEvent, DOMUpdateEvent, DOMUnloadEvent, DOMSnapshotEvent,

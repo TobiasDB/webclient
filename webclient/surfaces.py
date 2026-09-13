@@ -16,13 +16,48 @@ from .surface import Surface, surface
 @surface(ReferenceCore)
 class Reference(Surface):
     """A request spec (eager): ``url``/``with_params``/``replace``/``join``/
-    ``resolve``."""
+    ``resolve``. Construct from a core (``Reference(core)``) or directly from
+    spec fields (``Reference(hostname=..., path=...)``)."""
+
+    def __init__(self, core: Any = None, **fields: Any) -> None:
+        if not isinstance(core, ReferenceCore):
+            core = ReferenceCore(**fields)
+        super().__init__(core)
+
+    # -- serialisation proxies (a Reference is a request spec on the wire) ---
+    def model_dump(self, **kw: Any) -> Any:
+        return self._core.model_dump(**kw)
+
+    def model_dump_json(self, **kw: Any) -> Any:
+        return self._core.model_dump_json(**kw)
+
+    @classmethod
+    def model_validate(cls, data: Any, **kw: Any) -> "Reference":
+        return cls(ReferenceCore.model_validate(data, **kw))
+
+    @classmethod
+    def model_validate_json(cls, data: Any, **kw: Any) -> "Reference":
+        return cls(ReferenceCore.model_validate_json(data, **kw))
 
 
 @surface(DocumentCore)
 class Document(Surface):
-    """A resolved document (eager): ``select``/``select_all``/``attr``/``text``
-    (render/live/events are later slices)."""
+    """A resolved document (eager): ``select``/``select_all``/``attr``/``text``/
+    ``render``/events, plus the live interaction set when backed by a page.
+    Construct from a core (``Document(core)``) or from core-field kwargs
+    (unknown keys are ignored)."""
+
+    def __init__(self, core: Any = None, **fields: Any) -> None:
+        if not isinstance(core, DocumentCore):
+            known = {k: v for k, v in fields.items()
+                     if k in DocumentCore.model_fields}
+            core = DocumentCore(**known)
+        super().__init__(core)
+
+
+#: A live (browser-backed) document is a Document with the ``page`` capability;
+#: the generated tier calls it ``LiveDocument``.
+LiveDocument = Document
 
 
 def from_url(url: str, method: HttpMethod = "get",
@@ -31,6 +66,17 @@ def from_url(url: str, method: HttpMethod = "get",
              cookies: dict[str, str] | None = None) -> Reference:
     """Build a :class:`Reference` from a URL string."""
     return Reference(_core_from_url(url, method, params, headers, cookies))
+
+
+_DEFAULT: "WebClient | None" = None
+
+
+def default_client() -> "WebClient":
+    """A process-local shared client, recreated after it is closed."""
+    global _DEFAULT
+    if _DEFAULT is None or _DEFAULT._core._closed:
+        _DEFAULT = WebClient()
+    return _DEFAULT
 
 
 class Renderer:
@@ -56,8 +102,8 @@ class SearchEngine(BaseModel):
 
 
 class Session:
-    """A logical identity (cookies/headers/ttl) spanning fetches. ``ref``
-    returns a lazy reference bound to this session."""
+    """A logical identity (cookies/headers/ttl) spanning fetches. ``ref`` and
+    ``fetch`` return lazy references bound to this session."""
 
     def __init__(self, core: Any) -> None:
         self._core = core
@@ -68,9 +114,29 @@ class Session:
         spec = _core_from_url(url, method, **kw).model_dump()
         return Expr(Plan(root="Reference", source=spec), self._core)
 
+    def fetch(self, url: str, **kw: Any) -> Any:
+        return self.ref(url, **kw).resolve()
+
+    def close(self) -> None:
+        self._core.close()
+
+    def document(self, name: str) -> Any:
+        """Recover a document from this session's scope, or ``None``."""
+        from .surface import wrap
+        core = self._core.document(name)
+        return wrap(core) if core is not None else None
+
+    @property
+    def id(self) -> str:
+        return self._core.id
+
     @property
     def status(self) -> str:
         return self._core.status
+
+    @property
+    def expires_at(self) -> Any:
+        return self._core.expires_at
 
     @property
     def cookies(self) -> dict[str, str]:
@@ -88,6 +154,23 @@ class _ClientBase:
         self._core = core if core is not None else WebClientCore(**policy)
 
     @property
+    def core(self) -> WebClientCore:
+        """The underlying engine core."""
+        return self._core
+
+    def _ensure_loop(self) -> Any:
+        """The engine loop (drives async fan-out / bridges sync callers)."""
+        return self._core.loop()
+
+    @property
+    def _scope(self) -> Any:
+        return self._core._scope
+
+    @property
+    def _closed(self) -> bool:
+        return getattr(self._core, "_closed", False)
+
+    @property
     def bus(self) -> Any:
         """The client's event bus (subscribe to network/dom/console topics)."""
         return self._core.bus
@@ -96,13 +179,19 @@ class _ClientBase:
         self._core.use(renderer)
         return self
 
-    def ref(self, url: str, method: HttpMethod = "get", **kw: Any) -> Any:
+    def ref(self, url: Any, method: HttpMethod = "get", **kw: Any) -> Any:
         """A lazy client-bound reference: ``.ref(url).resolve()...`` (statically
-        a ``Reference``; at runtime an Expr recording a plan)."""
+        a ``Reference``; at runtime an Expr recording a plan). ``url`` may be a
+        URL string, a ``Reference``, or a ``ReferenceCore``."""
         from .expr import Expr
         from .plan import Plan
-        spec = _core_from_url(url, method, **kw).model_dump()
-        return Expr(Plan(root="Reference", source=spec), self._core)
+        if isinstance(url, Reference):
+            core = url._core
+        elif isinstance(url, ReferenceCore):
+            core = url
+        else:
+            core = _core_from_url(url, method, **kw)
+        return Expr(Plan(root="Reference", source=core.model_dump()), self._core)
 
     #: the same bound reference root as ``ref``.
     lazy = ref
@@ -118,6 +207,9 @@ class _ClientBase:
         from .core.session_core import WebSessionCore
         core = WebSessionCore(ttl=ttl, headers=headers or {}, **kw)
         core._client = self._core
+        if hasattr(self._core, "_sessions"):
+            core._scope = self._core.new_scope()
+            self._core._sessions.append(core)
         return Session(core)
 
     def search(self, query: str, *, engine: SearchEngine,
@@ -135,15 +227,18 @@ class _ClientBase:
         """A lazy plan resolving ``url`` to a title + markdown digest."""
         return self.ref(url, **kw).resolve().summary()
 
-    def document(self, name: str) -> Document:
-        """Recover a materialised Document by name (same surface object)."""
+    def document(self, name: str) -> Document | None:
+        """Recover a materialised Document by name (same surface object), or
+        ``None`` if it is not (or no longer) in scope."""
         from .surface import wrap
-        return wrap(self._core.document(name))
+        core = self._core.document(name)
+        return wrap(core) if core is not None else None
 
-    def reference(self, name: str) -> Reference:
-        """Recover a Reference by its (root) name (same surface object)."""
+    def reference(self, name: str) -> Reference | None:
+        """Recover a Reference by its (root) name, or ``None``."""
         from .surface import wrap
-        return wrap(self._core.reference(name))
+        core = self._core.reference(name)
+        return wrap(core) if core is not None else None
 
     def release(self, doc: Document) -> None:
         """Return a live document's browser page to the pool."""
@@ -161,11 +256,33 @@ class WebClient(_ClientBase):
 
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False,
                 **kw: Any) -> Any:
-        """Run a recorded lazy plan on this client (bridges the engine loop).
-        ``stream=True`` yields rows (MVP: materialised then iterated)."""
+        """Run a recorded lazy plan on this client. A remote core round-trips
+        over HTTP; otherwise it runs on the engine loop. ``stream=True`` yields
+        rows (MVP: materialised then iterated)."""
+        from .collection import Collection, Field
         from .executor import evaluate
+        if hasattr(self._core, "remote_execute"):
+            return self._core.remote_execute(expr, context)
         result = evaluate(expr, context, client=self._core)
-        return iter(result) if stream and isinstance(result, list) else result
+        if stream and isinstance(result, (list, Collection)):
+            return self._stream(list(result))
+        if isinstance(result, Field):
+            return result
+        if isinstance(result, (str, int, float, bool)) or result is None:
+            return Field(result)                    # a scalar leaf -> a Field
+        return result
+
+    def _stream(self, rows: list) -> Any:
+        """Yield rows, publishing plan lifecycle events on the bus."""
+        from .events import PlanEvent
+        bus = self._core.bus
+        bus.publish(PlanEvent(phase="started"))
+        count = 0
+        for row in rows:
+            count += 1
+            bus.publish(PlanEvent(phase="row"))
+            yield row
+        bus.publish(PlanEvent(phase="done", detail={"rows": count}))
 
     def close(self) -> None:
         self._core.close()
@@ -186,9 +303,16 @@ class AsyncWebClient(_ClientBase):
                       stream: bool = False, **kw: Any) -> Any:
         import asyncio
 
+        from .collection import Field
         from .executor import evaluate
         result = await asyncio.to_thread(evaluate, expr, context, client=self._core)
-        return iter(result) if stream and isinstance(result, list) else result
+        if stream and isinstance(result, list):
+            return iter(result)
+        if isinstance(result, Field):
+            return result
+        if isinstance(result, (str, int, float, bool)) or result is None:
+            return Field(result)
+        return result
 
     async def aclose(self) -> None:
         import asyncio
@@ -201,5 +325,5 @@ class AsyncWebClient(_ClientBase):
         await self.aclose()
 
 
-__all__ = ["Reference", "Document", "Session", "SearchEngine", "WebClient",
-           "AsyncWebClient", "from_url"]
+__all__ = ["Reference", "Document", "LiveDocument", "Session", "SearchEngine",
+           "WebClient", "AsyncWebClient", "default_client", "from_url"]

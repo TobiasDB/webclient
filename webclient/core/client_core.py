@@ -22,6 +22,39 @@ from .reference_core import ReferenceCore, from_url
 from .web_core import Backing, WebCore
 
 
+class NameScope:
+    """An ordered, optionally LRU-capped map of scoped names to objects. Names
+    are ``{kind}:{scope:03d}-{seq:03d}``; refs and docs share the scope's seq."""
+
+    def __init__(self, index: int, cap: int | None = None) -> None:
+        from collections import OrderedDict
+        self.index = index
+        self.cap = cap
+        self.seq = 0
+        self._items: "OrderedDict[str, Any]" = OrderedDict()
+
+    def add(self, kind: str, obj: Any) -> str:
+        self.seq += 1
+        name = f"{kind}:{self.index:03d}-{self.seq:03d}"
+        self._items[name] = obj
+        if self.cap is not None:
+            while len(self._items) > self.cap:
+                self._items.popitem(last=False)      # evict least-recent
+        return name
+
+    def get(self, name: str) -> Any:
+        obj = self._items.get(name)
+        if obj is not None:
+            self._items.move_to_end(name)            # LRU touch
+        return obj
+
+    def clear(self) -> None:
+        self._items.clear()
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+
 class _PoolView:
     """A minimal read-only view of the client's transport leases (MVP)."""
 
@@ -45,19 +78,20 @@ class WebClientCore(WebCore, BaseModel):
 
     timeout: float = 30.0
     default_headers: dict[str, str] = {}
+    names_cap: int | None = None
 
     _loop: Any = PrivateAttr(default=None)
     _http: Any = PrivateAttr(default=None)     # httpx.AsyncClient (MVP: one shared)
     _render_table: dict[tuple[str, str], Any] = PrivateAttr(default_factory=dict)
     _closed: bool = PrivateAttr(default=False)
-    _docs: dict[str, Any] = PrivateAttr(default_factory=dict)   # name -> DocumentCore
-    _refs: dict[str, Any] = PrivateAttr(default_factory=dict)   # root -> ReferenceCore
-    _counter: int = PrivateAttr(default=0)
+    _scope: Any = PrivateAttr(default=None)    # the client's NameScope (000)
+    _scope_counter: int = PrivateAttr(default=0)   # next session scope index
     _bus: Any = PrivateAttr(default=None)      # EventBus (lazy)
     _pw: Any = PrivateAttr(default=None)       # playwright instance (lazy)
     _browser: Any = PrivateAttr(default=None)  # chromium browser (lazy)
     _pages: list = PrivateAttr(default_factory=list)   # live pages in use
     _pages_created: int = PrivateAttr(default=0)
+    _sessions: list = PrivateAttr(default_factory=list)   # sessions to close
 
     @property
     def bus(self) -> EventBus:
@@ -65,9 +99,29 @@ class WebClientCore(WebCore, BaseModel):
             self._bus = EventBus()
         return self._bus
 
+    def model_post_init(self, _ctx: Any) -> None:
+        self._scope = NameScope(0, cap=self.names_cap)
+
+    def new_scope(self) -> NameScope:
+        """A fresh scope for a session (index 1, 2, ...)."""
+        self._scope_counter += 1
+        return NameScope(self._scope_counter)
+
+    def _scopes(self) -> list:
+        """The client scope plus every live session scope."""
+        return [self._scope, *(s._scope for s in self._sessions
+                               if s._scope is not None)]
+
     def use(self, renderer: Any) -> "WebClientCore":
-        """Register a Renderer override for its (kind, format) pairs."""
+        """Register a Renderer override for its (kind, format) pairs; a second
+        renderer claiming the same (kind, format) shadows the first (warned)."""
+        import logging
+        log = logging.getLogger("webclient")
         for fmt in renderer.formats:
+            existing = self._render_table.get((renderer.kind, fmt))
+            if existing is not None:
+                log.warning("renderer %r shadows %r for (%s, %s)",
+                            renderer.name, existing.name, renderer.kind, fmt)
             self._render_table[(renderer.kind, fmt)] = renderer
         return self
 
@@ -93,6 +147,8 @@ class WebClientCore(WebCore, BaseModel):
             if self._browser is not None:
                 self._loop.run(self._browser.close())
                 self._loop.run(self._pw.stop())
+        for session in self._sessions:               # cascade to sessions
+            session.status = "closed"
         self._closed = True
         if self._loop is not None:
             self._loop.stop()
@@ -100,18 +156,31 @@ class WebClientCore(WebCore, BaseModel):
     # -- fetch (resolve a ReferenceCore -> DocumentCore) ---------------------
     async def afetch(self, ref: ReferenceCore, *, optional: bool = False,
                      browser: bool = False) -> DocumentCore:
+        import time
         if browser:
             return await self._alive(ref)
         client = await self._client()
         headers = {**self.default_headers, **ref.headers}
-        resp = await engine_http.request(
-            client, ref, headers=headers, cookies=ref.cookies,
-            timeout=self.timeout, retries=0)
+        start = time.monotonic()
+        try:
+            resp = await engine_http.request(
+                client, ref, headers=headers, cookies=ref.cookies,
+                timeout=self.timeout, retries=0)
+        except Exception as exc:                     # transport failure
+            doc = DocumentCore(url=ref.dispatch("url"), status_code=0,
+                               elapsed=time.monotonic() - start,
+                               error=error_for(0, str(exc)))
+            doc._client = self
+            self._register(doc, ref)
+            if not optional:
+                raise WebException(doc.error, document=doc) from exc
+            return doc
         kind = engine_http.sniff_kind(resp.headers.get("content-type"), resp.content)
         doc = DocumentCore(
             url=ref.dispatch("url"), final_url=str(resp.url), kind=kind,
             content=resp.content, status_code=resp.status_code,
             response_headers=dict(resp.headers),
+            elapsed=time.monotonic() - start,
             encoding=engine_http.charset_of(resp.headers.get("content-type")))
         doc._client = self
         self._register(doc, ref)
@@ -119,7 +188,7 @@ class WebClientCore(WebCore, BaseModel):
         if not (200 <= resp.status_code < 300):
             doc.error = error_for(resp.status_code)
             if not optional:                         # loud by default
-                raise WebException(doc.error)
+                raise WebException(doc.error, document=doc)
         return doc
 
     def fetch(self, ref: ReferenceCore, *, optional: bool = False,
@@ -164,7 +233,9 @@ class WebClientCore(WebCore, BaseModel):
         return doc
 
     async def _areload(self, core: DocumentCore) -> DocumentCore:
-        return await self._alive(core._ref, replay=list(core._ref.actions))
+        if core._page is not None or (core._ref is not None and core._ref.actions):
+            return await self._alive(core._ref, replay=list(core._ref.actions))
+        return await self.afetch(core._ref)          # plain HTTP refetch
 
     def release(self, doc: DocumentCore) -> None:
         """Return a live document's page to the pool (close it)."""
@@ -181,37 +252,50 @@ class WebClientCore(WebCore, BaseModel):
 
     # -- naming / recovery ---------------------------------------------------
     def _register(self, doc: DocumentCore, ref: ReferenceCore) -> None:
-        """Give the document and its reference scoped names and index them so
-        they can be recovered (and so ``doc.ref()`` round-trips to identity)."""
-        self._counter += 1
-        n = self._counter
-        ref.name = ref.name or f"ref{n}"
-        doc.name, doc.root = f"doc{n}", ref.name
+        """Give the reference and document scoped names in the owning scope
+        (a session's, else the client's) and index them for recovery."""
+        import time
+        session = ref._session
+        scope = session._scope if session is not None else self._scope
+        if not ref.name:
+            ref.name = scope.add("ref", ref)
+        doc.root = ref.name
+        doc.id = doc.name = scope.add("doc", doc)
+        doc.created = doc.accessed = time.time()
         doc._ref = ref
-        self._docs[doc.name] = doc
-        self._refs[ref.name] = ref
+
+    def document(self, name: str) -> DocumentCore | None:
+        """Recover a materialised document by name from any live scope."""
+        import time
+        for scope in self._scopes():
+            obj = scope.get(name)
+            if isinstance(obj, DocumentCore):
+                obj.accessed = time.time()
+                return obj
+        return None
+
+    def reference(self, name: str) -> ReferenceCore | None:
+        """Recover a reference by its (root) name from any live scope."""
+        for scope in self._scopes():
+            obj = scope.get(name)
+            if isinstance(obj, ReferenceCore):
+                return obj
+        return None
 
     def _capture(self, doc: DocumentCore, ref: ReferenceCore, resp: Any) -> None:
         """Emit a NavigationEvent per redirect hop plus a final NetworkEvent,
         routed onto the document and published on the bus."""
         events: list[Any] = []
-        for hop in resp.history:                     # each redirect
-            events.append(NavigationEvent(
+        for hop in resp.history:                     # redirect hops are plain
+            events.append(NetworkEvent(
                 request=from_url(str(hop.url)), status_code=hop.status_code,
-                document_id=doc.name))
-        events.append(NetworkEvent(
-            request=ref, status_code=resp.status_code, document_id=doc.name))
+                document_id=doc.id, source="core-network"))
+        events.append(NavigationEvent(                # the landing is a navigation
+            request=ref, status_code=resp.status_code, document_id=doc.id,
+            source="core-network"))
         for event in events:
             self.bus.publish(event)
         doc._events.extend(events)
 
-    def document(self, name: str) -> DocumentCore:
-        """Recover a materialised document by name."""
-        return self._docs[name]
 
-    def reference(self, name: str) -> ReferenceCore:
-        """Recover a reference by its (root) name."""
-        return self._refs[name]
-
-
-__all__ = ["WebClientCore"]
+__all__ = ["WebClientCore", "NameScope"]

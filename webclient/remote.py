@@ -13,9 +13,9 @@ from typing import Any
 import httpx
 
 from .core.reference_core import ReferenceCore
-from .core.reference_core import from_url as _core_from_url
 from .expr import Expr
 from .plan import Plan
+from .surfaces import WebClient
 
 
 def _url_of(source: dict[str, Any]) -> str:
@@ -62,7 +62,9 @@ class RemoteWebClientCore:
             body["url"] = _url_of(context._plan.source)
         headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         resp = self._http.post(f"{self.url}/execute", json=body, headers=headers)
-        resp.raise_for_status()
+        if not (200 <= resp.status_code < 300):
+            from .errors import RemoteError
+            raise RemoteError(resp.status_code, resp.text[:200])
         return self._deserialize(resp.json()["rows"])
 
     def _deserialize(self, rows: Any) -> Any:
@@ -76,33 +78,12 @@ class RemoteWebClientCore:
         self._http.close()
 
 
-class RemoteWebClient:
-    """The remote client: same ref/fetch/execute surface as ``WebClient``, run
-    server-side."""
+class RemoteWebClient(WebClient):
+    """The remote client is literally a ``WebClient`` over a remote core: the
+    same ref/fetch/execute plan-building surface, executed server-side."""
 
     def __init__(self, url: str, token: str | None = None) -> None:
-        self._core = RemoteWebClientCore(url, token)
-
-    def ref(self, url: str, method: str = "get", **kw: Any) -> Any:
-        spec = _core_from_url(url, method, **kw).model_dump()
-        return Expr(Plan(root="Reference", source=spec), self._core)
-
-    lazy = ref
-
-    def fetch(self, url: str, **kw: Any) -> Any:
-        return self.ref(url, **kw).resolve()
-
-    def execute(self, expr: Any, context: Any = None) -> Any:
-        return self._core.remote_execute(expr, context)
-
-    def close(self) -> None:
-        self._core.close()
-
-    def __enter__(self) -> "RemoteWebClient":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self._core.close()
+        super().__init__(core=RemoteWebClientCore(url, token))
 
 
 __all__ = ["RemoteWebClient", "RemoteWebClientCore"]

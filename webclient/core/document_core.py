@@ -89,6 +89,8 @@ def _md_blocks(el: Any, out: list[str]) -> None:
             out.append("```\n" + "".join(child.itertext()).strip("\n") + "\n```")
         elif tag == "blockquote":
             out.append("> " + _inline(child))
+        elif tag == "img":
+            out.append(f"![{child.get('alt', '')}]({child.get('src', '')})")
         else:
             _md_blocks(child, out)
 
@@ -123,6 +125,14 @@ def _html_elements(root: Any) -> list[Element]:
                                    type="text" if tag == "p" else "list_item",
                                    text=_norm("".join(child.itertext())),
                                    parent_id=section))
+            elif tag == "pre":
+                out.append(Element(id=next_id(), type="code",
+                                   text=_norm("".join(child.itertext())),
+                                   parent_id=section))
+            elif tag == "img":
+                out.append(Element(id=next_id(), type="image",
+                                   text=child.get("alt", ""), parent_id=section,
+                                   metadata={"src": child.get("src", "")}))
             else:
                 walk(child)
 
@@ -202,9 +212,12 @@ class EventBacking(Backing):
         return True
 
     def events(self, core: "DocumentCore") -> list[Any]:
-        return list(core._events)
+        return core._events                          # the live store (appendable)
 
-    def events_of(self, core: "DocumentCore", event_type: type) -> list[Any]:
+    def events_of(self, core: "DocumentCore", event_type: Any) -> list[Any]:
+        if isinstance(event_type, str):              # a topic prefix
+            from ..events import _topic_matches
+            return [e for e in core._events if _topic_matches(event_type, e.topic)]
         return [e for e in core._events if isinstance(e, event_type)]
 
     def action_events(self, core: "DocumentCore") -> list[Any]:
@@ -259,10 +272,13 @@ class HtmlBacking(Backing):
             return core._element
         if core._tree is None:
             from lxml import html as _lh
-            core._tree = _lh.fromstring(core.content or b"<html></html>")
+            core._tree = _lh.fromstring(_decode(core) or "<html></html>")
         return core._tree
 
     def _find(self, core: "DocumentCore", selector: str) -> list[Any]:
+        if selector.rstrip().endswith(("text()",)) or "/@" in selector:
+            raise ValueError(
+                "select yields elements; use .attr() for an attribute or text")
         root = self._tree(core)
         if selector.startswith("/") or selector.startswith("./"):
             return list(root.xpath(selector))
@@ -271,28 +287,40 @@ class HtmlBacking(Backing):
     def select(self, core: "DocumentCore", selector: str, *,
                index: int = 0, error: Any = None) -> "DocumentCore":
         els = self._find(core, selector)
-        return _element(core, els[index] if len(els) > index else None)
+        if not (-len(els) <= index < len(els)):
+            return _miss(core, f"no match for {selector!r}", error)
+        return _element(core, els[index])
 
-    def select_all(self, core: "DocumentCore", selector: str,
+    def select_all(self, core: "DocumentCore", selector: str, *,
+                   limit: int | None = None, offset: int = 0,
                    ) -> "list[DocumentCore]":
-        return [_element(core, el) for el in self._find(core, selector)]
+        els = self._find(core, selector)[offset:]
+        if limit is not None:
+            els = els[:limit]
+        return [_element(core, el) for el in els]
 
-    def attr(self, core: "DocumentCore", name: str) -> "str | ReferenceCore":
+    def attr(self, core: "DocumentCore", name: str, *, error: Any = None) -> Any:
+        from ..collection import Field
         if core._missing:
-            return ""
-        el = core._element
+            return Field(None, ok=False)
         if name == "text":
-            return self.text(core)
-        value = el.get(name, "") if el is not None else ""
+            return Field(self.text(core))
+        el = core._element
+        value = el.get(name) if el is not None else None
         if name in ("href", "src", "action"):
-            ref = from_url(urljoin(core.final_url or core.url, value))
+            ref = from_url(urljoin(core.final_url or core.url, value or ""))
             ref._client = core._client               # inherit the client so it resolves
             return ref
-        return value
+        if value is None:                            # absent attribute
+            from ..errors import RAISE, current_policy
+            if (error or current_policy()) is RAISE:
+                raise LookupError(f"no attribute {name!r}")
+            return Field(None, ok=False)
+        return Field(value)
 
-    def text(self, core: "DocumentCore") -> str:
+    def text(self, core: "DocumentCore") -> "str | None":
         if core._missing:
-            return ""
+            return None
         el = core._element if core._element is not None else self._tree(core)
         return _norm("".join(el.itertext()))
 
@@ -301,12 +329,23 @@ class JsonBacking(Backing):
     """Dotted-path ops for json. A selected node is a DocumentCore holding the
     sub-value; ``attr('value')`` / ``text`` read it."""
 
-    provides = frozenset({"select", "attr", "render"})
+    provides = frozenset({"select", "select_all", "attr", "render"})
     props = frozenset({"text"})
     gate = "tree"
 
     def applies(self, core: "DocumentCore") -> bool:
         return core.kind == "json"
+
+    def select_all(self, core: "DocumentCore", path: str, *,
+                   limit: int | None = None, offset: int = 0,
+                   ) -> "list[DocumentCore]":
+        node = self.select(core, path)
+        data = None if node._missing else node._element
+        items = list(data) if isinstance(data, list) else []
+        items = items[offset:]
+        if limit is not None:
+            items = items[:limit]
+        return [_element(core, item) for item in items]
 
     def render(self, core: "DocumentCore", format: str, **options: Any) -> Any:
         override = _override(core, format)
@@ -333,12 +372,18 @@ class JsonBacking(Backing):
             value = None
         return _element(core, value)
 
-    def attr(self, core: "DocumentCore", name: str) -> Any:
-        return "" if core._missing else self._data(core)
-
-    def text(self, core: "DocumentCore") -> str:
+    def attr(self, core: "DocumentCore", name: str, *, error: Any = None) -> Any:
+        from ..collection import Field
         if core._missing:
-            return ""
+            return Field(None, ok=False)
+        data = self._data(core)
+        if name != "value" and isinstance(data, dict) and name in data:
+            return Field(data[name])
+        return Field(data)
+
+    def text(self, core: "DocumentCore") -> "str | None":
+        if core._missing:
+            return None
         value = self._data(core)
         return value if isinstance(value, str) else _json.dumps(value)
 
@@ -355,15 +400,47 @@ def _override(core: "DocumentCore", format: str) -> Any:
     return renderer.render(wrap(core), format)
 
 
+def _decode(core: "DocumentCore") -> str:
+    """Decode the response bytes: the declared encoding first, else utf-8 with
+    a latin-1 fallback (covers undeclared single-byte pages)."""
+    if isinstance(core._element, str):
+        return core._element
+    if core.encoding:
+        return (core.content or b"").decode(core.encoding, "replace")
+    try:
+        return (core.content or b"").decode("utf-8")
+    except UnicodeDecodeError:
+        return (core.content or b"").decode("latin-1", "replace")
+
+
+def _miss(parent: "DocumentCore", message: str, error: Any) -> "DocumentCore":
+    """A missing selection: raise under RAISE, else a not-ok sub-document."""
+    from ..errors import RAISE, WebError, current_policy
+    if (error or current_policy()) is RAISE:
+        raise LookupError(message)
+    sub = _element(parent, None)
+    sub.error = WebError(type="LookupError", message=message)
+    return sub
+
+
 def _element(parent: "DocumentCore", node: Any) -> "DocumentCore":
     """A selected element/value as a DocumentCore rooted at ``parent``. A
     ``None`` node means the selection missed -- a not-ok, empty sub-document."""
+    content = b""
+    if node is not None and not isinstance(node, (str, int, float, bool, list, dict)):
+        try:
+            from lxml import html as _lh
+            content = _lh.tostring(node)             # the element's own bytes
+        except Exception:
+            content = b""
     sub = DocumentCore(url=parent.url, final_url=parent.final_url,
-                       kind=parent.kind, status_code=parent.status_code)
+                       kind=parent.kind, status_code=parent.status_code,
+                       content=content)
     sub.root = parent.name or parent.root
     sub._client = parent._client
     sub._element = node
     sub._missing = node is None
+    sub._events = parent._events                     # a static element shares the store
     return sub
 
 
@@ -374,6 +451,7 @@ class DocumentCore(WebCore, BaseModel):
     id: str = ""
     name: str = ""                                # scoped document name
     root: str = ""                                # the originating reference's name
+    session_id: str = ""                          # owning session (if any)
     kind: Literal["html", "json", "xml", "binary"] = "html"
     url: str = ""
     final_url: str | None = None
@@ -381,6 +459,9 @@ class DocumentCore(WebCore, BaseModel):
     status_code: int = 0
     response_headers: dict[str, str] = {}
     encoding: str | None = None
+    elapsed: float | None = None
+    created: float = 0.0
+    accessed: float = 0.0
     error: WebError | None = None
 
     _client: Any = PrivateAttr(default=None)      # owning WebClientCore
@@ -392,6 +473,7 @@ class DocumentCore(WebCore, BaseModel):
     _surface: Any = PrivateAttr(default=None)     # cached eager surface (identity)
     _events: list = PrivateAttr(default_factory=list)   # events routed here
     _page: Any = PrivateAttr(default=None)        # playwright Page (live document)
+    _row: Any = PrivateAttr(default=None)         # extracted columns (extract/field)
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (
         StatusBacking(), EventBacking(), LiveBacking(), HtmlBacking(), JsonBacking())

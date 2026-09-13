@@ -86,11 +86,17 @@ class Expr:
         if client is None:
             from .core.client_core import WebClientCore
             client = WebClientCore()               # process-local default (MVP)
+        from .collection import Field
         result = evaluate(self, context, client=client)
+        if isinstance(result, Field):
+            return result
         if isinstance(result, (str, int, float, bool)) or result is None:
-            from .collection import Field           # a scalar leaf -> a Field
-            return Field(result)
+            return Field(result)                    # a scalar leaf -> a Field
         return result
+
+    @property
+    def is_lazy(self) -> bool:
+        return True
 
     def __repr__(self) -> str:
         return f"lazy {self._plan.describe()}"
@@ -109,9 +115,11 @@ def lazy(cls: type[T], *, plan: Plan | None = None, client: Any = None) -> T:
 
 
 def from_plan(plan: Plan | dict[str, Any], client: Any = None) -> Expr:
-    """Rebuild an ``Expr`` from its wire form (a Plan or its dict)."""
+    """Rebuild an ``Expr`` from its wire form (a Plan or its dict), validating
+    its names first -- the wire safety boundary for the service/remote."""
     if isinstance(plan, dict):
         plan = Plan.model_validate(plan)
+    plan.validate_names()
     return Expr(plan, client)
 
 
@@ -130,6 +138,21 @@ def reference(url: str, **kwargs: Any) -> Any:
 def field(name: str) -> Any:
     """A value already extracted in the surrounding row/context."""
     return doc.field(name)
+
+
+def _fn(name: str, expr: Any) -> Expr:
+    base = expr if isinstance(expr, Expr) else Expr(Plan())
+    return base._extend(Step(kind="fn", name=name))
+
+
+def is_empty(expr: Any) -> Any:
+    """Free-function form of ``x.is_empty()`` (records an ``fn`` step)."""
+    return _fn("is_empty", expr)
+
+
+def is_ok(expr: Any) -> Any:
+    """Free-function form of ``x.is_ok()`` (records an ``fn`` step)."""
+    return _fn("is_ok", expr)
 
 
 class _When:
@@ -173,4 +196,4 @@ many: Any = Expr(Plan(root="Collection"))
 
 
 __all__ = ["Expr", "lazy", "from_plan", "to_arg", "reference", "field", "when",
-           "filter", "doc", "ref", "many"]
+           "filter", "is_empty", "is_ok", "doc", "ref", "many"]

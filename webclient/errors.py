@@ -25,6 +25,27 @@ class _Policy:
 RAISE: _Policy = _Policy("RAISE")     # default: a failed fetch/resolve raises
 RETURN: _Policy = _Policy("RETURN")   # lenient: return a not-ok document
 
+import contextlib as _contextlib
+import contextvars as _contextvars
+
+#: the ambient error policy: RAISE at the top level; extract/filter run their
+#: sub-expressions under RETURN so one bad field never aborts a whole plan.
+_CURRENT: "_contextvars.ContextVar[_Policy]" = _contextvars.ContextVar(
+    "webclient_policy", default=RAISE)
+
+
+def current_policy() -> "_Policy":
+    return _CURRENT.get()
+
+
+@_contextlib.contextmanager
+def default_policy(policy: "_Policy"):
+    token = _CURRENT.set(policy)
+    try:
+        yield
+    finally:
+        _CURRENT.reset(token)
+
 
 class WebError(BaseModel):
     """A serializable failure attached to a not-ok document."""
@@ -35,27 +56,33 @@ class WebError(BaseModel):
 
 
 class WebException(Exception):
-    """Raised by a loud (RAISE) fetch/resolve; carries the ``WebError``."""
+    """Raised by a loud (RAISE) fetch/resolve; carries the ``WebError`` and the
+    not-ok ``document`` (when one was built)."""
 
-    def __init__(self, error: WebError) -> None:
+    def __init__(self, error: WebError, document: object | None = None) -> None:
         super().__init__(error.message or f"HTTP {error.status_code}")
         self.error = error
+        self.document = document
+
+
+#: a fetch/resolve failure -- the name used at the call sites/tests.
+FetchError = WebException
+
+
+class RemoteError(Exception):
+    """A remote ``/execute`` call returned a non-2xx response."""
+
+    def __init__(self, status_code: int, detail: str = "") -> None:
+        super().__init__(f"remote execute failed: {status_code} {detail}".strip())
+        self.status_code = status_code
 
 
 def error_for(status_code: int, message: str = "") -> WebError:
     """Classify an HTTP status into a ``WebError``."""
-    if status_code == 404:
-        kind = "not_found"
-    elif status_code == 0:
-        kind = "transport_error"
-    elif 500 <= status_code < 600:
-        kind = "server_error"
-    elif 400 <= status_code < 500:
-        kind = "client_error"
-    else:
-        kind = "http_error"
+    kind = "TransportError" if status_code == 0 else "HTTPStatus"
     return WebError(type=kind, status_code=status_code,
-                    message=message or f"{status_code} for the request")
+                    message=message or f"HTTP {status_code} for the request")
 
 
-__all__ = ["RAISE", "RETURN", "WebError", "WebException", "error_for"]
+__all__ = ["RAISE", "RETURN", "WebError", "WebException", "FetchError",
+           "RemoteError", "error_for", "current_policy", "default_policy"]

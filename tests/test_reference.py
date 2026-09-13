@@ -1,7 +1,6 @@
 import pytest
 
 from webclient import Reference, from_url
-from webclient.core.document import bind
 
 
 def test_from_url_parses_components():
@@ -59,14 +58,6 @@ def test_join_resolves_relative_and_absolute():
     assert ref.join("items/3").url == "https://example.com/items/3"
     assert ref.join("/items/1?ref=home").params == {"ref": "home"}
     assert ref.join("https://other.example/x").hostname == "other.example"
-
-
-def test_bind_returns_bound_copy():
-    ref = Reference(hostname="e.com")
-    client = object()
-    bound = bind(ref, client)
-    assert bound._client is client
-    assert ref._client is None
 
 
 def test_bound_reference_carries_client():

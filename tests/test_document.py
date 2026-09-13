@@ -23,8 +23,7 @@ def make_doc(**overrides) -> Document:
         status_code=200,
     )
     values.update(overrides)
-    from webclient.core.document import apply_status
-    return apply_status(Document(**values))
+    return Document(**values)
 
 
 # -- decoding / status ------------------------------------------------------ #
@@ -89,7 +88,7 @@ def test_select_all_limit_offset():
 
 def test_select_on_treeless_kind_raises_typed_error():
     doc = make_doc(kind="binary", content=b"\x00")
-    with pytest.raises(TypeError, match="requires 'tree'"):
+    with pytest.raises(TypeError, match="not available"):   # UnsupportedOp: no tree backing
         doc.select(".card")
 
 
