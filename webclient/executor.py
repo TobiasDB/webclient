@@ -70,7 +70,7 @@ def truthy(value: Any) -> bool:
 def _start(plan: Any, context: Any, client: Any) -> Any:
     """The value a plan starts from: a reconstructed Reference (source plan) or
     the passed context (doc/ref/field roots)."""
-    if plan.source is not None:
+    if plan.source is not None and "document_id" not in plan.source:
         from .core.reference_core import ReferenceCore
         from .surface import wrap
         core = ReferenceCore(**plan.source)

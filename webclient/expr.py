@@ -76,10 +76,13 @@ class Expr:
 
     # -- evaluation ----------------------------------------------------------
     def collect(self, context: Any = None) -> Any:
-        """Evaluate this plan through a client and return the result -- the
-        single lazy trigger. ``collect`` is reserved (non-recordable)."""
-        from .executor import evaluate
+        """Evaluate this plan and return the result -- the single lazy trigger.
+        A plan bound to a remote backend round-trips over HTTP; otherwise it
+        runs on the local engine. ``collect`` is reserved (non-recordable)."""
         client = self._client
+        if client is not None and hasattr(client, "remote_execute"):
+            return client.remote_execute(self, context)
+        from .executor import evaluate
         if client is None:
             from .core.client_core import WebClientCore
             client = WebClientCore()               # process-local default (MVP)

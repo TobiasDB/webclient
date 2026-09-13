@@ -4,11 +4,12 @@ from .errors import RAISE, RETURN, WebError, WebException
 from .events import (ActionEvent, ConsoleEvent, DOMUpdateEvent, Event,
                      NavigationEvent, NetworkEvent)
 from .expr import doc, field, filter, many, ref, reference, when
+from .remote import RemoteWebClient
 from .surfaces import (AsyncWebClient, Document, Reference, Renderer,
                        SearchEngine, Session, WebClient, from_url)
 
-__all__ = ["WebClient", "AsyncWebClient", "Session", "SearchEngine", "Document",
-           "Reference", "Renderer", "from_url",
+__all__ = ["WebClient", "AsyncWebClient", "RemoteWebClient", "Session",
+           "SearchEngine", "Document", "Reference", "Renderer", "from_url",
            "Collection", "Field", "reference", "doc", "ref", "many", "field",
            "when", "filter", "RAISE", "RETURN", "WebError", "WebException",
            "Event", "NetworkEvent", "NavigationEvent", "DOMUpdateEvent",
