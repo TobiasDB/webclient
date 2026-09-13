@@ -529,6 +529,7 @@ class DocumentCore(WebCore, BaseModel):
     _missing: bool = PrivateAttr(default=False)  # a selection that missed
     _events: list = PrivateAttr(default_factory=list)  # events routed here
     _page: Any = PrivateAttr(default=None)  # playwright Page (live document)
+    _lease: Any = PrivateAttr(default=None)  # the page's pool lease (live document)
     _row: Any = PrivateAttr(default=None)  # extracted columns (extract/field)
     _surface: Any = PrivateAttr(default=None)  # the core's single eager surface
 

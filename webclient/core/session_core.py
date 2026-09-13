@@ -47,15 +47,13 @@ class WebSessionCore(WebClientCore):
         parent._sessions.append(self)
         return self
 
-    # -- engine shared with the parent ---------------------------------------
+    # -- engine shared with the parent (loop / pool / bus / plugins) ---------
     def loop(self) -> Any:
         return self._parent.loop()
 
-    async def _client(self) -> Any:
-        return await self._parent._client()
-
-    async def _browser_page(self) -> Any:
-        return await self._parent._browser_page()
+    @property
+    def pool(self) -> Any:
+        return self._parent.pool
 
     @property
     def bus(self) -> Any:

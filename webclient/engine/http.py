@@ -1,48 +1,9 @@
-"""HTTP transport: httpx request execution plus response sniffing helpers."""
+"""HTTP response sniffing helpers (the request itself is issued by
+``engine.clients.HTTPXClient``)."""
 
 from __future__ import annotations
 
 from typing import Literal
-
-import httpx
-
-from ..core.reference_core import ReferenceCore
-
-
-async def request(
-    client: httpx.AsyncClient,
-    ref: ReferenceCore,
-    *,
-    headers: dict[str, str],
-    cookies: dict[str, str],
-    timeout: float,
-    retries: int,
-) -> httpx.Response:
-    """Perform the request described by ``ref`` with pre-merged headers and
-    cookies. Retries transport errors only, immediately, ``retries`` times."""
-    last_error: httpx.TransportError | None = None
-    for _ in range(retries + 1):
-        try:
-            resp = await client.request(
-                ref.method.upper(),
-                ref.dispatch("url"),
-                headers=headers or None,
-                cookies=cookies or None,
-                content=ref.body,
-                json=ref.json_body,
-                data=ref.form,
-                follow_redirects=ref.follow_redirects,
-                timeout=ref.timeout if ref.timeout is not None else timeout,
-            )
-            # keep the shared client's jar empty: cookies are supplied
-            # per-request and Set-Cookie is captured from response headers, so
-            # nothing leaks across requests or between sessions.
-            client.cookies.clear()
-            return resp
-        except httpx.TransportError as exc:
-            last_error = exc
-    assert last_error is not None
-    raise last_error
 
 
 def sniff_kind(

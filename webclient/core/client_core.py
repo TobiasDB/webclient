@@ -9,14 +9,12 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-import httpx
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from ..engine import http as engine_http
 from ..engine.loop import EngineLoop
 from ..errors import WebException, error_for
 from ..events import EventBus, NavigationEvent, NetworkEvent
-from ..pool import PoolStats
 from . import live as _live
 from .document_core import DocumentCore
 from .reference_core import ReferenceCore, from_url
@@ -57,22 +55,6 @@ class NameScope:
         return len(self._items)
 
 
-class _PoolView:
-    """A minimal read-only view of the client's transport leases (MVP)."""
-
-    def __init__(self, core: "WebClientCore") -> None:
-        self._core = core
-
-    def stats(self) -> PoolStats:
-        c = self._core
-        return PoolStats(
-            http_total=1 if c._http is not None else 0,
-            http_free=1 if c._http is not None else 0,
-            pages_total=c._pages_created,
-            pages_free=c._pages_created - len(c._pages),
-        )
-
-
 class WebClientCore(WebCore, BaseModel):
     """Core Fields (policy) + engine loop + http client. The user-facing
     ``WebClient`` is the surface; this is the machinery it drives."""
@@ -84,16 +66,12 @@ class WebClientCore(WebCore, BaseModel):
     names_cap: int | None = None
 
     _loop: Any = PrivateAttr(default=None)
-    _http: Any = PrivateAttr(default=None)  # httpx.AsyncClient (MVP: one shared)
+    _pool: Any = PrivateAttr(default=None)  # ClientPool (lazy)
     _render_table: dict[tuple[str, str], Any] = PrivateAttr(default_factory=dict)
     _closed: bool = PrivateAttr(default=False)
     _scope: Any = PrivateAttr(default=None)  # the client's NameScope (000)
     _scope_counter: int = PrivateAttr(default=0)  # next session scope index
     _bus: Any = PrivateAttr(default=None)  # EventBus (lazy)
-    _pw: Any = PrivateAttr(default=None)  # playwright instance (lazy)
-    _browser: Any = PrivateAttr(default=None)  # chromium browser (lazy)
-    _pages: list = PrivateAttr(default_factory=list)  # live pages in use
-    _pages_created: int = PrivateAttr(default=0)
     _sessions: list = PrivateAttr(default_factory=list)  # sessions to close
 
     @property
@@ -144,20 +122,27 @@ class WebClientCore(WebCore, BaseModel):
             self._loop = EngineLoop()
         return self._loop
 
-    async def _client(self) -> httpx.AsyncClient:
-        if self._http is None:
-            self._http = httpx.AsyncClient(follow_redirects=True)
-        return self._http
+    @property
+    def pool(self) -> Any:
+        """The transport-lease pool (http clients + browser pages)."""
+        if self._pool is None:
+            from ..engine.clients import BrowserFactory, HTTPXFactory
+            from ..pool import ClientPool
+
+            self._pool = ClientPool(
+                {
+                    "http": HTTPXFactory(),
+                    "page": BrowserFactory(init_script=_live.INIT_JS),
+                },
+                limits={"http": 10, "page": 4},
+            )
+        return self._pool
 
     def close(self) -> None:
         if self._closed:
             return
-        if self._loop is not None and not self._loop.closed:
-            if self._http is not None:
-                self._loop.run(self._http.aclose())
-            if self._browser is not None:
-                self._loop.run(self._browser.close())
-                self._loop.run(self._pw.stop())
+        if self._loop is not None and not self._loop.closed and self._pool is not None:
+            self._loop.run(self._pool.aclose())
         for session in self._sessions:  # cascade to sessions
             session.status = "closed"
         self._closed = True
@@ -172,18 +157,13 @@ class WebClientCore(WebCore, BaseModel):
 
         if browser:
             return await self._alive(ref)
-        client = await self._client()
         headers = {**self.default_headers, **ref.headers}
         start = time.monotonic()
         try:
-            resp = await engine_http.request(
-                client,
-                ref,
-                headers=headers,
-                cookies=ref.cookies,
-                timeout=self.timeout,
-                retries=0,
-            )
+            async with await self.pool.lease("http") as lease:
+                resp = await lease.client.send(
+                    ref, headers=headers, cookies=ref.cookies, timeout=self.timeout
+                )
         except Exception as exc:  # transport failure
             doc = DocumentCore(
                 url=ref.dispatch("url"),
@@ -223,22 +203,11 @@ class WebClientCore(WebCore, BaseModel):
         return self.loop().run(self.afetch(ref, optional=optional, browser=browser))
 
     # -- live / browser ------------------------------------------------------
-    async def _browser_page(self) -> Any:
-        if self._browser is None:
-            from playwright.async_api import async_playwright
-
-            self._pw = await async_playwright().start()
-            self._browser = await self._pw.chromium.launch()
-        page = await self._browser.new_page()
-        self._pages.append(page)
-        self._pages_created += 1
-        await page.add_init_script(_live.INIT_JS)
-        return page
-
     async def _alive(
         self, ref: ReferenceCore, replay: list[dict[str, Any]] | None = None
     ) -> DocumentCore:
-        page = await self._browser_page()
+        lease = await self.pool.lease("page")
+        page = lease.client.page
         raw: list[tuple[str, str]] = []
         page.on("console", lambda m: raw.append((m.type, m.text)))
         url = ref.dispatch("url")
@@ -252,6 +221,7 @@ class WebClientCore(WebCore, BaseModel):
         )
         doc._client = self
         doc._page = page
+        doc._lease = lease
         self._register(doc, ref)
         for level, text in raw:
             doc._events.append(_live.console_event(level, text, doc))
@@ -273,17 +243,11 @@ class WebClientCore(WebCore, BaseModel):
         return await self.afetch(core._ref)  # plain HTTP refetch
 
     def release(self, doc: DocumentCore) -> None:
-        """Return a live document's page to the pool (close it)."""
-        page = doc._page
-        if page is not None:
-            self.loop().run(page.close())
-            if page in self._pages:
-                self._pages.remove(page)
+        """Return a live document's page lease to the pool."""
+        if doc._lease is not None:
+            self.loop().run(self.pool.release(doc._lease))
+            doc._lease = None
             doc._page = None
-
-    @property
-    def pool(self) -> Any:
-        return _PoolView(self)
 
     # -- naming / recovery ---------------------------------------------------
     def _register(self, doc: DocumentCore, ref: ReferenceCore) -> None:
