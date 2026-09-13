@@ -46,21 +46,8 @@ class NetworkEvent(Event):
     body: bytes | None = None
 
 
-class XHREvent(NetworkEvent):
-    topic: Topic = "network.xhr"
-
-
-class FetchEvent(NetworkEvent):
-    topic: Topic = "network.fetch"
-
-
 class NavigationEvent(NetworkEvent):
     topic: Topic = "network.navigation"
-
-
-class AssetEvent(NetworkEvent):
-    topic: Topic = "network.asset"
-    asset_type: str = ""  # css / js / image / font / media
 
 
 # -- dom -------------------------------------------------------------------- #
@@ -72,26 +59,9 @@ class DOMEvent(Event):
     detail: dict[str, Any] = {}
 
 
-class DOMLoadEvent(DOMEvent):
-    topic: Topic = "dom.load"
-
-
 class DOMUpdateEvent(DOMEvent):
     topic: Topic = "dom.update"
     kind: Literal["added", "removed", "attribute", "text"] = "added"
-
-
-class DOMUnloadEvent(DOMEvent):
-    topic: Topic = "dom.unload"
-
-
-class DOMSnapshotEvent(DOMEvent):
-    """Full-DOM checkpoint so stream consumers resync instead of replaying
-    (and diverging from) a full incremental history."""
-
-    topic: Topic = "dom.snapshot"
-    snapshot: dict[str, Any] = {}
-    digest: str = ""
 
 
 # -- interaction & console --------------------------------------------------- #
@@ -117,15 +87,9 @@ class PlanEvent(Event):
 
 CORE_EVENTS: tuple[type[Event], ...] = (
     NetworkEvent,
-    XHREvent,
-    FetchEvent,
     NavigationEvent,
-    AssetEvent,
     DOMEvent,
-    DOMLoadEvent,
     DOMUpdateEvent,
-    DOMUnloadEvent,
-    DOMSnapshotEvent,
     ActionEvent,
     ConsoleEvent,
 )

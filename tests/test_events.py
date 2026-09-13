@@ -5,8 +5,8 @@ from webclient import (
     Event,
     EventBus,
     EventRegistry,
+    NavigationEvent,
     NetworkEvent,
-    XHREvent,
 )
 
 
@@ -59,8 +59,8 @@ def test_bus_cancel():
 
 def test_registry_resolves_exact_and_ancestors():
     registry = EventRegistry()
-    assert registry.resolve("network.xhr") is XHREvent
-    assert registry.resolve("network.xhr.slow") is XHREvent
+    assert registry.resolve("network.navigation") is NavigationEvent
+    assert registry.resolve("network.navigation.slow") is NavigationEvent
     assert registry.resolve("rrweb.dom.update") is DOMUpdateEvent  # leading drop
     assert registry.resolve("console") is ConsoleEvent
     assert registry.resolve("completely.unknown") is Event
