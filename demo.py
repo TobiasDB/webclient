@@ -344,15 +344,21 @@ def main() -> None:
         )
         print("eager:      ", cards.name, "->", [r["title"] for r in cards.project()])
 
-        # [P6] High-level helpers built on the plan surface. search() runs a
-        #      query against a configurable engine; summary() resolves a page
-        #      to title + markdown. (crawl is intentionally out of scope.)
-        from webclient import SearchEngine
-
-        engine = SearchEngine(
-            url=f"{base}/?q={{q}}", result=".card", title=".title", link="a"
+        # [P6] Search is not a verb or a config type -- it is just an expression:
+        #      resolve the query URL, pick the result nodes, extract a row each.
+        #      summary() (a genuine digest) resolves a page to title + markdown.
+        hits = (
+            wc.ref(f"{base}/?q=coffee")
+            .resolve()
+            .select_all(".card")
+            .limit(2)
+            .extract(
+                title=doc.select(".title").attr("text"),
+                url=doc.select("a").attr("href"),
+            )
+            .collect()
+            .project()
         )
-        hits = wc.search("coffee", engine=engine, limit=2).collect()
         print("search:     ", [(h["title"], h["url"].path) for h in hits])
         summary = wc.summary(f"{base}/").collect()
         print("summary:    ", {k: summary[k] for k in ("title", "ok")})

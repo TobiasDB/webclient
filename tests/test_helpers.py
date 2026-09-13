@@ -2,7 +2,7 @@
 
 import pytest
 
-from webclient import SearchEngine, WebClient, WebClientCore
+from webclient import WebClient, WebClientCore, doc
 
 RESULTS = """
 <html><body>
@@ -33,10 +33,22 @@ def test_links_join_against_final_url_after_redirect(httpserver, wc):
     assert doc.select("a").attr("href").path == "/new/sibling"  # not /sibling
 
 
-def test_search_returns_result_rows(httpserver, wc):
+def test_search_is_just_an_expression(httpserver, wc):
+    """No search verb / engine type: a search is a plan the caller composes
+    from the ordinary surface -- resolve, pick results, extract rows."""
     httpserver.expect_request("/s").respond_with_data(RESULTS, content_type="text/html")
-    engine = SearchEngine(url=httpserver.url_for("/s") + "?q={q}")
-    rows = wc.search("coffee", engine=engine, limit=2).collect()
+    rows = (
+        wc.ref(httpserver.url_for("/s"))
+        .resolve()
+        .select_all(".result")
+        .limit(2)
+        .extract(
+            title=doc.select(".result__a").attr("text"),
+            url=doc.select(".result__a").attr("href"),
+        )
+        .collect()
+        .project()
+    )
     assert [r["title"] for r in rows] == ["First", "Second"]
     assert rows[0]["url"].path == "/go/1"
 

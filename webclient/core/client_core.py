@@ -3,7 +3,7 @@
 Holds the engine loop, a ``ClientPool`` (leasing http clients + browser pages),
 the event bus, renderer plugins and name scopes, and the machinery that drives
 transport (``afetch``) and plan execution (``execute``/``aexecute``). Its
-user-facing features are backings (``FetchBacking`` / ``SearchBacking``); the
+user-facing features are backings (``FetchBacking``: ref/fetch/summary); the
 ``WebClient`` / ``AsyncWebClient`` surface is a thin sync/async/lazy interface
 over it. A remote backend is just a subclass that swaps ``execute`` for an HTTP
 round-trip -- so the surface is unchanged; only the core differs.
@@ -72,12 +72,13 @@ class NameScope:
 
 
 class FetchBacking(Backing):
-    """Reference/document authoring verbs. Each records a lazy ``Expr`` rooted
-    at this client (materialised later by ``execute``/``collect``); statically
-    they return the surface's core type, mapped to the lazy tier by the
-    generator (``ref -> LazyReference``, ``fetch -> LazyDocument``)."""
+    """The client's authoring verbs. Each records a lazy ``Expr`` rooted at this
+    client (materialised later by ``execute``/``collect``); statically they
+    return the surface's core type, mapped to the lazy tier by the generator
+    (``ref -> LazyReference``, ``fetch -> LazyDocument``). Anything higher-level
+    (search, crawl) is just an expression the caller composes -- not a verb."""
 
-    provides = frozenset({"ref", "lazy", "fetch"})
+    provides = frozenset({"ref", "lazy", "fetch", "summary"})
     gate = "ok"
 
     def ref(
@@ -108,43 +109,17 @@ class FetchBacking(Backing):
         """A lazy fetch: ``ref(url).resolve()``."""
         return self.ref(core, url, **kw).resolve(optional=optional, error=error)
 
-
-class SearchBacking(Backing):
-    """Higher-level authoring verbs composed from fetch + extraction."""
-
-    provides = frozenset({"search", "summary"})
-    gate = "ok"
-
     def summary(self, core: "WebClientCore", url: str, **kw: Any) -> "dict[str, Any]":
         """A lazy plan resolving ``url`` to a title + markdown digest."""
         return core.dispatch("ref", url, **kw).resolve().summary()
-
-    def search(
-        self, core: "WebClientCore", query: str, *, engine: Any, limit: int = 10
-    ) -> "list[dict[str, Any]]":
-        """A lazy search plan: resolve the engine's query URL, extract a
-        (title, url) row per result."""
-        from ..expr import doc
-
-        plan = (
-            core.dispatch("ref", engine.url.format(q=query))
-            .resolve()
-            .select_all(engine.result)
-        )
-        if limit:
-            plan = plan.limit(limit)
-        return plan.extract(
-            title=doc.select(engine.title).attr("text"),
-            url=doc.select(engine.link).attr("href"),
-        ).project()
 
 
 class WebClientCore(WebCore, BaseModel):
     """The engine: Core Fields (policy) + machinery (loop, ClientPool, bus, name
     scopes, transport + plan execution). Its user-facing features are backings
-    (fetch/search); the surface (``WebClient`` / ``AsyncWebClient``) is a thin
-    sync/async/lazy interface over it, and a remote backend is just a subclass
-    that swaps ``execute``. Sessions are a scoped subclass."""
+    (``FetchBacking``); the surface (``WebClient`` / ``AsyncWebClient``) is a
+    thin sync/async/lazy interface over it, and a remote backend is just a
+    subclass that swaps ``execute``. Sessions are a scoped subclass."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -214,7 +189,7 @@ class WebClientCore(WebCore, BaseModel):
             self._render_table[(renderer.kind, fmt)] = renderer
         return self
 
-    BACKINGS: ClassVar[tuple[Backing, ...]] = (FetchBacking(), SearchBacking())
+    BACKINGS: ClassVar[tuple[Backing, ...]] = (FetchBacking(),)
 
     # -- loop / lifecycle ----------------------------------------------------
     def loop(self) -> EngineLoop:
@@ -458,4 +433,4 @@ class WebClientCore(WebCore, BaseModel):
         doc._events.extend(events)
 
 
-__all__ = ["WebClientCore", "NameScope", "FetchBacking", "SearchBacking"]
+__all__ = ["WebClientCore", "NameScope", "FetchBacking"]

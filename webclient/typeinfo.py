@@ -1,36 +1,19 @@
-"""Return-type resolution for ``Expr`` validation + surface generation.
+"""Type classification for the surface generator.
 
-Given a Core's data fields and its backings' typed ops, work out each member's
-result type and which surface category it maps into. This is the one place
-that reads signatures (stdlib ``inspect`` / ``typing.get_type_hints``); both
-``Expr`` validation and the surface generator (``gen``) use it.
-
-(Grows out of the extraction in the old ``scripts/gen_stubs.py``.)
+Given a resolved annotation, decide which surface category it maps into
+(``classify``) and pull it apart (``element_type`` / ``unwrap_union`` /
+``field_type``). ``scripts/gen_stubs.py`` reads the signatures (it owns the
+``get_type_hints`` / ``inspect`` calls, since it needs a custom namespace) and
+leans on this module for the classification.
 """
 
 from __future__ import annotations
 
-import inspect
 import types
 import typing
 from collections.abc import Iterable as _Iterable
 from collections.abc import Mapping as _Mapping
 from typing import Any
-
-
-def return_type(fn: Any) -> Any:
-    """The resolved return annotation of ``fn`` (``Any`` if none/unresolvable).
-    Overloads: ``typing.get_overloads`` would refine by call args -- TODO."""
-    try:
-        return typing.get_type_hints(fn).get("return", Any)
-    except Exception:
-        return getattr(fn, "__annotations__", {}).get("return", Any)
-
-
-def op_params(fn: Any) -> list[inspect.Parameter]:
-    """The op's parameters, dropping the ``self``/``core`` receiver pair."""
-    sig = inspect.signature(fn)
-    return [p for n, p in sig.parameters.items() if n not in ("self", "core")]
 
 
 def field_type(core_cls: type, name: str) -> Any:
@@ -73,8 +56,6 @@ def unwrap_union(tp: Any) -> Any:
 
 
 __all__ = [
-    "return_type",
-    "op_params",
     "field_type",
     "classify",
     "element_type",

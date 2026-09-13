@@ -6,8 +6,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 
-from pydantic import BaseModel
-
 from .core.client_core import WebClientCore
 from .core.document_core import DocumentCore
 from .core.reference_core import HttpMethod, ReferenceCore
@@ -18,7 +16,7 @@ from .surface import Surface, surface
 if TYPE_CHECKING:
     from .collection import Collection, Field
     from .core.document_core import Element
-    from .models import Lazy, LazyDocument, LazyField, LazyReference
+    from .models import Lazy, LazyDocument, LazyReference
 
 T = TypeVar("T")
 
@@ -194,16 +192,6 @@ class Renderer:
         raise NotImplementedError
 
 
-class SearchEngine(BaseModel):
-    """A configurable search backend: a URL template (``{q}`` = the query) and
-    the selectors that pick each result's title and link out of the page."""
-
-    url: str
-    result: str = ".result"
-    title: str = "a"
-    link: str = "a"
-
-
 class Session:
     """A logical identity (cookies/headers/ttl) spanning fetches. ``ref`` and
     ``fetch`` return lazy references bound to this session."""
@@ -267,7 +255,6 @@ class _ClientBase:
         def fetch(self, url: str, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "LazyDocument": ...
         def lazy(self, url: Any, method: str = ..., **kw: Any) -> "LazyReference": ...
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "LazyReference": ...
-        def search(self, query: str, *, engine: Any, limit: int = ...) -> "Lazy[list[dict[str, Any]]]": ...
         def summary(self, url: str, **kw: Any) -> "Lazy[dict[str, Any]]": ...
         # fmt: on
         # >>> end generated <<<
@@ -416,7 +403,6 @@ __all__ = [
     "Document",
     "LiveDocument",
     "Session",
-    "SearchEngine",
     "WebClient",
     "AsyncWebClient",
     "default_client",

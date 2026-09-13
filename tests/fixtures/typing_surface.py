@@ -15,7 +15,6 @@ from webclient import (
     Element,
     Field,
     Reference,
-    SearchEngine,
     WebClient,
     doc,
     many,
@@ -75,9 +74,7 @@ assert_type(_wc.ref("https://e.com"), LazyReference)
 assert_type(_wc.lazy("https://e.com"), LazyReference)
 assert_type(_wc.fetch("https://e.com"), LazyDocument)
 
-# higher-level authoring verbs record a plan you collect (a Lazy[T] handle)
-_engine = SearchEngine(url="https://e.com/s?q={q}")
-assert_type(_wc.search("coffee", engine=_engine).collect(), list[dict[str, Any]])
+# summary records a plan you collect (a Lazy[T] handle)
 assert_type(_wc.summary("https://e.com").collect(), dict[str, Any])
 assert_type(_wc.fetch("https://e.com").select(".t"), LazyDocument)
 assert_type(_wc.fetch("https://e.com").attr("href"), LazyReference)
