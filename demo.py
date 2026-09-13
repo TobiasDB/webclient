@@ -258,7 +258,7 @@ def main() -> None:
                      missing=doc.select(".nope").attr("text"))
             .extract(name=doc.reference("link").resolve().select("name").attr("value"),
                      stock=doc.reference("link").resolve().select("stock.count").attr("value"),
-                     tag=doc.field("title").when(doc.field("title") == "Grinder")
+                     tag=when(doc.field("title") == "Grinder")
                          .then("bulky").otherwise("small"))
             .project()
         )

@@ -304,9 +304,6 @@ def _lazy_field() -> list[str]:
         '    def get(self) -> T: ...',
         '    def is_ok(self, *, error: _E = ...) -> "LazyField[bool]": ...',
         '    def is_empty(self, *, error: _E = ...) -> "LazyField[bool]": ...',
-        '    def when(self, cond: "LazyField[bool] | bool") -> "LazyField[T]": ...',
-        '    def then(self, value: Any) -> "LazyField[T]": ...',
-        '    def otherwise(self, value: Any) -> "LazyField[T]": ...',
     ]
     for op in ops:
         ignore = "  # type: ignore[override]" if op in ("eq", "ne") else ""

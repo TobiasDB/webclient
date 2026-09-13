@@ -373,7 +373,6 @@ class Field[T](WebBase):
     value: Any = None
 
     _registrable: ClassVar[bool] = False
-    _cond: bool | None = PrivateAttr(default=None)   # when(...) state
 
     def get(self) -> T:
         if not self.ok:
@@ -406,24 +405,8 @@ class Field[T](WebBase):
     def __bool__(self) -> bool:
         return bool(self.get())
 
-    # -- branching (Decision 5) ----------------------------------------------
-    def when(self, cond: Field[bool] | bool) -> Field[T]:
-        out = Field[Any](value=self.value)
-        out._cond = bool(cond.get() if isinstance(cond, Field) else cond)
-        return out
-
-    def then(self, value: T | Field[T]) -> Field[T]:
-        out = Field[Any](value=self.value)
-        out._cond = self._cond
-        if self._cond:
-            out.value = value.get() if isinstance(value, Field) else value
-        return out
-
-    def otherwise(self, value: T | Field[T]) -> Field[T]:
-        out = Field[Any](value=self.value)
-        if self._cond is False:
-            out.value = value.get() if isinstance(value, Field) else value
-        return out
+    # Branching is the free ``when(cond).then(a).otherwise(b)`` builder
+    # (core.expr, Polars-style) -- not a Field method (PLAN §9).
 
 
 # --------------------------------------------------------------------------- #

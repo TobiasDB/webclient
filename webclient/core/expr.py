@@ -212,6 +212,7 @@ def _install_roots() -> None:
 
 
 if TYPE_CHECKING:
+    from .base import Field
     from .document import Collection, Document, Reference
     doc: Document
     many: Collection[Document]
@@ -254,12 +255,12 @@ class _When:
         self._then = value
         return self
 
-    def otherwise(self, value: Any) -> Expr:
+    def otherwise(self, value: Any) -> "Field[Any]":
         if self._then is _MISSING:
             raise TypeError("when(...).then(...) is required before .otherwise(...)")
         step = Step(kind="when", args=[to_arg(self._cond), to_arg(self._then),
                                        to_arg(value)])
-        return Expr(Plan(steps=[step]))
+        return cast("Field[Any]", Expr(Plan(steps=[step])))   # runtime: an Expr
 
 
 def when(cond: Any) -> _When:

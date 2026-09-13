@@ -14,6 +14,7 @@ from webclient import (
     lazy,
     many,
     ref,
+    when,
 )
 
 assert_type(doc, Document)
@@ -34,7 +35,8 @@ assert_type(ref.resolve(error=IGNORE), Document)
 title: Field[str] = Field[str]()
 assert_type(title == "x", Field[bool])
 assert_type((title != "x") & ~(title == "y"), Field[bool])
-assert_type(title.when(title == "").then("n/a").otherwise(title), Field[str])
+# branching is the free Polars-style builder (not a Field method)
+assert_type(when(title == "").then("n/a").otherwise(title), Field[Any])
 assert_type(title.get(), str)
 
 # Collection lifts element ops and keeps the element type

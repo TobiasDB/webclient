@@ -3,7 +3,7 @@ import asyncio
 
 import pytest
 
-from webclient import RAISE, RETURN, Collection, Field, Reference, WebClient, doc, ref
+from webclient import RAISE, RETURN, Collection, Field, Reference, WebClient, doc, ref, when
 from webclient.core.executor import fan_out
 
 CARDS = """
@@ -143,7 +143,7 @@ def test_when_then_otherwise_and_sibling_field(site, wc):
     status = doc.select(".status").attr("text")
     rows = rows_of(wc, site, ref.resolve().select_all(".card").extract(
         title=doc.select(".title").attr("text"),
-        flag=status.when(status == "Active").then("on").otherwise("off"),
+        flag=when(status == "Active").then("on").otherwise("off"),
         again=doc.field("title"),
     ).project())
     assert [(r["flag"], r["again"] == r["title"]) for r in rows] == [
