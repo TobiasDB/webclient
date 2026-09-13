@@ -14,12 +14,17 @@ def wc():
 
 def test_session_cookies_persist_across_fetches(httpserver, wc):
     httpserver.expect_request("/login").respond_with_response(
-        Response("ok", content_type="text/html",
-                 headers={"Set-Cookie": "token=abc123; Path=/"}))
+        Response(
+            "ok",
+            content_type="text/html",
+            headers={"Set-Cookie": "token=abc123; Path=/"},
+        )
+    )
 
     def whoami(request):
-        return Response(f"cookie={request.cookies.get('token')}",
-                        content_type="text/html")
+        return Response(
+            f"cookie={request.cookies.get('token')}", content_type="text/html"
+        )
 
     httpserver.expect_request("/whoami").respond_with_handler(whoami)
 
@@ -32,7 +37,8 @@ def test_session_cookies_persist_across_fetches(httpserver, wc):
 
 def test_sessions_are_isolated(httpserver, wc):
     httpserver.expect_request("/login").respond_with_response(
-        Response("ok", headers={"Set-Cookie": "token=s1; Path=/"}))
+        Response("ok", headers={"Set-Cookie": "token=s1; Path=/"})
+    )
 
     def whoami(request):
         return Response(f"cookie={request.cookies.get('token')}")
@@ -42,7 +48,7 @@ def test_sessions_are_isolated(httpserver, wc):
     s1, s2 = wc.session(), wc.session()
     s1.ref(httpserver.url_for("/login")).resolve().collect()
     doc = s2.ref(httpserver.url_for("/whoami")).resolve().collect()
-    assert doc.text == "cookie=None"      # s1's cookie must not leak into s2
+    assert doc.text == "cookie=None"  # s1's cookie must not leak into s2
 
 
 def test_session_headers_merge_over_client_defaults(httpserver):
@@ -52,7 +58,10 @@ def test_session_headers_merge_over_client_defaults(httpserver):
     httpserver.expect_request("/echo").respond_with_handler(echo)
     with WebClient(default_headers={"x-app": "client"}) as wc:
         session = wc.session(headers={"x-app": "session"})
-        assert session.ref(httpserver.url_for("/echo")).resolve().collect().text == "session"
+        assert (
+            session.ref(httpserver.url_for("/echo")).resolve().collect().text
+            == "session"
+        )
 
 
 def test_session_metadata_and_document_binding(httpserver, wc):

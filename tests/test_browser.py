@@ -6,6 +6,7 @@ per-element event narrowing, missing-target policy, screenshot, reload replay,
 and page release. (xhr capture, DOM snapshots, storage_state and the plugin
 system are later M4 work and are intentionally not exercised here.)
 """
+
 import pytest
 
 from webclient import RETURN, DOMUpdateEvent, LiveDocument, WebClient
@@ -44,7 +45,7 @@ def test_browser_fetch_returns_live_document(app):
     assert isinstance(app, LiveDocument)
     assert app.ok and app.kind == "html"
     assert app.select("h2").text == "Card One"
-    assert app.select('//div[@id="c2"]/h2').text == "Card Two"   # xpath
+    assert app.select('//div[@id="c2"]/h2').text == "Card Two"  # xpath
 
 
 def test_click_mutates_dom_and_records_everything(app):
@@ -62,7 +63,7 @@ def test_write_and_live_state(app):
 
 
 def test_console_capture(app):
-    app.wait_for(timeout=0.3)        # let the boot script finish
+    app.wait_for(timeout=0.3)  # let the boot script finish
     assert any("booted" in e.text for e in app.console)
 
 
@@ -72,13 +73,13 @@ def test_livenode_event_narrowing(app):
     card1 = app.select("#c1")
     card2 = app.select("#c2")
     assert len(card1.events_of(DOMUpdateEvent)) > 0
-    assert len(card2.events_of(DOMUpdateEvent)) == 0     # sibling untouched
+    assert len(card2.events_of(DOMUpdateEvent)) == 0  # sibling untouched
 
 
 def test_missing_targets_are_loud_unless_policy_returns(app):
     with pytest.raises(LookupError):
         app.click(".nope", timeout=0.3)
-    app.click(".nope", timeout=0.3, optional=True)        # optional: no raise
+    app.click(".nope", timeout=0.3, optional=True)  # optional: no raise
     with pytest.raises(LookupError):
         app.select(".nope")
     assert app.select(".nope", error=RETURN).ok is False  # loud unless error=
@@ -99,7 +100,7 @@ def test_reload_reproduces_state(httpserver, wc):
     assert [a["op"] for a in live.ref().actions] == ["click", "write"]  # chain recorded
     wc.release(live)
 
-    fresh = live.reload()               # re-resolves + replays the action chain
+    fresh = live.reload()  # re-resolves + replays the action chain
     try:
         assert fresh.select(".added", error=RETURN).ok
         assert fresh.select("#out").text == "Bob"
@@ -109,10 +110,11 @@ def test_reload_reproduces_state(httpserver, wc):
 
 def test_release_returns_page_to_pool(httpserver, wc):
     httpserver.expect_request("/p").respond_with_data(
-        "<html><body>p</body></html>", content_type="text/html")
+        "<html><body>p</body></html>", content_type="text/html"
+    )
     live = wc.ref(httpserver.url_for("/p")).resolve(browser=True).collect()
     before = wc.pool.stats().pages_free
     wc.release(live)
-    assert wc.pool.stats().pages_free == before + 1     # a page freed up
-    with pytest.raises(Exception):                      # its page is gone
+    assert wc.pool.stats().pages_free == before + 1  # a page freed up
+    with pytest.raises(Exception):  # its page is gone
         live.click("body", timeout=0.3)

@@ -5,6 +5,7 @@ and branches into a ``Plan`` -- a pydantic model, so a plan is the wire form for
 the service/remote backends. The plan knows nothing about the cores; the
 executor (``webclient.executor``) walks it against a live context.
 """
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -24,7 +25,7 @@ class Step(BaseModel):
     """One recorded operation in a chain."""
 
     kind: Literal["get", "call", "op", "fn", "when"]
-    name: str = ""                       # attribute / operator / function name
+    name: str = ""  # attribute / operator / function name
     args: list[Arg] = []
     kwargs: dict[str, Arg] = {}
 
@@ -71,16 +72,22 @@ class Plan(BaseModel):
 
     def describe(self) -> str:
         """A readable rendering of the chain (for logs / the demo)."""
-        out = f"{self.root or 'reference'}({self.source.get('hostname', '')})" \
-            if self.source else (self.root or "·")
+        out = (
+            f"{self.root or 'reference'}({self.source.get('hostname', '')})"
+            if self.source
+            else (self.root or "·")
+        )
         for s in self.steps:
-            args = ", ".join([*map(_show, s.args),
-                              *(f"{k}={_show(v)}" for k, v in s.kwargs.items())])
-            out = {"get": f"{out}.{s.name}",
-                   "call": f"{out}({args})",
-                   "op": f"({out} {s.name} {args})",
-                   "fn": f"{s.name}({out}{', ' + args if args else ''})",
-                   "when": f"when({args})"}[s.kind]
+            args = ", ".join(
+                [*map(_show, s.args), *(f"{k}={_show(v)}" for k, v in s.kwargs.items())]
+            )
+            out = {
+                "get": f"{out}.{s.name}",
+                "call": f"{out}({args})",
+                "op": f"({out} {s.name} {args})",
+                "fn": f"{s.name}({out}{', ' + args if args else ''})",
+                "when": f"when({args})",
+            }[s.kind]
         return out
 
 

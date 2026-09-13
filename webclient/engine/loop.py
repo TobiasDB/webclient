@@ -2,6 +2,7 @@
 sync<->async bridge. All engine I/O runs here; public facade methods wrap
 coroutines via ``run``.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -17,7 +18,8 @@ class EngineLoop:
     def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
-            target=self._main, name="webclient-engine", daemon=True)
+            target=self._main, name="webclient-engine", daemon=True
+        )
         self._thread.start()
 
     def _main(self) -> None:
@@ -40,7 +42,8 @@ class EngineLoop:
             coro.close()
             raise RuntimeError(
                 "sync facade method called from the engine loop thread -- "
-                "bus handlers must not call facade methods")
+                "bus handlers must not call facade methods"
+            )
         if self.closed:
             coro.close()
             raise RuntimeError("engine loop is stopped (WebClient closed?)")
@@ -66,7 +69,7 @@ class EngineLoop:
                 await q.put(_SENTINEL)
             except asyncio.CancelledError:
                 raise
-            except BaseException as exc:      # surfaced on the consuming side
+            except BaseException as exc:  # surfaced on the consuming side
                 await q.put(exc)
 
         asyncio.run_coroutine_threadsafe(_pump(), self._loop)
@@ -74,8 +77,7 @@ class EngineLoop:
             while True:
                 if self.closed:
                     break
-                item = asyncio.run_coroutine_threadsafe(
-                    q.get(), self._loop).result()
+                item = asyncio.run_coroutine_threadsafe(q.get(), self._loop).result()
                 if item is _SENTINEL:
                     break
                 if isinstance(item, BaseException):
@@ -97,8 +99,9 @@ class EngineLoop:
 
             if not self.closed:
                 try:
-                    asyncio.run_coroutine_threadsafe(
-                        _shutdown(), self._loop).result(timeout=5)
+                    asyncio.run_coroutine_threadsafe(_shutdown(), self._loop).result(
+                        timeout=5
+                    )
                 except Exception:
                     pass
 

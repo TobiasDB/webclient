@@ -2,6 +2,7 @@
 driving a real (in-process) uvicorn server on an ephemeral port -- no local
 browser/lxml, exercising the true HTTP path. Remote documents are lazy
 handles; value ops run through ``rc.execute`` (deferred/batched)."""
+
 import threading
 import time
 
@@ -21,8 +22,7 @@ from webclient.service import create_app
 
 class _Server:
     def __init__(self, app):
-        config = uvicorn.Config(app, host="127.0.0.1", port=0,
-                                log_level="warning")
+        config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
         self.server = uvicorn.Server(config)
         self.thread = threading.Thread(target=self.server.run, daemon=True)
 
@@ -36,6 +36,7 @@ class _Server:
     def __exit__(self, *exc):
         self.server.should_exit = True
         self.thread.join(timeout=5)
+
 
 CARDS = """
 <html><head><title>Shop</title></head><body>
@@ -51,7 +52,8 @@ CARDS = """
 @pytest.fixture
 def remote(httpserver):
     httpserver.expect_request("/cards").respond_with_data(
-        CARDS, content_type="text/html")
+        CARDS, content_type="text/html"
+    )
     httpserver.expect_request("/i/1").respond_with_json({"name": "Aeropress"})
     httpserver.expect_request("/i/2").respond_with_json({"name": "Grinder"})
     app = create_app(token="secret")
@@ -65,7 +67,7 @@ def remote(httpserver):
 def test_fetch_returns_handle(remote):
     rc, server = remote
     d = rc.fetch(server.url_for("/cards")).collect()
-    assert d.ok and d.kind == "html" and d.title == "Shop"   # cheap meta
+    assert d.ok and d.kind == "html" and d.title == "Shop"  # cheap meta
     assert d.id
 
 
@@ -82,7 +84,7 @@ def test_auth_enforced(httpserver):
 
 def test_render_over_the_wire(remote):
     rc, server = remote
-    d = rc.fetch(server.url_for("/cards")).collect()   # lazy handle
+    d = rc.fetch(server.url_for("/cards")).collect()  # lazy handle
     assert "# Featured" in rc.execute(d.render("markdown"))
     assert "Curated picks." in rc.execute(d.render("text"))
     assert any(u.endswith("/i/1") for u in rc.execute(d.render("links")))
@@ -93,8 +95,7 @@ def test_select_is_one_batched_call(remote):
     rc, server = remote
     d = rc.fetch(server.url_for("/cards")).collect()
     assert rc.execute(d.select(".title").attr("text")) == "Aeropress"
-    assert rc.execute(d.select_all(".title").attr("text")) == \
-        ["Aeropress", "Grinder"]
+    assert rc.execute(d.select_all(".title").attr("text")) == ["Aeropress", "Grinder"]
     hrefs = rc.execute(d.select_all("a").attr("href"))
     assert all(u.startswith("http") for u in hrefs)
 
@@ -102,9 +103,11 @@ def test_select_is_one_batched_call(remote):
 def test_plan_execution_is_portable(remote):
     rc, server = remote
     plan = (
-        ref.resolve().select_all(".card")
-        .extract(title=doc.select(".title").attr("text"),
-                 link=doc.select("a").attr("href"))
+        ref.resolve()
+        .select_all(".card")
+        .extract(
+            title=doc.select(".title").attr("text"), link=doc.select("a").attr("href")
+        )
         .extract(name=doc.reference("link").resolve().select("name").attr("value"))
         .project()
     )
@@ -114,13 +117,19 @@ def test_plan_execution_is_portable(remote):
 
 def test_plan_matches_local_client(remote, httpserver):
     rc, server = remote
-    plan = ref.resolve().select_all(".card").extract(
-        title=doc.select(".title").attr("text")).project()
-    remote_rows = sorted(r["title"] for r in rc.execute(
-        plan, rc.ref(server.url_for("/cards"))))
+    plan = (
+        ref.resolve()
+        .select_all(".card")
+        .extract(title=doc.select(".title").attr("text"))
+        .project()
+    )
+    remote_rows = sorted(
+        r["title"] for r in rc.execute(plan, rc.ref(server.url_for("/cards")))
+    )
     with WebClient() as local:
-        local_rows = sorted(r["title"] for r in local.execute(
-            plan, local.ref(server.url_for("/cards"))))
+        local_rows = sorted(
+            r["title"] for r in local.execute(plan, local.ref(server.url_for("/cards")))
+        )
     assert remote_rows == local_rows == ["Aeropress", "Grinder"]
 
 
@@ -133,9 +142,11 @@ def test_same_facade_over_a_remote_core(remote):
 
 def test_sessions(remote, httpserver):
     from werkzeug.wrappers import Response
+
     rc, server = remote
     server.expect_request("/login").respond_with_response(
-        Response("ok", headers={"Set-Cookie": "t=1; Path=/"}))
+        Response("ok", headers={"Set-Cookie": "t=1; Path=/"})
+    )
 
     def whoami(request):
         return Response(f"t={request.cookies.get('t')}", content_type="text/html")
@@ -143,7 +154,7 @@ def test_sessions(remote, httpserver):
     server.expect_request("/whoami").respond_with_handler(whoami)
     session = rc.session(ttl=60)
     assert session.status == "running"
-    session.fetch(server.url_for("/login")).collect()             # sets a cookie server-side
+    session.fetch(server.url_for("/login")).collect()  # sets a cookie server-side
     d = session.fetch(server.url_for("/whoami")).collect()
     assert rc.execute(d.render("text")).strip() == "t=1"
     session.close()
@@ -172,7 +183,8 @@ def test_remote_needs_no_browser_or_lxml():
         "assert 'lxml' not in sys.modules and 'playwright' not in sys.modules\n"
         "print('ok')\n"
     )
-    result = subprocess.run([sys.executable, "-c", script],
-                            capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"

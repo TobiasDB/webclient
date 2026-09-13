@@ -5,6 +5,7 @@ BrowserContext per session (storage_state round-trips), one Page per page
 lease. Everything here runs on the loop; the sync facade lives on
 LiveDocument / WebClient.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -22,9 +23,11 @@ class BrowserHost:
     async def _ensure_browser(self) -> Any:
         if self._browser is None:
             from playwright.async_api import async_playwright
+
             self._playwright = await async_playwright().start()
             self._browser = await self._playwright.chromium.launch(
-                headless=self.headless)
+                headless=self.headless
+            )
         return self._browser
 
     async def context_for(self, session: Any = None) -> Any:

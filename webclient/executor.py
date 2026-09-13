@@ -9,6 +9,7 @@ unevaluated so the ``Collection`` can evaluate them per element.
 MVP: synchronous, sequential fan-out. Async / bounded-pool / streaming are
 later slices.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,9 +30,17 @@ def _row_of(value: Any) -> dict[str, Any] | None:
     core = getattr(value, "_core", None)
     return getattr(core, "_row", None) if core is not None else None
 
-_OPS = {"eq": operator.eq, "ne": operator.ne, "lt": operator.lt,
-        "le": operator.le, "gt": operator.gt, "ge": operator.ge,
-        "and": operator.and_, "or": operator.or_}
+
+_OPS = {
+    "eq": operator.eq,
+    "ne": operator.ne,
+    "lt": operator.lt,
+    "le": operator.le,
+    "gt": operator.gt,
+    "ge": operator.ge,
+    "and": operator.and_,
+    "or": operator.or_,
+}
 
 #: ops whose expression arguments are evaluated per element inside the op
 #: itself, so the executor passes them unevaluated (as ``Expr``).
@@ -46,7 +55,7 @@ def evaluate(expr: Any, context: Any = None, *, client: Any = None) -> Any:
     if not isinstance(expr, Expr):
         return expr
     client = client or expr._client or getattr(context, "_client", None)
-    if isinstance(context, Expr):                  # an Expr context (wc.ref(url)) runs first
+    if isinstance(context, Expr):  # an Expr context (wc.ref(url)) runs first
         context = evaluate(context, client=client)
     value = _start(expr._plan, context, client)
     return _run(value, expr._plan.steps, 0, context, client)
@@ -56,10 +65,12 @@ def _run(value: Any, steps: list[Step], i: int, context: Any, client: Any) -> An
     """Apply steps from ``i``. When the value is a Collection and the next step
     is not a whole-collection op, the rest of the chain fans out per element."""
     from .collection import Collection
+
     while i < len(steps):
         step = steps[i]
         if isinstance(value, Collection) and not (
-                step.kind == "get" and step.name in _COLL_OPS):
+            step.kind == "get" and step.name in _COLL_OPS
+        ):
             rest = steps[i:]
             results = [_run(el, rest, 0, el, client) for el in value]
             if results and all(hasattr(r, "_core") for r in results):
@@ -73,6 +84,7 @@ def truthy(value: Any) -> bool:
     """Whether an evaluated value counts as true (a not-ok surface/field is
     false; otherwise normal truthiness)."""
     from .collection import Field
+
     if isinstance(value, Field):
         return bool(value)
     if hasattr(value, "ok"):
@@ -82,6 +94,7 @@ def truthy(value: Any) -> bool:
 
 # -- the walk ---------------------------------------------------------------
 
+
 def _start(plan: Any, context: Any, client: Any) -> Any:
     """The value a plan starts from: a reconstructed Reference (source plan) or
     the passed context (doc/ref/field roots)."""
@@ -89,8 +102,9 @@ def _start(plan: Any, context: Any, client: Any) -> Any:
         from .core.reference_core import ReferenceCore
         from .core.session_core import WebSessionCore
         from .surface import wrap
+
         core = ReferenceCore(**plan.source)
-        if isinstance(context, WebSessionCore):      # a session-bound reference
+        if isinstance(context, WebSessionCore):  # a session-bound reference
             core._session = context
             core._client = context._client
         else:
@@ -99,12 +113,14 @@ def _start(plan: Any, context: Any, client: Any) -> Any:
     if context is None and plan.root:
         raise ValueError(
             f"a plan rooted at {plan.root} needs a context; pass one to "
-            "execute()/collect() or root it with reference(url)")
+            "execute()/collect() or root it with reference(url)"
+        )
     return context
 
 
-def _apply(value: Any, steps: list[Step], i: int, context: Any,
-           client: Any) -> tuple[Any, int]:
+def _apply(
+    value: Any, steps: list[Step], i: int, context: Any, client: Any
+) -> tuple[Any, int]:
     step = steps[i]
     if step.kind == "get":
         nxt = steps[i + 1] if i + 1 < len(steps) else None
@@ -118,7 +134,7 @@ def _apply(value: Any, steps: list[Step], i: int, context: Any,
         cond, then_arg, else_arg = step.args
         chosen = then_arg if truthy(_arg(cond, context, client)) else else_arg
         return _arg(chosen, context, client), i + 1
-    if step.kind == "fn":                          # is_empty(x) == x.is_empty()
+    if step.kind == "fn":  # is_empty(x) == x.is_empty()
         op = getattr(value, step.name, None)
         return (op() if callable(op) else op), i + 1
     raise ValueError(f"cannot evaluate step {step.kind!r}")
@@ -136,11 +152,12 @@ def _call(value: Any, name: str, call: Step, context: Any, client: Any) -> Any:
         row = _row_of(value)
         if row is not None:
             column = row.get(_arg(call.args[0], context, client))
-            if name == "field":                     # a field is a scalar leaf
+            if name == "field":  # a field is a scalar leaf
                 from .collection import Field
+
                 return column if isinstance(column, Field) else Field(column)
-            return column                           # reference: the raw value
-    if name in _BINDS:                             # pass sub-plans unevaluated
+            return column  # reference: the raw value
+    if name in _BINDS:  # pass sub-plans unevaluated
         args = [_as_expr(a, client) for a in call.args]
         kwargs = {k: _as_expr(v, client) for k, v in call.kwargs.items()}
     else:
@@ -161,8 +178,10 @@ def _arg(arg: Arg, context: Any, client: Any) -> Any:
 
 # -- bounded fan-out ---------------------------------------------------------
 
-async def fan_out(items: list[Any], fn: Callable[[Any], Awaitable[Any]], *,
-                  limit: int) -> list[Any]:
+
+async def fan_out(
+    items: list[Any], fn: Callable[[Any], Awaitable[Any]], *, limit: int
+) -> list[Any]:
     """Run ``fn`` over ``items`` with at most ``limit`` in flight, results in
     input order. A failing task cancels its siblings and propagates (the first
     failure is raised)."""
@@ -177,7 +196,7 @@ async def fan_out(items: list[Any], fn: Callable[[Any], Awaitable[Any]], *,
         async with asyncio.TaskGroup() as group:
             for _ in range(min(max(limit, 1), len(items)) or 1):
                 group.create_task(worker())
-    except BaseExceptionGroup as group_exc:         # unwrap to the first failure
+    except BaseExceptionGroup as group_exc:  # unwrap to the first failure
         exc: BaseException = group_exc
         while isinstance(exc, BaseExceptionGroup):
             exc = exc.exceptions[0]

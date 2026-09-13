@@ -6,6 +6,7 @@ dispatcher. Every Core-typed result is auto-wrapped back into its surface, so
 chaining stays on the surface. The generated stub classes (``webclient.gen``)
 supply the static types; this is the one runtime behind all of them.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, TypeVar
@@ -30,14 +31,15 @@ def wrap(value: Any, *, client: Any = None) -> Any:
             return value
         surf = cls(value)
         try:
-            value._surface = surf   # type: ignore[attr-defined]
+            value._surface = surf  # type: ignore[attr-defined]
         except (AttributeError, ValueError):
             pass
         return surf
     if isinstance(value, (list, tuple)):
         if not any(isinstance(v, WebCore) for v in value):
-            return value                 # nothing to wrap; preserve identity
+            return value  # nothing to wrap; preserve identity
         from .collection import Collection
+
         owner = client or getattr(value[0], "_client", None)
         root = getattr(value[0], "root", "") or getattr(value[0], "name", "")
         return Collection([wrap(v) for v in value], client=owner, root=root)
@@ -61,21 +63,24 @@ class Surface:
         else:
             object.__setattr__(self, name, value)
 
-    if not TYPE_CHECKING:                            # hidden from type checkers:
-        def __getattr__(self, name: str) -> Any:     # the typed surface is the
-            if name.startswith("_"):                 # generated stub blocks
+    if not TYPE_CHECKING:  # hidden from type checkers:
+
+        def __getattr__(self, name: str) -> Any:  # the typed surface is the
+            if name.startswith("_"):  # generated stub blocks
                 raise AttributeError(name)
             core = object.__getattribute__(self, "_core")
             cls = type(core)
-            if name in cls.model_fields:             # a data field
+            if name in cls.model_fields:  # a data field
                 return getattr(core, name)
-            if name in cls.prop_ops():               # a property op -> dispatch now
+            if name in cls.prop_ops():  # a property op -> dispatch now
                 return wrap(core.dispatch(name))
-            if name in cls.ops():                    # a call op -> a dispatcher
+            if name in cls.ops():  # a call op -> a dispatcher
+
                 def call(*args: Any, **kwargs: Any) -> Any:
                     return wrap(core.dispatch(name, *args, **kwargs))
+
                 return call
-            if isinstance(getattr(cls, name, None), property):   # a core property
+            if isinstance(getattr(cls, name, None), property):  # a core property
                 return wrap(getattr(core, name))
             raise AttributeError(name)
 
@@ -89,9 +94,11 @@ _C = TypeVar("_C", bound=type)
 def surface(core_cls: type) -> "Callable[[_C], _C]":
     """Register the decorated Surface subclass as ``core_cls``'s eager wrapper
     (an identity decorator -- the class type is preserved)."""
+
     def register(cls: _C) -> _C:
         _REGISTRY[core_cls] = cls
         return cls
+
     return register
 
 

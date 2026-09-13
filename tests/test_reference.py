@@ -37,7 +37,9 @@ def test_url_roundtrip():
 
 def test_url_elides_default_port_keeps_custom():
     assert Reference(hostname="e.com", scheme="https", port=443).url == "https://e.com"
-    assert Reference(hostname="e.com", scheme="http", port=8080).url == "http://e.com:8080"
+    assert (
+        Reference(hostname="e.com", scheme="http", port=8080).url == "http://e.com:8080"
+    )
 
 
 def test_url_encodes_multivalued_params():
@@ -62,6 +64,7 @@ def test_join_resolves_relative_and_absolute():
 
 def test_bound_reference_carries_client():
     from webclient import WebClient
+
     with WebClient() as wc:
-        ref = wc.ref("https://example.com/x")          # a lazy reference root
-        assert ref._client is wc.core                  # bound to this client's core
+        ref = wc.ref("https://example.com/x")  # a lazy reference root
+        assert ref._client is wc.core  # bound to this client's core

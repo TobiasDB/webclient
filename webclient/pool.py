@@ -5,6 +5,7 @@ M2 implements the http side (a reusable set of persistent
 lease, so plugins may install event hooks for the request's duration).
 Page leases land in M4.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,8 +26,8 @@ class Lease(BaseModel):
     session_id: str | None = None
 
     _pool: Any = PrivateAttr(default=None)
-    _client: Any = PrivateAttr(default=None)   # httpx.AsyncClient (http kind)
-    _page: Any = PrivateAttr(default=None)     # playwright Page (page kind)
+    _client: Any = PrivateAttr(default=None)  # httpx.AsyncClient (http kind)
+    _page: Any = PrivateAttr(default=None)  # playwright Page (page kind)
 
 
 class PoolStats(BaseModel):
@@ -42,8 +43,8 @@ class ClientPool(BaseModel):
     max_pages: int = 4
     acquire_timeout: float = 60.0
 
-    _owner: Any = PrivateAttr(default=None)            # owning WebClient
-    _semaphore: Any = PrivateAttr(default=None)        # asyncio.Semaphore
+    _owner: Any = PrivateAttr(default=None)  # owning WebClient
+    _semaphore: Any = PrivateAttr(default=None)  # asyncio.Semaphore
     _idle: list[Any] = PrivateAttr(default_factory=list)
     _held: dict[str, Any] = PrivateAttr(default_factory=dict)
     _created: int = PrivateAttr(default=0)
@@ -64,8 +65,9 @@ class ClientPool(BaseModel):
         )
 
     # -- engine side (runs on the loop) --------------------------------------
-    async def _acquire(self, kind: LeaseKind, *, session: Any = None,
-                       timeout: float | None = None) -> Lease:
+    async def _acquire(
+        self, kind: LeaseKind, *, session: Any = None, timeout: float | None = None
+    ) -> Lease:
         if kind == "page":
             return await self._acquire_page(session, timeout)
         if self._semaphore is None:
@@ -74,15 +76,18 @@ class ClientPool(BaseModel):
         try:
             await asyncio.wait_for(
                 self._semaphore.acquire(),
-                timeout if timeout is not None else self.acquire_timeout)
+                timeout if timeout is not None else self.acquire_timeout,
+            )
         except asyncio.TimeoutError:
             raise TimeoutError(
-                f"pool exhausted: no http lease within {self.acquire_timeout}s") from None
+                f"pool exhausted: no http lease within {self.acquire_timeout}s"
+            ) from None
         finally:
             self._waiting -= 1
         client = self._idle.pop() if self._idle else self._new_http_client()
-        lease = Lease(id=uuid4().hex, kind="http",
-                      session_id=getattr(session, "id", None))
+        lease = Lease(
+            id=uuid4().hex, kind="http", session_id=getattr(session, "id", None)
+        )
         lease._pool = self
         lease._client = client
         self._held[lease.id] = client
@@ -100,21 +105,22 @@ class ClientPool(BaseModel):
             return
         client = self._held.pop(lease.id, None)
         if client is not None:
-            client.event_hooks = {}    # a lease returns clean...
-            client.cookies.clear()     # ...and must not leak cookies across
+            client.event_hooks = {}  # a lease returns clean...
+            client.cookies.clear()  # ...and must not leak cookies across
             self._idle.append(client)  # sessions (Session owns cookie state)
             self._semaphore.release()
 
-    async def _acquire_page(self, session: Any,
-                            timeout: float | None) -> Lease:
+    async def _acquire_page(self, session: Any, timeout: float | None) -> Lease:
         import asyncio as _asyncio
+
         if self._page_semaphore is None:
             self._page_semaphore = _asyncio.Semaphore(self.max_pages)
         self._waiting += 1
         try:
             await _asyncio.wait_for(
                 self._page_semaphore.acquire(),
-                timeout if timeout is not None else self.acquire_timeout)
+                timeout if timeout is not None else self.acquire_timeout,
+            )
         except _asyncio.TimeoutError:
             raise TimeoutError(
                 f"pool exhausted: no page lease within {self.acquire_timeout}s"
@@ -127,8 +133,9 @@ class ClientPool(BaseModel):
             self._page_semaphore.release()
             raise
         self._pages_created += 1
-        lease = Lease(id=uuid4().hex, kind="page",
-                      session_id=getattr(session, "id", None))
+        lease = Lease(
+            id=uuid4().hex, kind="page", session_id=getattr(session, "id", None)
+        )
         lease._pool = self
         lease._page = page
         self._pages_held[lease.id] = page

@@ -1,5 +1,6 @@
 """The typing gate: tests/fixtures/typing_surface.py must pass both checkers.
 Skips a checker that is not installed (dev extra installs both)."""
+
 import subprocess
 import sys
 from pathlib import Path

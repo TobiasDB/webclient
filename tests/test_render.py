@@ -34,7 +34,7 @@ def test_markdown_renderer():
     assert "- one\n- two" in md
     assert "```\ncode block\n```" in md
     assert "![A picture](/pic.png)" in md
-    assert "x()" not in md                       # scripts stripped
+    assert "x()" not in md  # scripts stripped
 
 
 def test_markdown_via_view_sugar():
@@ -44,8 +44,8 @@ def test_markdown_via_view_sugar():
 def test_text_renderer_is_readable():
     text = make_doc().render("text")
     assert "Big News" in text and "First bold paragraph" in text
-    assert "fine print" not in text              # footer is noise
-    assert "home" not in text                    # nav is noise
+    assert "fine print" not in text  # footer is noise
+    assert "home" not in text  # nav is noise
 
 
 def test_elements_renderer_sections_under_titles():
@@ -66,8 +66,12 @@ def test_links_and_html_formats():
 
 
 def test_json_elements_renderer():
-    doc = Document(kind="json", hostname="e.com", status_code=200,
-                       content=b'{"a": {"b": 1}, "c": [true, "x"]}')
+    doc = Document(
+        kind="json",
+        hostname="e.com",
+        status_code=200,
+        content=b'{"a": {"b": 1}, "c": [true, "x"]}',
+    )
     elements = doc.render("elements")
     by_id = {e.id: e for e in elements}
     assert by_id["a.b"].text == "1" and by_id["a.b"].parent_id == "a"
@@ -75,8 +79,12 @@ def test_json_elements_renderer():
 
 
 def test_json_query():
-    doc = Document(kind="json", hostname="e.com", status_code=200,
-                       content=b'{"items": [{"name": "n0"}, {"name": "n1"}]}')
+    doc = Document(
+        kind="json",
+        hostname="e.com",
+        status_code=200,
+        content=b'{"items": [{"name": "n0"}, {"name": "n1"}]}',
+    )
     assert doc.select("items[1].name").text == "n1"
 
 

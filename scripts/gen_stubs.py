@@ -10,6 +10,7 @@ generated <<<`` markers and is rewritten here from a core's data fields
     python scripts/gen_stubs.py          # rewrite the blocks
     python scripts/gen_stubs.py --check  # exit 1 if any block is stale (CI)
 """
+
 from __future__ import annotations
 
 import sys
@@ -19,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from webclient.core.document_core import DocumentCore    # noqa: E402
+from webclient.core.document_core import DocumentCore  # noqa: E402
 from webclient.core.reference_core import ReferenceCore  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -42,8 +43,11 @@ def _type_of(ann: object) -> str:
 
 
 def _fields(core: type, skip: set[str]) -> list[str]:
-    return [f"        {name}: {_type_of(f.annotation)}"
-            for name, f in core.model_fields.items() if name not in skip]
+    return [
+        f"        {name}: {_type_of(f.annotation)}"
+        for name, f in core.model_fields.items()
+        if name not in skip
+    ]
 
 
 # The op contract: fully-rendered method/attribute lines. ``{D}``/``{R}``/
@@ -54,10 +58,10 @@ _REFERENCE_OPS = [
     "@property",
     "def ok(self) -> bool: ...",
     "def resolve(self, *, browser: bool = ..., optional: bool = ...,",
-    "            error: Any = ...) -> \"{D}\": ...",
-    "def with_params(self, **params: str) -> \"{R}\": ...",
-    "def replace(self, **fields: Any) -> \"{R}\": ...",
-    "def join(self, href: str) -> \"{R}\": ...",
+    '            error: Any = ...) -> "{D}": ...',
+    'def with_params(self, **params: str) -> "{R}": ...',
+    'def replace(self, **fields: Any) -> "{R}": ...',
+    'def join(self, href: str) -> "{R}": ...',
 ]
 
 _DOCUMENT_OPS = [
@@ -76,47 +80,53 @@ _DOCUMENT_OPS = [
     "@property",
     "def dom_mutations(self) -> list[Any]: ...",
     "def select(self, selector: str, *, index: int = ...,",
-    "           error: Any = ...) -> \"{D}\": ...",
+    '           error: Any = ...) -> "{D}": ...',
     "def select_all(self, selector: str, *, limit: int | None = ...,",
-    "               offset: int = ...) -> \"{CD}\": ...",
+    '               offset: int = ...) -> "{CD}": ...',
     "@overload",
-    "def attr(self, name: Literal[\"href\", \"src\", \"action\"]) -> \"{R}\": ...  # type: ignore[overload-overlap]",
+    'def attr(self, name: Literal["href", "src", "action"]) -> "{R}": ...  # type: ignore[overload-overlap]',
     "@overload",
-    "def attr(self, name: str, *, error: Any = ...) -> \"{FS}\": ...",
-    "def is_ok(self) -> \"{FB}\": ...",
-    "def is_empty(self) -> \"{FB}\": ...",
-    "def ref(self) -> \"{R}\": ...",
+    'def attr(self, name: str, *, error: Any = ...) -> "{FS}": ...',
+    'def is_ok(self) -> "{FB}": ...',
+    'def is_empty(self) -> "{FB}": ...',
+    'def ref(self) -> "{R}": ...',
     "def events_of(self, event_type: Any) -> list[Any]: ...",
-    "def reload(self) -> \"{D}\": ...",
+    'def reload(self) -> "{D}": ...',
     "def summary(self) -> dict[str, Any]: ...",
     "def click(self, selector: str | None = ..., *, timeout: float = ...,",
-    "          optional: bool = ...) -> \"{D}\": ...",
+    '          optional: bool = ...) -> "{D}": ...',
     "def write(self, selector: str, text: str, *, timeout: float = ...,",
-    "          optional: bool = ...) -> \"{D}\": ...",
+    '          optional: bool = ...) -> "{D}": ...',
     "def wait_for(self, selector: str | None = ..., *,",
-    "             timeout: float = ...) -> \"{D}\": ...",
+    '             timeout: float = ...) -> "{D}": ...',
     "def evaluate(self, script: str) -> Any: ...",
-    "def screenshot(self, selector: str | None = ...) -> \"{D}\": ...",
+    'def screenshot(self, selector: str | None = ...) -> "{D}": ...',
     "@overload",
-    "def render(self, format: Literal[\"elements\"]) -> \"list[Element]\": ...",
+    'def render(self, format: Literal["elements"]) -> "list[Element]": ...',
     "@overload",
-    "def render(self, format: Literal[\"links\"]) -> \"{CR}\": ...",
+    'def render(self, format: Literal["links"]) -> "{CR}": ...',
     "@overload",
     "def render(self, format: str, **options: Any) -> str: ...",
 ]
 
 _COLLECTION_LIFT = [
     "def select(self, selector: str, *, index: int = ...,",
-    "           error: Any = ...) -> \"Collection[Document]\": ...",
+    '           error: Any = ...) -> "Collection[Document]": ...',
     "def select_all(self, selector: str, *, limit: int | None = ...,",
-    "               offset: int = ...) -> \"Collection[Document]\": ...",
-    "def attr(self, name: str, *, error: Any = ...) -> \"Collection[Field[str]]\": ...",
-    "def text(self) -> \"Collection[Field[str]]\": ...",
-    "def render(self, format: str, **options: Any) -> \"Collection[Field[Any]]\": ...",
+    '               offset: int = ...) -> "Collection[Document]": ...',
+    'def attr(self, name: str, *, error: Any = ...) -> "Collection[Field[str]]": ...',
+    'def text(self) -> "Collection[Field[str]]": ...',
+    'def render(self, format: str, **options: Any) -> "Collection[Field[Any]]": ...',
 ]
 
-EAGER = {"D": "Document", "R": "Reference", "FS": "Field[str]", "FB": "Field[bool]",
-         "CD": "Collection[Document]", "CR": "Collection[Reference]"}
+EAGER = {
+    "D": "Document",
+    "R": "Reference",
+    "FS": "Field[str]",
+    "FB": "Field[bool]",
+    "CD": "Collection[Document]",
+    "CR": "Collection[Reference]",
+}
 
 
 def _expand(lines: list[str], tier: dict[str, str]) -> list[str]:
@@ -133,17 +143,23 @@ def _body(region: str) -> str:
         # fields that are ops (url/ok props, actions unused in stub) are skipped
         rows = _fields(ReferenceCore, {"actions"}) + _expand(_REFERENCE_OPS, EAGER)
     elif region == "Document eager surface":
-        rows = (_fields(DocumentCore, {"final_url", "error", "text", "title"})
-                + _expand(_DOCUMENT_OPS, EAGER)
-                + ["        @property",
-                   "        def final_url(self) -> str | None: ...",
-                   "        @property",
-                   "        def error(self) -> Any: ..."])
+        rows = (
+            _fields(DocumentCore, {"final_url", "error", "text", "title"})
+            + _expand(_DOCUMENT_OPS, EAGER)
+            + [
+                "        @property",
+                "        def final_url(self) -> str | None: ...",
+                "        @property",
+                "        def error(self) -> Any: ...",
+            ]
+        )
     elif region == "collection element-op lifting":
         rows = _expand(_COLLECTION_LIFT, EAGER)
     else:
         raise KeyError(region)
-    return "\n".join(rows)
+    # fmt guards keep black off the generated block, so its exact text (and
+    # thus --check) stays stable regardless of formatting runs.
+    return "        # fmt: off\n" + "\n".join(rows) + "\n        # fmt: on"
 
 
 REGIONS = [

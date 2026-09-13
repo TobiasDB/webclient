@@ -7,6 +7,7 @@ that reads signatures (stdlib ``inspect`` / ``typing.get_type_hints``); both
 
 (Grows out of the extraction in the old ``scripts/gen_stubs.py``.)
 """
+
 from __future__ import annotations
 
 import inspect
@@ -45,13 +46,15 @@ def classify(tp: Any, cores: tuple[type, ...]) -> str:
     if isinstance(tp, type) and issubclass(tp, cores):
         return "core"
     origin = typing.get_origin(tp)
-    if origin is not None and isinstance(origin, type) \
-            and issubclass(origin, _Iterable) \
-            and not issubclass(origin, _Mapping) \
-            and origin not in (str, bytes):
-        return "iterable"                  # list/tuple/set/Sequence -> Collection
-    return "scalar"                        # dict/Mapping/scalars stay data
-
+    if (
+        origin is not None
+        and isinstance(origin, type)
+        and issubclass(origin, _Iterable)
+        and not issubclass(origin, _Mapping)
+        and origin not in (str, bytes)
+    ):
+        return "iterable"  # list/tuple/set/Sequence -> Collection
+    return "scalar"  # dict/Mapping/scalars stay data
 
 
 def element_type(tp: Any) -> Any:
@@ -69,5 +72,11 @@ def unwrap_union(tp: Any) -> Any:
     return tp
 
 
-__all__ = ["return_type", "op_params", "field_type", "classify",
-           "element_type", "unwrap_union"]
+__all__ = [
+    "return_type",
+    "op_params",
+    "field_type",
+    "classify",
+    "element_type",
+    "unwrap_union",
+]

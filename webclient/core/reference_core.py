@@ -4,6 +4,7 @@ Core Fields = the request spec. Backings provide the derivations (``url`` prop,
 ``with_params`` / ``replace`` / ``join``) and ``resolve`` (via the client).
 Pure data + dispatch, like every core.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
@@ -53,8 +54,9 @@ class DeriveBacking(Backing):
         return _derive(core, core.model_copy(update=fields))
 
     def with_params(self, core: "ReferenceCore", **params: str) -> "ReferenceCore":
-        return _derive(core, core.model_copy(
-            update={"params": {**core.params, **params}}))
+        return _derive(
+            core, core.model_copy(update={"params": {**core.params, **params}})
+        )
 
     def join(self, core: "ReferenceCore", href: str) -> "ReferenceCore":
         return from_url(urljoin(self.url(core), href))
@@ -66,16 +68,24 @@ class ResolveBacking(Backing):
     provides = frozenset({"resolve"})
     gate = "ok"
 
-    def resolve(self, core: "ReferenceCore", *, browser: bool = False,
-                optional: bool = False, error: Any = None) -> "DocumentCore":
+    def resolve(
+        self,
+        core: "ReferenceCore",
+        *,
+        browser: bool = False,
+        optional: bool = False,
+        error: Any = None,
+    ) -> "DocumentCore":
         from ..errors import RETURN
+
         lenient = optional or error is RETURN
-        if core._session is not None:                # resolve through the session
+        if core._session is not None:  # resolve through the session
             return core._session.fetch(core, optional=lenient, browser=browser)
         client = core._client
         if client is None:
             from .client_core import WebClientCore
-            client = WebClientCore()                 # process-local default (MVP)
+
+            client = WebClientCore()  # process-local default (MVP)
         return client.fetch(core, optional=lenient, browser=browser)
 
 
@@ -85,8 +95,8 @@ class ReferenceCore(WebCore, BaseModel):
 
     # -- Core Fields (the request spec) --------------------------------------
     kind: str = "webpage"
-    name: str = ""                       # scoped name (the doc's `root`)
-    root: str = ""                       # the reference this was derived from
+    name: str = ""  # scoped name (the doc's `root`)
+    root: str = ""  # the reference this was derived from
     hostname: str = ""
     method: HttpMethod = "get"
     scheme: str = "https"
@@ -101,34 +111,44 @@ class ReferenceCore(WebCore, BaseModel):
     form: dict[str, str] | None = None
     follow_redirects: bool = True
     timeout: float | None = None
-    actions: list[dict[str, Any]] = []   # recorded live-interaction chain (reload)
+    actions: list[dict[str, Any]] = []  # recorded live-interaction chain (reload)
 
     _client: Any = PrivateAttr(default=None)
     _session: Any = PrivateAttr(default=None)
-    _surface: Any = PrivateAttr(default=None)     # cached eager surface (identity)
+    _surface: Any = PrivateAttr(default=None)  # cached eager surface (identity)
 
     @property
     def ok(self) -> bool:
-        return bool(self.hostname)                # a well-formed request spec
+        return bool(self.hostname)  # a well-formed request spec
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (DeriveBacking(), ResolveBacking())
 
 
-def from_url(url: str, method: HttpMethod = "get",
-             params: dict[str, str | list[str]] | None = None,
-             headers: dict[str, str] | None = None,
-             cookies: dict[str, str] | None = None) -> ReferenceCore:
+def from_url(
+    url: str,
+    method: HttpMethod = "get",
+    params: dict[str, str | list[str]] | None = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+) -> ReferenceCore:
     """Build a ReferenceCore from a URL string."""
     parsed = urlparse(url)
     query: dict[str, str | list[str]] = {
-        k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed.query).items()}
+        k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed.query).items()
+    }
     if params:
         query.update(params)
     return ReferenceCore(
-        hostname=parsed.hostname or "", method=method,
-        scheme=parsed.scheme or "https", port=parsed.port,
-        path=parsed.path or "", fragment=parsed.fragment or "",
-        params=query, headers=headers or {}, cookies=cookies or {})
+        hostname=parsed.hostname or "",
+        method=method,
+        scheme=parsed.scheme or "https",
+        port=parsed.port,
+        path=parsed.path or "",
+        fragment=parsed.fragment or "",
+        params=query,
+        headers=headers or {},
+        cookies=cookies or {},
+    )
 
 
 __all__ = ["ReferenceCore", "DeriveBacking", "HttpMethod", "from_url"]

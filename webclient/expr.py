@@ -8,6 +8,7 @@ never recordable. Static types come from the generated surface stubs the roots
 are cast to (see ``webclient.gen``); at runtime every value in a chain is an
 ``Expr``.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -38,29 +39,51 @@ class Expr:
         return Expr(self._plan.extend(step), self._client)
 
     def __getattr__(self, name: str) -> "Expr":
-        if name.startswith("_"):                   # the one safety boundary
+        if name.startswith("_"):  # the one safety boundary
             raise AttributeError(name)
         return self._extend(Step(kind="get", name=name))
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        eager = kwargs.pop("_collect", False)      # per-call eager escape hatch
-        nxt = self._extend(Step(kind="call", args=[to_arg(a) for a in args],
-                                kwargs={k: to_arg(v) for k, v in kwargs.items()}))
+        eager = kwargs.pop("_collect", False)  # per-call eager escape hatch
+        nxt = self._extend(
+            Step(
+                kind="call",
+                args=[to_arg(a) for a in args],
+                kwargs={k: to_arg(v) for k, v in kwargs.items()},
+            )
+        )
         return nxt.collect() if eager else nxt
 
     def _op(self, name: str, other: Any = _MISSING) -> "Expr":
         args = [] if other is _MISSING else [to_arg(other)]
         return self._extend(Step(kind="op", name=name, args=args))
 
-    def __eq__(self, o: Any) -> "Expr": return self._op("eq", o)   # type: ignore[override]
-    def __ne__(self, o: Any) -> "Expr": return self._op("ne", o)   # type: ignore[override]
-    def __lt__(self, o: Any) -> "Expr": return self._op("lt", o)
-    def __le__(self, o: Any) -> "Expr": return self._op("le", o)
-    def __gt__(self, o: Any) -> "Expr": return self._op("gt", o)
-    def __ge__(self, o: Any) -> "Expr": return self._op("ge", o)
-    def __and__(self, o: Any) -> "Expr": return self._op("and", o)
-    def __or__(self, o: Any) -> "Expr": return self._op("or", o)
-    def __invert__(self) -> "Expr": return self._op("not")
+    def __eq__(self, o: Any) -> "Expr":
+        return self._op("eq", o)  # type: ignore[override]
+
+    def __ne__(self, o: Any) -> "Expr":
+        return self._op("ne", o)  # type: ignore[override]
+
+    def __lt__(self, o: Any) -> "Expr":
+        return self._op("lt", o)
+
+    def __le__(self, o: Any) -> "Expr":
+        return self._op("le", o)
+
+    def __gt__(self, o: Any) -> "Expr":
+        return self._op("gt", o)
+
+    def __ge__(self, o: Any) -> "Expr":
+        return self._op("ge", o)
+
+    def __and__(self, o: Any) -> "Expr":
+        return self._op("and", o)
+
+    def __or__(self, o: Any) -> "Expr":
+        return self._op("or", o)
+
+    def __invert__(self) -> "Expr":
+        return self._op("not")
 
     __hash__ = None  # type: ignore[assignment]
 
@@ -68,11 +91,17 @@ class Expr:
         raise TypeError(
             f"a lazy expression has no {what}: it records, it does not run. "
             "Use it inside extract(...) / filter(...) or with `& | ~` -- not "
-            "and/or/not/bool/len/iter.")
+            "and/or/not/bool/len/iter."
+        )
 
-    def __bool__(self) -> bool: return self._coerce("truth value")
-    def __len__(self) -> int: return self._coerce("length")
-    def __iter__(self) -> Any: return self._coerce("iterator")
+    def __bool__(self) -> bool:
+        return self._coerce("truth value")
+
+    def __len__(self) -> int:
+        return self._coerce("length")
+
+    def __iter__(self) -> Any:
+        return self._coerce("iterator")
 
     # -- evaluation ----------------------------------------------------------
     def collect(self, context: Any = None) -> Any:
@@ -83,15 +112,18 @@ class Expr:
         if client is not None and hasattr(client, "remote_execute"):
             return client.remote_execute(self, context)
         from .executor import evaluate
+
         if client is None:
             from .core.client_core import WebClientCore
-            client = WebClientCore()               # process-local default (MVP)
+
+            client = WebClientCore()  # process-local default (MVP)
         from .collection import Field
+
         result = evaluate(self, context, client=client)
         if isinstance(result, Field):
             return result
         if isinstance(result, (str, int, float, bool)) or result is None:
-            return Field(result)                    # a scalar leaf -> a Field
+            return Field(result)  # a scalar leaf -> a Field
         return result
 
     @property
@@ -127,10 +159,12 @@ def from_plan(plan: Plan | dict[str, Any], client: Any = None) -> Expr:
 # Roots and free functions
 # --------------------------------------------------------------------------- #
 
+
 def reference(url: str, **kwargs: Any) -> "Reference":
     """A lazy reference root starting from ``url``: an ``Expr`` recording a plan
     rooted at that request spec (statically a ``Reference``)."""
     from .core.reference_core import from_url
+
     spec = from_url(url, **kwargs).model_dump()
     return Expr(Plan(root="Reference", source=spec))
 
@@ -173,8 +207,9 @@ class _When:
     def otherwise(self, value: Any) -> Any:
         if self._then is _MISSING:
             raise TypeError("when(...).then(...) before .otherwise(...)")
-        step = Step(kind="when", args=[to_arg(self._cond), to_arg(self._then),
-                                       to_arg(value)])
+        step = Step(
+            kind="when", args=[to_arg(self._cond), to_arg(self._then), to_arg(value)]
+        )
         return Expr(Plan(steps=[step]))
 
 
@@ -194,6 +229,7 @@ def filter(collection: Any, *predicates: Any) -> Any:
 if TYPE_CHECKING:
     from .collection import Collection
     from .surfaces import Document, Reference
+
     doc: "Document"
     ref: "Reference"
     many: "Collection[Document]"
@@ -203,5 +239,18 @@ else:
     many = Expr(Plan(root="Collection"))
 
 
-__all__ = ["Expr", "lazy", "from_plan", "to_arg", "reference", "field", "when",
-           "filter", "is_empty", "is_ok", "doc", "ref", "many"]
+__all__ = [
+    "Expr",
+    "lazy",
+    "from_plan",
+    "to_arg",
+    "reference",
+    "field",
+    "when",
+    "filter",
+    "is_empty",
+    "is_ok",
+    "doc",
+    "ref",
+    "many",
+]

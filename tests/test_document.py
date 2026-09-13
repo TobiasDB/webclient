@@ -28,6 +28,7 @@ def make_doc(**overrides) -> Document:
 
 # -- decoding / status ------------------------------------------------------ #
 
+
 def test_text_uses_declared_encoding_first():
     doc = make_doc(content="café".encode("latin-1"), encoding="latin-1")
     assert doc.text == "café"
@@ -45,6 +46,7 @@ def test_ok_is_2xx():
 
 # -- typed views (ISSUES #6 aliasing pin) ----------------------------------- #
 
+
 def test_select_css():
     assert make_doc().select(".card .title").text == "First Card"
 
@@ -57,7 +59,9 @@ def test_select_xpath():
 def test_select_index_and_negative_index():
     doc = make_doc()
     assert make_doc().select(".card", index=1).attr("data-rank").get() == "2"
-    assert doc.select(".card", index=-1).attr("data-rank") == "3"   # Field == -> Field[bool], truthy eagerly
+    assert (
+        doc.select(".card", index=-1).attr("data-rank") == "3"
+    )  # Field == -> Field[bool], truthy eagerly
 
 
 def test_select_missing_raises_unless_policy_returns():
@@ -82,13 +86,15 @@ def test_select_all_limit_offset():
     assert len(doc.select_all(".card")) == 3
     cards = doc.select_all(".card", limit=2, offset=1)
     assert [n.attr("data-rank").get() for n in cards] == ["2", "3"]
-    lifted = cards.attr("data-rank")                       # element op -> Collection
+    lifted = cards.attr("data-rank")  # element op -> Collection
     assert len(lifted) == 2 and [f.get() for f in lifted] == ["2", "3"]
 
 
 def test_select_on_treeless_kind_raises_typed_error():
     doc = make_doc(kind="binary", content=b"\x00")
-    with pytest.raises(TypeError, match="not available"):   # UnsupportedOp: no tree backing
+    with pytest.raises(
+        TypeError, match="not available"
+    ):  # UnsupportedOp: no tree backing
         doc.select(".card")
 
 
@@ -101,11 +107,12 @@ def test_json_select_and_attr_value():
 
 # -- elements are documents (P3) -------------------------------------------- #
 
+
 def test_element_text_is_whitespace_normalized():
     el = make_doc().select(".card .title")
     assert el.text == "First Card" and el.attr("text").get() == "First Card"
     assert isinstance(el, Document) and el.kind == "html"
-    assert el.content.startswith(b"<h2")                # element bytes
+    assert el.content.startswith(b"<h2")  # element bytes
 
 
 def test_element_select_is_scoped_to_element():
@@ -135,6 +142,7 @@ def test_attr_href_resolves_to_reference_against_document():
 
 # -- html sugar ------------------------------------------------------------- #
 
+
 def test_title_and_links():
     page = make_doc()
     assert page.title == "Fixture Page"
@@ -145,9 +153,13 @@ def test_title_and_links():
 
 # -- other kinds ------------------------------------------------------------ #
 
+
 def test_json_data():
-    doc = Document(kind="json", hostname="e.com", content=b'{"a": [1, 2]}', status_code=200)
+    doc = Document(
+        kind="json", hostname="e.com", content=b'{"a": [1, 2]}', status_code=200
+    )
     import json as _j
+
     assert _j.loads(doc.text) == {"a": [1, 2]}
 
 
@@ -164,9 +176,9 @@ def test_events_of_by_class_and_topic_prefix():
     doc.events.append(ActionEvent(action="click"))
     doc.events.append(DOMUpdateEvent(kind="added"))
     assert [e.action for e in doc.action_events] == ["click"]
-    assert len(doc.events_of("dom")) == 1          # prefix matches dom.update
+    assert len(doc.events_of("dom")) == 1  # prefix matches dom.update
     assert len(doc.events_of("dom.update")) == 1
-    assert doc.events_of("domx") == []             # not a prefix match
+    assert doc.events_of("domx") == []  # not a prefix match
     assert len(doc.events_of(DOMUpdateEvent)) == 1
 
 

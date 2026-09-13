@@ -7,6 +7,7 @@ Runs fully offline: it serves its own demo site on localhost.
 
     env/bin/python demo.py
 """
+
 from __future__ import annotations
 
 import http.server
@@ -57,28 +58,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         if self.path == "/" or self.path.startswith("/?"):  # html (query ignored)
             body, ctype = PAGE, "text/html; charset=utf-8"
-        elif self.path == "/items/1":              # json documents
+        elif self.path == "/items/1":  # json documents
             body, ctype = ITEM % (1, b"Aeropress"), "application/json"
         elif self.path == "/items/2":
             body, ctype = ITEM % (2, b"Grinder"), "application/json"
-        elif self.path.startswith("/feed"):        # paginated + cookie-aware
+        elif self.path.startswith("/feed"):  # paginated + cookie-aware
             from urllib.parse import parse_qs, urlparse
+
             page = int(parse_qs(urlparse(self.path).query).get("p", ["1"])[0])
-            user = "friend" if "token=tok" in (self.headers.get("Cookie") or "") else "guest"
-            nxt = f'<a class="next" href="/feed?p={page + 1}">more</a>' if page < 3 else ""
-            body = (f"<html><body><h1>feed p{page} for {user}</h1>{nxt}"
-                    "</body></html>").encode()
+            user = (
+                "friend"
+                if "token=tok" in (self.headers.get("Cookie") or "")
+                else "guest"
+            )
+            nxt = (
+                f'<a class="next" href="/feed?p={page + 1}">more</a>'
+                if page < 3
+                else ""
+            )
+            body = (
+                f"<html><body><h1>feed p{page} for {user}</h1>{nxt}" "</body></html>"
+            ).encode()
             ctype = "text/html"
-        elif self.path == "/login":                # sets a session cookie
+        elif self.path == "/login":  # sets a session cookie
             self.send_response(200)
             self.send_header("Set-Cookie", "token=tok; Path=/")
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write(b"welcome")
             return
-        elif self.path == "/app":                  # a JS-driven live page
+        elif self.path == "/app":  # a JS-driven live page
             body, ctype = APP, "text/html"
-        elif self.path == "/old":                  # a redirect hop
+        elif self.path == "/old":  # a redirect hop
             self.send_response(302)
             self.send_header("Location", "/")
             self.end_headers()
@@ -116,8 +127,12 @@ def main() -> None:
     with WebClient(default_headers={"user-agent": "webclient-demo"}) as wc:
 
         # [M2] Live event stream: everything observable crosses one bus.
-        wc.bus.subscribe("network", lambda e: print(
-            f"event:       {e.topic} #{e.seq} {e.status_code} {e.request.path}"))
+        wc.bus.subscribe(
+            "network",
+            lambda e: print(
+                f"event:       {e.topic} #{e.seq} {e.status_code} {e.request.path}"
+            ),
+        )
 
         # [M2] Fetch through a redirect; loud by default, optional=True lenient.
         shop = wc.ref(f"{base}/old").resolve().collect()
@@ -127,23 +142,39 @@ def main() -> None:
 
         # [P1] Every object is addressable: short scoped names, a root chain
         #      (ref -> doc), recovery by name from the resolver, shop.ref().
-        print("names:      ", shop.root, "->", shop.name,
-              "| recovered:", wc.document(shop.name) is shop,
-              wc.reference(shop.root) is shop.ref())
+        print(
+            "names:      ",
+            shop.root,
+            "->",
+            shop.name,
+            "| recovered:",
+            wc.document(shop.name) is shop,
+            wc.reference(shop.root) is shop.ref(),
+        )
         # [P1] Error policy: a not-ok object carries a serializable WebError;
         #      `ok` is the truth, is_ok()/is_empty() run even when not ok.
-        print("not ok:     ", missing.error.type, "|", missing.message,
-              "| is_ok:", missing.is_ok().get(), "| empty:", bool(missing.is_empty()))
+        print(
+            "not ok:     ",
+            missing.error.type,
+            "|",
+            missing.message,
+            "| is_ok:",
+            missing.is_ok().get(),
+            "| empty:",
+            bool(missing.is_empty()),
+        )
 
         # [M1] Selection: css or xpath, elements only; index/optional knobs.
         for card in shop.select_all(".card"):
             title = card.select(".title").text
-            price = card.select("./span[@class='price']").text     # xpath
-            link = card.select("a").attr("href")                   # -> Reference
+            price = card.select("./span[@class='price']").text  # xpath
+            link = card.select("a").attr("href")  # -> Reference
             # [M2] Follow the link: json selection uses a dotted path.
             item = link.resolve()
-            print(f"card:        {title} {price} -> "
-                  f"{item.select('name').text} (stock {item.select('stock.count').text})")
+            print(
+                f"card:        {title} {price} -> "
+                f"{item.select('name').text} (stock {item.select('stock.count').text})"
+            )
 
         # [render] One render(format) surface, dispatched to the backing for
         # the doc's kind. html gives markdown/text/elements/links/html; json
@@ -155,13 +186,13 @@ def main() -> None:
         print("elements:   ", [(e.type, e.text) for e in page.render("elements")][:3])
         print("links:      ", [r.path for r in page.render("links")])
         print("html:       ", page.render("html").strip()[:40])
-        item = shop.select(".card a").attr("href").resolve()   # a json document
+        item = shop.select(".card a").attr("href").resolve()  # a json document
         print("json render:", [(e.type, e.text) for e in item.render("elements")][:3])
 
         # [M2] Events routed onto the document that caused them.
         print("doc events: ", [e.topic for e in shop.events])
         print("navigations:", [e.status_code for e in shop.events_of(NavigationEvent)])
-        print("actions:    ", list(shop.action_events))   # empty until browser (M4)
+        print("actions:    ", list(shop.action_events))  # empty until browser (M4)
 
         # [M2] Plugins: replace a core renderer by registration alone.
         class Shouty(Renderer):
@@ -199,7 +230,7 @@ def main() -> None:
         # [P7] The reference carries the action chain, so re-resolving it
         #      (reload) reproduces the mutated state on a fresh page.
         print("chain:      ", [a["op"] for a in live.ref().actions])
-        wc.release(live)                            # page back to the pool
+        wc.release(live)  # page back to the pool
         reloaded = live.reload()
         print("reloaded:   ", reloaded.select("#cart li", error=RETURN).ok)
         wc.release(reloaded)
@@ -211,7 +242,9 @@ def main() -> None:
     #      `doc`/`ref` are lazy roots; every op call appends a step to a typed
     #      Plan -- the wire form for the service. Reference(url) roots a plan.
     plan = (
-        reference(f"{base}/").resolve().select_all(".card")
+        reference(f"{base}/")
+        .resolve()
+        .select_all(".card")
         .extract(
             title=doc.select(".title").attr("text"),
             price=doc.select(".price").attr("text"),
@@ -240,47 +273,85 @@ def main() -> None:
         # [§8] Polars-style free when()/filter() on the lazy surface.
         from webclient import filter as lazy_filter
         from webclient import when
-        labeled = (ref.resolve().select_all(".card").extract(
-            title=doc.select(".title").attr("text"),
-            tier=when(doc.select(".price").attr("text") != "")
-            .then("priced").otherwise("free")).project())
-        print("free when:  ",
-              [(r["title"], r["tier"]) for r in wc.execute(labeled, wc.ref(f"{base}/"))])
-        priced = lazy_filter(ref.resolve().select_all(".card"),
-                             doc.select(".price").attr("text") != "").extract(
-            title=doc.select(".title").attr("text")).project()
-        print("free filter:", [r["title"] for r in wc.execute(priced, wc.ref(f"{base}/"))])
+
+        labeled = (
+            ref.resolve()
+            .select_all(".card")
+            .extract(
+                title=doc.select(".title").attr("text"),
+                tier=when(doc.select(".price").attr("text") != "")
+                .then("priced")
+                .otherwise("free"),
+            )
+            .project()
+        )
+        print(
+            "free when:  ",
+            [(r["title"], r["tier"]) for r in wc.execute(labeled, wc.ref(f"{base}/"))],
+        )
+        priced = (
+            lazy_filter(
+                ref.resolve().select_all(".card"),
+                doc.select(".price").attr("text") != "",
+            )
+            .extract(title=doc.select(".title").attr("text"))
+            .project()
+        )
+        print(
+            "free filter:", [r["title"] for r in wc.execute(priced, wc.ref(f"{base}/"))]
+        )
 
         # [P3] Follow each card's link (reference -> resolve) into its JSON
         #      detail; `when/then/otherwise` branches; a missing select is a
         #      not-ok field under the plan default, never an aborted plan.
         enriched = (
-            ref.resolve().select_all(".card")
-            .extract(title=doc.select(".title").attr("text"),
-                     link=doc.select("a.link").attr("href"),
-                     missing=doc.select(".nope").attr("text"))
-            .extract(name=doc.reference("link").resolve().select("name").attr("value"),
-                     stock=doc.reference("link").resolve().select("stock.count").attr("value"),
-                     tag=when(doc.field("title") == "Grinder")
-                         .then("bulky").otherwise("small"))
+            ref.resolve()
+            .select_all(".card")
+            .extract(
+                title=doc.select(".title").attr("text"),
+                link=doc.select("a.link").attr("href"),
+                missing=doc.select(".nope").attr("text"),
+            )
+            .extract(
+                name=doc.reference("link").resolve().select("name").attr("value"),
+                stock=doc.reference("link")
+                .resolve()
+                .select("stock.count")
+                .attr("value"),
+                tag=when(doc.field("title") == "Grinder")
+                .then("bulky")
+                .otherwise("small"),
+            )
             .project()
         )
         print("streamed:")
         for row in wc.execute(enriched, wc.ref(f"{base}/"), stream=True):
-            print("  detail:   ", row["title"], "->", row["name"], row["stock"],
-                  row["tag"], "| missing:", row["missing"])
+            print(
+                "  detail:   ",
+                row["title"],
+                "->",
+                row["name"],
+                row["stock"],
+                row["tag"],
+                "| missing:",
+                row["missing"],
+            )
 
         # [P3] Eager and lazy agree: the same extract on a resolved page.
         page = wc.ref(f"{base}/").resolve().collect()
-        cards = page.select_all(".card").extract(title=doc.select(".title").attr("text"))
+        cards = page.select_all(".card").extract(
+            title=doc.select(".title").attr("text")
+        )
         print("eager:      ", cards.name, "->", [r["title"] for r in cards.project()])
 
         # [P6] High-level helpers built on the plan surface. search() runs a
         #      query against a configurable engine; summary() resolves a page
         #      to title + markdown. (crawl is intentionally out of scope.)
         from webclient import SearchEngine
-        engine = SearchEngine(url=f"{base}/?q={{q}}", result=".card",
-                              title=".title", link="a")
+
+        engine = SearchEngine(
+            url=f"{base}/?q={{q}}", result=".card", title=".title", link="a"
+        )
         hits = wc.search("coffee", engine=engine, limit=2).collect()
         print("search:     ", [(h["title"], h["url"].path) for h in hits])
         summary = wc.summary(f"{base}/").collect()
@@ -295,11 +366,14 @@ def main() -> None:
 
     async def _async_demo() -> tuple:
         async with AsyncWebClient() as ac:
-            document = await ac.execute(ac.fetch(f"{base}/"))   # lazy fetch, awaited
+            document = await ac.execute(ac.fetch(f"{base}/"))  # lazy fetch, awaited
             rows = await ac.execute(
-                ref.resolve().select_all(".card")
-                .extract(title=doc.select(".title").attr("text")).project(),
-                ac.ref(f"{base}/"))
+                ref.resolve()
+                .select_all(".card")
+                .extract(title=doc.select(".title").attr("text"))
+                .project(),
+                ac.ref(f"{base}/"),
+            )
             return document.title, [r["title"] for r in rows]
 
     title, async_rows = asyncio.run(_async_demo())
@@ -315,22 +389,43 @@ def main() -> None:
 
     with TestClient(create_app(token="demo")) as api:
         auth = {"Authorization": "Bearer demo"}
-        handle = api.post("/execute", headers=auth, json={
-            "plan": ref.resolve()._plan.model_dump(),
-            "url": f"{base}/"}).json()["rows"]["__doc__"]
+        handle = api.post(
+            "/execute",
+            headers=auth,
+            json={"plan": ref.resolve()._plan.model_dump(), "url": f"{base}/"},
+        ).json()["rows"]["__doc__"]
         print("\nservice fetch:", {k: handle[k] for k in ("kind", "ok", "title")})
         did = handle["id"]
-        md = api.post("/execute", headers=auth, json={
-            "plan": doc.render("markdown")._plan.model_dump(), "document_id": did}).json()
+        md = api.post(
+            "/execute",
+            headers=auth,
+            json={
+                "plan": doc.render("markdown")._plan.model_dump(),
+                "document_id": did,
+            },
+        ).json()
         print("service render:", md["rows"].splitlines()[0])
-        titles = api.post("/execute", headers=auth, json={
-            "plan": doc.select_all(".title").attr("text")._plan.model_dump(),
-            "document_id": did}).json()
+        titles = api.post(
+            "/execute",
+            headers=auth,
+            json={
+                "plan": doc.select_all(".title").attr("text")._plan.model_dump(),
+                "document_id": did,
+            },
+        ).json()
         print("service select:", titles["rows"])
-        plan = ref.resolve().select_all(".card").extract(
-            title=doc.select(".title").attr("text")).project()._plan
-        rows = api.post("/execute", headers=auth, json={
-            "plan": plan.model_dump(), "url": f"{base}/"}).json()
+        plan = (
+            ref.resolve()
+            .select_all(".card")
+            .extract(title=doc.select(".title").attr("text"))
+            .project()
+            ._plan
+        )
+        rows = api.post(
+            "/execute",
+            headers=auth,
+            json={"plan": plan.model_dump(), "url": f"{base}/"},
+        ).json()
         print("service plan:  ", rows["rows"])
 
     # [remote] Remote is just a different backend: the same WebClient over a
@@ -345,21 +440,30 @@ def main() -> None:
     from webclient import RemoteWebClient
 
     app = create_app(token="demo")
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0,
-                                           log_level="error"))
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error")
+    )
     threading.Thread(target=server.run, daemon=True).start()
     while not server.started:
         time.sleep(0.01)
     port = server.servers[0].sockets[0].getsockname()[1]
 
     with RemoteWebClient(f"http://127.0.0.1:{port}", token="demo") as rc:
-        remote_doc = rc.fetch(f"{base}/").collect()          # lazy fetch -> handle
+        remote_doc = rc.fetch(f"{base}/").collect()  # lazy fetch -> handle
         print("\nremote fetch:  ", remote_doc.title, "| ok:", remote_doc.ok)
-        print("remote render: ", rc.execute(remote_doc.render("markdown")).splitlines()[0])
-        print("remote select: ", rc.execute(remote_doc.select_all(".title").attr("text")))
+        print(
+            "remote render: ", rc.execute(remote_doc.render("markdown")).splitlines()[0]
+        )
+        print(
+            "remote select: ", rc.execute(remote_doc.select_all(".title").attr("text"))
+        )
         # identical plan API -- runs server-side, no local browser/lxml
-        same_plan = ref.resolve().select_all(".card").extract(
-            title=doc.select(".title").attr("text")).project()
+        same_plan = (
+            ref.resolve()
+            .select_all(".card")
+            .extract(title=doc.select(".title").attr("text"))
+            .project()
+        )
         print("remote plan:   ", rc.execute(same_plan, rc.ref(f"{base}/")))
     server.should_exit = True
     app.state.wc.close()

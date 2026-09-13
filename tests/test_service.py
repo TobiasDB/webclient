@@ -18,7 +18,8 @@ CARDS = """
 @pytest.fixture
 def client_and_server(httpserver):
     httpserver.expect_request("/cards").respond_with_data(
-        CARDS, content_type="text/html")
+        CARDS, content_type="text/html"
+    )
     httpserver.expect_request("/i/1").respond_with_json({"name": "Aeropress"})
     httpserver.expect_request("/i/2").respond_with_json({"name": "Grinder"})
     wc = WebClient()
@@ -33,29 +34,42 @@ AUTH = {"Authorization": "Bearer secret"}
 
 def _handle(api, url):
     """Fetch = execute ``ref.resolve()``; the Document comes back as a handle."""
-    rows = api.post("/execute", headers=AUTH, json={
-        "plan": ref.resolve()._plan.model_dump(), "url": url}).json()["rows"]
+    rows = api.post(
+        "/execute",
+        headers=AUTH,
+        json={"plan": ref.resolve()._plan.model_dump(), "url": url},
+    ).json()["rows"]
     return rows["__doc__"]
 
 
 def test_auth_required(client_and_server):
     api, server = client_and_server
-    assert api.post("/execute", json={
-        "plan": ref.resolve()._plan.model_dump(),
-        "url": server.url_for("/cards")}).status_code == 401
+    assert (
+        api.post(
+            "/execute",
+            json={
+                "plan": ref.resolve()._plan.model_dump(),
+                "url": server.url_for("/cards"),
+            },
+        ).status_code
+        == 401
+    )
 
 
 def test_fetch_returns_handle_not_html(client_and_server):
     api, server = client_and_server
     meta = _handle(api, server.url_for("/cards"))
     assert meta["ok"] and meta["kind"] == "html" and meta["title"] == "Shop"
-    assert "content" not in meta and "html" not in meta   # handle only
+    assert "content" not in meta and "html" not in meta  # handle only
     assert meta["id"]
 
 
 def _exec(api, doc_id, expr):
-    return api.post("/execute", headers=AUTH, json={
-        "plan": expr._plan.model_dump(), "document_id": doc_id}).json()["rows"]
+    return api.post(
+        "/execute",
+        headers=AUTH,
+        json={"plan": expr._plan.model_dump(), "document_id": doc_id},
+    ).json()["rows"]
 
 
 def test_render_via_execute(client_and_server):
@@ -71,8 +85,10 @@ def test_select_via_execute(client_and_server):
     api, server = client_and_server
     doc_id = _handle(api, server.url_for("/cards"))["id"]
     assert _exec(api, doc_id, doc.select(".title").attr("text")) == "Aeropress"
-    assert _exec(api, doc_id, doc.select_all(".title").attr("text")) == \
-        ["Aeropress", "Grinder"]
+    assert _exec(api, doc_id, doc.select_all(".title").attr("text")) == [
+        "Aeropress",
+        "Grinder",
+    ]
     hrefs = _exec(api, doc_id, doc.select_all("a").attr("href"))
     assert all(u.startswith("http") for u in hrefs)
 
@@ -89,14 +105,19 @@ def test_session_lifecycle(client_and_server):
 def test_plan_submission(client_and_server):
     api, server = client_and_server
     plan = (
-        ref.resolve().select_all(".card")
-        .extract(title=doc.select(".title").attr("text"),
-                 link=doc.select("a").attr("href"))
+        ref.resolve()
+        .select_all(".card")
+        .extract(
+            title=doc.select(".title").attr("text"), link=doc.select("a").attr("href")
+        )
         .extract(name=doc.reference("link").resolve().select("name").attr("value"))
         .project()
     )._plan
-    resp = api.post("/execute", headers=AUTH, json={
-        "plan": plan.model_dump(), "url": server.url_for("/cards")})
+    resp = api.post(
+        "/execute",
+        headers=AUTH,
+        json={"plan": plan.model_dump(), "url": server.url_for("/cards")},
+    )
     rows = resp.json()["rows"]
     names = sorted(r["name"] for r in rows)
     assert names == ["Aeropress", "Grinder"]
@@ -105,8 +126,9 @@ def test_plan_submission(client_and_server):
 def test_plan_with_unknown_op_is_rejected_not_dispatched(client_and_server):
     api, server = client_and_server
     plan = {"root": "Document", "steps": [{"kind": "get", "name": "__class__"}]}
-    resp = api.post("/execute", headers=AUTH, json={
-        "plan": plan, "url": server.url_for("/cards")})
+    resp = api.post(
+        "/execute", headers=AUTH, json={"plan": plan, "url": server.url_for("/cards")}
+    )
     assert resp.status_code == 422 and "__class__" in resp.text
 
 
@@ -118,9 +140,14 @@ def test_missing_document_404(client_and_server):
 def test_events_websocket_streams_and_resumes(client_and_server):
     api, server = client_and_server
     with api.websocket_connect("/events?topic=network") as ws:
-        api.post("/execute", headers=AUTH, json={
-            "plan": ref.resolve()._plan.model_dump(),
-            "url": server.url_for("/cards")})
+        api.post(
+            "/execute",
+            headers=AUTH,
+            json={
+                "plan": ref.resolve()._plan.model_dump(),
+                "url": server.url_for("/cards"),
+            },
+        )
         msg = ws.receive_json()
         assert msg["topic"].startswith("network")
         assert msg["seq"] is not None
@@ -132,16 +159,28 @@ def test_search_as_a_plan(httpserver):
     /execute, exactly as the client's ``search`` builds it."""
     httpserver.expect_request("/s").respond_with_data(
         '<div class="result"><a class="result__a" href="/g/1">First</a></div>',
-        content_type="text/html")
-    plan = (ref.resolve().select_all(".result", limit=1)
-            .extract(title=doc.select(".result__a").attr("text"),
-                     url=doc.select(".result__a").attr("href")).project())
+        content_type="text/html",
+    )
+    plan = (
+        ref.resolve()
+        .select_all(".result", limit=1)
+        .extract(
+            title=doc.select(".result__a").attr("text"),
+            url=doc.select(".result__a").attr("href"),
+        )
+        .project()
+    )
     wc = WebClient()
     app = create_app(wc, token="secret")
     with TestClient(app) as api:
-        rows = api.post("/execute", headers=AUTH, json={
-            "plan": plan._plan.model_dump(),
-            "url": httpserver.url_for("/s") + "?q=x"}).json()["rows"]
+        rows = api.post(
+            "/execute",
+            headers=AUTH,
+            json={
+                "plan": plan._plan.model_dump(),
+                "url": httpserver.url_for("/s") + "?q=x",
+            },
+        ).json()["rows"]
         assert [r["title"] for r in rows] == ["First"]
     wc.close()
 

@@ -1,4 +1,5 @@
 """HTTP transport: httpx request execution plus response sniffing helpers."""
+
 from __future__ import annotations
 
 from typing import Literal
@@ -8,9 +9,15 @@ import httpx
 from ..core.reference_core import ReferenceCore
 
 
-async def request(client: httpx.AsyncClient, ref: ReferenceCore, *,
-                  headers: dict[str, str], cookies: dict[str, str],
-                  timeout: float, retries: int) -> httpx.Response:
+async def request(
+    client: httpx.AsyncClient,
+    ref: ReferenceCore,
+    *,
+    headers: dict[str, str],
+    cookies: dict[str, str],
+    timeout: float,
+    retries: int,
+) -> httpx.Response:
     """Perform the request described by ``ref`` with pre-merged headers and
     cookies. Retries transport errors only, immediately, ``retries`` times."""
     last_error: httpx.TransportError | None = None
@@ -38,8 +45,9 @@ async def request(client: httpx.AsyncClient, ref: ReferenceCore, *,
     raise last_error
 
 
-def sniff_kind(content_type: str | None,
-               content: bytes) -> Literal["html", "json", "xml", "binary"]:
+def sniff_kind(
+    content_type: str | None, content: bytes
+) -> Literal["html", "json", "xml", "binary"]:
     """Content-type header first, leading bytes as fallback."""
     mime = (content_type or "").split(";")[0].strip().lower()
     if "html" in mime:
@@ -48,7 +56,7 @@ def sniff_kind(content_type: str | None,
         return "json"
     if mime in ("text/xml", "application/xml") or mime.endswith("+xml"):
         return "xml"
-    if mime.startswith("text/"):          # text/plain etc. -> parse as html
+    if mime.startswith("text/"):  # text/plain etc. -> parse as html
         return "html"
     head = content[:256].lstrip().lower()
     if head.startswith((b"<!doctype", b"<html")):

@@ -1,6 +1,7 @@
 """Dispatch model: a WebCore chooses the backings that apply to its state and
 dispatches an op to the first that provides it; missing ops / absent
 capabilities raise UnsupportedOp. (Replaces the pre-rewrite @policy op tests.)"""
+
 import pytest
 from typing import ClassVar
 
@@ -29,7 +30,7 @@ class Gated(Backing):
     gate = "page"
 
     def applies(self, core):
-        return core.unlocked          # only in play when unlocked
+        return core.unlocked  # only in play when unlocked
 
     def secret(self, core):
         return 42

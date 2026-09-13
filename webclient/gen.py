@@ -12,6 +12,7 @@ Capabilities give **subtypes**: the base surface = fields + the always-on
 backings' ops; each elevated capability (e.g. ``page``) adds a subtype
 (``LiveDocument`` = base + the live backing's ops).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -37,7 +38,7 @@ def _type_str(tp: Any) -> str:
     if isinstance(tp, type):
         return tp.__name__
     if typing.get_origin(tp) is typing.Literal:
-        return "str"                       # a Literal of strings reads as str
+        return "str"  # a Literal of strings reads as str
     return "Any"
 
 
@@ -61,8 +62,11 @@ def _params(fn: Any) -> str:
         if p.kind is p.KEYWORD_ONLY:
             parts = parts + ["*"] if "*" not in parts else parts
         if p.annotation is not p.empty:
-            a = p.annotation if isinstance(p.annotation, str) else \
-                getattr(p.annotation, "__name__", str(p.annotation))
+            a = (
+                p.annotation
+                if isinstance(p.annotation, str)
+                else getattr(p.annotation, "__name__", str(p.annotation))
+            )
             s += f": {a}"
         if p.default is not p.empty:
             s += " = ..."
@@ -71,8 +75,10 @@ def _params(fn: Any) -> str:
 
 
 def _fields(core_cls: type, tier: str) -> list[str]:
-    return [f"    {n}: {_render(f.annotation, tier)}"
-            for n, f in core_cls.model_fields.items()]
+    return [
+        f"    {n}: {_render(f.annotation, tier)}"
+        for n, f in core_cls.model_fields.items()
+    ]
 
 
 def _ops(backings: list[Any], tier: str) -> list[str]:
@@ -80,8 +86,10 @@ def _ops(backings: list[Any], tier: str) -> list[str]:
     for backing in backings:
         for op in sorted(backing.provides):
             fn = getattr(backing, op)
-            out.append(f"    def {op}(self{_params(fn)}) "
-                       f"-> {_render(typeinfo.return_type(fn), tier)}: ...")
+            out.append(
+                f"    def {op}(self{_params(fn)}) "
+                f"-> {_render(typeinfo.return_type(fn), tier)}: ..."
+            )
     return out
 
 
@@ -101,8 +109,10 @@ def render_surface(core_cls: type, tier: str) -> str:
     for cap, suffix in SUBTYPE.items():
         if cap in by_cap:
             extra = _ops(by_cap[cap], tier)
-            blocks.append(f"class {pre}{suffix}{base}({pre}{base}):\n" +
-                          ("\n".join(extra) or "    pass"))
+            blocks.append(
+                f"class {pre}{suffix}{base}({pre}{base}):\n"
+                + ("\n".join(extra) or "    pass")
+            )
     return "\n\n".join(blocks)
 
 

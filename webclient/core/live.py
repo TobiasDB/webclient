@@ -7,6 +7,7 @@ bridges back synchronously, so the eager surface stays sync. Console messages
 and DOM mutations are captured onto the document as events (so ``console`` /
 ``dom_mutations`` / ``events_of`` and per-element narrowing work).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -32,8 +33,13 @@ INIT_JS = """(() => {
 })()"""
 
 _DRAIN_JS = "() => { const m = window.__wc_mutations || []; window.__wc_mutations = []; return m; }"
-_LEVELS = {"log": "log", "info": "info", "debug": "log",
-           "warning": "warning", "error": "error"}
+_LEVELS = {
+    "log": "log",
+    "info": "info",
+    "debug": "log",
+    "warning": "warning",
+    "error": "error",
+}
 
 
 def _kind(record: dict[str, Any]) -> str:
@@ -49,20 +55,25 @@ async def drain(doc: Any) -> None:
     settle lets the observer's microtask deliver records from the last action."""
     await doc._page.wait_for_timeout(30)
     for r in await doc._page.evaluate(_DRAIN_JS):
-        doc._events.append(DOMUpdateEvent(
-            kind=_kind(r), detail={"ids": r["ids"]}, document_id=doc.name))
+        doc._events.append(
+            DOMUpdateEvent(
+                kind=_kind(r), detail={"ids": r["ids"]}, document_id=doc.name
+            )
+        )
 
 
 def console_event(level: str, text: str, doc: Any) -> ConsoleEvent:
-    return ConsoleEvent(level=_LEVELS.get(level, "log"), text=text,
-                        document_id=doc.name)
+    return ConsoleEvent(
+        level=_LEVELS.get(level, "log"), text=text, document_id=doc.name
+    )
 
 
 class LiveBacking(Backing):
     """Interaction + live selection on a browser page (capability ``page``)."""
 
-    provides = frozenset({"click", "write", "wait_for", "select", "select_all",
-                          "evaluate", "screenshot"})
+    provides = frozenset(
+        {"click", "write", "wait_for", "select", "select_all", "evaluate", "screenshot"}
+    )
     props = frozenset({"dom_mutations", "console"})
     gate = "page"
 
@@ -80,25 +91,51 @@ class LiveBacking(Backing):
         return [e for e in core._events if isinstance(e, ConsoleEvent)]
 
     # -- interactions (sync; bridge onto the engine loop) --------------------
-    def click(self, core: Any, selector: str | None = None, *,
-              timeout: float | None = None, optional: bool = False) -> Any:
-        self._loop(core).run(self._aact(core, "click", selector=selector,
-                                        timeout=timeout, optional=optional))
+    def click(
+        self,
+        core: Any,
+        selector: str | None = None,
+        *,
+        timeout: float | None = None,
+        optional: bool = False,
+    ) -> Any:
+        self._loop(core).run(
+            self._aact(
+                core, "click", selector=selector, timeout=timeout, optional=optional
+            )
+        )
         return core
 
-    def write(self, core: Any, selector: str, text: str, *,
-              timeout: float | None = None, optional: bool = False) -> Any:
-        self._loop(core).run(self._aact(core, "write", selector=selector,
-                                        text=text, timeout=timeout, optional=optional))
+    def write(
+        self,
+        core: Any,
+        selector: str,
+        text: str,
+        *,
+        timeout: float | None = None,
+        optional: bool = False,
+    ) -> Any:
+        self._loop(core).run(
+            self._aact(
+                core,
+                "write",
+                selector=selector,
+                text=text,
+                timeout=timeout,
+                optional=optional,
+            )
+        )
         return core
 
-    def wait_for(self, core: Any, selector: str | None = None, *,
-                 timeout: float | None = None) -> Any:
+    def wait_for(
+        self, core: Any, selector: str | None = None, *, timeout: float | None = None
+    ) -> Any:
         self._loop(core).run(self._await_for(core, selector, timeout))
         return core
 
-    def select(self, core: Any, selector: str, *, index: int = 0,
-               error: Any = None) -> Any:
+    def select(
+        self, core: Any, selector: str, *, index: int = 0, error: Any = None
+    ) -> Any:
         return self._loop(core).run(self._aselect(core, selector, index, error))
 
     def select_all(self, core: Any, selector: str) -> Any:
@@ -111,19 +148,36 @@ class LiveBacking(Backing):
         return self._loop(core).run(self._ashot(core, selector))
 
     # -- async bodies --------------------------------------------------------
-    async def _aact(self, core: Any, action: str, *, selector: str | None = None,
-                    text: str | None = None, timeout: float | None = None,
-                    optional: bool = False) -> None:
+    async def _aact(
+        self,
+        core: Any,
+        action: str,
+        *,
+        selector: str | None = None,
+        text: str | None = None,
+        timeout: float | None = None,
+        optional: bool = False,
+    ) -> None:
         ms = (timeout or 30.0) * 1000
-        event = ActionEvent(action=action,
-                            args={"selector": selector, "text": text},
-                            document_id=core.name, source="core-action")
+        event = ActionEvent(
+            action=action,
+            args={"selector": selector, "text": text},
+            document_id=core.name,
+            source="core-action",
+        )
         core._client.bus.publish(event)
-        core._events.append(event)                   # routed onto the document
+        core._events.append(event)  # routed onto the document
         if core._ref is not None:
-            core._ref.actions.append({"op": action, "args": {
-                k: v for k, v in (("selector", selector), ("text", text))
-                if v is not None}})
+            core._ref.actions.append(
+                {
+                    "op": action,
+                    "args": {
+                        k: v
+                        for k, v in (("selector", selector), ("text", text))
+                        if v is not None
+                    },
+                }
+            )
         loc = core._page.locator(selector or "*").first
         try:
             if action == "click":
@@ -134,60 +188,77 @@ class LiveBacking(Backing):
             if optional and "Timeout" in type(exc).__name__:
                 return
             if "Timeout" in type(exc).__name__:
-                raise LookupError(
-                    f"{action}: no target for {selector!r}") from exc
+                raise LookupError(f"{action}: no target for {selector!r}") from exc
             raise
         await drain(core)
 
-    async def _await_for(self, core: Any, selector: str | None,
-                         timeout: float | None) -> None:
+    async def _await_for(
+        self, core: Any, selector: str | None, timeout: float | None
+    ) -> None:
         if selector is not None:
-            await core._page.wait_for_selector(selector, timeout=(timeout or 30.0) * 1000)
+            await core._page.wait_for_selector(
+                selector, timeout=(timeout or 30.0) * 1000
+            )
         elif timeout is not None:
             await core._page.wait_for_timeout(timeout * 1000)
         await drain(core)
 
     async def _ashot(self, core: Any, selector: str | None) -> Any:
         from .document_core import DocumentCore
+
         target = core._page if selector is None else core._page.locator(selector).first
         data = await target.screenshot(type="png")
-        shot = DocumentCore(url=core.url, kind="binary", content=data,
-                            status_code=core.status_code)
+        shot = DocumentCore(
+            url=core.url, kind="binary", content=data, status_code=core.status_code
+        )
         shot._client = core._client
         return shot
 
-    async def _aselect(self, core: Any, selector: str, index: int,
-                       error: Any) -> Any:
+    async def _aselect(self, core: Any, selector: str, index: int, error: Any) -> Any:
         from ..errors import RETURN
         from .document_core import DocumentCore
+
         loc = core._page.locator(selector)
         if await loc.count() <= index:
-            if error is not RETURN:                  # live select is loud by default
+            if error is not RETURN:  # live select is loud by default
                 raise LookupError(f"no match for {selector!r}")
-            sub = DocumentCore(url=core.url, kind="html",
-                               status_code=core.status_code)
+            sub = DocumentCore(url=core.url, kind="html", status_code=core.status_code)
             sub._client = core._client
             sub._missing = True
             return sub
         html = await loc.nth(index).evaluate("el => el.outerHTML")
-        sub = DocumentCore(url=core.url, final_url=core.final_url, kind="html",
-                           content=html.encode(), status_code=core.status_code)
+        sub = DocumentCore(
+            url=core.url,
+            final_url=core.final_url,
+            kind="html",
+            content=html.encode(),
+            status_code=core.status_code,
+        )
         sub._client = core._client
         sub.root = core.name
         nid = selector[1:] if selector.startswith("#") and " " not in selector else None
-        sub._events = [e for e in core._events if isinstance(e, DOMUpdateEvent)
-                       and (nid is None or nid in e.detail.get("ids", []))]
+        sub._events = [
+            e
+            for e in core._events
+            if isinstance(e, DOMUpdateEvent)
+            and (nid is None or nid in e.detail.get("ids", []))
+        ]
         return sub
 
     async def _aselect_all(self, core: Any, selector: str) -> list[Any]:
         from .document_core import DocumentCore
+
         loc = core._page.locator(selector)
         out: list[Any] = []
         for i in range(await loc.count()):
             html = await loc.nth(i).evaluate("el => el.outerHTML")
-            sub = DocumentCore(url=core.url, final_url=core.final_url,
-                               kind="html", content=html.encode(),
-                               status_code=core.status_code)
+            sub = DocumentCore(
+                url=core.url,
+                final_url=core.final_url,
+                kind="html",
+                content=html.encode(),
+                status_code=core.status_code,
+            )
             sub._client = core._client
             sub.root = core.name
             out.append(sub)

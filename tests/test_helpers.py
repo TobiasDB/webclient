@@ -1,4 +1,5 @@
 """P5/P6: the final-URL join fix, WebClientCore, and search/summary."""
+
 import pytest
 
 from webclient import SearchEngine, WebClient, WebClientCore
@@ -20,18 +21,20 @@ def wc():
 
 def test_links_join_against_final_url_after_redirect(httpserver, wc):
     from werkzeug.wrappers import Response
+
     httpserver.expect_request("/old").respond_with_response(
-        Response(status=302, headers={"Location": httpserver.url_for("/new/page")}))
+        Response(status=302, headers={"Location": httpserver.url_for("/new/page")})
+    )
     httpserver.expect_request("/new/page").respond_with_data(
-        "<a href='sibling'>x</a>", content_type="text/html")
+        "<a href='sibling'>x</a>", content_type="text/html"
+    )
     doc = wc.ref(httpserver.url_for("/old")).resolve().collect()
     assert doc.final_url.endswith("/new/page")
-    assert doc.select("a").attr("href").path == "/new/sibling"   # not /sibling
+    assert doc.select("a").attr("href").path == "/new/sibling"  # not /sibling
 
 
 def test_search_returns_result_rows(httpserver, wc):
-    httpserver.expect_request("/s").respond_with_data(
-        RESULTS, content_type="text/html")
+    httpserver.expect_request("/s").respond_with_data(RESULTS, content_type="text/html")
     engine = SearchEngine(url=httpserver.url_for("/s") + "?q={q}")
     rows = wc.search("coffee", engine=engine, limit=2).collect()
     assert [r["title"] for r in rows] == ["First", "Second"]
@@ -41,7 +44,8 @@ def test_search_returns_result_rows(httpserver, wc):
 def test_summary_returns_title_and_markdown(httpserver, wc):
     httpserver.expect_request("/p").respond_with_data(
         "<html><head><title>Hi</title></head><body><h1>Big</h1></body></html>",
-        content_type="text/html")
+        content_type="text/html",
+    )
     out = wc.summary(httpserver.url_for("/p")).collect()
     assert out["ok"] and out["title"] == "Hi" and "Big" in out["markdown"]
 

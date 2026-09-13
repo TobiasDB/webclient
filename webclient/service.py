@@ -8,6 +8,7 @@ inline. Sessions have their own small REST surface; live events stream over a
 ``/events`` websocket. The plan is the same wire form ``Plan.model_dump()`` the
 client records, validated (``from_plan``) before it runs.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,6 +24,7 @@ def _serialize(value: Any, store: dict[str, Any]) -> Any:
     """A Document -> a stored handle; a Reference -> its url; a Field -> its
     value; a Collection/list/dict recurse; scalars pass through."""
     from .collection import Collection, Field
+
     if isinstance(value, Field):
         return value.get()
     if isinstance(value, Collection):
@@ -55,20 +57,21 @@ def create_app(wc: WebClient | None = None, token: str | None = None) -> FastAPI
             raise HTTPException(status_code=401, detail="bad token")
 
     @app.post("/execute")
-    def execute(body: dict[str, Any],
-                authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    def execute(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> dict[str, Any]:
         _auth(authorization)
         wc_: WebClient = app.state.wc
         try:
             expr = from_plan(body["plan"], wc_._core)
-        except ValueError as exc:                    # unknown root / private name
+        except ValueError as exc:  # unknown root / private name
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         sid = expr._plan.session_id
         if "document_id" in body:
             if body["document_id"] not in app.state.docs:
                 raise HTTPException(status_code=404, detail="no such document")
             context: Any = app.state.docs[body["document_id"]]
-        elif sid and sid in app.state.sessions:      # resolve through the session
+        elif sid and sid in app.state.sessions:  # resolve through the session
             context = app.state.sessions[sid]._core
         elif "url" in body:
             context = wc_.ref(body["url"])
@@ -78,8 +81,9 @@ def create_app(wc: WebClient | None = None, token: str | None = None) -> FastAPI
         return {"rows": _serialize(result, app.state.docs)}
 
     @app.get("/document/{doc_id}")
-    def document(doc_id: str,
-                 authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    def document(
+        doc_id: str, authorization: str | None = Header(default=None)
+    ) -> dict[str, Any]:
         _auth(authorization)
         if doc_id not in app.state.docs:
             raise HTTPException(status_code=404, detail="no such document")
@@ -88,24 +92,27 @@ def create_app(wc: WebClient | None = None, token: str | None = None) -> FastAPI
 
     # -- sessions ------------------------------------------------------------
     @app.post("/sessions")
-    def create_session(body: dict[str, Any],
-                       authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    def create_session(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> dict[str, Any]:
         _auth(authorization)
         session = app.state.wc.session(ttl=body.get("ttl"))
         app.state.sessions[session.id] = session
         return {"id": session.id, "status": session.status}
 
     @app.get("/sessions/{sid}")
-    def get_session(sid: str,
-                    authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    def get_session(
+        sid: str, authorization: str | None = Header(default=None)
+    ) -> dict[str, Any]:
         _auth(authorization)
         if sid not in app.state.sessions:
             raise HTTPException(status_code=404, detail="no such session")
         return {"id": sid, "status": app.state.sessions[sid].status}
 
     @app.delete("/sessions/{sid}")
-    def close_session(sid: str,
-                      authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    def close_session(
+        sid: str, authorization: str | None = Header(default=None)
+    ) -> dict[str, Any]:
         _auth(authorization)
         if sid not in app.state.sessions:
             raise HTTPException(status_code=404, detail="no such session")
@@ -125,7 +132,7 @@ def create_app(wc: WebClient | None = None, token: str | None = None) -> FastAPI
         loop = asyncio.get_event_loop()
         queue: asyncio.Queue = asyncio.Queue()
 
-        def handler(event: Any) -> None:             # engine thread -> server loop
+        def handler(event: Any) -> None:  # engine thread -> server loop
             loop.call_soon_threadsafe(queue.put_nowait, event.model_dump(mode="json"))
 
         sub = app.state.wc.bus.subscribe(topic, handler)

@@ -5,6 +5,7 @@ reference), the eager materialised tier (Document/Reference/Field/Collection),
 and the two-tier client surface (WebClient/AsyncWebClient with the lazy tier in
 webclient.models). The stubs are generated/verified by scripts/gen_stubs.py.
 """
+
 from typing import Any, assert_type
 
 from webclient import (
@@ -30,7 +31,7 @@ assert_type(ref, Reference)
 # element ops on a Document
 assert_type(doc.select("a").select_all("li"), Collection[Document])
 assert_type(doc.attr("text"), Field[str])
-assert_type(doc.attr("href"), Reference)                         # link attrs narrow
+assert_type(doc.attr("href"), Reference)  # link attrs narrow
 assert_type(doc.attr("href").resolve().attr("text"), Field[str])
 assert_type(ref.resolve(), Document)
 
@@ -51,8 +52,9 @@ assert_type(reference("https://e.com"), Reference)
 assert_type(reference("https://e.com").resolve().select("a").attr("text"), Field[str])
 
 # extract -> project pipeline
-assert_type(doc.select_all("li").extract(t=doc.attr("text")).project(),
-            list[dict[str, Any]])
+assert_type(
+    doc.select_all("li").extract(t=doc.attr("text")).project(), list[dict[str, Any]]
+)
 
 # render() is the single representation function, typed per format
 res_doc = reference("https://e.com").resolve()
@@ -77,8 +79,8 @@ assert_type(_wc.fetch("https://e.com").collect(), Document)
 assert_type(_wc.fetch("https://e.com").attr("text").collect(), Field[str])
 assert_type(_wc.ref("https://e.com").resolve().collect(), Document)
 assert_type(
-    _wc.ref("https://e.com").resolve().select(".t").attr("text").collect(),
-    Field[str])
+    _wc.ref("https://e.com").resolve().select(".t").attr("text").collect(), Field[str]
+)
 
 # execute() materialises a lazy tier to its model via the Lazy[T] bridge
 assert_type(_wc.execute(_wc.fetch("https://e.com")), Document)

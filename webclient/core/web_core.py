@@ -11,6 +11,7 @@ The cores carry data ("Core Fields") and talk to each other; the user-facing
 surface (``LazyDocument`` / ``Document`` / ...) is GENERATED from a core's
 fields + its backings' ops (see ``webclient.gen``), never hand-written.
 """
+
 from __future__ import annotations
 
 from typing import Any, ClassVar
@@ -22,7 +23,8 @@ class UnsupportedOp(TypeError):
     def __init__(self, op: str, have: frozenset[str]) -> None:
         super().__init__(
             f"{op!r} is not available here; this core has "
-            f"{sorted(have) or 'no capabilities'}")
+            f"{sorted(have) or 'no capabilities'}"
+        )
         self.op, self.have = op, have
 
 
@@ -32,8 +34,8 @@ class Backing:
     capability it grants when chosen; ``applies`` decides if it is in play for a
     given core's current state (default: always)."""
 
-    provides: ClassVar[frozenset[str]] = frozenset()    # call ops: obj.op(...)
-    props: ClassVar[frozenset[str]] = frozenset()       # property ops: obj.op
+    provides: ClassVar[frozenset[str]] = frozenset()  # call ops: obj.op(...)
+    props: ClassVar[frozenset[str]] = frozenset()  # property ops: obj.op
     gate: ClassVar[str] = "ok"
 
     def applies(self, core: "WebCore") -> bool:

@@ -20,7 +20,8 @@ def wc():
 def test_fetch_html_document(httpserver, wc):
     httpserver.expect_request("/page").respond_with_data(
         "<html><body><h1 class='t'>Hello</h1></body></html>",
-        content_type="text/html; charset=utf-8")
+        content_type="text/html; charset=utf-8",
+    )
     doc = wc.ref(httpserver.url_for("/page")).resolve().collect()
     assert doc.ok and doc.kind == "html"
     assert doc.encoding == "utf-8"
@@ -34,6 +35,7 @@ def test_fetch_sniffs_json(httpserver, wc):
     doc = wc.ref(httpserver.url_for("/api")).resolve().collect()
     assert doc.kind == "json"
     import json as _j
+
     assert _j.loads(doc.text) == {"n": 1}
 
 
@@ -49,12 +51,16 @@ def test_fetch_records_navigation_event(httpserver, wc):
 
 def test_fetch_records_redirect_hops(httpserver, wc):
     httpserver.expect_request("/start").respond_with_data(
-        "", status=302, headers={"Location": httpserver.url_for("/end")})
-    httpserver.expect_request("/end").respond_with_data("done", content_type="text/html")
+        "", status=302, headers={"Location": httpserver.url_for("/end")}
+    )
+    httpserver.expect_request("/end").respond_with_data(
+        "done", content_type="text/html"
+    )
     doc = wc.ref(httpserver.url_for("/start")).resolve().collect()
     assert doc.final_url == httpserver.url_for("/end")
-    hops = [e for e in doc.events_of(NetworkEvent)
-            if not isinstance(e, NavigationEvent)]
+    hops = [
+        e for e in doc.events_of(NetworkEvent) if not isinstance(e, NavigationEvent)
+    ]
     assert [h.status_code for h in hops] == [302]
     assert [n.status_code for n in doc.events_of(NavigationEvent)] == [200]
 
@@ -83,12 +89,15 @@ def test_fetch_transport_error(wc):
 
 def test_fetch_sends_headers_params_and_method(httpserver, wc):
     httpserver.expect_request(
-        "/submit", method="POST", query_string="q=1",
+        "/submit",
+        method="POST",
+        query_string="q=1",
         headers={"x-app": "demo"},
     ).respond_with_json({"ok": True})
     ref = wc.ref(httpserver.url_for("/submit") + "?q=1", method="post")
     doc = ref.replace(headers={"x-app": "demo"}).resolve().collect()
     import json as _j
+
     assert _j.loads(doc.text) == {"ok": True}
 
 
@@ -97,6 +106,7 @@ def test_reload_refetches(httpserver, wc):
 
     def handler(request):
         from werkzeug.wrappers import Response
+
         hits["n"] += 1
         return Response(f"hit {hits['n']}", content_type="text/html")
 
@@ -109,8 +119,8 @@ def test_reload_refetches(httpserver, wc):
 
 def test_fetched_document_renders(httpserver, wc):
     httpserver.expect_request("/a").respond_with_data(
-        "<html><body><h1>Title</h1><p>Body</p></body></html>",
-        content_type="text/html")
+        "<html><body><h1>Title</h1><p>Body</p></body></html>", content_type="text/html"
+    )
     doc = wc.ref(httpserver.url_for("/a")).resolve().collect()
     assert "# Title" in doc.render("markdown")
 
@@ -134,6 +144,7 @@ def test_closed_client_refuses_work(httpserver):
 
 def test_default_client_recreated_after_close():
     from webclient import default_client
+
     first = default_client()
     first.close()
     second = default_client()

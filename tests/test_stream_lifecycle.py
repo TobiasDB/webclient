@@ -2,34 +2,44 @@
 survive its consumer, however the consumer stops (fully drained, broken
 early, abandoned, or the client closed mid-stream). The vehicle is now a
 streamed plan (pagination is gone)."""
+
 import gc
 
 import pytest
 
 from webclient import WebClient, doc, ref
 
-CARDS = "<html><body>" + "".join(
-    f'<div class="c"><a href="/i/{n}">{n}</a></div>' for n in range(5)) + "</body></html>"
+CARDS = (
+    "<html><body>"
+    + "".join(f'<div class="c"><a href="/i/{n}">{n}</a></div>' for n in range(5))
+    + "</body></html>"
+)
 
 
 def stranded_streams(wc):
     import asyncio
 
     async def scan():
-        return sum(1 for t in asyncio.all_tasks()
-                   if t.get_coro().__qualname__.endswith("stream.<locals>._pump")
-                   and not t.done())
+        return sum(
+            1
+            for t in asyncio.all_tasks()
+            if t.get_coro().__qualname__.endswith("stream.<locals>._pump")
+            and not t.done()
+        )
+
     return wc._ensure_loop().run(scan())
 
 
 def plan():
-    return ref.resolve().select_all(".c").extract(
-        n=doc.select("a").attr("text")).project()
+    return (
+        ref.resolve().select_all(".c").extract(n=doc.select("a").attr("text")).project()
+    )
 
 
 def serve(httpserver):
     httpserver.expect_request("/cards").respond_with_data(
-        CARDS, content_type="text/html")
+        CARDS, content_type="text/html"
+    )
     return httpserver.url_for("/cards")
 
 

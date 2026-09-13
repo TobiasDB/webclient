@@ -5,6 +5,7 @@ cookies/headers persist across its fetches and do not leak between sessions. It
 has a ttl'd lifecycle (running -> expired / closed) and tags the documents and
 events it produces with its id.
 """
+
 from __future__ import annotations
 
 import time
@@ -27,8 +28,8 @@ class WebSessionCore(WebCore, BaseModel):
     ttl: float | None = None
     expires_at: float | None = None
 
-    _client: Any = PrivateAttr(default=None)     # owning WebClientCore (the engine)
-    _scope: Any = PrivateAttr(default=None)      # this session's NameScope
+    _client: Any = PrivateAttr(default=None)  # owning WebClientCore (the engine)
+    _scope: Any = PrivateAttr(default=None)  # this session's NameScope
     _surface: Any = PrivateAttr(default=None)
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = ()
@@ -49,22 +50,27 @@ class WebSessionCore(WebCore, BaseModel):
 
     def close(self) -> None:
         self.status = "closed"
-        if self._scope is not None:                  # retention ends
+        if self._scope is not None:  # retention ends
             self._scope.clear()
 
     def document(self, name: str) -> Any:
         """Recover a document from THIS session's scope only."""
         from .document_core import DocumentCore
+
         obj = self._scope.get(name) if self._scope is not None else None
         return obj if isinstance(obj, DocumentCore) else None
 
     # -- session-scoped fetch ------------------------------------------------
-    def fetch(self, ref: ReferenceCore, *, optional: bool = False,
-              browser: bool = False) -> Any:
+    def fetch(
+        self, ref: ReferenceCore, *, optional: bool = False, browser: bool = False
+    ) -> Any:
         self._guard()
-        scoped = ref.model_copy(update={
-            "headers": {**self.headers, **ref.headers},
-            "cookies": {**self.cookies, **ref.cookies}})
+        scoped = ref.model_copy(
+            update={
+                "headers": {**self.headers, **ref.headers},
+                "cookies": {**self.cookies, **ref.cookies},
+            }
+        )
         scoped._client = self._client
         scoped._session = self
         doc = self._client.fetch(scoped, optional=optional, browser=browser)

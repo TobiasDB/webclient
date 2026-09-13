@@ -5,6 +5,7 @@ A failed fetch/resolve is loud by default (RAISE); ``error=RETURN`` (or
 ``WebError``. Value ops (``is_ok`` / ``is_empty`` / ``error`` / ``message``)
 work on a not-ok document too.
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel
@@ -22,8 +23,8 @@ class _Policy:
         return self.name
 
 
-RAISE: _Policy = _Policy("RAISE")     # default: a failed fetch/resolve raises
-RETURN: _Policy = _Policy("RETURN")   # lenient: return a not-ok document
+RAISE: _Policy = _Policy("RAISE")  # default: a failed fetch/resolve raises
+RETURN: _Policy = _Policy("RETURN")  # lenient: return a not-ok document
 
 import contextlib as _contextlib
 import contextvars as _contextvars
@@ -31,7 +32,8 @@ import contextvars as _contextvars
 #: the ambient error policy: RAISE at the top level; extract/filter run their
 #: sub-expressions under RETURN so one bad field never aborts a whole plan.
 _CURRENT: "_contextvars.ContextVar[_Policy]" = _contextvars.ContextVar(
-    "webclient_policy", default=RAISE)
+    "webclient_policy", default=RAISE
+)
 
 
 def current_policy() -> "_Policy":
@@ -80,9 +82,21 @@ class RemoteError(Exception):
 def error_for(status_code: int, message: str = "") -> WebError:
     """Classify an HTTP status into a ``WebError``."""
     kind = "TransportError" if status_code == 0 else "HTTPStatus"
-    return WebError(type=kind, status_code=status_code,
-                    message=message or f"HTTP {status_code} for the request")
+    return WebError(
+        type=kind,
+        status_code=status_code,
+        message=message or f"HTTP {status_code} for the request",
+    )
 
 
-__all__ = ["RAISE", "RETURN", "WebError", "WebException", "FetchError",
-           "RemoteError", "error_for", "current_policy", "default_policy"]
+__all__ = [
+    "RAISE",
+    "RETURN",
+    "WebError",
+    "WebException",
+    "FetchError",
+    "RemoteError",
+    "error_for",
+    "current_policy",
+    "default_policy",
+]

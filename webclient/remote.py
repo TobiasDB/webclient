@@ -6,6 +6,7 @@ a ``webclient.service`` app -- so there is no local browser or lxml, only httpx
 (``_RemoteDoc``): its metadata (title/ok/kind) is inline, and any op on it is a
 plan rooted at the server-side document id, run with one more round trip.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -32,7 +33,7 @@ class _RemoteDoc:
 
     def __getattr__(self, name: str) -> Any:
         meta = object.__getattribute__(self, "_meta")
-        if name in meta:                            # title / ok / kind / id
+        if name in meta:  # title / ok / kind / id
             return meta[name]
         core = object.__getattribute__(self, "_core")
         root = Expr(Plan(root="Document", source={"document_id": meta["id"]}), core)
@@ -55,7 +56,7 @@ class RemoteWebClientCore:
         src = expr._plan.source
         if src and "document_id" in src:
             body["document_id"] = src["document_id"]
-        elif src:                                   # a reference-rooted plan
+        elif src:  # a reference-rooted plan
             body["url"] = _url_of(src)
         elif isinstance(context, _RemoteDoc):
             body["document_id"] = context._meta["id"]
@@ -65,6 +66,7 @@ class RemoteWebClientCore:
         resp = self._http.post(f"{self.url}/execute", json=body, headers=headers)
         if not (200 <= resp.status_code < 300):
             from .errors import RemoteError
+
             raise RemoteError(resp.status_code, resp.text[:200])
         return self._deserialize(resp.json()["rows"])
 
@@ -83,8 +85,9 @@ class RemoteWebClientCore:
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
     def create_session(self, ttl: float | None = None) -> dict[str, Any]:
-        resp = self._http.post(f"{self.url}/sessions", json={"ttl": ttl},
-                               headers=self._headers())
+        resp = self._http.post(
+            f"{self.url}/sessions", json={"ttl": ttl}, headers=self._headers()
+        )
         resp.raise_for_status()
         return resp.json()
 
@@ -103,8 +106,9 @@ class RemoteSession:
 
     def ref(self, url: str, method: str = "get", **kw: Any) -> Any:
         spec = _core_from_url(url, method, **kw).model_dump()
-        return Expr(Plan(root="Reference", source=spec, session_id=self._id),
-                    self._core)
+        return Expr(
+            Plan(root="Reference", source=spec, session_id=self._id), self._core
+        )
 
     def fetch(self, url: str, **kw: Any) -> Any:
         return self.ref(url, **kw).resolve()

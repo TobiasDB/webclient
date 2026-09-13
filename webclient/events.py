@@ -4,6 +4,7 @@ Topics are dotted strings matched by prefix: subscribing to "network" also
 receives "network.xhr". Plugin events subclass one of these core events and
 may introduce namespaced topics ("rrweb.dom.update").
 """
+
 from __future__ import annotations
 
 import threading
@@ -18,16 +19,16 @@ Topic = str
 
 class Event(BaseModel):
     topic: Topic
-    source: str = "core"             # name of the emitting plugin
-    seq: int | None = None           # per-document counter, stamped by the bus
-    ts: float | None = None          # stamped by the bus
+    source: str = "core"  # name of the emitting plugin
+    seq: int | None = None  # per-document counter, stamped by the bus
+    ts: float | None = None  # stamped by the bus
     # correlation ids -- overwritten by Surface.emit (ISSUES #15)
     session_id: str | None = None
     document_id: str | None = None
     plan_id: str | None = None
-    node_id: str | None = None       # stable node identity, stamped by the
-                                     # capture plugin (enables LiveNode
-                                     # event narrowing; ISSUES #9)
+    node_id: str | None = None  # stable node identity, stamped by the
+    # capture plugin (enables LiveNode
+    # event narrowing; ISSUES #9)
 
 
 E = TypeVar("E", bound=Event)
@@ -35,11 +36,12 @@ E = TypeVar("E", bound=Event)
 
 # -- network ---------------------------------------------------------------- #
 
+
 class NetworkEvent(Event):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     topic: Topic = "network"
-    request: Any = None              # the ReferenceCore for this request
+    request: Any = None  # the ReferenceCore for this request
     status_code: int | None = None
     body: bytes | None = None
 
@@ -58,10 +60,11 @@ class NavigationEvent(NetworkEvent):
 
 class AssetEvent(NetworkEvent):
     topic: Topic = "network.asset"
-    asset_type: str = ""             # css / js / image / font / media
+    asset_type: str = ""  # css / js / image / font / media
 
 
 # -- dom -------------------------------------------------------------------- #
+
 
 class DOMEvent(Event):
     topic: Topic = "dom"
@@ -93,9 +96,10 @@ class DOMSnapshotEvent(DOMEvent):
 
 # -- interaction & console --------------------------------------------------- #
 
+
 class ActionEvent(Event):
     topic: Topic = "action"
-    action: str                      # "click", "write", "scroll", ...
+    action: str  # "click", "write", "scroll", ...
     args: dict[str, Any] = {}
 
 
@@ -107,14 +111,23 @@ class ConsoleEvent(Event):
 
 class PlanEvent(Event):
     topic: Topic = "plan"
-    phase: str = "started"           # started / row / done
+    phase: str = "started"  # started / row / done
     detail: dict[str, Any] = {}
 
 
 CORE_EVENTS: tuple[type[Event], ...] = (
-    NetworkEvent, XHREvent, FetchEvent, NavigationEvent, AssetEvent,
-    DOMEvent, DOMLoadEvent, DOMUpdateEvent, DOMUnloadEvent, DOMSnapshotEvent,
-    ActionEvent, ConsoleEvent,
+    NetworkEvent,
+    XHREvent,
+    FetchEvent,
+    NavigationEvent,
+    AssetEvent,
+    DOMEvent,
+    DOMLoadEvent,
+    DOMUpdateEvent,
+    DOMUnloadEvent,
+    DOMSnapshotEvent,
+    ActionEvent,
+    ConsoleEvent,
 )
 
 
@@ -125,6 +138,7 @@ def _topic_matches(pattern: Topic, topic: Topic) -> bool:
 # --------------------------------------------------------------------------- #
 # EventBus
 # --------------------------------------------------------------------------- #
+
 
 class Subscription(BaseModel):
     id: str
@@ -147,8 +161,9 @@ class EventBus(BaseModel):
     """
 
     _lock: Any = PrivateAttr(default_factory=threading.RLock)
-    _subs: dict[str, tuple[Topic, dict[str, str | None], Callable[[Event], None]]] = \
+    _subs: dict[str, tuple[Topic, dict[str, str | None], Callable[[Event], None]]] = (
         PrivateAttr(default_factory=dict)
+    )
     _seq: dict[str | None, int] = PrivateAttr(default_factory=dict)
 
     def publish(self, event: Event) -> None:
@@ -161,20 +176,31 @@ class EventBus(BaseModel):
         for pattern, filters, handler in subs:
             if not _topic_matches(pattern, event.topic):
                 continue
-            if any(getattr(event, field) != value
-                   for field, value in filters.items() if value is not None):
+            if any(
+                getattr(event, field) != value
+                for field, value in filters.items()
+                if value is not None
+            ):
                 continue
             handler(event)
 
-    def subscribe(self, topic: Topic, handler: Callable[[Event], None], *,
-                  session_id: str | None = None,
-                  document_id: str | None = None,
-                  plan_id: str | None = None) -> Subscription:
+    def subscribe(
+        self,
+        topic: Topic,
+        handler: Callable[[Event], None],
+        *,
+        session_id: str | None = None,
+        document_id: str | None = None,
+        plan_id: str | None = None,
+    ) -> Subscription:
         """Handler fires for events whose topic matches ``topic`` by dotted
         prefix ("" matches everything) and every given correlation filter."""
         sub_id = uuid4().hex
-        filters = {"session_id": session_id, "document_id": document_id,
-                   "plan_id": plan_id}
+        filters = {
+            "session_id": session_id,
+            "document_id": document_id,
+            "plan_id": plan_id,
+        }
         with self._lock:
             self._subs[sub_id] = (topic, filters, handler)
         sub = Subscription(id=sub_id, topic=topic)
@@ -189,6 +215,7 @@ class EventBus(BaseModel):
 # --------------------------------------------------------------------------- #
 # EventRegistry
 # --------------------------------------------------------------------------- #
+
 
 class EventRegistry(BaseModel):
     """Topic -> event class, for typed round-tripping over the wire and for

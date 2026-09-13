@@ -7,6 +7,7 @@ leaf) are the sanctioned exceptions -- they hold minimal built-in helpers.
 / ``documents``) by evaluating sub-expressions against each element; ``Field``
 is the value leaf (``get`` + ``is_ok``/``is_empty`` + comparisons + truthiness).
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Generic, Iterator, TypeVar
@@ -46,10 +47,10 @@ class Field(Generic[T]):
     def __bool__(self) -> bool:
         return bool(self._value) if self._ok else False
 
-    def __eq__(self, o: Any) -> bool:   # type: ignore[override]
+    def __eq__(self, o: Any) -> bool:  # type: ignore[override]
         return self.get() == (o.get() if isinstance(o, Field) else o)
 
-    def __ne__(self, o: Any) -> bool:   # type: ignore[override]
+    def __ne__(self, o: Any) -> bool:  # type: ignore[override]
         return not self.__eq__(o)
 
     def __hash__(self) -> int:
@@ -83,8 +84,9 @@ class Collection(Generic[T]):
 
     __slots__ = ("_items", "_client", "name", "root")
 
-    def __init__(self, items: list[Any] | None = None, *, client: Any = None,
-                 root: str = "") -> None:
+    def __init__(
+        self, items: list[Any] | None = None, *, client: Any = None, root: str = ""
+    ) -> None:
         self._items = items or []
         self._client = client
         self.root = root
@@ -105,6 +107,7 @@ class Collection(Generic[T]):
 
     if TYPE_CHECKING:
         # >>> generated: collection element-op lifting <<<
+        # fmt: off
         def select(self, selector: str, *, index: int = ...,
                    error: Any = ...) -> "Collection[Document]": ...
         def select_all(self, selector: str, *, limit: int | None = ...,
@@ -112,8 +115,10 @@ class Collection(Generic[T]):
         def attr(self, name: str, *, error: Any = ...) -> "Collection[Field[str]]": ...
         def text(self) -> "Collection[Field[str]]": ...
         def render(self, format: str, **options: Any) -> "Collection[Field[Any]]": ...
+        # fmt: on
         # >>> end generated <<<
     else:
+
         def __getattr__(self, name: str) -> Any:
             """An element op fans out over the elements: a list of results (a
             Collection when the results are surfaces)."""
@@ -121,11 +126,11 @@ class Collection(Generic[T]):
                 raise AttributeError(name)
 
             def fan(*args: Any, **kwargs: Any) -> Any:
-                results = [getattr(el, name)(*args, **kwargs)
-                           for el in self._items]
+                results = [getattr(el, name)(*args, **kwargs) for el in self._items]
                 if results and all(hasattr(r, "_core") for r in results):
                     return Collection(results, client=self._client, root=self.root)
                 return results
+
             return fan
 
     # -- row shaping ----------------------------------------------------------
@@ -137,7 +142,8 @@ class Collection(Generic[T]):
         Field results are stored unwrapped (missing -> None)."""
         from .errors import RETURN, default_policy
         from .executor import evaluate
-        with default_policy(RETURN):                  # a missing field is None, not an abort
+
+        with default_policy(RETURN):  # a missing field is None, not an abort
             for el in self._items:
                 row = _row_of(el)
                 if row is None:
@@ -150,10 +156,13 @@ class Collection(Generic[T]):
         """Keep the elements for which every predicate is truthy."""
         from .errors import RETURN, default_policy
         from .executor import evaluate, truthy
+
         with default_policy(RETURN):
-            kept = [el for el in self._items
-                    if all(truthy(evaluate(p, el, client=self._client))
-                           for p in predicates)]
+            kept = [
+                el
+                for el in self._items
+                if all(truthy(evaluate(p, el, client=self._client)) for p in predicates)
+            ]
         return self._derive(kept)
 
     def documents(self, column: str) -> "Collection[Any]":
