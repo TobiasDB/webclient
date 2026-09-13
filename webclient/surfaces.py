@@ -212,6 +212,12 @@ class Session:
     def close(self) -> None:
         self._core.close()
 
+    def __enter__(self) -> "Session":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
     def document(self, name: str) -> Any:
         """Recover a document from this session's scope, or ``None``."""
         from .surface import wrap

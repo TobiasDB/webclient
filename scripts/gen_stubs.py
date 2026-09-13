@@ -1,8 +1,7 @@
 """Regenerate the typed surface stubs from the cores + their backings.
 
 One function -- ``members`` -- reads a Core's data fields, its class properties
-and its backings' typed ops (via ``webclient.typeinfo``) and renders each into a
-tier's vocabulary:
+and its backings' typed ops and renders each into a tier's vocabulary:
 
     Core subtype   ->  Document / Reference   (eager) | LazyDocument / ...  (lazy)
     scalar T       ->  T  or  Field[T]        (eager) | LazyField[T]        (lazy)
@@ -22,17 +21,17 @@ import inspect
 import sys
 import types as _types
 import typing
+from collections.abc import Iterable as _Iterable
+from collections.abc import Mapping as _Mapping
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from webclient import typeinfo  # noqa: E402
 from webclient.collection import Field  # noqa: E402
 from webclient.core.client_core import WebClientCore  # noqa: E402
 from webclient.core.document_core import DocumentCore, Element  # noqa: E402
 from webclient.core.reference_core import ReferenceCore  # noqa: E402
-from webclient.core.web_core import WebCore  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SURFACES = ROOT / "webclient" / "surfaces.py"
@@ -61,16 +60,70 @@ _UNION = (typing.Union, getattr(_types, "UnionType", None))
 _SKIP_FIELDS = {ReferenceCore: {"actions"}, DocumentCore: set[str]()}
 
 
+# -- type classification (was webclient/typeinfo.py; only the generator uses it)
+
+
+def _classify(tp: Any) -> str:
+    """-> 'core' (a mapped Core -> its surface), 'iterable' (list/Sequence ->
+    Collection[T]) or 'scalar' (dict/Mapping/scalars stay data)."""
+    if isinstance(tp, type) and issubclass(tp, CORES):
+        return "core"
+    origin = typing.get_origin(tp)
+    if (
+        origin is not None
+        and isinstance(origin, type)
+        and issubclass(origin, _Iterable)
+        and not issubclass(origin, _Mapping)
+        and origin not in (str, bytes)
+    ):
+        return "iterable"
+    return "scalar"
+
+
+def _element_type(tp: Any) -> Any:
+    """The element type of a list/Sequence annotation (``Any`` if unparameterised)."""
+    args = typing.get_args(tp)
+    return args[0] if args else Any
+
+
+def _unwrap_union(tp: Any) -> Any:
+    """A union -> its single non-None member (else ``Any``); a plain type passes."""
+    if typing.get_origin(tp) in _UNION:
+        parts = [a for a in typing.get_args(tp) if a is not type(None)]
+        return parts[0] if len(parts) == 1 else Any
+    return tp
+
+
+def _field_type(core_cls: type, name: str) -> Any:
+    """A Core data field's type (pydantic ``model_fields``)."""
+    field = getattr(core_cls, "model_fields", {}).get(name)
+    return field.annotation if field is not None else Any
+
+
 # -- type rendering -----------------------------------------------------------
 
 
+class _Unresolved(Exception):
+    """A backing annotation the generator could not resolve to a real type --
+    a bug to fix loudly, never a silent ``Any`` in the emitted stub."""
+
+
 def _return(fn: Any) -> Any:
-    """The resolved return annotation of ``fn`` (``Any`` on failure)."""
+    """The resolved return annotation of ``fn`` (``Any`` if unannotated). An
+    annotation that is present but unresolvable is a hard error -- the generator
+    must never silently degrade a member to ``Any``."""
+    raw = getattr(fn, "__annotations__", {}).get("return")
+    if raw is None:
+        return Any
     try:
         ns = {**getattr(fn, "__globals__", {}), **_NS}
         return typing.get_type_hints(fn, globalns=ns).get("return", Any)
-    except Exception:
-        return Any
+    except Exception as exc:
+        where = f"{getattr(fn, '__qualname__', fn)}"
+        raise _Unresolved(
+            f"cannot resolve return annotation {raw!r} of {where}: {exc}. "
+            "Add the name to gen_stubs._NS or import it in the backing's module."
+        ) from exc
 
 
 def _name(tp: Any) -> str:
@@ -100,20 +153,20 @@ def _render(tp: Any, tier: str) -> str:
     ``client`` is like ``lazy`` (a Core maps to its lazy surface) but a value
     return is a ``Lazy[T]`` handle -- a client verb records a plan you collect,
     not a chainable field/list."""
-    inner = typeinfo.unwrap_union(tp)
-    cat = typeinfo.classify(inner, CORES)
+    inner = _unwrap_union(tp)
+    cat = _classify(inner)
     if cat == "core":
         return (SURFACE if tier == "eager" else LAZY)[inner]
     if cat == "iterable":
-        el = typeinfo.unwrap_union(typeinfo.element_type(inner))
-        if typeinfo.classify(el, CORES) == "core":
+        el = _unwrap_union(_element_type(inner))
+        if _classify(el) == "core":
             sub = (SURFACE if tier == "eager" else LAZY)[el]
             box = "Collection" if tier == "eager" else "LazyCollection"
             return f"{box}[{sub}]"
         listed = f"list[{_name(el)}]"  # an iterable of non-cores stays a list
         return f"Lazy[{listed}]" if tier == "client" else listed
     if typing.get_origin(inner) is Field:  # a value leaf
-        base = _name(typeinfo.element_type(inner))
+        base = _name(_element_type(inner))
         return f"Field[{base}]" if tier == "eager" else f"LazyField[{base}]"
     base = _name(inner)  # a plain scalar
     if tier == "client":
@@ -189,7 +242,7 @@ def _method(op: str, fn: Any, tier: str) -> list[str]:
             )
         ]
     lines: list[str] = []
-    for i, ov in enumerate(overloads):
+    for ov in overloads:
         ret = _render(_return(ov), tier)
         ignore = "  # type: ignore[overload-overlap]" if ret in _CORE_SURFACES else ""
         line = f'def {op}(self, {_params(ov)}) -> "{ret}": ...{ignore}'.replace(
@@ -224,7 +277,7 @@ def members(
         for name in core.model_fields:
             if name in _SKIP_FIELDS.get(core, set()):
                 continue
-            lines.append(f"{name}: {_field(typeinfo.field_type(core, name), tier)}")
+            lines.append(f"{name}: {_field(_field_type(core, name), tier)}")
     # property ops (class @property + backing props) -- an attribute when lazy,
     # a @property when eager.
     seed = _class_props(core) if class_props else {}
@@ -292,7 +345,7 @@ _LAZY_COLLECTION = """class LazyCollection(Lazy["Collection[T]"], Generic[T]):
     def filter(self, *predicates: Any) -> "LazyCollection[T]": ...
     def limit(self, n: int) -> "LazyCollection[T]": ...
     def documents(self, column: str) -> "LazyCollection[LazyDocument]": ...
-    def project(self) -> "list[dict[str, Any]]": ...
+    def project(self) -> "Lazy[list[dict[str, Any]]]": ...
     def collect(self, context: Any = ...) -> "Collection[T]": ..."""
 
 

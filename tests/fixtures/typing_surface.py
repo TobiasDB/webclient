@@ -76,6 +76,16 @@ assert_type(_wc.fetch("https://e.com"), LazyDocument)
 
 # summary records a plan you collect (a Lazy[T] handle)
 assert_type(_wc.summary("https://e.com").collect(), dict[str, Any])
+
+# a lazy extract->project pipeline is itself a Lazy handle; collect() materialises
+assert_type(
+    _wc.fetch("https://e.com")
+    .select_all(".card")
+    .extract(t=doc.attr("text"))
+    .project()
+    .collect(),
+    list[dict[str, Any]],
+)
 assert_type(_wc.fetch("https://e.com").select(".t"), LazyDocument)
 assert_type(_wc.fetch("https://e.com").attr("href"), LazyReference)
 assert_type(_wc.fetch("https://e.com").attr("text"), LazyField[str])
