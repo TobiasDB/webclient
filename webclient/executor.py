@@ -94,8 +94,8 @@ def _read(value: Any, name: str) -> Any:
 
 
 def _call(value: Any, name: str, call: Step, context: Any, client: Any) -> Any:
-    # ``field(k)`` on a row dict reads the extracted column.
-    if name == "field" and isinstance(value, dict):
+    # ``field(k)`` / ``reference(k)`` on a row dict read the extracted column.
+    if name in ("field", "reference") and isinstance(value, dict):
         return value.get(_arg(call.args[0], context, client))
     if name in _BINDS:                             # pass sub-plans unevaluated
         args = [_as_expr(a, client) for a in call.args]
