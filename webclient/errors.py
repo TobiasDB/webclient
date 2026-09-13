@@ -8,6 +8,8 @@ work on a not-ok document too.
 
 from __future__ import annotations
 
+from collections.abc import Iterator as _Iterator
+
 from pydantic import BaseModel
 
 
@@ -41,7 +43,7 @@ def current_policy() -> "_Policy":
 
 
 @_contextlib.contextmanager
-def default_policy(policy: "_Policy"):
+def default_policy(policy: "_Policy") -> "_Iterator[None]":
     token = _CURRENT.set(policy)
     try:
         yield

@@ -32,6 +32,17 @@ include = ["webclient*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.mypy]
+strict = true
+
+# The code-generated type-only surface stubs (scripts/gen_stubs.py) are `...`-body
+# declarations validated at their use-site by tests/fixtures/typing_surface.py.
+# Checking their DEFINITIONS trips codes that are inherent to stub form; suppress
+# only those, only here -- every other strict check still applies to these files.
+[[tool.mypy.overrides]]
+module = ["webclient.models", "webclient.surfaces", "webclient.collection"]
+disable_error_code = ["empty-body", "no-overload-impl", "overload-overlap"]
+
 [tool.pyright]
 # The project targets 3.12 (requires-python). Pin it so pyright does not fall
 # back to the system interpreter's version for stdlib typing (assert_type etc.).
