@@ -33,7 +33,8 @@ class WebSessionCore(WebCore, BaseModel):
     BACKINGS: ClassVar[tuple[Backing, ...]] = ()
 
     # -- session-scoped fetch ------------------------------------------------
-    def fetch(self, ref: ReferenceCore, *, optional: bool = False) -> Any:
+    def fetch(self, ref: ReferenceCore, *, optional: bool = False,
+              browser: bool = False) -> Any:
         """Fetch through the owning client with this session's headers/cookies
         applied, then absorb any Set-Cookie back into the session."""
         scoped = ref.model_copy(update={
@@ -41,7 +42,7 @@ class WebSessionCore(WebCore, BaseModel):
             "cookies": {**self.cookies, **ref.cookies}})
         scoped._client = self._client
         scoped._session = self
-        doc = self._client.fetch(scoped, optional=optional)
+        doc = self._client.fetch(scoped, optional=optional, browser=browser)
         self._absorb(doc)
         self.status = "active"
         return doc

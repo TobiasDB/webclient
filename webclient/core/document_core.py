@@ -16,6 +16,7 @@ from urllib.parse import urljoin
 from pydantic import BaseModel, PrivateAttr
 
 from ..errors import WebError
+from .live import LiveBacking
 from .reference_core import ReferenceCore, from_url
 from .web_core import Backing, WebCore
 
@@ -150,7 +151,7 @@ class StatusBacking(Backing):
     """Status / value ops, available even on a not-ok document: ``is_ok`` /
     ``is_empty`` (a ``Field``), ``message`` (the error text)."""
 
-    provides = frozenset({"is_ok", "is_empty", "ref", "summary"})
+    provides = frozenset({"is_ok", "is_empty", "ref", "summary", "reload"})
     props = frozenset({"message"})
     gate = "ok"
 
@@ -160,6 +161,11 @@ class StatusBacking(Backing):
     def ref(self, core: "DocumentCore") -> "ReferenceCore | None":
         """The reference that produced this document (for reload / recovery)."""
         return core._ref
+
+    def reload(self, core: "DocumentCore") -> "DocumentCore":
+        """Re-resolve on a fresh page, replaying the recorded action chain --
+        available even after the page was released."""
+        return core._client.loop().run(core._client._areload(core))
 
     def summary(self, core: "DocumentCore") -> dict[str, Any]:
         """A page digest: url / ok, plus title + markdown when available."""
@@ -385,9 +391,10 @@ class DocumentCore(WebCore, BaseModel):
     _missing: bool = PrivateAttr(default=False)   # a selection that missed
     _surface: Any = PrivateAttr(default=None)     # cached eager surface (identity)
     _events: list = PrivateAttr(default_factory=list)   # events routed here
+    _page: Any = PrivateAttr(default=None)        # playwright Page (live document)
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (
-        StatusBacking(), EventBacking(), HtmlBacking(), JsonBacking())
+        StatusBacking(), EventBacking(), LiveBacking(), HtmlBacking(), JsonBacking())
 
     @property
     def ok(self) -> bool:

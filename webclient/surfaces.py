@@ -145,6 +145,15 @@ class _ClientBase:
         from .surface import wrap
         return wrap(self._core.reference(name))
 
+    def release(self, doc: Document) -> None:
+        """Return a live document's browser page to the pool."""
+        self._core.release(doc._core)
+
+    @property
+    def pool(self) -> Any:
+        """The client's transport-lease pool (``.stats()``)."""
+        return self._core.pool
+
 
 class WebClient(_ClientBase):
     """The synchronous client surface: build lazy plans, run them on the engine

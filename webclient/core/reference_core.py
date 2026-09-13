@@ -62,7 +62,8 @@ class ResolveBacking(Backing):
         if client is None:
             from .client_core import WebClientCore
             client = WebClientCore()                 # process-local default (MVP)
-        return client.fetch(core, optional=optional or error is RETURN)
+        return client.fetch(core, optional=optional or error is RETURN,
+                            browser=browser)
 
 
 class ReferenceCore(WebCore, BaseModel):
@@ -86,7 +87,7 @@ class ReferenceCore(WebCore, BaseModel):
     form: dict[str, str] | None = None
     follow_redirects: bool = True
     timeout: float | None = None
-    # TODO(port): actions chain / resolve options.
+    actions: list[dict[str, Any]] = []   # recorded live-interaction chain (reload)
 
     _client: Any = PrivateAttr(default=None)
     _session: Any = PrivateAttr(default=None)

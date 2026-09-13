@@ -15,9 +15,26 @@ from ..engine import http as engine_http
 from ..engine.loop import EngineLoop
 from ..errors import WebException, error_for
 from ..events import EventBus, NavigationEvent, NetworkEvent
+from ..pool import PoolStats
+from . import live as _live
 from .document_core import DocumentCore
 from .reference_core import ReferenceCore, from_url
 from .web_core import Backing, WebCore
+
+
+class _PoolView:
+    """A minimal read-only view of the client's transport leases (MVP)."""
+
+    def __init__(self, core: "WebClientCore") -> None:
+        self._core = core
+
+    def stats(self) -> PoolStats:
+        c = self._core
+        return PoolStats(
+            http_total=1 if c._http is not None else 0,
+            http_free=1 if c._http is not None else 0,
+            pages_total=c._pages_created,
+            pages_free=c._pages_created - len(c._pages))
 
 
 class WebClientCore(WebCore, BaseModel):
@@ -37,6 +54,10 @@ class WebClientCore(WebCore, BaseModel):
     _refs: dict[str, Any] = PrivateAttr(default_factory=dict)   # root -> ReferenceCore
     _counter: int = PrivateAttr(default=0)
     _bus: Any = PrivateAttr(default=None)      # EventBus (lazy)
+    _pw: Any = PrivateAttr(default=None)       # playwright instance (lazy)
+    _browser: Any = PrivateAttr(default=None)  # chromium browser (lazy)
+    _pages: list = PrivateAttr(default_factory=list)   # live pages in use
+    _pages_created: int = PrivateAttr(default=0)
 
     @property
     def bus(self) -> EventBus:
@@ -66,14 +87,21 @@ class WebClientCore(WebCore, BaseModel):
     def close(self) -> None:
         if self._closed:
             return
-        if self._loop is not None and not self._loop.closed and self._http is not None:
-            self._loop.run(self._http.aclose())
+        if self._loop is not None and not self._loop.closed:
+            if self._http is not None:
+                self._loop.run(self._http.aclose())
+            if self._browser is not None:
+                self._loop.run(self._browser.close())
+                self._loop.run(self._pw.stop())
         self._closed = True
         if self._loop is not None:
             self._loop.stop()
 
     # -- fetch (resolve a ReferenceCore -> DocumentCore) ---------------------
-    async def afetch(self, ref: ReferenceCore, *, optional: bool = False) -> DocumentCore:
+    async def afetch(self, ref: ReferenceCore, *, optional: bool = False,
+                     browser: bool = False) -> DocumentCore:
+        if browser:
+            return await self._alive(ref)
         client = await self._client()
         headers = {**self.default_headers, **ref.headers}
         resp = await engine_http.request(
@@ -94,9 +122,62 @@ class WebClientCore(WebCore, BaseModel):
                 raise WebException(doc.error)
         return doc
 
-    def fetch(self, ref: ReferenceCore, *, optional: bool = False) -> DocumentCore:
+    def fetch(self, ref: ReferenceCore, *, optional: bool = False,
+              browser: bool = False) -> DocumentCore:
         """Sync: run ``afetch`` on the engine loop."""
-        return self.loop().run(self.afetch(ref, optional=optional))
+        return self.loop().run(self.afetch(ref, optional=optional, browser=browser))
+
+    # -- live / browser ------------------------------------------------------
+    async def _browser_page(self) -> Any:
+        if self._browser is None:
+            from playwright.async_api import async_playwright
+            self._pw = await async_playwright().start()
+            self._browser = await self._pw.chromium.launch()
+        page = await self._browser.new_page()
+        self._pages.append(page)
+        self._pages_created += 1
+        await page.add_init_script(_live.INIT_JS)
+        return page
+
+    async def _alive(self, ref: ReferenceCore,
+                     replay: list[dict[str, Any]] | None = None) -> DocumentCore:
+        page = await self._browser_page()
+        raw: list[tuple[str, str]] = []
+        page.on("console", lambda m: raw.append((m.type, m.text)))
+        url = ref.dispatch("url")
+        await page.goto(url)
+        doc = DocumentCore(url=url, final_url=page.url, kind="html",
+                           content=(await page.content()).encode(), status_code=200)
+        doc._client = self
+        doc._page = page
+        self._register(doc, ref)
+        for level, text in raw:
+            doc._events.append(_live.console_event(level, text, doc))
+        for step in (replay or []):                  # reproduce mutated state
+            args = step.get("args", {})
+            loc = page.locator(args.get("selector") or "*").first
+            if step["op"] == "click":
+                await loc.click()
+            elif step["op"] == "write":
+                await loc.fill(args.get("text", "") or "")
+        await _live.drain(doc)
+        return doc
+
+    async def _areload(self, core: DocumentCore) -> DocumentCore:
+        return await self._alive(core._ref, replay=list(core._ref.actions))
+
+    def release(self, doc: DocumentCore) -> None:
+        """Return a live document's page to the pool (close it)."""
+        page = doc._page
+        if page is not None:
+            self.loop().run(page.close())
+            if page in self._pages:
+                self._pages.remove(page)
+            doc._page = None
+
+    @property
+    def pool(self) -> Any:
+        return _PoolView(self)
 
     # -- naming / recovery ---------------------------------------------------
     def _register(self, doc: DocumentCore, ref: ReferenceCore) -> None:
