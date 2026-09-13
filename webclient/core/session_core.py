@@ -11,29 +11,48 @@ from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, PrivateAttr
 
+from .reference_core import ReferenceCore
 from .web_core import Backing, WebCore
 
 
 class WebSessionCore(WebCore, BaseModel):
-    """Core Fields (identity/state) + the same backings as the client, run
-    against the owning client's engine with this session as the context."""
+    """Core Fields (identity/state) + the same fetch path as the client, run
+    against the owning client's engine with this session's identity applied.
+    Cookies/headers persist across its fetches; sessions do not share cookies."""
 
     # -- Core Fields (identity / lifecycle) ----------------------------------
     id: str = ""
-    status: Literal["pending", "running", "expired", "closed"] = "pending"
+    status: Literal["pending", "active", "expired", "closed"] = "pending"
     headers: dict[str, str] = {}
     cookies: dict[str, str] = {}
     ttl: float | None = None
-    # TODO(port): expires_at / keep_alive / proxy / storage_state / timeout.
 
     _client: Any = PrivateAttr(default=None)     # owning WebClientCore (the engine)
-    _scope: Any = PrivateAttr(default=None)      # this session's name scope
+    _surface: Any = PrivateAttr(default=None)
 
-    # -- backings: same verbs as the client, session-scoped ------------------
-    BACKINGS: ClassVar[tuple[Backing, ...]] = ()   # TODO: (Fetch, Search, Crawl, Document)
+    BACKINGS: ClassVar[tuple[Backing, ...]] = ()
 
-    # execute/remote_execute delegate to the owning WebClientCore with self as
-    # the resolution context (TODO).
+    # -- session-scoped fetch ------------------------------------------------
+    def fetch(self, ref: ReferenceCore, *, optional: bool = False) -> Any:
+        """Fetch through the owning client with this session's headers/cookies
+        applied, then absorb any Set-Cookie back into the session."""
+        scoped = ref.model_copy(update={
+            "headers": {**self.headers, **ref.headers},
+            "cookies": {**self.cookies, **ref.cookies}})
+        scoped._client = self._client
+        scoped._session = self
+        doc = self._client.fetch(scoped, optional=optional)
+        self._absorb(doc)
+        self.status = "active"
+        return doc
+
+    def _absorb(self, doc: Any) -> None:
+        raw = doc.response_headers.get("set-cookie", "")
+        for chunk in raw.split(", "):
+            pair = chunk.split(";")[0].strip()
+            if "=" in pair:
+                key, value = pair.split("=", 1)
+                self.cookies[key.strip()] = value.strip()
 
 
 __all__ = ["WebSessionCore"]

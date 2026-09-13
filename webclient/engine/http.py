@@ -13,21 +13,25 @@ async def request(client: httpx.AsyncClient, ref: ReferenceCore, *,
                   timeout: float, retries: int) -> httpx.Response:
     """Perform the request described by ``ref`` with pre-merged headers and
     cookies. Retries transport errors only, immediately, ``retries`` times."""
-    for name, value in cookies.items():
-        client.cookies.set(name, value)
     last_error: httpx.TransportError | None = None
     for _ in range(retries + 1):
         try:
-            return await client.request(
+            resp = await client.request(
                 ref.method.upper(),
                 ref.dispatch("url"),
                 headers=headers or None,
+                cookies=cookies or None,
                 content=ref.body,
                 json=ref.json_body,
                 data=ref.form,
                 follow_redirects=ref.follow_redirects,
                 timeout=ref.timeout if ref.timeout is not None else timeout,
             )
+            # keep the shared client's jar empty: cookies are supplied
+            # per-request and Set-Cookie is captured from response headers, so
+            # nothing leaks across requests or between sessions.
+            client.cookies.clear()
+            return resp
         except httpx.TransportError as exc:
             last_error = exc
     assert last_error is not None

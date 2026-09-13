@@ -43,6 +43,28 @@ class Renderer:
         raise NotImplementedError
 
 
+class Session:
+    """A logical identity (cookies/headers/ttl) spanning fetches. ``ref``
+    returns a lazy reference bound to this session."""
+
+    def __init__(self, core: Any) -> None:
+        self._core = core
+
+    def ref(self, url: str, method: HttpMethod = "get", **kw: Any) -> Any:
+        from .expr import Expr
+        from .plan import Plan
+        spec = _core_from_url(url, method, **kw).model_dump()
+        return Expr(Plan(root="Reference", source=spec), self._core)
+
+    @property
+    def status(self) -> str:
+        return self._core.status
+
+    @property
+    def cookies(self) -> dict[str, str]:
+        return self._core.cookies
+
+
 class WebClient:
     """The synchronous client surface (MVP): fetch a URL into a Document, or
     build a client-bound Reference to resolve. Owns a ``WebClientCore``."""
@@ -74,6 +96,14 @@ class WebClient:
               **kw: Any) -> Any:
         """A lazy fetch: ``ref(url).resolve()``; ``.collect()`` to materialise."""
         return self.ref(url, **kw).resolve(optional=optional, error=error)
+
+    def session(self, *, ttl: float | None = None,
+                headers: dict[str, str] | None = None, **kw: Any) -> Session:
+        """A new session bound to this client's engine."""
+        from .core.session_core import WebSessionCore
+        core = WebSessionCore(ttl=ttl, headers=headers or {}, **kw)
+        core._client = self._core
+        return Session(core)
 
     def document(self, name: str) -> Document:
         """Recover a materialised Document by name (same surface object)."""
