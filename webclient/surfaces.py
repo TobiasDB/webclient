@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel
+
 from .core.client_core import WebClientCore
 from .core.document_core import DocumentCore
 from .core.reference_core import HttpMethod, ReferenceCore
@@ -41,6 +43,16 @@ class Renderer:
 
     def render(self, document: "Document", format: str, **options: Any) -> Any:
         raise NotImplementedError
+
+
+class SearchEngine(BaseModel):
+    """A configurable search backend: a URL template (``{q}`` = the query) and
+    the selectors that pick each result's title and link out of the page."""
+
+    url: str
+    result: str = ".result"
+    title: str = "a"
+    link: str = "a"
 
 
 class Session:
@@ -108,6 +120,21 @@ class _ClientBase:
         core._client = self._core
         return Session(core)
 
+    def search(self, query: str, *, engine: SearchEngine,
+               limit: int = 10) -> Any:
+        """A lazy search plan: resolve the engine's query URL, then extract a
+        (title, url) row per result. Run it to get the hits."""
+        from .expr import doc
+        plan = self.ref(engine.url.format(q=query)).resolve().select_all(engine.result)
+        if limit:
+            plan = plan.limit(limit)
+        return plan.extract(title=doc.select(engine.title).attr("text"),
+                            url=doc.select(engine.link).attr("href")).project()
+
+    def summary(self, url: str, **kw: Any) -> Any:
+        """A lazy plan resolving ``url`` to a title + markdown digest."""
+        return self.ref(url, **kw).resolve().summary()
+
     def document(self, name: str) -> Document:
         """Recover a materialised Document by name (same surface object)."""
         from .surface import wrap
@@ -165,5 +192,5 @@ class AsyncWebClient(_ClientBase):
         await self.aclose()
 
 
-__all__ = ["Reference", "Document", "Session", "WebClient", "AsyncWebClient",
-           "from_url"]
+__all__ = ["Reference", "Document", "Session", "SearchEngine", "WebClient",
+           "AsyncWebClient", "from_url"]

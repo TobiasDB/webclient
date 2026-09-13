@@ -85,6 +85,10 @@ class Collection:
                        for p in predicates)]
         return Collection(kept, client=self._client, name=self.name)
 
+    def limit(self, n: int) -> "Collection":
+        """Keep at most the first ``n`` elements."""
+        return Collection(self._items[:n], client=self._client, name=self.name)
+
     def project(self) -> list[Any]:
         """Materialise the rows/elements as a plain list."""
         return list(self._items)

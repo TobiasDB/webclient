@@ -150,7 +150,7 @@ class StatusBacking(Backing):
     """Status / value ops, available even on a not-ok document: ``is_ok`` /
     ``is_empty`` (a ``Field``), ``message`` (the error text)."""
 
-    provides = frozenset({"is_ok", "is_empty", "ref"})
+    provides = frozenset({"is_ok", "is_empty", "ref", "summary"})
     props = frozenset({"message"})
     gate = "ok"
 
@@ -160,6 +160,15 @@ class StatusBacking(Backing):
     def ref(self, core: "DocumentCore") -> "ReferenceCore | None":
         """The reference that produced this document (for reload / recovery)."""
         return core._ref
+
+    def summary(self, core: "DocumentCore") -> dict[str, Any]:
+        """A page digest: url / ok, plus title + markdown when available."""
+        out: dict[str, Any] = {"url": core.final_url or core.url, "ok": core.ok}
+        if core.has_op("title"):
+            out["title"] = core.dispatch("title")
+        if core.has_op("render"):
+            out["markdown"] = core.dispatch("render", "markdown")
+        return out
 
     def is_ok(self, core: "DocumentCore") -> Any:
         from ..collection import Field
@@ -345,6 +354,7 @@ def _element(parent: "DocumentCore", node: Any) -> "DocumentCore":
     ``None`` node means the selection missed -- a not-ok, empty sub-document."""
     sub = DocumentCore(url=parent.url, final_url=parent.final_url,
                        kind=parent.kind, status_code=parent.status_code)
+    sub.root = parent.name or parent.root
     sub._client = parent._client
     sub._element = node
     sub._missing = node is None
