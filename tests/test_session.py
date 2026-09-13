@@ -35,6 +35,23 @@ def test_session_cookies_persist_across_fetches(httpserver, wc):
     assert doc.text == "cookie=abc123"
 
 
+def test_session_absorbs_cookie_with_dated_expires(httpserver, wc):
+    """A cookie whose Expires attribute contains a comma must not be corrupted
+    (the old hand-split on ", " broke it)."""
+    httpserver.expect_request("/login").respond_with_response(
+        Response(
+            "ok",
+            content_type="text/html",
+            headers={
+                "Set-Cookie": "sid=xyz; Expires=Wed, 21 Oct 2099 07:28:00 GMT; Path=/"
+            },
+        )
+    )
+    session = wc.session()
+    session.ref(httpserver.url_for("/login")).resolve().collect()
+    assert session.cookies == {"sid": "xyz"}
+
+
 def test_sessions_are_isolated(httpserver, wc):
     httpserver.expect_request("/login").respond_with_response(
         Response("ok", headers={"Set-Cookie": "token=s1; Path=/"})

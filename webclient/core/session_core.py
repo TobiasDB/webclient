@@ -96,12 +96,11 @@ class WebSessionCore(WebClientCore):
         return doc
 
     def _absorb(self, doc: Any) -> None:
-        raw = doc.response_headers.get("set-cookie", "")
-        for chunk in raw.split(", "):
-            pair = chunk.split(";")[0].strip()
-            if "=" in pair:
-                key, value = pair.split("=", 1)
-                self.cookies[key.strip()] = value.strip()
+        """Merge the response's Set-Cookie into the session identity. Uses the
+        transport-parsed cookies (httpx's cookiejar), not a hand-split of the
+        collapsed header -- which corrupted values whose ``Expires`` attribute
+        contains a comma (``Expires=Wed, 21 Oct ...``)."""
+        self.cookies.update(doc._set_cookies)
 
     def document(self, name: str) -> Any:
         """Recover a document from THIS session's scope only."""

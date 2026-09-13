@@ -546,6 +546,9 @@ class DocumentCore(WebCore, BaseModel):
     _lease: Any = PrivateAttr(default=None)  # the page's pool lease (live document)
     _row: Any = PrivateAttr(default=None)  # extracted columns (extract/field)
     _surface: Any = PrivateAttr(default=None)  # the core's single eager surface
+    _set_cookies: dict[str, str] = PrivateAttr(  # transport-parsed Set-Cookie
+        default_factory=dict
+    )
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (
         StatusBacking(),

@@ -267,6 +267,7 @@ class WebClientCore(WebCore, BaseModel):
             encoding=engine_http.charset_of(resp.headers.get("content-type")),
         )
         doc._client = self
+        doc._set_cookies = dict(resp.cookies)  # httpx parses Set-Cookie correctly
         self._register(doc, ref)
         self._capture(doc, ref, resp)
         if not (200 <= resp.status_code < 300):
