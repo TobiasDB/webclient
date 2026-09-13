@@ -139,7 +139,7 @@ def _expand(lines: list[str], tier: dict[str, str]) -> list[str]:
     return out
 
 
-_LAZY_TIER = '''# fmt: off
+_LAZY_TIER = """# fmt: off
 class LazyField(Lazy["Field[S]"], Generic[S]):
     def get(self, default: Any = ...) -> S: ...
     def is_ok(self) -> "LazyField[bool]": ...
@@ -183,7 +183,7 @@ class LazyCollection(Lazy["Collection[T]"], Generic[T]):
     def documents(self, column: str) -> "LazyCollection[LazyDocument]": ...
     def project(self) -> "list[dict[str, Any]]": ...
     def collect(self, context: Any = ...) -> "Collection[T]": ...
-# fmt: on'''
+# fmt: on"""
 
 
 def _body(region: str) -> str:
