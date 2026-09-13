@@ -86,7 +86,11 @@ class Expr:
         if client is None:
             from .core.client_core import WebClientCore
             client = WebClientCore()               # process-local default (MVP)
-        return evaluate(self, context, client=client)
+        result = evaluate(self, context, client=client)
+        if isinstance(result, (str, int, float, bool)) or result is None:
+            from .collection import Field           # a scalar leaf -> a Field
+            return Field(result)
+        return result
 
     def __repr__(self) -> str:
         return f"lazy {self._plan.describe()}"
