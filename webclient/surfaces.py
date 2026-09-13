@@ -404,6 +404,15 @@ class AsyncWebClient(_ClientBase):
         await self.aclose()
 
 
+def RemoteWebClient(url: str, token: str | None = None) -> WebClient:
+    """A ``WebClient`` over a remote core -- literally the same surface, executed
+    server-side. A factory, not a subclass: the remote-ness is entirely in the
+    core it swaps in (``RemoteWebClientCore``)."""
+    from .core.remote_core import RemoteWebClientCore
+
+    return WebClient(core=RemoteWebClientCore(url=url, token=token))
+
+
 __all__ = [
     "Reference",
     "Document",
@@ -411,6 +420,7 @@ __all__ = [
     "Session",
     "WebClient",
     "AsyncWebClient",
+    "RemoteWebClient",
     "default_client",
     "from_url",
 ]

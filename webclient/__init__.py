@@ -28,12 +28,13 @@ from .expr import (
     reference,
     when,
 )
-from .remote import RemoteWebClient, RemoteWebClientCore
+from .core.remote_core import RemoteWebClientCore
 from .surfaces import (
     AsyncWebClient,
     Document,
     LiveDocument,
     Reference,
+    RemoteWebClient,
     Renderer,
     Session,
     WebClient,

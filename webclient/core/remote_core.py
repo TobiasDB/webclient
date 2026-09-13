@@ -1,12 +1,12 @@
-"""Remote backend: the same surface, a swapped core.
+"""Remote backend: a ``WebClientCore`` that executes over HTTP.
 
+Remote is not a separate client -- it is the same surface over a swapped core.
 ``RemoteWebClientCore`` is a ``WebClientCore`` whose ``execute`` POSTs the plan
-to a ``webclient.service`` app instead of running it on a local engine -- so a
-``WebClient`` over it builds the very same plans (the inherited fetch/search
-backings) with no local browser or lxml, only httpx + pydantic. A fetched
-document comes back as a shallow lazy handle (``_RemoteDoc``): its metadata
-(title/ok/kind) is inline, and any op on it is a plan rooted at the server-side
-document id, run with one more round trip.
+to a ``webclient.service`` app instead of running it on a local engine, so a
+``WebClient`` over it builds the very same plans (the inherited fetch backing)
+with no local browser or lxml -- only httpx + pydantic. A fetched document comes
+back as a shallow handle (``_RemoteDoc``): metadata (title/ok/kind) inline, any
+op a plan rooted at the server-side document id, run with one more round trip.
 """
 
 from __future__ import annotations
@@ -16,12 +16,11 @@ from typing import Any
 import httpx
 from pydantic import PrivateAttr
 
-from .core.client_core import WebClientCore
-from .core.reference_core import ReferenceCore
-from .core.reference_core import from_url as _core_from_url
-from .expr import Expr
-from .plan import Plan
-from .surfaces import WebClient
+from ..expr import Expr
+from ..plan import Plan
+from .client_core import WebClientCore
+from .reference_core import ReferenceCore
+from .reference_core import from_url as _core_from_url
 
 
 def _url_of(source: dict[str, Any]) -> str:
@@ -49,8 +48,8 @@ class _RemoteDoc:
 
 class RemoteWebClientCore(WebClientCore):
     """A ``WebClientCore`` whose ``execute`` round-trips to ``/execute`` instead
-    of running locally. The authoring backings (fetch/search) are inherited, so
-    the surface is unchanged; only execution differs."""
+    of running locally. The authoring backing (fetch) is inherited, so the
+    surface is unchanged; only execution differs."""
 
     url: str
     token: str | None = None
@@ -84,7 +83,7 @@ class RemoteWebClientCore(WebClientCore):
             f"{self.url}/execute", json=body, headers=self._headers()
         )
         if not (200 <= resp.status_code < 300):
-            from .errors import RemoteError
+            from ..errors import RemoteError
 
             raise RemoteError(resp.status_code, resp.text[:200])
         return self._deserialize(resp.json()["rows"])
@@ -114,8 +113,9 @@ class RemoteWebClientCore(WebClientCore):
 
 
 class RemoteSession:
-    """A handle to a server-side session; its fetches thread the session id
-    into the plan so the server resolves them through that session."""
+    """A handle to a server-side session; its fetches thread the session id into
+    the plan so the server resolves them through that session. A context manager
+    (``with rc.session() as s:``) so the server-side session is always closed."""
 
     def __init__(self, core: RemoteWebClientCore, sid: str) -> None:
         self._core = core
@@ -135,6 +135,12 @@ class RemoteSession:
         self._core.close_session(self._id)
         self._status = "closed"
 
+    def __enter__(self) -> "RemoteSession":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
     @property
     def id(self) -> str:
         return self._id
@@ -144,11 +150,4 @@ class RemoteSession:
         return self._status
 
 
-def RemoteWebClient(url: str, token: str | None = None) -> WebClient:
-    """A ``WebClient`` over a remote core -- literally the same surface, executed
-    server-side. (A factory, not a subclass: the remote-ness is entirely in the
-    core it swaps in.)"""
-    return WebClient(core=RemoteWebClientCore(url=url, token=token))
-
-
-__all__ = ["RemoteWebClient", "RemoteWebClientCore", "RemoteSession"]
+__all__ = ["RemoteWebClientCore", "RemoteSession"]
