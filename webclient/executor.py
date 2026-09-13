@@ -105,8 +105,8 @@ def _start(plan: Any, context: Any, client: Any) -> Any:
 
         core = ReferenceCore(**plan.source)
         if isinstance(context, WebSessionCore):  # a session-bound reference
-            core._session = context
-            core._client = context._client
+            core._session = context  # resolve() will use the session
+            core._client = context
         else:
             core._client = client
         return wrap(core)

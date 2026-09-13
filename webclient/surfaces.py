@@ -409,14 +409,11 @@ class _ClientBase:
         headers: dict[str, str] | None = None,
         **kw: Any,
     ) -> Session:
-        """A new session bound to this client's engine."""
+        """A new session sharing this client's engine (a scoped core)."""
         from .core.session_core import WebSessionCore
 
-        core = WebSessionCore(ttl=ttl, headers=headers or {}, **kw)
-        core._client = self._core
-        if hasattr(self._core, "_sessions"):
-            core._scope = self._core.new_scope()
-            self._core._sessions.append(core)
+        core = WebSessionCore(ttl=ttl, session_headers=headers or {}, **kw)
+        core.bind(self._core)
         return Session(core)
 
     def search(self, query: str, *, engine: SearchEngine, limit: int = 10) -> Any:

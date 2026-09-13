@@ -1,44 +1,65 @@
-"""WebSessionCore: a logical identity (cookies/headers/ttl) spanning fetches.
+"""WebSessionCore: a scoped ``WebClientCore``.
 
-A session runs against the owning client's engine but applies its own identity:
-cookies/headers persist across its fetches and do not leak between sessions. It
-has a ttl'd lifecycle (running -> expired / closed) and tags the documents and
-events it produces with its id.
+A session is the same engine core as the client, sharing its loop / http client
+/ browser pool / event bus / plugins with a parent ``WebClientCore``, but with
+its own identity (headers + cookies + name scope) and a ttl'd lifecycle. It
+reuses the parent's whole fetch pipeline (``afetch``) -- it only injects its
+identity into the request, absorbs Set-Cookie, and guards the lifecycle.
 """
 
 from __future__ import annotations
 
 import time
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, PrivateAttr
+from pydantic import PrivateAttr
 
+from .client_core import WebClientCore
 from .reference_core import ReferenceCore
-from .web_core import Backing, WebCore
 
 
-class WebSessionCore(WebCore, BaseModel):
-    """Core Fields (identity/lifecycle) + a session-scoped fetch."""
+class WebSessionCore(WebClientCore):
+    """A ``WebClientCore`` scoped to one logical identity."""
 
     id: str = ""
     status: Literal["running", "expired", "closed"] = "running"
-    headers: dict[str, str] = {}
+    session_headers: dict[str, str] = {}
     cookies: dict[str, str] = {}
     ttl: float | None = None
     expires_at: float | None = None
 
-    _client: Any = PrivateAttr(default=None)  # owning WebClientCore (the engine)
-    _scope: Any = PrivateAttr(default=None)  # this session's NameScope
-    _surface: Any = PrivateAttr(default=None)
+    _parent: Any = PrivateAttr(default=None)  # the owning engine core
 
-    BACKINGS: ClassVar[tuple[Backing, ...]] = ()
-
-    def model_post_init(self, _ctx: Any) -> None:
+    def model_post_init(self, ctx: Any) -> None:
+        super().model_post_init(ctx)
         if not self.id:
             self.id = f"sess-{uuid4().hex[:8]}"
         if self.ttl is not None and self.expires_at is None:
             self.expires_at = time.time() + self.ttl
+
+    def bind(self, parent: WebClientCore) -> "WebSessionCore":
+        """Share ``parent``'s engine (loop / http / browser / bus / plugins) and
+        take a fresh name scope from it."""
+        self._parent = parent
+        self._render_table = parent._render_table  # plugins are shared
+        self._scope = parent.new_scope()
+        parent._sessions.append(self)
+        return self
+
+    # -- engine shared with the parent ---------------------------------------
+    def loop(self) -> Any:
+        return self._parent.loop()
+
+    async def _client(self) -> Any:
+        return await self._parent._client()
+
+    async def _browser_page(self) -> Any:
+        return await self._parent._browser_page()
+
+    @property
+    def bus(self) -> Any:
+        return self._parent.bus
 
     # -- lifecycle -----------------------------------------------------------
     def _guard(self) -> None:
@@ -48,32 +69,25 @@ class WebSessionCore(WebCore, BaseModel):
             self.status = "expired"
             raise RuntimeError("session has expired")
 
-    def close(self) -> None:
+    def close(self) -> None:  # not the parent engine
         self.status = "closed"
-        if self._scope is not None:  # retention ends
+        if self._scope is not None:
             self._scope.clear()
 
-    def document(self, name: str) -> Any:
-        """Recover a document from THIS session's scope only."""
-        from .document_core import DocumentCore
-
-        obj = self._scope.get(name) if self._scope is not None else None
-        return obj if isinstance(obj, DocumentCore) else None
-
-    # -- session-scoped fetch ------------------------------------------------
-    def fetch(
+    # -- fetch: the parent's pipeline + this session's identity --------------
+    async def afetch(
         self, ref: ReferenceCore, *, optional: bool = False, browser: bool = False
     ) -> Any:
         self._guard()
         scoped = ref.model_copy(
             update={
-                "headers": {**self.headers, **ref.headers},
+                "headers": {**self.session_headers, **ref.headers},
                 "cookies": {**self.cookies, **ref.cookies},
             }
         )
-        scoped._client = self._client
+        scoped._client = self
         scoped._session = self
-        doc = self._client.fetch(scoped, optional=optional, browser=browser)
+        doc = await super().afetch(scoped, optional=optional, browser=browser)
         doc.session_id = self.id
         for event in doc._events:
             event.session_id = self.id
@@ -87,6 +101,13 @@ class WebSessionCore(WebCore, BaseModel):
             if "=" in pair:
                 key, value = pair.split("=", 1)
                 self.cookies[key.strip()] = value.strip()
+
+    def document(self, name: str) -> Any:
+        """Recover a document from THIS session's scope only."""
+        from .document_core import DocumentCore
+
+        obj = self._scope.get(name) if self._scope is not None else None
+        return obj if isinstance(obj, DocumentCore) else None
 
 
 __all__ = ["WebSessionCore"]
