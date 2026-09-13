@@ -50,32 +50,6 @@ from ..pool import ClientPool
 logger = logging.getLogger("webclient")
 
 
-class Proxy(BaseModel):
-    """Upstream proxy config (used by a Session / the client proxy pool)."""
-
-    url: str
-    username: str | None = None
-    password: str | None = None
-
-    @property
-    def authenticated_url(self) -> str:
-        if self.username is None:
-            return self.url
-        scheme, _, rest = self.url.partition("://")
-        auth = self.username + (f":{self.password}" if self.password else "")
-        return f"{scheme}://{auth}@{rest}"
-
-
-class SearchEngine(BaseModel):
-    """How to drive one search engine: a URL template (``{q}`` = the escaped
-    query) and the selectors for a result, its title and its link."""
-
-    url: str = "https://duckduckgo.com/html/?q={q}"
-    result: str = ".result"
-    title: str = ".result__a"
-    link: str = ".result__a"
-
-
 def _core_plugins() -> list[Plugin]:
     return [HttpNetworkPlugin(), PageNetworkPlugin(), PageConsolePlugin(),
             PageDomPlugin()]
@@ -95,7 +69,6 @@ class WebClientCore(EngineCore, BaseModel):
     events_cap: int = 1000           # per-document event-store cap
     verify_tls: bool = True
     default_headers: dict[str, str] = Field(default_factory=dict)
-    proxy_pool: list[Proxy] = Field(default_factory=list)
     headless: bool = True
     default_scripts: list[Script] = Field(default_factory=list)
     names_cap: int = 1024            # client-scope retention (sessions: unbounded, dropped on close)
@@ -480,27 +453,6 @@ class WebClientCore(EngineCore, BaseModel):
 
 # -- plan builders (shared by the facades and Session) ---------------------- #
 
-def fetch_expr(*, browser: bool = False, optional: bool = False,
-               **options: Any) -> Any:
-    """``ref.resolve(...)``. The explicit error policy makes a plan (RETURN by
-    default) still raise on a hard fetch unless the caller opted out."""
-    return _lz.ref.resolve(browser=browser, optional=optional,
-                           error=RETURN if optional else RAISE, **options)
-
-
-def search_expr(engine: Any, *, limit: int = 5) -> Any:
-    """Resolve the search page, then project a title/url row per result."""
-    doc = _lz.doc
-    return (_lz.ref.resolve().select_all(engine.result, limit=limit)
-            .extract(title=doc.select(engine.title).attr("text"),
-                     url=doc.select(engine.link).attr("href"))
-            .project())
-
-
-def default_engine() -> Any:
-    return SearchEngine()
-
-
 def run_on_core(core: Any, expr: Any, context: Any = None, *,
                 stream: bool = False) -> Any:
     """Bridge a lazy expression onto the core's engine loop and block (sync)."""
@@ -512,17 +464,52 @@ def run_on_core(core: Any, expr: Any, context: Any = None, *,
     return loop.run(core.execute(expr, context))
 
 
-# -- the shared facade ------------------------------------------------------ #
+class WebClient:
+    """A facade over a core backend: it owns (or is given) a core and forwards
+    the core's lifecycle/registry surface (``session``/``document``/``use`` …).
+    ``core`` defaults to a local :class:`WebClientCore`; pass ``core=`` to run
+    against another backend (e.g. ``RemoteWebClientCore``)."""
 
-class _Facade:
-    """The user surface: the same plan builders over any execution. A subclass
-    supplies ``_core``/``ref``/``_run`` (and ``session`` for a session-bound
-    surface)."""
+    def __init__(self, core: Any = None, **policy: Any) -> None:
+        object.__setattr__(self, "_core",
+                           core if core is not None else WebClientCore(**policy))
 
+    @property
+    def core(self) -> Any:
+        return self._core
+
+    def ref(self, url: str, method: str = "get", **kwargs: Any) -> "LazyReference":
+        """A LAZY reference root bound to this client's core: it records ops and
+        runs on ``.collect()`` (or ``wc.execute``), on THIS client's core
+        (PLAN §8 -- was eager). Build a plain request spec with
+        ``Reference.from_url`` if you need to inspect ``.url``/``.path``."""
+        from .document import HttpMethod
+        from .expr import Expr, Plan
+        spec = request_fields(from_url(url, method=cast(HttpMethod, method),
+                                       **kwargs))
+        return cast("LazyReference", Expr(Plan(root="Reference", source=spec), self._core))
+
+    #: ``lazy`` is kept as an explicit alias of the (now lazy) ``ref``.
+    lazy = ref
     _core: Any
 
-    def ref(self, url: str, method: str = "get", **kwargs: Any) -> Any:
-        raise NotImplementedError
+    def close(self) -> None:
+        self._core.close()
+
+    def __enter__(self) -> "WebClient":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._core.close()
+
+    def __getattr__(self, name: str) -> Any:
+        # session / document / reference / release / use / pool / bus / …
+        if name == "_core":
+            raise AttributeError(name)
+        return getattr(object.__getattribute__(self, "_core"), name)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(core={self._core!r})"
 
     def _run(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
         raise NotImplementedError
@@ -557,7 +544,7 @@ class _Facade:
         return cast("LazyDocument", root.resolve(**resolve_opts))
 
     def fetch(self, ref: Any, *, browser: bool = False, session: Any = None,
-              optional: bool = False, **options: Any) -> "LazyDocument":
+                optional: bool = False, **options: Any) -> "LazyDocument":
         """Lazy (PLAN §8): a Document expr bound to this client; run with
         ``.collect()`` (sync), ``await ac.execute(...)`` (async), or
         ``wc.execute``. Was eager."""
@@ -566,14 +553,14 @@ class _Facade:
                             error=RETURN if optional else RAISE, **options)
 
     def search(self, term: str, *, engine: Any = None, limit: int = 5,
-               session: Any = None) -> "LazyCollection":
+                session: Any = None) -> "LazyCollection":
         """Lazy: a rows expr (a title/url record per result); run with
         ``.collect()``."""
         engine = engine or default_engine()
         ctx = self._context(engine.url.format(q=quote_plus(term)), session)
         rows = (self._rooted(ctx).select_all(engine.result, limit=limit)
                 .extract(title=_lz.doc.select(engine.title).attr("text"),
-                         url=_lz.doc.select(engine.link).attr("href")).project())
+                            url=_lz.doc.select(engine.link).attr("href")).project())
         return cast("LazyCollection", rows)
 
     def summary(self, url: str, *, browser: bool = False,
@@ -582,58 +569,11 @@ class _Facade:
         ctx = self._context(url, session, **reference_like)
         return (self._rooted(ctx, browser=browser)
                 .extract(url=_lz.doc.final_url, ok=_lz.doc.is_ok(),
-                         title=_lz.doc.title, markdown=_lz.doc.render("markdown"))
+                            title=_lz.doc.title, markdown=_lz.doc.render("markdown"))
                 .project())
+    
 
-
-class _Client(_Facade):
-    """A facade over a core backend: it owns (or is given) a core and forwards
-    the core's lifecycle/registry surface (``session``/``document``/``use`` …).
-    ``core`` defaults to a local :class:`WebClientCore`; pass ``core=`` to run
-    against another backend (e.g. ``RemoteWebClientCore``)."""
-
-    def __init__(self, core: Any = None, **policy: Any) -> None:
-        object.__setattr__(self, "_core",
-                           core if core is not None else WebClientCore(**policy))
-
-    @property
-    def core(self) -> Any:
-        return self._core
-
-    def ref(self, url: str, method: str = "get", **kwargs: Any) -> "LazyReference":
-        """A LAZY reference root bound to this client's core: it records ops and
-        runs on ``.collect()`` (or ``wc.execute``), on THIS client's core
-        (PLAN §8 -- was eager). Build a plain request spec with
-        ``Reference.from_url`` if you need to inspect ``.url``/``.path``."""
-        from .document import HttpMethod
-        from .expr import Expr, Plan
-        spec = request_fields(from_url(url, method=cast(HttpMethod, method),
-                                       **kwargs))
-        return cast("LazyReference", Expr(Plan(root="Reference", source=spec), self._core))
-
-    #: ``lazy`` is kept as an explicit alias of the (now lazy) ``ref``.
-    lazy = ref
-
-    def close(self) -> None:
-        self._core.close()
-
-    def __enter__(self) -> "_Client":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self._core.close()
-
-    def __getattr__(self, name: str) -> Any:
-        # session / document / reference / release / use / pool / bus / …
-        if name == "_core":
-            raise AttributeError(name)
-        return getattr(object.__getattribute__(self, "_core"), name)
-
-    def __repr__(self) -> str:
-        return f"{type(self).__name__}(core={self._core!r})"
-
-
-class AsyncWebClient(_Client):
+class AsyncWebClient(WebClient):
     """The async client -- the core's native form. ``await ac.fetch(url)`` /
     ``await ac.execute(plan, ctx)`` run the async core directly on the
     caller's event loop (no engine thread, no bridge);
@@ -664,7 +604,7 @@ class AsyncWebClient(_Client):
             self._core._closed = True
 
 
-class WebClient(_Client):
+class SyncWebClient(WebClient):
     """The synchronous client: the one surface that bridges the async core
     onto a dedicated engine loop and blocks for the result. ``wc.core`` is
     the async engine underneath."""
@@ -710,10 +650,6 @@ def _close_default() -> None:
                 pass
 
 
-# ========================================================================= #
-# Session (merged from session.py)
-# ========================================================================= #
-
 class Session(BaseModel):
     id: str = ""
     status: Literal["pending", "running", "expired", "closed"] = "pending"
@@ -722,7 +658,6 @@ class Session(BaseModel):
     expires_at: float | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     cookies: dict[str, str] = Field(default_factory=dict)
-    proxy: Proxy | None = None
     storage_state: dict[str, Any] | None = None
     timeout: float | None = None
 

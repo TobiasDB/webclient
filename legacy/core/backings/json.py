@@ -42,7 +42,6 @@ class JsonBacking(Backing):
         value = data if name in ("value", "text") else _json_path(data, name)
         return Field[str](value=value)
 
-
     def render(self, core: "DocumentCore", format: str, **options: Any) -> Any:
         client = core.client
         if client is not None:
