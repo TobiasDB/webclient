@@ -30,7 +30,7 @@ def wrap(value: Any, *, client: Any = None) -> Any:
             return value
         surf = cls(value)
         try:
-            value._surface = surf
+            value._surface = surf   # type: ignore[attr-defined]
         except (AttributeError, ValueError):
             pass
         return surf

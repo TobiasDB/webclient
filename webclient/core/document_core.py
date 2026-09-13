@@ -174,6 +174,29 @@ class StatusBacking(Backing):
         return core.error.message if core.error is not None else ""
 
 
+class EventBacking(Backing):
+    """Events routed onto the document. ``events`` is everything captured;
+    ``events_of(cls)`` narrows by type; ``action_events`` is the interaction
+    subset (empty until a live/browser document)."""
+
+    provides = frozenset({"events_of"})
+    props = frozenset({"events", "action_events"})
+    gate = "ok"
+
+    def applies(self, core: "DocumentCore") -> bool:
+        return True
+
+    def events(self, core: "DocumentCore") -> list[Any]:
+        return list(core._events)
+
+    def events_of(self, core: "DocumentCore", event_type: type) -> list[Any]:
+        return [e for e in core._events if isinstance(e, event_type)]
+
+    def action_events(self, core: "DocumentCore") -> list[Any]:
+        from ..events import ActionEvent
+        return [e for e in core._events if isinstance(e, ActionEvent)]
+
+
 class HtmlBacking(Backing):
     """Tree ops for html/xml. ``select``/``select_all`` yield element
     DocumentCores; ``attr``/``text`` read from the element (or body)."""
@@ -351,9 +374,10 @@ class DocumentCore(WebCore, BaseModel):
     _data: Any = PrivateAttr(default=None)        # cached json
     _missing: bool = PrivateAttr(default=False)   # a selection that missed
     _surface: Any = PrivateAttr(default=None)     # cached eager surface (identity)
+    _events: list = PrivateAttr(default_factory=list)   # events routed here
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (
-        StatusBacking(), HtmlBacking(), JsonBacking())
+        StatusBacking(), EventBacking(), HtmlBacking(), JsonBacking())
 
     @property
     def ok(self) -> bool:

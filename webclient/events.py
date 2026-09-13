@@ -11,10 +11,7 @@ import time
 from typing import TYPE_CHECKING, Any, Callable, Literal, TypeVar
 from uuid import uuid4
 
-from pydantic import BaseModel, PrivateAttr
-
-if TYPE_CHECKING:
-    from .core.document import Reference
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 Topic = str
 
@@ -39,8 +36,10 @@ E = TypeVar("E", bound=Event)
 # -- network ---------------------------------------------------------------- #
 
 class NetworkEvent(Event):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     topic: Topic = "network"
-    request: Reference
+    request: Any = None              # the ReferenceCore for this request
     status_code: int | None = None
     body: bytes | None = None
 

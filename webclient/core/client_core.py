@@ -14,8 +14,9 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr
 from ..engine import http as engine_http
 from ..engine.loop import EngineLoop
 from ..errors import WebException, error_for
+from ..events import EventBus, NavigationEvent, NetworkEvent
 from .document_core import DocumentCore
-from .reference_core import ReferenceCore
+from .reference_core import ReferenceCore, from_url
 from .web_core import Backing, WebCore
 
 
@@ -35,6 +36,13 @@ class WebClientCore(WebCore, BaseModel):
     _docs: dict[str, Any] = PrivateAttr(default_factory=dict)   # name -> DocumentCore
     _refs: dict[str, Any] = PrivateAttr(default_factory=dict)   # root -> ReferenceCore
     _counter: int = PrivateAttr(default=0)
+    _bus: Any = PrivateAttr(default=None)      # EventBus (lazy)
+
+    @property
+    def bus(self) -> EventBus:
+        if self._bus is None:
+            self._bus = EventBus()
+        return self._bus
 
     def use(self, renderer: Any) -> "WebClientCore":
         """Register a Renderer override for its (kind, format) pairs."""
@@ -79,6 +87,7 @@ class WebClientCore(WebCore, BaseModel):
             encoding=engine_http.charset_of(resp.headers.get("content-type")))
         doc._client = self
         self._register(doc, ref)
+        self._capture(doc, ref, resp)
         if not (200 <= resp.status_code < 300):
             doc.error = error_for(resp.status_code)
             if not optional:                         # loud by default
@@ -100,6 +109,20 @@ class WebClientCore(WebCore, BaseModel):
         doc._ref = ref
         self._docs[doc.name] = doc
         self._refs[ref.name] = ref
+
+    def _capture(self, doc: DocumentCore, ref: ReferenceCore, resp: Any) -> None:
+        """Emit a NavigationEvent per redirect hop plus a final NetworkEvent,
+        routed onto the document and published on the bus."""
+        events: list[Any] = []
+        for hop in resp.history:                     # each redirect
+            events.append(NavigationEvent(
+                request=from_url(str(hop.url)), status_code=hop.status_code,
+                document_id=doc.name))
+        events.append(NetworkEvent(
+            request=ref, status_code=resp.status_code, document_id=doc.name))
+        for event in events:
+            self.bus.publish(event)
+        doc._events.extend(events)
 
     def document(self, name: str) -> DocumentCore:
         """Recover a materialised document by name."""

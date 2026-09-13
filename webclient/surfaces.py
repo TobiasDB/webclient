@@ -50,6 +50,11 @@ class WebClient:
     def __init__(self, **policy: Any) -> None:
         self._core = WebClientCore(**policy)
 
+    @property
+    def bus(self) -> Any:
+        """The client's event bus (subscribe to network/dom/console topics)."""
+        return self._core.bus
+
     def use(self, renderer: Renderer) -> "WebClient":
         self._core.use(renderer)
         return self
