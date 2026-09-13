@@ -76,6 +76,10 @@ class WebCore:
         """Run ``op`` on its backing, passing this core as the receiver."""
         return getattr(self.backing(op), op)(self, *args, **kwargs)
 
+    async def adispatch(self, op: str, *args: Any, **kwargs: Any) -> Any:
+        """Await ``op`` on its backing (for async backing ops, e.g. fetch)."""
+        return await getattr(self.backing(op), op)(self, *args, **kwargs)
+
     def has_op(self, op: str) -> bool:
         """Whether any chosen backing provides ``op`` (call or prop)."""
         return any(op in b.provides or op in b.props for b in self.choose())

@@ -57,9 +57,69 @@ class NameScope:
         return len(self._items)
 
 
+class FetchBacking(Backing):
+    """The client's fetch verb: resolve a ``ReferenceCore`` into a
+    ``DocumentCore`` via a leased transport (http) or a browser page."""
+
+    provides = frozenset({"fetch"})
+    gate = "ok"
+
+    async def fetch(
+        self,
+        core: "WebClientCore",
+        ref: ReferenceCore,
+        *,
+        optional: bool = False,
+        browser: bool = False,
+    ) -> DocumentCore:
+        import time
+
+        if browser:
+            return await core._alive(ref)
+        headers = {**core.default_headers, **ref.headers}
+        start = time.monotonic()
+        try:
+            async with await core.pool.lease("http") as lease:
+                resp = await lease.client.send(
+                    ref, headers=headers, cookies=ref.cookies, timeout=core.timeout
+                )
+        except Exception as exc:  # transport failure
+            doc = DocumentCore(
+                url=ref.dispatch("url"),
+                status_code=0,
+                elapsed=time.monotonic() - start,
+                error=error_for(0, str(exc)),
+            )
+            doc._client = core
+            core._register(doc, ref)
+            if not optional:
+                raise WebException(doc.error, document=doc) from exc
+            return doc
+        kind = engine_http.sniff_kind(resp.headers.get("content-type"), resp.content)
+        doc = DocumentCore(
+            url=ref.dispatch("url"),
+            final_url=str(resp.url),
+            kind=kind,
+            content=resp.content,
+            status_code=resp.status_code,
+            response_headers=dict(resp.headers),
+            elapsed=time.monotonic() - start,
+            encoding=engine_http.charset_of(resp.headers.get("content-type")),
+        )
+        doc._client = core
+        core._register(doc, ref)
+        core._capture(doc, ref, resp)
+        if not (200 <= resp.status_code < 300):
+            doc.error = error_for(resp.status_code)
+            if not optional:  # loud by default
+                raise WebException(doc.error, document=doc)
+        return doc
+
+
 class WebClientCore(WebCore, BaseModel):
-    """Core Fields (policy) + engine loop + http client. The user-facing
-    ``WebClient`` is the surface; this is the machinery it drives."""
+    """Core Fields (policy) + engine (loop, ClientPool, bus, name scopes). Its
+    verbs are backings (``FetchBacking``); the surface (``WebClient``) drives
+    it. Sessions are a scoped subclass."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -129,7 +189,7 @@ class WebClientCore(WebCore, BaseModel):
             self._render_table[(renderer.kind, fmt)] = renderer
         return self
 
-    BACKINGS: ClassVar[tuple[Backing, ...]] = ()  # TODO: (Fetch, Search, ...) as ops
+    BACKINGS: ClassVar[tuple[Backing, ...]] = (FetchBacking(),)
 
     # -- loop / lifecycle ----------------------------------------------------
     def loop(self) -> EngineLoop:
@@ -157,48 +217,7 @@ class WebClientCore(WebCore, BaseModel):
     async def afetch(
         self, ref: ReferenceCore, *, optional: bool = False, browser: bool = False
     ) -> DocumentCore:
-        import time
-
-        if browser:
-            return await self._alive(ref)
-        headers = {**self.default_headers, **ref.headers}
-        start = time.monotonic()
-        try:
-            async with await self.pool.lease("http") as lease:
-                resp = await lease.client.send(
-                    ref, headers=headers, cookies=ref.cookies, timeout=self.timeout
-                )
-        except Exception as exc:  # transport failure
-            doc = DocumentCore(
-                url=ref.dispatch("url"),
-                status_code=0,
-                elapsed=time.monotonic() - start,
-                error=error_for(0, str(exc)),
-            )
-            doc._client = self
-            self._register(doc, ref)
-            if not optional:
-                raise WebException(doc.error, document=doc) from exc
-            return doc
-        kind = engine_http.sniff_kind(resp.headers.get("content-type"), resp.content)
-        doc = DocumentCore(
-            url=ref.dispatch("url"),
-            final_url=str(resp.url),
-            kind=kind,
-            content=resp.content,
-            status_code=resp.status_code,
-            response_headers=dict(resp.headers),
-            elapsed=time.monotonic() - start,
-            encoding=engine_http.charset_of(resp.headers.get("content-type")),
-        )
-        doc._client = self
-        self._register(doc, ref)
-        self._capture(doc, ref, resp)
-        if not (200 <= resp.status_code < 300):
-            doc.error = error_for(resp.status_code)
-            if not optional:  # loud by default
-                raise WebException(doc.error, document=doc)
-        return doc
+        return await self.adispatch("fetch", ref, optional=optional, browser=browser)
 
     def fetch(
         self, ref: ReferenceCore, *, optional: bool = False, browser: bool = False
