@@ -10,7 +10,7 @@ cannot drift:
    ``attr("text") -> Field[str]``). Subclasses inherit WebBase's block.
 2. ``Collection[T]`` (base.py) -- the element-op lifting, each op re-typed to
    ``Collection[<ret>]``.
-3. LAZY tier (``webclient/stubs.py``) -- every op returns another lazy type;
+3. LAZY tier (``webclient/interface.py``) -- every op returns another lazy type;
    ``collect()`` (on ``Lazy[T]``) returns the materialised model.
 
 Every block is rewritten between its ``>>> ... <<<`` markers.
@@ -32,7 +32,7 @@ import webclient.core.ops as o  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 BASE = Path(m.__file__)           # WebBase eager block + Collection[T] block
 DOCS = Path(d.__file__)           # Document + Reference eager blocks
-STUBS = ROOT / "webclient" / "stubs.py"
+STUBS = ROOT / "webclient" / "interface.py"
 
 CALL = o.CALL_OPS
 PROP = o.PROP_OPS

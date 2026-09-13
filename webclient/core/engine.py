@@ -17,7 +17,7 @@ from uuid import uuid4
 if TYPE_CHECKING:
     from collections.abc import Coroutine
 
-    from ..stubs import Lazy, LazyCollection, LazyDocument, LazyReference
+    from ..interface import Lazy, LazyCollection, LazyDocument, LazyReference
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
