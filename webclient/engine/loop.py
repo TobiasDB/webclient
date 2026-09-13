@@ -35,6 +35,12 @@ class EngineLoop:
         so a coroutine should be awaited rather than bridged."""
         return threading.current_thread() is self._thread
 
+    def submit(self, coro: Coroutine[Any, Any, T]) -> Any:
+        """Schedule ``coro`` on the loop and return its ``concurrent.futures``
+        Future (for an async caller to ``wrap_future`` and await without
+        blocking its own loop)."""
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
+
     def run(self, coro: Coroutine[Any, Any, T], timeout: float | None = None) -> T:
         # Re-entrancy guard, unconditional (ISSUES #28): a bus handler runs
         # on this thread and must never block on it.

@@ -78,14 +78,16 @@ class ResolveBacking(Backing):
         from ..errors import RETURN
 
         lenient = optional or error is RETURN
-        if core._session is not None:  # resolve through the session
-            return core._session.fetch(core, optional=lenient, browser=browser)
-        client = core._client
-        if client is None:
+        target = core._session or core._client
+        if target is None:
             from .client_core import WebClientCore
 
-            client = WebClientCore()  # process-local default (MVP)
-        return client.fetch(core, optional=lenient, browser=browser)
+            target = WebClientCore()  # process-local default
+        coro = target.afetch(core, optional=lenient, browser=browser)
+        loop = target.loop()
+        # On the engine loop (the async executor) hand back the coroutine to
+        # await; off it (a sync caller) bridge onto the loop.
+        return coro if loop.on_loop_thread() else loop.run(coro)
 
 
 class ReferenceCore(WebCore, BaseModel):

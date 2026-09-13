@@ -387,32 +387,32 @@ class WebClient(_ClientBase):
     ) -> Any:
         """Run a recorded lazy plan on this client. A remote core round-trips
         over HTTP; otherwise it runs on the engine loop. ``stream=True`` yields
-        rows (MVP: materialised then iterated)."""
-        from .collection import Collection, Field
+        rows as they complete."""
+        from .collection import Field
         from .executor import evaluate
 
         if hasattr(self._core, "remote_execute"):
             return self._core.remote_execute(expr, context)
+        if stream:
+            return self._stream(expr, context)
         result = evaluate(expr, context, client=self._core)
-        if stream and isinstance(result, (list, Collection)):
-            return self._stream(list(result))
         if isinstance(result, Field):
             return result
         if isinstance(result, (str, int, float, bool)) or result is None:
             return Field(result)  # a scalar leaf -> a Field
         return result
 
-    def _stream(self, rows: list) -> Any:
-        """Yield rows, publishing plan lifecycle events on the bus."""
+    def _stream(self, expr: Any, context: Any) -> Any:
+        """Bridge the async row stream to a sync iterator via the engine loop
+        (a ``_pump`` task feeds a bounded queue), publishing plan events."""
         from .collection import Field
         from .events import PlanEvent
+        from .executor import astream
 
         bus = self._core.bus
         bus.publish(PlanEvent(phase="started"))
         count = 0
-        for row in rows:
-            if self._core._closed:  # client closed mid-stream: stop
-                break
+        for row in self._core.loop().stream(astream(expr, context, client=self._core)):
             count += 1
             bus.publish(PlanEvent(phase="row"))
             yield row.get() if isinstance(row, Field) else row
@@ -454,13 +454,21 @@ class AsyncWebClient(_ClientBase):
             return self._astream(expr, context)
         return self._aexecute(expr, context)
 
-    async def _aexecute(self, expr: Any, context: Any) -> Any:
+    async def _run(self, expr: Any, context: Any) -> Any:
+        """Await ``aevaluate`` on the engine loop without blocking the caller's
+        loop (bridged via ``run_coroutine_threadsafe`` + ``wrap_future``)."""
         import asyncio
 
-        from .collection import Field
-        from .executor import evaluate
+        from .executor import aevaluate
 
-        result = await asyncio.to_thread(evaluate, expr, context, client=self._core)
+        return await asyncio.wrap_future(
+            self._core.loop().submit(aevaluate(expr, context, client=self._core))
+        )
+
+    async def _aexecute(self, expr: Any, context: Any) -> Any:
+        from .collection import Field
+
+        result = await self._run(expr, context)
         if isinstance(result, Field):
             return result
         if isinstance(result, (str, int, float, bool)) or result is None:
@@ -468,12 +476,9 @@ class AsyncWebClient(_ClientBase):
         return result
 
     async def _astream(self, expr: Any, context: Any) -> Any:
-        import asyncio
-
         from .collection import Collection, Field
-        from .executor import evaluate
 
-        result = await asyncio.to_thread(evaluate, expr, context, client=self._core)
+        result = await self._run(expr, context)
         for row in (
             list(result) if isinstance(result, (list, Collection)) else [result]
         ):

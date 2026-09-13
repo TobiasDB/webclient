@@ -134,36 +134,58 @@ class Collection(Generic[T]):
             return fan
 
     # -- row shaping ----------------------------------------------------------
-    def extract(self, **exprs: Any) -> "Collection[T]":
-        """Annotate each element with extracted columns (its ``_row``), then
-        return a collection over the same elements. Columns are evaluated in
-        order against the element, so a later column can reference an earlier
-        one via ``field``; a chained extract accumulates into the same row.
-        Field results are stored unwrapped (missing -> None)."""
+    def _loop(self) -> Any:
+        from .core.client_core import WebClientCore
+
+        return (self._client or WebClientCore()).loop()
+
+    async def aextract(self, **exprs: Any) -> "Collection[T]":
+        """Annotate each element with extracted columns (its ``_row``): columns
+        are evaluated in order against the element (a later column can reference
+        an earlier one via ``field``; chained extracts accumulate); elements are
+        evaluated concurrently, bounded by the pool. Fields store unwrapped."""
         from .errors import RETURN, default_policy
-        from .executor import evaluate
+        from .executor import aevaluate, fan_out
+
+        async def one(el: Any) -> None:
+            row = _row_of(el)
+            if row is None:
+                return
+            for key, expr in exprs.items():
+                row[key] = _raw(await aevaluate(expr, el, client=self._client))
 
         with default_policy(RETURN):  # a missing field is None, not an abort
-            for el in self._items:
-                row = _row_of(el)
-                if row is None:
-                    continue
-                for key, expr in exprs.items():
-                    row[key] = _raw(evaluate(expr, el, client=self._client))
+            await fan_out(list(self._items), one, limit=self._limit())
         return self._derive(self._items)
 
-    def filter(self, *predicates: Any) -> "Collection[T]":
+    async def afilter(self, *predicates: Any) -> "Collection[T]":
         """Keep the elements for which every predicate is truthy."""
         from .errors import RETURN, default_policy
-        from .executor import evaluate, truthy
+        from .executor import aevaluate, fan_out, truthy
+
+        async def keep(el: Any) -> bool:
+            for p in predicates:
+                if not truthy(await aevaluate(p, el, client=self._client)):
+                    return False
+            return True
 
         with default_policy(RETURN):
-            kept = [
-                el
-                for el in self._items
-                if all(truthy(evaluate(p, el, client=self._client)) for p in predicates)
-            ]
+            flags = await fan_out(list(self._items), keep, limit=self._limit())
+        kept = [el for el, ok in zip(self._items, flags) if ok]
         return self._derive(kept)
+
+    def _limit(self) -> int:
+        from .executor import _fanout_limit
+
+        return _fanout_limit(self._client)
+
+    def extract(self, **exprs: Any) -> "Collection[T]":
+        """Eager form of :meth:`aextract` (bridged onto the engine loop)."""
+        return self._loop().run(self.aextract(**exprs))
+
+    def filter(self, *predicates: Any) -> "Collection[T]":
+        """Eager form of :meth:`afilter` (bridged onto the engine loop)."""
+        return self._loop().run(self.afilter(*predicates))
 
     def documents(self, column: str) -> "Collection[Any]":
         """Flatten a column whose values are Collections/lists of documents
