@@ -38,6 +38,8 @@ from .document import (
     Reference,
     Script,
     WebBase,
+    from_url,
+    request_fields,
 )
 from .base import RAISE, RETURN, EngineCore, NameScope, now
 from ..plugins.base import Plugin, Renderer, Surface, SurfaceKind
@@ -536,7 +538,7 @@ class _Facade:
         Reference is used as-is. (The public ``ref`` is lazy; this is internal
         and stays a real Reference so the plan can embed its source.)"""
         from .document import Reference
-        return Reference.from_url(ref, **kwargs) if isinstance(ref, str) else ref
+        return from_url(ref, **kwargs) if isinstance(ref, str) else ref
 
     def execute(self, expr: Any, context: Any = None, *,
                 stream: bool = False) -> Any:
@@ -550,7 +552,7 @@ class _Facade:
         """A lazy Document expr: resolve ``context`` self-contained (its request
         spec is embedded in the plan), bound to this client's core -- so
         ``.collect()`` needs no separate context."""
-        root = Expr(Plan(root="Reference", source=context.request_fields()),
+        root = Expr(Plan(root="Reference", source=request_fields(context)),
                     self._core)
         return cast("LazyDocument", root.resolve(**resolve_opts))
 
@@ -605,8 +607,8 @@ class _Client(_Facade):
         ``Reference.from_url`` if you need to inspect ``.url``/``.path``."""
         from .document import HttpMethod
         from .expr import Expr, Plan
-        spec = Reference.from_url(url, method=cast(HttpMethod, method),
-                                 **kwargs).request_fields()
+        spec = request_fields(from_url(url, method=cast(HttpMethod, method),
+                                       **kwargs))
         return cast("LazyReference", Expr(Plan(root="Reference", source=spec), self._core))
 
     #: ``lazy`` is kept as an explicit alias of the (now lazy) ``ref``.
@@ -733,7 +735,7 @@ class Session(BaseModel):
         ``.collect()`` (or ``session.execute``), resolving within this session
         (PLAN §8 -- was eager). The plan carries this session's id."""
         from .expr import Expr, Plan
-        spec = Reference.from_url(url, method=method, **kwargs).request_fields()
+        spec = request_fields(from_url(url, method=method, **kwargs))
         return cast("LazyReference", Expr(
             Plan(root="Reference", source=spec, session_id=self.id), self._client))
 
@@ -755,8 +757,8 @@ class Session(BaseModel):
         run with ``.collect()`` / ``session.execute`` (PLAN §8 -- was eager)."""
         from .base import RAISE, RETURN
         from .expr import Expr, Plan
-        r = ref if isinstance(ref, Reference) else Reference.from_url(ref)
-        root = Expr(Plan(root="Reference", source=r.request_fields(),
+        r = ref if isinstance(ref, Reference) else from_url(ref)
+        root = Expr(Plan(root="Reference", source=request_fields(r),
                          session_id=self.id), self._client)
         return cast("LazyDocument", root.resolve(
             browser=browser, optional=optional,

@@ -323,10 +323,11 @@ def console(self: Document) -> "Sequence[ConsoleEvent]":
 def resolve(self: Reference, *, browser: bool = False, session: Any = None,
             optional: bool = False, error: ErrorPolicy | None = None,
             **options: Any) -> Document:
+    from .document import request_fields
     wc = self._client or (self._session._client if self._session else None)
     if wc is None:
         from .expr import Expr, Plan
-        root = Expr(Plan(root="Reference", source=self.request_fields()))
+        root = Expr(Plan(root="Reference", source=request_fields(self)))
         return cast("Document", run_op(root, "resolve", [],
                     {"browser": browser, "optional": optional, **options}))
     return wc.resolve(self, browser=browser, optional=optional,
@@ -349,8 +350,14 @@ def with_params(self: Reference, **params: str) -> Reference:
 def join(self: Reference, href: str) -> Reference:
     from urllib.parse import urljoin
 
-    from .document import Reference as _Reference
-    return _Reference.from_url(urljoin(self.url, href))
+    from .document import from_url, url_of
+    return from_url(urljoin(url_of(self), href))
+
+
+@prop("Reference", "url")
+def url(self: Reference) -> str:
+    from .document import url_of
+    return url_of(self)
 
 
 # ========================================================================= #

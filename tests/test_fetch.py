@@ -7,6 +7,7 @@ from webclient import (
     NetworkEvent,
     Reference,
     WebClient,
+    from_url,
 )
 
 
@@ -73,7 +74,7 @@ def test_fetch_non_2xx_optional_returns_document(httpserver, wc):
 
 
 def test_fetch_transport_error(wc):
-    ref = Reference.from_url("http://127.0.0.1:1/nothing")  # port 1: refused
+    ref = from_url("http://127.0.0.1:1/nothing")  # port 1: refused
     with pytest.raises(FetchError):
         wc.fetch(ref).collect()
     doc = wc.fetch(ref, optional=True).collect()

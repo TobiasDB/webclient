@@ -17,7 +17,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 from uuid import uuid4
 
 from ..events import Event
-from .document import Collection, Reference, WebBase
+from .document import Collection, Reference, WebBase, bind
 from .base import RETURN, default_policy
 from .expr import Arg, Expr, Plan, Step
 from .ops import read_prop, run_op
@@ -110,14 +110,14 @@ def _start(plan: Plan, context: Any, client: Any) -> Any:
     # source (with an optional session) and no steps.
     if isinstance(context, Expr):
         src = context._plan.source
-        context = (Reference(**src).bind(client, _session_of(context._plan, client))
+        context = (bind(Reference(**src), client, _session_of(context._plan, client))
                    if src is not None and not context._plan.steps else None)
     # A document-source plan (remote handle, source={"document_id": ...}) is
     # resolved to its context by the caller (the service looks up the doc);
     # only a Reference source is reconstructed here.
     if plan.source is not None and "document_id" not in plan.source:
         sess = _session_of(plan, client) or getattr(context, "_session", None)
-        return Reference(**plan.source).bind(client, sess)
+        return bind(Reference(**plan.source), client, sess)
     if context is None:
         raise ValueError(
             f"plan rooted at {plan.root or 'a context'} needs a context; pass "

@@ -29,7 +29,7 @@ from ..events import (
     NavigationEvent,
     XHREvent,
 )
-from ..core.document import Reference, Script
+from ..core.document import Reference, from_url, Script
 from .base import Plugin, Surface, SurfaceKind
 
 _CONSOLE_LEVELS = {"log": "log", "info": "info", "warning": "warning",
@@ -49,7 +49,7 @@ class PageNetworkPlugin(Plugin):
 
         def on_response(response: Any) -> None:
             kind = response.request.resource_type
-            ref = Reference.from_url(response.url)
+            ref = from_url(response.url)
             if kind == "xhr":
                 event: Event = XHREvent(request=ref, status_code=response.status)
             elif kind == "fetch":

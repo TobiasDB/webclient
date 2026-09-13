@@ -14,7 +14,7 @@ import httpx
 from pydantic import PrivateAttr
 
 from ..events import Event, NavigationEvent, NetworkEvent
-from ..core.document import Reference
+from ..core.document import Reference, from_url
 from .base import Plugin, Surface, SurfaceKind
 
 
@@ -29,7 +29,7 @@ class HttpNetworkPlugin(Plugin):
         client: httpx.AsyncClient = surface.raw
 
         async def on_response(response: httpx.Response) -> None:
-            ref = Reference.from_url(str(response.request.url))
+            ref = from_url(str(response.request.url))
             # A 3xx with a Location is a hop the client will follow; the
             # final response (any status) is the navigation. (A 3xx with
             # follow_redirects=False is misclassified as a hop; accepted.)

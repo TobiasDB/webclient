@@ -47,6 +47,7 @@ from .core.document import (
     Script,
     WebBase,
     WebError,
+    from_url,
 )
 from .core.base import IGNORE, RAISE, RETURN, OpError, UnsupportedOperation
 from .core.expr import (Plan, field, filter, from_plan, is_empty, is_ok, lazy,
@@ -74,7 +75,7 @@ __all__ = [
     "EventBus", "EventRegistry", "FetchEvent", "NavigationEvent",
     "NetworkEvent", "Subscription", "Topic", "XHREvent",
     "Document", "Element", "FetchError", "Proxy", "Reference", "Script",
-    "WebBase", "WebError", "Field", "Collection",
+    "WebBase", "WebError", "Field", "Collection", "from_url",
     "IGNORE", "RETURN", "RAISE", "OpError", "UnsupportedOperation",
     "Plugin", "Renderer", "Surface", "SurfaceKind",
     "ClientPool", "Lease", "PoolStats", "Session",

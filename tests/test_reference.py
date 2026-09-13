@@ -1,10 +1,11 @@
 import pytest
 
-from webclient import Reference
+from webclient import Reference, from_url
+from webclient.core.document import bind
 
 
 def test_from_url_parses_components():
-    ref = Reference.from_url("http://example.com:8080/a/b?x=1&y=2#frag")
+    ref = from_url("http://example.com:8080/a/b?x=1&y=2#frag")
     assert ref.scheme == "http"
     assert ref.hostname == "example.com"
     assert ref.port == 8080
@@ -14,25 +15,25 @@ def test_from_url_parses_components():
 
 
 def test_from_url_defaults():
-    ref = Reference.from_url("https://example.com/path")
+    ref = from_url("https://example.com/path")
     assert ref.port is None  # default port for scheme
     assert ref.method == "get"
     assert ref.follow_redirects is True
 
 
 def test_from_url_preserves_multivalued_params():
-    ref = Reference.from_url("https://e.com/?x=1&x=2&y=3")
+    ref = from_url("https://e.com/?x=1&x=2&y=3")
     assert ref.params == {"x": ["1", "2"], "y": "3"}
 
 
 def test_from_url_merges_extra_params():
-    ref = Reference.from_url("https://e.com/?x=1", params={"y": "2"})
+    ref = from_url("https://e.com/?x=1", params={"y": "2"})
     assert ref.params == {"x": "1", "y": "2"}
 
 
 def test_url_roundtrip():
     url = "https://example.com/a/b?x=1&y=2#frag"
-    assert Reference.from_url(url).url == url
+    assert from_url(url).url == url
 
 
 def test_url_elides_default_port_keeps_custom():
@@ -54,7 +55,7 @@ def test_replace_and_with_params_return_copies():
 
 
 def test_join_resolves_relative_and_absolute():
-    ref = Reference.from_url("https://example.com/list")
+    ref = from_url("https://example.com/list")
     assert ref.join("items/3").url == "https://example.com/items/3"
     assert ref.join("/items/1?ref=home").params == {"ref": "home"}
     assert ref.join("https://other.example/x").hostname == "other.example"
@@ -63,7 +64,7 @@ def test_join_resolves_relative_and_absolute():
 def test_bind_returns_bound_copy():
     ref = Reference(hostname="e.com")
     client = object()
-    bound = ref.bind(client)
+    bound = bind(ref, client)
     assert bound._client is client
     assert ref._client is None
 

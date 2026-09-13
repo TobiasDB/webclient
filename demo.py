@@ -18,10 +18,12 @@ from webclient import (
     NavigationEvent,
     Reference,
     Renderer,
+    from_url,
     reference,
     WebClient,
     doc,
     ref,
+    from_url,
 )
 
 PAGE = b"""
@@ -105,7 +107,7 @@ def main() -> None:
     base = serve()
 
     # [M1] References are pure request specs -- build, derive, inspect.
-    spec = Reference.from_url(f"{base}/?utm=x", params={"page": "1"})
+    spec = from_url(f"{base}/?utm=x", params={"page": "1"})
     print("url:        ", spec.url)
     print("derived:    ", spec.with_params(page="2").replace(fragment="top").url)
     print("joined:     ", spec.join("items/1").url)

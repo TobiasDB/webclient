@@ -278,8 +278,8 @@ def reference(url: str, **kwargs: Any) -> "Reference":
     """A lazy reference root starting from ``url`` (construction lives here, not
     in ``Reference.__new__`` -- PLAN §9). Statically a ``Reference``; at runtime
     an ``Expr`` recording a plan rooted at that request spec."""
-    from .document import Reference
-    spec = Reference.from_url(url, **kwargs).request_fields()
+    from .document import Reference, from_url, request_fields
+    spec = request_fields(from_url(url, **kwargs))
     return lazy(Reference, plan=Plan(root="Reference", source=spec))
 
 
