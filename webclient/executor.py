@@ -24,6 +24,8 @@ _OPS = {"eq": operator.eq, "ne": operator.ne, "lt": operator.lt,
 #: ops whose expression arguments are evaluated per element inside the op
 #: itself, so the executor passes them unevaluated (as ``Expr``).
 _BINDS = {"extract", "filter"}
+#: ops that act on a Collection as a whole (everything else fans out per element)
+_COLL_OPS = {"extract", "filter", "project", "limit"}
 
 
 def evaluate(expr: Any, context: Any = None, *, client: Any = None) -> Any:
@@ -35,8 +37,19 @@ def evaluate(expr: Any, context: Any = None, *, client: Any = None) -> Any:
     if isinstance(context, Expr):                  # an Expr context (wc.ref(url)) runs first
         context = evaluate(context, client=client)
     value = _start(expr._plan, context, client)
-    i, steps = 0, expr._plan.steps
+    return _run(value, expr._plan.steps, 0, context, client)
+
+
+def _run(value: Any, steps: list[Step], i: int, context: Any, client: Any) -> Any:
+    """Apply steps from ``i``. When the value is a Collection and the next step
+    is not a whole-collection op, the rest of the chain fans out per element."""
+    from .collection import Collection
     while i < len(steps):
+        step = steps[i]
+        if isinstance(value, Collection) and not (
+                step.kind == "get" and step.name in _COLL_OPS):
+            rest = steps[i:]
+            return [_run(el, rest, 0, el, client) for el in value]
         value, i = _apply(value, steps, i, context, client)
     return value
 

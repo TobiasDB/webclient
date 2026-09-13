@@ -101,6 +101,13 @@ def lazy(cls: type[T], *, plan: Plan | None = None, client: Any = None) -> T:
     return cast(T, Expr(plan or Plan(root=cls.__name__), client))
 
 
+def from_plan(plan: Plan | dict[str, Any], client: Any = None) -> Expr:
+    """Rebuild an ``Expr`` from its wire form (a Plan or its dict)."""
+    if isinstance(plan, dict):
+        plan = Plan.model_validate(plan)
+    return Expr(plan, client)
+
+
 # --------------------------------------------------------------------------- #
 # Roots and free functions
 # --------------------------------------------------------------------------- #
@@ -158,5 +165,5 @@ ref: Any = Expr(Plan(root="Reference"))
 many: Any = Expr(Plan(root="Collection"))
 
 
-__all__ = ["Expr", "lazy", "to_arg", "reference", "field", "when", "filter",
-           "doc", "ref", "many"]
+__all__ = ["Expr", "lazy", "from_plan", "to_arg", "reference", "field", "when",
+           "filter", "doc", "ref", "many"]
