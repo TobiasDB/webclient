@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable, Sequence, cast
 
 from .base import (CLASSES, RETURN, Collection, ErrorPolicy, Field, OpError,
-                   _extracted, _gather, _plain, default_policy, policy)
+                   default_policy, policy)
 
 if TYPE_CHECKING:
     from ..events import (ActionEvent, ConsoleEvent, DOMUpdateEvent, Event,
@@ -111,6 +111,46 @@ async def _afilter(coll: Any, exprs: tuple[Any, ...]) -> Any:
     out: Any = Collection()
     out._items = kept
     return out
+
+
+def _extracted(obj: Any, name: str, kind: type | None = None) -> Any:
+    """A value stored under ``name`` by ``extract``; optional ``kind`` guards
+    the value's type (op-support, off the data classes -- PLAN §9)."""
+    if name not in obj._fields:
+        raise LookupError(f"no extracted value {name!r} on {obj!r}")
+    value = obj._fields[name]
+    if kind is not None and not isinstance(value, kind):
+        raise TypeError(f"{name!r} is a {type(value).__name__}, "
+                        f"not a {kind.__name__}")
+    return value
+
+
+def _gather(obj: Any, names: tuple[str, ...], kind: type) -> Any:
+    """The named extracted values as one Collection; a value that is itself a
+    Collection contributes its elements."""
+    items: list[Any] = []
+    for name in names or obj._fields:
+        value = _extracted(obj, name)
+        found = list(value) if isinstance(value, Collection) else [value]
+        bad = [v for v in found if not isinstance(v, kind)]
+        if bad:
+            raise TypeError(f"{name!r} holds a {type(bad[0]).__name__}, "
+                            f"not a {kind.__name__}")
+        items.extend(found)
+    out: Any = Collection()
+    out._items = items
+    return out
+
+
+def _plain(value: Any) -> Any:
+    """Projection of one extracted value: a Field unwraps (None when not ok),
+    a Document/Collection projects (via the op), a Reference stays a Reference."""
+    from .document import Document
+    if isinstance(value, Field):
+        return value.value if value.ok else None
+    if isinstance(value, (Collection, Document)):
+        return run_op(value, "project", [], {})
+    return value
 
 
 def _is_empty_of(obj: Any) -> bool:

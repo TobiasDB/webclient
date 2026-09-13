@@ -187,7 +187,8 @@ def _after(obj: Any, result: Any) -> Any:
     if result is obj:
         obj.error, obj.message, obj.ok, obj.updated = None, None, True, now()
         return result
-    if isinstance(result, WebBase):
+    webbase = CLASSES.get("WebBase")
+    if webbase is not None and isinstance(result, webbase):
         if not result.root and obj.name:
             result.root = obj.name
         if result._client is None:
@@ -266,19 +267,6 @@ class WebError(BaseModel):
         return cls(type=type(exc).__name__, message=str(exc))
 
 
-def _plain(value: Any) -> Any:
-    """Projection of one extracted value: Fields unwrap (None when not ok),
-    Documents/Collections project recursively, References stay References."""
-    if isinstance(value, Field):
-        return value.value if value.ok else None
-    if isinstance(value, Collection):
-        return value.project()
-    doc_cls = CLASSES.get("Document")
-    if doc_cls is not None and isinstance(value, doc_cls):
-        return value.project()
-    return value
-
-
 class WebBase(BaseModel):
     """Addressable, error-carrying base of every surface object. Names/roots
     are assigned by the resolver that registers the object (Decision 9)."""
@@ -330,35 +318,6 @@ class WebBase(BaseModel):
         def references(self, *names: str, error: ErrorPolicy | None = None) -> Collection[Reference]: ...  # type: ignore[empty-body]
         # <<< eager:WebBase
         pass
-
-
-def _extracted(obj: WebBase, name: str, kind: type | None = None) -> Any:
-    """A value stored under ``name`` by ``extract`` (op-support, off the data
-    classes -- PLAN §9); optional ``kind`` guards the value's type."""
-    if name not in obj._fields:
-        raise LookupError(f"no extracted value {name!r} on {obj!r}")
-    value = obj._fields[name]
-    if kind is not None and not isinstance(value, kind):
-        raise TypeError(f"{name!r} is a {type(value).__name__}, "
-                        f"not a {kind.__name__}")
-    return value
-
-
-def _gather(obj: WebBase, names: tuple[str, ...], kind: type) -> Any:
-    """The named extracted values as one Collection; a value that is itself a
-    Collection contributes its elements."""
-    items: list[Any] = []
-    for name in names or obj._fields:
-        value = _extracted(obj, name)
-        found = list(value) if isinstance(value, Collection) else [value]
-        bad = [v for v in found if not isinstance(v, kind)]
-        if bad:
-            raise TypeError(f"{name!r} holds a {type(bad[0]).__name__}, "
-                            f"not a {kind.__name__}")
-        items.extend(found)
-    out: Collection[Any] = Collection()
-    out._items = items
-    return out
 
 
 # --------------------------------------------------------------------------- #
