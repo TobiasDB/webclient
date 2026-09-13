@@ -812,3 +812,33 @@ times (the executable op in `core.ops`, its eager type stub, its lazy type
 stub), so "surface = stubs, execution in core" trades lines for the
 separation. The 3871 target predates this architecture and likely needs
 revisiting.
+
+### §9 surface cleanup complete (2026-09-13)
+
+The surface classes are now **data only** (methods dispatch through `core.ops`):
+
+- **Event backing** — `core/backings/events.py` (gate `ok`, always chosen) owns
+  `events_of`/`action_events`/`xhr_requests`/`dom_mutations`/`console`/
+  `subscribe`; dispatched like any op, typed on the interface.
+- **`text`/`ref`/`join`/`reload`** live on `DocumentCore`; **`Document` is data
+  only** (`_core`/`_capabilities`/`_is_empty` gone — `core.ops.core_of` caches
+  the DocumentCore on `_core_obj`; `@policy` inlines the one `ok` require;
+  `_is_empty_of` is an op helper).
+- **`Reference` is data only** — `from_url`/`request_fields`/`bind` are module
+  functions in `core.document`, `url` is a dispatched prop-op, `__new__`/`bound`
+  are gone. The free `reference(url)` (core.expr) is the lazy root;
+  `from_url(url)` the eager constructor (both re-exported).
+- **`WebBase`** keeps only `__getattr__` dispatch (`_aextract`/`_extracted`/
+  `fields`/`_capabilities`/`_is_empty`/`__repr_args__` moved to `core.ops`/
+  `core.base` helpers). **`Collection`** keeps `__iter__`/`__len__`/
+  `__getattr__` (its async plumbing moved to `core.ops`). **`Field`** keeps its
+  value helpers (`get`/comparisons/`__bool__`) — the scalar leaf.
+- **Branching** is the free `when(cond).then(a).otherwise(b)` (core.expr),
+  off `Field`/`LazyField`.
+- **`interface.py`** (renamed from `stubs.py`) is the typed surface; `gen_stubs`
+  generates the eager `TYPE_CHECKING` blocks (on the data classes) + the
+  `Collection[T]` lift + the lazy Protocols, all from the `core.ops` registry.
+
+Surface class inventory: `Reference`/`Document` = data only; `WebBase` =
+`__getattr__`; `Collection` = `__iter__`/`__len__`/`__getattr__`; `Field` =
+value helpers. 152 green, corpus clean, demo 0.
