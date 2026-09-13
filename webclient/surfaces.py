@@ -8,7 +8,7 @@ from .core.client_core import WebClientCore
 from .core.document_core import DocumentCore
 from .core.reference_core import HttpMethod, ReferenceCore
 from .core.reference_core import from_url as _core_from_url
-from .surface import Surface, surface, wrap
+from .surface import Surface, surface
 
 
 @surface(ReferenceCore)
@@ -54,30 +54,30 @@ class WebClient:
         self._core.use(renderer)
         return self
 
-    def ref(self, url: str, method: HttpMethod = "get", **kw: Any) -> Reference:
-        """A client-bound reference; ``.resolve()`` fetches on this client."""
-        core = _core_from_url(url, method, **kw)
-        core._client = self._core
-        return Reference(core)
-
-    def fetch(self, url: str, *, optional: bool = False, **kw: Any) -> Document:
-        """Resolve ``url`` into a Document."""
-        core = _core_from_url(url, **kw)
-        return wrap(self._core.fetch(core, optional=optional))
-
-    def execute(self, expr: Any, context: Any = None, **kw: Any) -> Any:
-        """Run a recorded lazy plan on this client. Returns the plan's result
-        (a scalar, a surface, or a list of rows)."""
-        from .executor import evaluate
-        return evaluate(expr, context, client=self._core)
-
-    def lazy(self, url: str, **kw: Any) -> Any:
-        """A lazy reference root bound to this client (companion to
-        ``collect()``): ``wc.lazy(url).resolve()...collect()``."""
+    def ref(self, url: str, method: HttpMethod = "get", **kw: Any) -> Any:
+        """A lazy client-bound reference: ``wc.ref(url).resolve()...collect()``
+        (statically a ``Reference``; at runtime an Expr recording a plan)."""
         from .expr import Expr
         from .plan import Plan
-        return Expr(Plan(root="Reference", source=_core_from_url(url, **kw).model_dump()),
-                    self._core)
+        spec = _core_from_url(url, method, **kw).model_dump()
+        return Expr(Plan(root="Reference", source=spec), self._core)
+
+    #: ``wc.lazy`` is the same bound reference root as ``wc.ref``.
+    lazy = ref
+
+    def fetch(self, url: str, *, optional: bool = False, error: Any = None,
+              **kw: Any) -> Any:
+        """A lazy fetch: ``ref(url).resolve()``; ``.collect()`` to materialise."""
+        return self.ref(url, **kw).resolve(optional=optional, error=error)
+
+    def execute(self, expr: Any, context: Any = None, *, stream: bool = False,
+                **kw: Any) -> Any:
+        """Run a recorded lazy plan on this client. Returns the plan's result
+        (a scalar, a surface, or the rows). ``stream=True`` yields rows (MVP:
+        sequential, so the rows are materialised then iterated)."""
+        from .executor import evaluate
+        result = evaluate(expr, context, client=self._core)
+        return iter(result) if stream and isinstance(result, list) else result
 
     def close(self) -> None:
         self._core.close()

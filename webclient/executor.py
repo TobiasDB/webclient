@@ -32,6 +32,8 @@ def evaluate(expr: Any, context: Any = None, *, client: Any = None) -> Any:
     if not isinstance(expr, Expr):
         return expr
     client = client or expr._client or getattr(context, "_client", None)
+    if isinstance(context, Expr):                  # an Expr context (wc.ref(url)) runs first
+        context = evaluate(context, client=client)
     value = _start(expr._plan, context, client)
     i, steps = 0, expr._plan.steps
     while i < len(steps):
