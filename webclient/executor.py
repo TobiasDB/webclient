@@ -87,9 +87,14 @@ def _start(plan: Any, context: Any, client: Any) -> Any:
     the passed context (doc/ref/field roots)."""
     if plan.source is not None and "document_id" not in plan.source:
         from .core.reference_core import ReferenceCore
+        from .core.session_core import WebSessionCore
         from .surface import wrap
         core = ReferenceCore(**plan.source)
-        core._client = client
+        if isinstance(context, WebSessionCore):      # a session-bound reference
+            core._session = context
+            core._client = context._client
+        else:
+            core._client = client
         return wrap(core)
     if context is None and plan.root:
         raise ValueError(

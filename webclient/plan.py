@@ -44,6 +44,7 @@ class Plan(BaseModel):
     version: int = 1
     root: str = ""
     source: dict[str, Any] | None = None
+    session_id: str | None = None
     steps: list[Step] = []
 
     def extend(self, step: Step) -> "Plan":

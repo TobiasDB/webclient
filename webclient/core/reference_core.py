@@ -69,12 +69,14 @@ class ResolveBacking(Backing):
     def resolve(self, core: "ReferenceCore", *, browser: bool = False,
                 optional: bool = False, error: Any = None) -> "DocumentCore":
         from ..errors import RETURN
-        client = core._client or (core._session._client if core._session else None)
+        lenient = optional or error is RETURN
+        if core._session is not None:                # resolve through the session
+            return core._session.fetch(core, optional=lenient, browser=browser)
+        client = core._client
         if client is None:
             from .client_core import WebClientCore
             client = WebClientCore()                 # process-local default (MVP)
-        return client.fetch(core, optional=optional or error is RETURN,
-                            browser=browser)
+        return client.fetch(core, optional=lenient, browser=browser)
 
 
 class ReferenceCore(WebCore, BaseModel):

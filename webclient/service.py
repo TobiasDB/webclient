@@ -59,18 +59,21 @@ def create_app(wc: WebClient | None = None, token: str | None = None) -> FastAPI
                 authorization: str | None = Header(default=None)) -> dict[str, Any]:
         _auth(authorization)
         wc_: WebClient = app.state.wc
-        if "document_id" in body:
-            if body["document_id"] not in app.state.docs:
-                raise HTTPException(status_code=404, detail="no such document")
-            context: Any = app.state.docs[body["document_id"]]
-        elif "url" in body:
-            context = wc_.ref(body["url"])
-        else:
-            context = None
         try:
             expr = from_plan(body["plan"], wc_._core)
         except ValueError as exc:                    # unknown root / private name
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        sid = expr._plan.session_id
+        if "document_id" in body:
+            if body["document_id"] not in app.state.docs:
+                raise HTTPException(status_code=404, detail="no such document")
+            context: Any = app.state.docs[body["document_id"]]
+        elif sid and sid in app.state.sessions:      # resolve through the session
+            context = app.state.sessions[sid]._core
+        elif "url" in body:
+            context = wc_.ref(body["url"])
+        else:
+            context = None
         result = wc_.execute(expr, context)
         return {"rows": _serialize(result, app.state.docs)}
 

@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from .core.reference_core import ReferenceCore
+from .core.reference_core import from_url as _core_from_url
 from .expr import Expr
 from .plan import Plan
 from .surfaces import WebClient
@@ -77,6 +78,49 @@ class RemoteWebClientCore:
     def close(self) -> None:
         self._http.close()
 
+    # -- server-side sessions ------------------------------------------------
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+
+    def create_session(self, ttl: float | None = None) -> dict[str, Any]:
+        resp = self._http.post(f"{self.url}/sessions", json={"ttl": ttl},
+                               headers=self._headers())
+        resp.raise_for_status()
+        return resp.json()
+
+    def close_session(self, sid: str) -> None:
+        self._http.delete(f"{self.url}/sessions/{sid}", headers=self._headers())
+
+
+class RemoteSession:
+    """A handle to a server-side session; its fetches thread the session id
+    into the plan so the server resolves them through that session."""
+
+    def __init__(self, core: RemoteWebClientCore, sid: str) -> None:
+        self._core = core
+        self._id = sid
+        self._status = "running"
+
+    def ref(self, url: str, method: str = "get", **kw: Any) -> Any:
+        spec = _core_from_url(url, method, **kw).model_dump()
+        return Expr(Plan(root="Reference", source=spec, session_id=self._id),
+                    self._core)
+
+    def fetch(self, url: str, **kw: Any) -> Any:
+        return self.ref(url, **kw).resolve()
+
+    def close(self) -> None:
+        self._core.close_session(self._id)
+        self._status = "closed"
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    @property
+    def status(self) -> str:
+        return self._status
+
 
 class RemoteWebClient(WebClient):
     """The remote client is literally a ``WebClient`` over a remote core: the
@@ -84,6 +128,10 @@ class RemoteWebClient(WebClient):
 
     def __init__(self, url: str, token: str | None = None) -> None:
         super().__init__(core=RemoteWebClientCore(url, token))
+
+    def session(self, *, ttl: float | None = None, **kw: Any) -> RemoteSession:
+        info = self._core.create_session(ttl)
+        return RemoteSession(self._core, info["id"])
 
 
 __all__ = ["RemoteWebClient", "RemoteWebClientCore"]
