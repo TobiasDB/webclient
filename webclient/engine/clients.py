@@ -51,6 +51,8 @@ class HTTPXClient(Client):
         retries: int = 0,
     ) -> httpx.Response:
         """Perform the request described by ``ref`` (retries transport errors)."""
+        for name, value in cookies.items():  # jar is cleared on reset()
+            self._httpx.cookies.set(name, value)
         last: httpx.TransportError | None = None
         for _ in range(retries + 1):
             try:
@@ -58,7 +60,6 @@ class HTTPXClient(Client):
                     ref.method.upper(),
                     ref.dispatch("url"),
                     headers=headers or None,
-                    cookies=cookies or None,
                     content=ref.body,
                     json=ref.json_body,
                     data=ref.form,
