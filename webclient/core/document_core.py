@@ -150,12 +150,16 @@ class StatusBacking(Backing):
     """Status / value ops, available even on a not-ok document: ``is_ok`` /
     ``is_empty`` (a ``Field``), ``message`` (the error text)."""
 
-    provides = frozenset({"is_ok", "is_empty"})
+    provides = frozenset({"is_ok", "is_empty", "ref"})
     props = frozenset({"message"})
     gate = "ok"
 
     def applies(self, core: "DocumentCore") -> bool:
         return True
+
+    def ref(self, core: "DocumentCore") -> "ReferenceCore | None":
+        """The reference that produced this document (for reload / recovery)."""
+        return core._ref
 
     def is_ok(self, core: "DocumentCore") -> Any:
         from ..collection import Field
@@ -329,6 +333,8 @@ class DocumentCore(WebCore, BaseModel):
     response; behaviour is the backings."""
 
     id: str = ""
+    name: str = ""                                # scoped document name
+    root: str = ""                                # the originating reference's name
     kind: Literal["html", "json", "xml", "binary"] = "html"
     url: str = ""
     final_url: str | None = None
@@ -339,10 +345,12 @@ class DocumentCore(WebCore, BaseModel):
     error: WebError | None = None
 
     _client: Any = PrivateAttr(default=None)      # owning WebClientCore
+    _ref: Any = PrivateAttr(default=None)         # the ReferenceCore that produced it
     _element: Any = PrivateAttr(default=None)     # lxml element / json sub-value
     _tree: Any = PrivateAttr(default=None)        # cached lxml parse
     _data: Any = PrivateAttr(default=None)        # cached json
     _missing: bool = PrivateAttr(default=False)   # a selection that missed
+    _surface: Any = PrivateAttr(default=None)     # cached eager surface (identity)
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (
         StatusBacking(), HtmlBacking(), JsonBacking())

@@ -71,6 +71,7 @@ class ReferenceCore(WebCore, BaseModel):
 
     # -- Core Fields (the request spec) --------------------------------------
     kind: str = "webpage"
+    name: str = ""                       # scoped name (the doc's `root`)
     hostname: str = ""
     method: HttpMethod = "get"
     scheme: str = "https"
@@ -89,6 +90,7 @@ class ReferenceCore(WebCore, BaseModel):
 
     _client: Any = PrivateAttr(default=None)
     _session: Any = PrivateAttr(default=None)
+    _surface: Any = PrivateAttr(default=None)     # cached eager surface (identity)
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (DeriveBacking(), ResolveBacking())
 

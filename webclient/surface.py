@@ -18,10 +18,22 @@ _REGISTRY: dict[type, type] = {}
 
 def wrap(value: Any, *, client: Any = None) -> Any:
     """Core -> its Surface; a list of cores -> a ``Collection`` of surfaces;
-    any other list/tuple -> the same with items wrapped; else as-is."""
+    any other list/tuple -> the same with items wrapped; else as-is. A core's
+    surface is cached on it, so wrapping the same core twice yields the same
+    surface object (identity: ``wc.document(name) is shop``)."""
     if isinstance(value, WebCore):
+        cached = getattr(value, "_surface", None)
+        if cached is not None:
+            return cached
         cls = _REGISTRY.get(type(value))
-        return cls(value) if cls is not None else value
+        if cls is None:
+            return value
+        surf = cls(value)
+        try:
+            value._surface = surf
+        except (AttributeError, ValueError):
+            pass
+        return surf
     if isinstance(value, (list, tuple)):
         wrapped = [wrap(v) for v in value]
         if value and all(isinstance(v, WebCore) for v in value):

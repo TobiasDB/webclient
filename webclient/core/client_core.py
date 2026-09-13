@@ -32,6 +32,9 @@ class WebClientCore(WebCore, BaseModel):
     _http: Any = PrivateAttr(default=None)     # httpx.AsyncClient (MVP: one shared)
     _render_table: dict[tuple[str, str], Any] = PrivateAttr(default_factory=dict)
     _closed: bool = PrivateAttr(default=False)
+    _docs: dict[str, Any] = PrivateAttr(default_factory=dict)   # name -> DocumentCore
+    _refs: dict[str, Any] = PrivateAttr(default_factory=dict)   # root -> ReferenceCore
+    _counter: int = PrivateAttr(default=0)
 
     def use(self, renderer: Any) -> "WebClientCore":
         """Register a Renderer override for its (kind, format) pairs."""
@@ -75,6 +78,7 @@ class WebClientCore(WebCore, BaseModel):
             response_headers=dict(resp.headers),
             encoding=engine_http.charset_of(resp.headers.get("content-type")))
         doc._client = self
+        self._register(doc, ref)
         if not (200 <= resp.status_code < 300):
             doc.error = error_for(resp.status_code)
             if not optional:                         # loud by default
@@ -84,6 +88,26 @@ class WebClientCore(WebCore, BaseModel):
     def fetch(self, ref: ReferenceCore, *, optional: bool = False) -> DocumentCore:
         """Sync: run ``afetch`` on the engine loop."""
         return self.loop().run(self.afetch(ref, optional=optional))
+
+    # -- naming / recovery ---------------------------------------------------
+    def _register(self, doc: DocumentCore, ref: ReferenceCore) -> None:
+        """Give the document and its reference scoped names and index them so
+        they can be recovered (and so ``doc.ref()`` round-trips to identity)."""
+        self._counter += 1
+        n = self._counter
+        ref.name = ref.name or f"ref{n}"
+        doc.name, doc.root = f"doc{n}", ref.name
+        doc._ref = ref
+        self._docs[doc.name] = doc
+        self._refs[ref.name] = ref
+
+    def document(self, name: str) -> DocumentCore:
+        """Recover a materialised document by name."""
+        return self._docs[name]
+
+    def reference(self, name: str) -> ReferenceCore:
+        """Recover a reference by its (root) name."""
+        return self._refs[name]
 
 
 __all__ = ["WebClientCore"]

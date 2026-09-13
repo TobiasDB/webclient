@@ -70,6 +70,16 @@ class WebClient:
         """A lazy fetch: ``ref(url).resolve()``; ``.collect()`` to materialise."""
         return self.ref(url, **kw).resolve(optional=optional, error=error)
 
+    def document(self, name: str) -> Document:
+        """Recover a materialised Document by name (same surface object)."""
+        from .surface import wrap
+        return wrap(self._core.document(name))
+
+    def reference(self, name: str) -> Reference:
+        """Recover a Reference by its (root) name (same surface object)."""
+        from .surface import wrap
+        return wrap(self._core.reference(name))
+
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False,
                 **kw: Any) -> Any:
         """Run a recorded lazy plan on this client. Returns the plan's result
