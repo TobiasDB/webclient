@@ -49,7 +49,8 @@ from .core.document import (
     WebError,
 )
 from .core.base import IGNORE, RAISE, RETURN, OpError, UnsupportedOperation
-from .core.expr import Plan, field, filter, from_plan, is_empty, is_ok, lazy, when
+from .core.expr import (Plan, field, filter, from_plan, is_empty, is_ok, lazy,
+                       reference, when)
 if TYPE_CHECKING:
     from .core.expr import doc, many, ref
 from .core.executor import PlanEvent
@@ -79,7 +80,7 @@ __all__ = [
     "ClientPool", "Lease", "PoolStats", "Session",
     "LiveDocument", "LiveNode",
     "Plan", "doc", "many", "ref", "field", "filter", "is_empty", "is_ok",
-    "lazy", "when",
+    "lazy", "when", "reference",
     "from_plan", "PlanEvent",
     "RemoteWebClient", "RemoteWebClientCore", "RemoteError",
     "WebClient", "AsyncWebClient", "WebClientCore", "SearchEngine",

@@ -2,7 +2,7 @@
 return types, refuses ``_``-names, JSON round-trips, validates on the wire."""
 import pytest
 
-from webclient import Reference, doc, field, from_plan, many, ref
+from webclient import Reference, doc, field, from_plan, many, ref, reference
 from webclient.core.expr import Expr, Plan, Step
 
 
@@ -27,7 +27,7 @@ def test_any_public_attribute_records_no_return_type_needed():
 
 
 def test_reference_url_is_a_lazy_root_with_a_source():
-    r = Reference("https://e.com/s?q=1")
+    r = reference("https://e.com/s?q=1")
     assert isinstance(r, Expr) and r._plan.root == "Reference"
     assert r._plan.source["hostname"] == "e.com"
     assert r._plan.source["params"] == {"q": "1"}
@@ -81,5 +81,5 @@ def test_private_names_are_refused_at_record_and_on_the_wire():
 
 
 def test_describe_is_human_readable():
-    text = Reference("https://e.com/").resolve().select_all(".c")._plan.describe()
+    text = reference("https://e.com/").resolve().select_all(".c")._plan.describe()
     assert text == "Reference(e.com).resolve().select_all('.c')"

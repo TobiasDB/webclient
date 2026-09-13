@@ -14,6 +14,7 @@ from webclient import (
     lazy,
     many,
     ref,
+    reference,
     when,
 )
 
@@ -55,9 +56,9 @@ assert_type(base.references("a", "b"), Collection[Reference])
 assert_type(base.document("d"), Document)
 assert_type(base.is_ok(), Field[bool])
 
-# Reference("url") is a lazy root, typed as Reference
-assert_type(Reference("https://e.com"), Reference)
-assert_type(Reference("https://e.com").resolve().select("a").attr("text"), Field[str])
+# reference("url") is a lazy root, typed as Reference
+assert_type(reference("https://e.com"), Reference)
+assert_type(reference("https://e.com").resolve().select("a").attr("text"), Field[str])
 
 # extract -> project pipeline
 assert_type(doc.select_all("li").extract(t=doc.attr("text")).project(),
@@ -65,7 +66,7 @@ assert_type(doc.select_all("li").extract(t=doc.attr("text")).project(),
 
 # item 3: render() is the single representation function, typed per format
 from webclient import Element
-res_doc = Reference("https://e.com").resolve()
+res_doc = reference("https://e.com").resolve()
 assert_type(res_doc.render("markdown"), str)
 assert_type(res_doc.render("elements"), list[Element])
 assert_type(res_doc.render("links"), Collection[Reference])

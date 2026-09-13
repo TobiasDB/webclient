@@ -64,8 +64,8 @@ def test_bind_returns_bound_copy():
     ref = Reference(hostname="e.com")
     client = object()
     bound = ref.bind(client)
-    assert bound.bound is client
-    assert ref.bound is None
+    assert bound._client is client
+    assert ref._client is None
 
 
 def test_bound_reference_carries_client():

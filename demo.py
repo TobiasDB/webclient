@@ -18,6 +18,7 @@ from webclient import (
     NavigationEvent,
     Reference,
     Renderer,
+    reference,
     WebClient,
     doc,
     ref,
@@ -208,7 +209,7 @@ def main() -> None:
     #      `doc`/`ref` are lazy roots; every op call appends a step to a typed
     #      Plan -- the wire form for the service. Reference(url) roots a plan.
     plan = (
-        Reference(f"{base}/").resolve().select_all(".card")
+        reference(f"{base}/").resolve().select_all(".card")
         .extract(
             title=doc.select(".title").attr("text"),
             price=doc.select(".price").attr("text"),

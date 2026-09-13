@@ -274,6 +274,15 @@ def filter(collection: Any, *predicates: Any) -> Any:
     return collection.filter(*predicates)
 
 
+def reference(url: str, **kwargs: Any) -> "Reference":
+    """A lazy reference root starting from ``url`` (construction lives here, not
+    in ``Reference.__new__`` -- PLAN §9). Statically a ``Reference``; at runtime
+    an ``Expr`` recording a plan rooted at that request spec."""
+    from .document import Reference
+    spec = Reference.from_url(url, **kwargs).request_fields()
+    return lazy(Reference, plan=Plan(root="Reference", source=spec))
+
+
 __all__ = ["Arg", "Step", "Plan", "Expr", "lazy", "from_plan", "to_arg",
-           "doc", "many", "ref", "field", "is_empty", "is_ok", "when", "filter",
-           "LAZY_TYPES", "OPERATORS", "FUNCTIONS"]
+           "doc", "many", "ref", "reference", "field", "is_empty", "is_ok",
+           "when", "filter", "LAZY_TYPES", "OPERATORS", "FUNCTIONS"]

@@ -3,7 +3,7 @@ import asyncio
 
 import pytest
 
-from webclient import RAISE, RETURN, Collection, Field, Reference, WebClient, doc, ref, when
+from webclient import RAISE, RETURN, Collection, Field, Reference, WebClient, doc, ref, reference, when
 from webclient.core.executor import fan_out
 
 CARDS = """
@@ -45,7 +45,7 @@ def test_scalar_plan_against_a_context(site, wc):
 
 
 def test_rooted_plan_needs_no_context(site, wc):
-    expr = Reference(site.url_for("/cards")).resolve().select(".title").attr("text")
+    expr = reference(site.url_for("/cards")).resolve().select(".title").attr("text")
     assert wc.execute(expr).get() == "Aeropress"
     with pytest.raises(ValueError, match="needs a context"):
         wc.execute(doc.select(".title"))
@@ -54,7 +54,7 @@ def test_rooted_plan_needs_no_context(site, wc):
 def test_collect_is_the_lazy_trigger(site, wc):
     # PLAN §8 stage: .collect() runs a rooted plan (via the process default
     # client) -- the single evaluation trigger, additive to wc.execute.
-    expr = Reference(site.url_for("/cards")).resolve().select(".title").attr("text")
+    expr = reference(site.url_for("/cards")).resolve().select(".title").attr("text")
     assert expr.collect().get() == "Aeropress"
     # equivalent to executing it explicitly
     assert expr.collect().get() == wc.execute(expr).get()
