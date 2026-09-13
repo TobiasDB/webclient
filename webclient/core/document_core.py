@@ -1,9 +1,10 @@
-"""DocumentCore: the core behind a document (MVP).
+"""DocumentCore: the core behind a document.
 
 Core Fields = the resolved response (the surface's data). Backings = per-medium
-op providers: HtmlBacking (css/xpath select, attr, text) and JsonBacking (dotted
-path). A selected element is itself a DocumentCore (subtree / json sub-value),
-so selection nests. Render / live / events are later slices.
+op providers: HtmlBacking (css/xpath select, attr, text, render), JsonBacking
+(dotted path), plus StatusBacking (ok/error/is_ok/reload/summary), EventBacking
+(events) and LiveBacking (browser interaction). A selected element is itself a
+DocumentCore (subtree / json sub-value), so selection nests.
 """
 
 from __future__ import annotations
@@ -411,8 +412,6 @@ class JsonBacking(Backing):
         return core._data
 
     def select(self, core: "DocumentCore", path: str) -> "DocumentCore":
-        import re
-
         value = self._data(core)
         try:
             for tok in re.findall(r"[^.\[\]]+|\[\d+\]", path):

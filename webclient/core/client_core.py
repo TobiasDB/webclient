@@ -1,8 +1,10 @@
-"""WebClientCore: the engine core (MVP).
+"""WebClientCore: the engine core.
 
-Owns the engine loop + an http client; its backings are the client's verbs
-(fetch for now; search/crawl/session later). Everything async; the sync
-surface bridges onto the loop. Remote will swap ``aexecute`` for a round-trip.
+Holds the engine loop, a ``ClientPool`` (leasing http clients + browser pages),
+the event bus, renderer plugins and name scopes, and drives fetch/resolve.
+Async-native: the sync ``WebClient`` surface bridges onto the loop,
+``AsyncWebClient`` awaits, and the remote backend swaps execution for an HTTP
+round-trip. (Its verbs are still methods here, not yet ``Backing``s.)
 """
 
 from __future__ import annotations

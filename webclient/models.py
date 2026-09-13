@@ -3,8 +3,11 @@
 At runtime every recording value is an ``Expr`` (see ``webclient.expr``); these
 classes exist only for the type checker. A lazy op returns another lazy type;
 ``collect()`` (via the ``Lazy[T]`` bridge) and ``WebClient.execute`` materialise
-it to the eager model. Generated/verified by ``scripts/gen_stubs.py`` from the
-cores' fields + backing signatures.
+it to the eager model.
+
+NOTE: this lazy tier currently mirrors the eager surface by hand. Only the eager
+op blocks are generated + checked by ``scripts/gen_stubs.py``; deriving this tier
+from the cores/backings too is an open item.
 """
 
 from __future__ import annotations
