@@ -65,36 +65,39 @@ class Session:
         return self._core.cookies
 
 
-class WebClient:
-    """The synchronous client surface (MVP): fetch a URL into a Document, or
-    build a client-bound Reference to resolve. Owns a ``WebClientCore``."""
+class _ClientBase:
+    """The shared plan-building surface. ``WebClient`` and ``AsyncWebClient``
+    build the same lazy plans off the same ``WebClientCore``; they differ only
+    in how ``execute`` runs (sync bridge vs awaited off-thread)."""
 
-    def __init__(self, **policy: Any) -> None:
-        self._core = WebClientCore(**policy)
+    _core: WebClientCore
+
+    def __init__(self, core: WebClientCore | None = None, **policy: Any) -> None:
+        self._core = core if core is not None else WebClientCore(**policy)
 
     @property
     def bus(self) -> Any:
         """The client's event bus (subscribe to network/dom/console topics)."""
         return self._core.bus
 
-    def use(self, renderer: Renderer) -> "WebClient":
+    def use(self, renderer: Renderer) -> Any:
         self._core.use(renderer)
         return self
 
     def ref(self, url: str, method: HttpMethod = "get", **kw: Any) -> Any:
-        """A lazy client-bound reference: ``wc.ref(url).resolve()...collect()``
-        (statically a ``Reference``; at runtime an Expr recording a plan)."""
+        """A lazy client-bound reference: ``.ref(url).resolve()...`` (statically
+        a ``Reference``; at runtime an Expr recording a plan)."""
         from .expr import Expr
         from .plan import Plan
         spec = _core_from_url(url, method, **kw).model_dump()
         return Expr(Plan(root="Reference", source=spec), self._core)
 
-    #: ``wc.lazy`` is the same bound reference root as ``wc.ref``.
+    #: the same bound reference root as ``ref``.
     lazy = ref
 
     def fetch(self, url: str, *, optional: bool = False, error: Any = None,
               **kw: Any) -> Any:
-        """A lazy fetch: ``ref(url).resolve()``; ``.collect()`` to materialise."""
+        """A lazy fetch: ``ref(url).resolve()``; run it to materialise."""
         return self.ref(url, **kw).resolve(optional=optional, error=error)
 
     def session(self, *, ttl: float | None = None,
@@ -115,11 +118,15 @@ class WebClient:
         from .surface import wrap
         return wrap(self._core.reference(name))
 
+
+class WebClient(_ClientBase):
+    """The synchronous client surface: build lazy plans, run them on the engine
+    loop. Owns (or is handed) a ``WebClientCore``."""
+
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False,
                 **kw: Any) -> Any:
-        """Run a recorded lazy plan on this client. Returns the plan's result
-        (a scalar, a surface, or the rows). ``stream=True`` yields rows (MVP:
-        sequential, so the rows are materialised then iterated)."""
+        """Run a recorded lazy plan on this client (bridges the engine loop).
+        ``stream=True`` yields rows (MVP: materialised then iterated)."""
         from .executor import evaluate
         result = evaluate(expr, context, client=self._core)
         return iter(result) if stream and isinstance(result, list) else result
@@ -134,4 +141,29 @@ class WebClient:
         self._core.close()
 
 
-__all__ = ["Reference", "Document", "WebClient", "from_url"]
+class AsyncWebClient(_ClientBase):
+    """The async client surface: the very same plans as ``WebClient``, awaited.
+    Execution runs the (sync) evaluator off the caller's loop so ``await`` does
+    not block it."""
+
+    async def execute(self, expr: Any, context: Any = None, *,
+                      stream: bool = False, **kw: Any) -> Any:
+        import asyncio
+
+        from .executor import evaluate
+        result = await asyncio.to_thread(evaluate, expr, context, client=self._core)
+        return iter(result) if stream and isinstance(result, list) else result
+
+    async def aclose(self) -> None:
+        import asyncio
+        await asyncio.to_thread(self._core.close)
+
+    async def __aenter__(self) -> "AsyncWebClient":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
+
+
+__all__ = ["Reference", "Document", "Session", "WebClient", "AsyncWebClient",
+           "from_url"]
