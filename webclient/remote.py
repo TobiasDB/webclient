@@ -1,10 +1,12 @@
-"""Remote backend: the same lazy interface, executed server-side over HTTP.
+"""Remote backend: the same surface, a swapped core.
 
-``RemoteWebClient`` builds the very same plans as ``WebClient`` but runs them on
-a ``webclient.service`` app -- so there is no local browser or lxml, only httpx
-+ pydantic. A fetched document comes back as a shallow lazy handle
-(``_RemoteDoc``): its metadata (title/ok/kind) is inline, and any op on it is a
-plan rooted at the server-side document id, run with one more round trip.
+``RemoteWebClientCore`` is a ``WebClientCore`` whose ``execute`` POSTs the plan
+to a ``webclient.service`` app instead of running it on a local engine -- so a
+``WebClient`` over it builds the very same plans (the inherited fetch/search
+backings) with no local browser or lxml, only httpx + pydantic. A fetched
+document comes back as a shallow lazy handle (``_RemoteDoc``): its metadata
+(title/ok/kind) is inline, and any op on it is a plan rooted at the server-side
+document id, run with one more round trip.
 """
 
 from __future__ import annotations
@@ -12,7 +14,9 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+from pydantic import PrivateAttr
 
+from .core.client_core import WebClientCore
 from .core.reference_core import ReferenceCore
 from .core.reference_core import from_url as _core_from_url
 from .expr import Expr
@@ -43,15 +47,29 @@ class _RemoteDoc:
         return f"_RemoteDoc({object.__getattribute__(self, '_meta')})"
 
 
-class RemoteWebClientCore:
-    """A client core whose ``remote_execute`` POSTs a plan to ``/execute``."""
+class RemoteWebClientCore(WebClientCore):
+    """A ``WebClientCore`` whose ``execute`` round-trips to ``/execute`` instead
+    of running locally. The authoring backings (fetch/search) are inherited, so
+    the surface is unchanged; only execution differs."""
 
-    def __init__(self, url: str, token: str | None = None) -> None:
-        self.url = url.rstrip("/")
-        self.token = token
+    url: str
+    token: str | None = None
+
+    _http: Any = PrivateAttr(default=None)
+
+    def model_post_init(self, ctx: Any) -> None:
+        super().model_post_init(ctx)
+        self.url = self.url.rstrip("/")
         self._http = httpx.Client()
 
-    def remote_execute(self, expr: Expr, context: Any = None) -> Any:
+    def _init_transport(self) -> None:
+        """No local transport pool -- execution is a remote round-trip."""
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+
+    # -- execution: one Plan POSTed to /execute ------------------------------
+    def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
         body: dict[str, Any] = {"plan": expr._plan.model_dump()}
         src = expr._plan.source
         if src and "document_id" in src:
@@ -62,8 +80,9 @@ class RemoteWebClientCore:
             body["document_id"] = context._meta["id"]
         elif isinstance(context, Expr) and context._plan.source:
             body["url"] = _url_of(context._plan.source)
-        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
-        resp = self._http.post(f"{self.url}/execute", json=body, headers=headers)
+        resp = self._http.post(
+            f"{self.url}/execute", json=body, headers=self._headers()
+        )
         if not (200 <= resp.status_code < 300):
             from .errors import RemoteError
 
@@ -78,18 +97,17 @@ class RemoteWebClientCore:
         return rows
 
     def close(self) -> None:
-        self._http.close()
+        if self._http is not None:
+            self._http.close()
+        super().close()
 
     # -- server-side sessions ------------------------------------------------
-    def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
-
-    def create_session(self, ttl: float | None = None) -> dict[str, Any]:
+    def session(self, *, ttl: float | None = None, **kw: Any) -> "RemoteSession":
         resp = self._http.post(
             f"{self.url}/sessions", json={"ttl": ttl}, headers=self._headers()
         )
         resp.raise_for_status()
-        return resp.json()
+        return RemoteSession(self, resp.json()["id"])
 
     def close_session(self, sid: str) -> None:
         self._http.delete(f"{self.url}/sessions/{sid}", headers=self._headers())
@@ -126,16 +144,11 @@ class RemoteSession:
         return self._status
 
 
-class RemoteWebClient(WebClient):
-    """The remote client is literally a ``WebClient`` over a remote core: the
-    same ref/fetch/execute plan-building surface, executed server-side."""
-
-    def __init__(self, url: str, token: str | None = None) -> None:
-        super().__init__(core=RemoteWebClientCore(url, token))
-
-    def session(self, *, ttl: float | None = None, **kw: Any) -> RemoteSession:
-        info = self._core.create_session(ttl)
-        return RemoteSession(self._core, info["id"])
+def RemoteWebClient(url: str, token: str | None = None) -> WebClient:
+    """A ``WebClient`` over a remote core -- literally the same surface, executed
+    server-side. (A factory, not a subclass: the remote-ness is entirely in the
+    core it swaps in.)"""
+    return WebClient(core=RemoteWebClientCore(url=url, token=token))
 
 
-__all__ = ["RemoteWebClient", "RemoteWebClientCore"]
+__all__ = ["RemoteWebClient", "RemoteWebClientCore", "RemoteSession"]

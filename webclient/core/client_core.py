@@ -1,10 +1,12 @@
 """WebClientCore: the engine core.
 
 Holds the engine loop, a ``ClientPool`` (leasing http clients + browser pages),
-the event bus, renderer plugins and name scopes, and drives fetch/resolve.
-Async-native: the sync ``WebClient`` surface bridges onto the loop,
-``AsyncWebClient`` awaits, and the remote backend swaps execution for an HTTP
-round-trip. (Its verbs are still methods here, not yet ``Backing``s.)
+the event bus, renderer plugins and name scopes, and the machinery that drives
+transport (``afetch``) and plan execution (``execute``/``aexecute``). Its
+user-facing features are backings (``FetchBacking`` / ``SearchBacking``); the
+``WebClient`` / ``AsyncWebClient`` surface is a thin sync/async/lazy interface
+over it. A remote backend is just a subclass that swaps ``execute`` for an HTTP
+round-trip -- so the surface is unchanged; only the core differs.
 """
 
 from __future__ import annotations
@@ -21,6 +23,18 @@ from . import live as _live
 from .document_core import DocumentCore
 from .reference_core import ReferenceCore, from_url
 from .web_core import Backing, WebCore
+
+
+def _materialize(result: Any) -> Any:
+    """A materialised plan result: a scalar leaf becomes a ``Field``; a surface
+    or collection passes through."""
+    from ..collection import Field
+
+    if isinstance(result, Field):
+        return result
+    if isinstance(result, (str, int, float, bool)) or result is None:
+        return Field(result)
+    return result
 
 
 class NameScope:
@@ -58,68 +72,79 @@ class NameScope:
 
 
 class FetchBacking(Backing):
-    """The client's fetch verb: resolve a ``ReferenceCore`` into a
-    ``DocumentCore`` via a leased transport (http) or a browser page."""
+    """Reference/document authoring verbs. Each records a lazy ``Expr`` rooted
+    at this client (materialised later by ``execute``/``collect``); statically
+    they return the surface's core type, mapped to the lazy tier by the
+    generator (``ref -> LazyReference``, ``fetch -> LazyDocument``)."""
 
-    provides = frozenset({"fetch"})
+    provides = frozenset({"ref", "lazy", "fetch"})
     gate = "ok"
 
-    async def fetch(
+    def ref(
+        self, core: "WebClientCore", url: Any, method: str = "get", **kw: Any
+    ) -> "ReferenceCore":
+        """A client-bound reference plan. ``url`` may be a URL string, a
+        ``Reference`` surface, or a ``ReferenceCore``."""
+        from ..expr import Expr
+        from ..plan import Plan
+
+        spec = getattr(url, "_core", url)  # unwrap a Reference surface
+        if not isinstance(spec, ReferenceCore):
+            spec = from_url(url, method, **kw)
+        return Expr(Plan(root="Reference", source=spec.model_dump()), core)  # type: ignore[return-value]
+
+    #: the same client-bound reference root under its authoring alias.
+    lazy = ref
+
+    def fetch(
         self,
         core: "WebClientCore",
-        ref: ReferenceCore,
+        url: str,
         *,
         optional: bool = False,
-        browser: bool = False,
-    ) -> DocumentCore:
-        import time
+        error: Any = None,
+        **kw: Any,
+    ) -> "DocumentCore":
+        """A lazy fetch: ``ref(url).resolve()``."""
+        return self.ref(core, url, **kw).resolve(optional=optional, error=error)
 
-        if browser:
-            return await core._alive(ref)
-        headers = {**core.default_headers, **ref.headers}
-        start = time.monotonic()
-        try:
-            async with await core.pool.lease("http") as lease:
-                resp = await lease.client.send(
-                    ref, headers=headers, cookies=ref.cookies, timeout=core.timeout
-                )
-        except Exception as exc:  # transport failure
-            doc = DocumentCore(
-                url=ref.dispatch("url"),
-                status_code=0,
-                elapsed=time.monotonic() - start,
-                error=error_for(0, str(exc)),
-            )
-            doc._client = core
-            core._register(doc, ref)
-            if not optional:
-                raise WebException(doc.error, document=doc) from exc
-            return doc
-        kind = engine_http.sniff_kind(resp.headers.get("content-type"), resp.content)
-        doc = DocumentCore(
-            url=ref.dispatch("url"),
-            final_url=str(resp.url),
-            kind=kind,
-            content=resp.content,
-            status_code=resp.status_code,
-            response_headers=dict(resp.headers),
-            elapsed=time.monotonic() - start,
-            encoding=engine_http.charset_of(resp.headers.get("content-type")),
+
+class SearchBacking(Backing):
+    """Higher-level authoring verbs composed from fetch + extraction."""
+
+    provides = frozenset({"search", "summary"})
+    gate = "ok"
+
+    def summary(self, core: "WebClientCore", url: str, **kw: Any) -> "dict[str, Any]":
+        """A lazy plan resolving ``url`` to a title + markdown digest."""
+        return core.dispatch("ref", url, **kw).resolve().summary()
+
+    def search(
+        self, core: "WebClientCore", query: str, *, engine: Any, limit: int = 10
+    ) -> "list[dict[str, Any]]":
+        """A lazy search plan: resolve the engine's query URL, extract a
+        (title, url) row per result."""
+        from ..expr import doc
+
+        plan = (
+            core.dispatch("ref", engine.url.format(q=query))
+            .resolve()
+            .select_all(engine.result)
         )
-        doc._client = core
-        core._register(doc, ref)
-        core._capture(doc, ref, resp)
-        if not (200 <= resp.status_code < 300):
-            doc.error = error_for(resp.status_code)
-            if not optional:  # loud by default
-                raise WebException(doc.error, document=doc)
-        return doc
+        if limit:
+            plan = plan.limit(limit)
+        return plan.extract(
+            title=doc.select(engine.title).attr("text"),
+            url=doc.select(engine.link).attr("href"),
+        ).project()
 
 
 class WebClientCore(WebCore, BaseModel):
-    """Core Fields (policy) + engine (loop, ClientPool, bus, name scopes). Its
-    verbs are backings (``FetchBacking``); the surface (``WebClient``) drives
-    it. Sessions are a scoped subclass."""
+    """The engine: Core Fields (policy) + machinery (loop, ClientPool, bus, name
+    scopes, transport + plan execution). Its user-facing features are backings
+    (fetch/search); the surface (``WebClient`` / ``AsyncWebClient``) is a thin
+    sync/async/lazy interface over it, and a remote backend is just a subclass
+    that swaps ``execute``. Sessions are a scoped subclass."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -189,7 +214,7 @@ class WebClientCore(WebCore, BaseModel):
             self._render_table[(renderer.kind, fmt)] = renderer
         return self
 
-    BACKINGS: ClassVar[tuple[Backing, ...]] = (FetchBacking(),)
+    BACKINGS: ClassVar[tuple[Backing, ...]] = (FetchBacking(), SearchBacking())
 
     # -- loop / lifecycle ----------------------------------------------------
     def loop(self) -> EngineLoop:
@@ -213,17 +238,114 @@ class WebClientCore(WebCore, BaseModel):
         if self._loop is not None:
             self._loop.stop()
 
-    # -- fetch (resolve a ReferenceCore -> DocumentCore) ---------------------
+    # -- transport (machinery): resolve a ReferenceCore -> DocumentCore ------
     async def afetch(
         self, ref: ReferenceCore, *, optional: bool = False, browser: bool = False
     ) -> DocumentCore:
-        return await self.adispatch("fetch", ref, optional=optional, browser=browser)
+        """Resolve ``ref`` into a document over a leased transport (http) or a
+        browser page. The core's own IO -- the ``fetch`` backing verb records a
+        plan; this is what the executor runs when that plan resolves."""
+        import time
 
-    def fetch(
-        self, ref: ReferenceCore, *, optional: bool = False, browser: bool = False
-    ) -> DocumentCore:
-        """Sync: run ``afetch`` on the engine loop."""
-        return self.loop().run(self.afetch(ref, optional=optional, browser=browser))
+        if browser:
+            return await self._alive(ref)
+        headers = {**self.default_headers, **ref.headers}
+        start = time.monotonic()
+        try:
+            async with await self.pool.lease("http") as lease:
+                resp = await lease.client.send(
+                    ref, headers=headers, cookies=ref.cookies, timeout=self.timeout
+                )
+        except Exception as exc:  # transport failure
+            doc = DocumentCore(
+                url=ref.dispatch("url"),
+                status_code=0,
+                elapsed=time.monotonic() - start,
+                error=error_for(0, str(exc)),
+            )
+            doc._client = self
+            self._register(doc, ref)
+            if not optional:
+                raise WebException(doc.error, document=doc) from exc
+            return doc
+        kind = engine_http.sniff_kind(resp.headers.get("content-type"), resp.content)
+        doc = DocumentCore(
+            url=ref.dispatch("url"),
+            final_url=str(resp.url),
+            kind=kind,
+            content=resp.content,
+            status_code=resp.status_code,
+            response_headers=dict(resp.headers),
+            elapsed=time.monotonic() - start,
+            encoding=engine_http.charset_of(resp.headers.get("content-type")),
+        )
+        doc._client = self
+        self._register(doc, ref)
+        self._capture(doc, ref, resp)
+        if not (200 <= resp.status_code < 300):
+            doc.error = error_for(resp.status_code)
+            if not optional:  # loud by default
+                raise WebException(doc.error, document=doc)
+        return doc
+
+    # -- plan execution (machinery): the surface's sync/async entry ----------
+    def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
+        """Run a recorded plan on this engine (sync bridge). A remote subclass
+        swaps this for an HTTP round-trip; ``stream=True`` yields rows."""
+        from ..executor import evaluate
+
+        if stream:
+            return self._stream(expr, context)
+        return _materialize(evaluate(expr, context, client=self))
+
+    async def aexecute(self, expr: Any, context: Any = None) -> Any:
+        """Await a plan on the engine loop without blocking the caller's loop."""
+        import asyncio
+
+        from ..executor import aevaluate
+
+        result = await asyncio.wrap_future(
+            self.loop().submit(aevaluate(expr, context, client=self))
+        )
+        return _materialize(result)
+
+    def _stream(self, expr: Any, context: Any) -> Any:
+        """Bridge the async row stream to a sync iterator, publishing plan
+        events (a ``_pump`` task feeds a bounded queue on the engine loop)."""
+        from ..collection import Field
+        from ..events import PlanEvent
+        from ..executor import astream
+
+        self.bus.publish(PlanEvent(phase="started"))
+        count = 0
+        for row in self.loop().stream(astream(expr, context, client=self)):
+            count += 1
+            self.bus.publish(PlanEvent(phase="row"))
+            yield row.get() if isinstance(row, Field) else row
+        self.bus.publish(PlanEvent(phase="done", detail={"rows": count}))
+
+    async def astream(self, expr: Any, context: Any) -> Any:
+        """Async row stream (same rows as ``_stream``, awaited off-thread)."""
+        from ..collection import Collection, Field
+
+        result = await self.aexecute(expr, context)
+        for row in list(result) if isinstance(result, (list, Collection)) else [result]:
+            yield row.get() if isinstance(row, Field) else row
+
+    # -- sessions ------------------------------------------------------------
+    def session(
+        self,
+        *,
+        ttl: float | None = None,
+        headers: dict[str, str] | None = None,
+        **kw: Any,
+    ) -> Any:
+        """A new session sharing this engine (a scoped ``WebSessionCore``)."""
+        from .session_core import WebSessionCore
+
+        core = WebSessionCore(ttl=ttl, session_headers=headers or {}, **kw)
+        core.bind(self)
+        return core
 
     # -- live / browser ------------------------------------------------------
     async def _alive(
@@ -336,4 +458,4 @@ class WebClientCore(WebCore, BaseModel):
         doc._events.extend(events)
 
 
-__all__ = ["WebClientCore", "NameScope"]
+__all__ = ["WebClientCore", "NameScope", "FetchBacking", "SearchBacking"]

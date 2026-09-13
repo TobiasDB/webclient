@@ -106,25 +106,14 @@ class Expr:
     # -- evaluation ----------------------------------------------------------
     def collect(self, context: Any = None) -> Any:
         """Evaluate this plan and return the result -- the single lazy trigger.
-        A plan bound to a remote backend round-trips over HTTP; otherwise it
-        runs on the local engine. ``collect`` is reserved (non-recordable)."""
+        Runs on the bound core's ``execute`` (a remote core round-trips over
+        HTTP -- same call). ``collect`` is reserved (non-recordable)."""
         client = self._client
-        if client is not None and hasattr(client, "remote_execute"):
-            return client.remote_execute(self, context)
-        from .executor import evaluate
-
         if client is None:
             from .core.client_core import WebClientCore
 
             client = WebClientCore()  # process-local default (MVP)
-        from .collection import Field
-
-        result = evaluate(self, context, client=client)
-        if isinstance(result, Field):
-            return result
-        if isinstance(result, (str, int, float, bool)) or result is None:
-            return Field(result)  # a scalar leaf -> a Field
-        return result
+        return client.execute(self, context)
 
     @property
     def is_lazy(self) -> bool:

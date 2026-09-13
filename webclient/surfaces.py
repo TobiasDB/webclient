@@ -12,6 +12,7 @@ from .core.client_core import WebClientCore
 from .core.document_core import DocumentCore
 from .core.reference_core import HttpMethod, ReferenceCore
 from .core.reference_core import from_url as _core_from_url
+from .core.web_core import WebCore
 from .surface import Surface, surface
 
 if TYPE_CHECKING:
@@ -248,14 +249,42 @@ class Session:
 
 
 class _ClientBase:
-    """The shared plan-building surface. ``WebClient`` and ``AsyncWebClient``
-    build the same lazy plans off the same ``WebClientCore``; they differ only
-    in how ``execute`` runs (sync bridge vs awaited off-thread)."""
+    """A thin sync/async/lazy interface over a ``WebClientCore``. The authoring
+    verbs (ref/fetch/summary/search) are the core's backings, reached through
+    the same dispatch every surface uses; the typed signatures below are
+    generated from those backings. ``execute`` (sync here, awaited in
+    ``AsyncWebClient``, remote if the core is a remote subclass) runs the plan;
+    session/recovery/lifecycle are the surface's own thin wrappers."""
 
     _core: WebClientCore
 
     def __init__(self, core: WebClientCore | None = None, **policy: Any) -> None:
         self._core = core if core is not None else WebClientCore(**policy)
+
+    if TYPE_CHECKING:
+        # >>> generated: WebClient surface <<<
+        # fmt: off
+        def fetch(self, url: str, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "LazyDocument": ...
+        def lazy(self, url: Any, method: str = ..., **kw: Any) -> "LazyReference": ...
+        def ref(self, url: Any, method: str = ..., **kw: Any) -> "LazyReference": ...
+        def search(self, query: str, *, engine: Any, limit: int = ...) -> "list[dict[str, Any]]": ...
+        def summary(self, url: str, **kw: Any) -> "LazyField[dict[str, Any]]": ...
+        # fmt: on
+        # >>> end generated <<<
+    else:
+
+        def __getattr__(self, name: str) -> Any:  # authoring verbs -> the core's
+            if name.startswith("_"):  # backings (generated stubs give the types)
+                raise AttributeError(name)
+            core = object.__getattribute__(self, "_core")
+            if name in type(core).ops():
+                from .surface import wrap
+
+                def call(*args: Any, **kwargs: Any) -> Any:
+                    return wrap(core.dispatch(name, *args, **kwargs))
+
+                return call
+            raise AttributeError(name)
 
     @property
     def core(self) -> WebClientCore:
@@ -279,64 +308,20 @@ class _ClientBase:
         """The client's event bus (subscribe to network/dom/console topics)."""
         return self._core.bus
 
+    @property
+    def pool(self) -> Any:
+        """The client's transport-lease pool (``.stats()``)."""
+        return self._core.pool
+
     def use(self, renderer: Renderer) -> Any:
         self._core.use(renderer)
         return self
 
-    def ref(self, url: Any, method: HttpMethod = "get", **kw: Any) -> "LazyReference":
-        """A lazy client-bound reference: ``.ref(url).resolve()...`` (statically
-        a ``LazyReference``; at runtime an Expr recording a plan). ``url`` may be
-        a URL string, a ``Reference``, or a ``ReferenceCore``."""
-        from .expr import Expr
-        from .plan import Plan
-
-        if isinstance(url, Reference):
-            core = url._core
-        elif isinstance(url, ReferenceCore):
-            core = url
-        else:
-            core = _core_from_url(url, method, **kw)
-        return Expr(Plan(root="Reference", source=core.model_dump()), self._core)
-
-    #: the same bound reference root as ``ref``.
-    lazy = ref
-
-    def fetch(
-        self, url: str, *, optional: bool = False, error: Any = None, **kw: Any
-    ) -> "LazyDocument":
-        """A lazy fetch: ``ref(url).resolve()``; run it to materialise."""
-        return self.ref(url, **kw).resolve(optional=optional, error=error)
-
-    def session(
-        self,
-        *,
-        ttl: float | None = None,
-        headers: dict[str, str] | None = None,
-        **kw: Any,
-    ) -> Session:
-        """A new session sharing this client's engine (a scoped core)."""
-        from .core.session_core import WebSessionCore
-
-        core = WebSessionCore(ttl=ttl, session_headers=headers or {}, **kw)
-        core.bind(self._core)
-        return Session(core)
-
-    def search(self, query: str, *, engine: SearchEngine, limit: int = 10) -> Any:
-        """A lazy search plan: resolve the engine's query URL, then extract a
-        (title, url) row per result. Run it to get the hits."""
-        from .expr import doc
-
-        plan = self.ref(engine.url.format(q=query)).resolve().select_all(engine.result)
-        if limit:
-            plan = plan.limit(limit)
-        return plan.extract(
-            title=doc.select(engine.title).attr("text"),
-            url=doc.select(engine.link).attr("href"),
-        ).project()
-
-    def summary(self, url: str, **kw: Any) -> Any:
-        """A lazy plan resolving ``url`` to a title + markdown digest."""
-        return self.ref(url, **kw).resolve().summary()
+    def session(self, **kw: Any) -> Any:
+        """A new session sharing this client's engine. A core-swap decides its
+        kind (local ``Session`` surface, or a remote session handle)."""
+        made = self._core.session(**kw)
+        return Session(made) if isinstance(made, WebCore) else made
 
     def document(self, name: str) -> Document | None:
         """Recover a materialised Document by name (same surface object), or
@@ -357,15 +342,10 @@ class _ClientBase:
         """Return a live document's browser page to the pool."""
         self._core.release(doc._core)
 
-    @property
-    def pool(self) -> Any:
-        """The client's transport-lease pool (``.stats()``)."""
-        return self._core.pool
-
 
 class WebClient(_ClientBase):
     """The synchronous client surface: build lazy plans, run them on the engine
-    loop. Owns (or is handed) a ``WebClientCore``."""
+    loop (via the core's ``execute``). Owns (or is handed) a ``WebClientCore``."""
 
     if TYPE_CHECKING:
 
@@ -379,38 +359,9 @@ class WebClient(_ClientBase):
     def execute(
         self, expr: Any, context: Any = None, *, stream: bool = False, **kw: Any
     ) -> Any:
-        """Run a recorded lazy plan on this client. A remote core round-trips
-        over HTTP; otherwise it runs on the engine loop. ``stream=True`` yields
-        rows as they complete."""
-        from .collection import Field
-        from .executor import evaluate
-
-        if hasattr(self._core, "remote_execute"):
-            return self._core.remote_execute(expr, context)
-        if stream:
-            return self._stream(expr, context)
-        result = evaluate(expr, context, client=self._core)
-        if isinstance(result, Field):
-            return result
-        if isinstance(result, (str, int, float, bool)) or result is None:
-            return Field(result)  # a scalar leaf -> a Field
-        return result
-
-    def _stream(self, expr: Any, context: Any) -> Any:
-        """Bridge the async row stream to a sync iterator via the engine loop
-        (a ``_pump`` task feeds a bounded queue), publishing plan events."""
-        from .collection import Field
-        from .events import PlanEvent
-        from .executor import astream
-
-        bus = self._core.bus
-        bus.publish(PlanEvent(phase="started"))
-        count = 0
-        for row in self._core.loop().stream(astream(expr, context, client=self._core)):
-            count += 1
-            bus.publish(PlanEvent(phase="row"))
-            yield row.get() if isinstance(row, Field) else row
-        bus.publish(PlanEvent(phase="done", detail={"rows": count}))
+        """Run a recorded lazy plan on this client's core (``stream=True`` yields
+        rows as they complete). A remote core round-trips over HTTP -- same call."""
+        return self._core.execute(expr, context, stream=stream)
 
     def close(self) -> None:
         self._core.close()
@@ -424,7 +375,7 @@ class WebClient(_ClientBase):
 
 class AsyncWebClient(_ClientBase):
     """The async client surface: the very same plans as ``WebClient``, awaited.
-    Execution runs the (sync) evaluator off the caller's loop so ``await`` does
+    Execution runs on the engine loop off the caller's loop so ``await`` does
     not block it."""
 
     if TYPE_CHECKING:
@@ -445,38 +396,8 @@ class AsyncWebClient(_ClientBase):
         """Awaited execution (same plans as ``WebClient``). Non-stream returns
         an awaitable; ``stream=True`` returns an async iterator of rows."""
         if stream:
-            return self._astream(expr, context)
-        return self._aexecute(expr, context)
-
-    async def _run(self, expr: Any, context: Any) -> Any:
-        """Await ``aevaluate`` on the engine loop without blocking the caller's
-        loop (bridged via ``run_coroutine_threadsafe`` + ``wrap_future``)."""
-        import asyncio
-
-        from .executor import aevaluate
-
-        return await asyncio.wrap_future(
-            self._core.loop().submit(aevaluate(expr, context, client=self._core))
-        )
-
-    async def _aexecute(self, expr: Any, context: Any) -> Any:
-        from .collection import Field
-
-        result = await self._run(expr, context)
-        if isinstance(result, Field):
-            return result
-        if isinstance(result, (str, int, float, bool)) or result is None:
-            return Field(result)
-        return result
-
-    async def _astream(self, expr: Any, context: Any) -> Any:
-        from .collection import Collection, Field
-
-        result = await self._run(expr, context)
-        for row in (
-            list(result) if isinstance(result, (list, Collection)) else [result]
-        ):
-            yield row.get() if isinstance(row, Field) else row
+            return self._core.astream(expr, context)
+        return self._core.aexecute(expr, context)
 
     async def aclose(self) -> None:
         import asyncio

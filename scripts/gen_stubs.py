@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from webclient import typeinfo  # noqa: E402
 from webclient.collection import Field  # noqa: E402
+from webclient.core.client_core import WebClientCore  # noqa: E402
 from webclient.core.document_core import DocumentCore, Element  # noqa: E402
 from webclient.core.reference_core import ReferenceCore  # noqa: E402
 from webclient.core.web_core import WebCore  # noqa: E402
@@ -204,19 +205,24 @@ def _class_props(core: type) -> dict[str, Any]:
     }
 
 
-def members(core: type, tier: str) -> list[str]:
+def members(
+    core: type, tier: str, *, fields: bool = True, class_props: bool = True
+) -> list[str]:
     """Every surface member for ``core`` in ``tier`` -- data fields, class
     properties, then the backings' property ops and call ops. This is the whole
-    generator: the eager surface, the lazy surface and the lift all come from it."""
+    generator: every surface (eager, lazy, the lift, the client) comes from it.
+    ``fields``/``class_props`` drop the data model for an authoring surface (the
+    client), whose only members are its verbs."""
     lines: list[str] = []
-    # data fields
-    for name in core.model_fields:
-        if name in _SKIP_FIELDS.get(core, set()):
-            continue
-        lines.append(f"{name}: {_field(typeinfo.field_type(core, name), tier)}")
+    if fields:
+        for name in core.model_fields:
+            if name in _SKIP_FIELDS.get(core, set()):
+                continue
+            lines.append(f"{name}: {_field(typeinfo.field_type(core, name), tier)}")
     # property ops (class @property + backing props) -- an attribute when lazy,
     # a @property when eager.
-    props = {**_class_props(core), **{op: None for op in core.prop_ops()}}
+    seed = _class_props(core) if class_props else {}
+    props = {**seed, **{op: None for op in core.prop_ops()}}
     for op in sorted(props):
         fn = props[op] or _fn(_provider(core, op, "props"), op)
         ret = _render(_return(fn), tier)
@@ -327,12 +333,18 @@ def _body(region: str) -> str:
         return _indented(members(DocumentCore, "eager"), 8)
     if region == "collection element-op lifting":
         return _indented(lift_members(), 8)
+    if region == "WebClient surface":
+        # an authoring root: only its verbs, in the lazy vocabulary (ref ->
+        # LazyReference, fetch -> LazyDocument); no data model.
+        verbs = members(WebClientCore, "lazy", fields=False, class_props=False)
+        return _indented(verbs, 8)
     raise KeyError(region)
 
 
 REGIONS = [
     (SURFACES, "Reference eager surface"),
     (SURFACES, "Document eager surface"),
+    (SURFACES, "WebClient surface"),
     (COLLECTION, "collection element-op lifting"),
     (MODELS, "lazy-tier"),
 ]
