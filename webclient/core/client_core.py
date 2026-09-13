@@ -229,7 +229,9 @@ class WebClientCore(WebCore, BaseModel):
                 await loc.click()
             elif step["op"] == "write":
                 await loc.fill(args.get("text", "") or "")
-        await _live.drain(doc)
+        # discard load/replay mutations: only post-collect interactions are
+        # captured as events (so a node's event view reflects real changes).
+        await page.evaluate(_live._DRAIN_JS)
         return doc
 
     async def _areload(self, core: DocumentCore) -> DocumentCore:

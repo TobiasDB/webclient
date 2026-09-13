@@ -115,9 +115,11 @@ class LiveBacking(Backing):
                     text: str | None = None, timeout: float | None = None,
                     optional: bool = False) -> None:
         ms = (timeout or 30.0) * 1000
-        core._client.bus.publish(ActionEvent(
-            action=action, args={"selector": selector, "text": text},
-            document_id=core.name, source="core-action"))
+        event = ActionEvent(action=action,
+                            args={"selector": selector, "text": text},
+                            document_id=core.name, source="core-action")
+        core._client.bus.publish(event)
+        core._events.append(event)                   # routed onto the document
         if core._ref is not None:
             core._ref.actions.append({"op": action, "args": {
                 k: v for k, v in (("selector", selector), ("text", text))

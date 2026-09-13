@@ -274,14 +274,17 @@ class WebClient(_ClientBase):
 
     def _stream(self, rows: list) -> Any:
         """Yield rows, publishing plan lifecycle events on the bus."""
+        from .collection import Field
         from .events import PlanEvent
         bus = self._core.bus
         bus.publish(PlanEvent(phase="started"))
         count = 0
         for row in rows:
+            if self._core._closed:                   # client closed mid-stream: stop
+                break
             count += 1
             bus.publish(PlanEvent(phase="row"))
-            yield row
+            yield row.get() if isinstance(row, Field) else row
         bus.publish(PlanEvent(phase="done", detail={"rows": count}))
 
     def close(self) -> None:
@@ -299,20 +302,34 @@ class AsyncWebClient(_ClientBase):
     Execution runs the (sync) evaluator off the caller's loop so ``await`` does
     not block it."""
 
-    async def execute(self, expr: Any, context: Any = None, *,
-                      stream: bool = False, **kw: Any) -> Any:
+    def execute(self, expr: Any, context: Any = None, *,
+                stream: bool = False, **kw: Any) -> Any:
+        """Awaited execution (same plans as ``WebClient``). Non-stream returns
+        an awaitable; ``stream=True`` returns an async iterator of rows."""
+        if stream:
+            return self._astream(expr, context)
+        return self._aexecute(expr, context)
+
+    async def _aexecute(self, expr: Any, context: Any) -> Any:
         import asyncio
 
         from .collection import Field
         from .executor import evaluate
         result = await asyncio.to_thread(evaluate, expr, context, client=self._core)
-        if stream and isinstance(result, list):
-            return iter(result)
         if isinstance(result, Field):
             return result
         if isinstance(result, (str, int, float, bool)) or result is None:
             return Field(result)
         return result
+
+    async def _astream(self, expr: Any, context: Any) -> Any:
+        import asyncio
+
+        from .collection import Collection, Field
+        from .executor import evaluate
+        result = await asyncio.to_thread(evaluate, expr, context, client=self._core)
+        for row in (list(result) if isinstance(result, (list, Collection)) else [result]):
+            yield row.get() if isinstance(row, Field) else row
 
     async def aclose(self) -> None:
         import asyncio

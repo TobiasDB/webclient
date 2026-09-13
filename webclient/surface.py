@@ -52,6 +52,15 @@ class Surface:
     def __init__(self, core: WebCore) -> None:
         object.__setattr__(self, "_core", core)
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        # Binding a client onto a surface (doc._client = wc) routes to the core
+        # (accepting a client surface or a core); everything else is normal.
+        if name == "_client":
+            core = object.__getattribute__(self, "_core")
+            core._client = getattr(value, "_core", value)
+        else:
+            object.__setattr__(self, name, value)
+
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
