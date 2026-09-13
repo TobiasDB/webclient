@@ -29,7 +29,14 @@ class WebClientCore(WebCore, BaseModel):
 
     _loop: Any = PrivateAttr(default=None)
     _http: Any = PrivateAttr(default=None)     # httpx.AsyncClient (MVP: one shared)
+    _render_table: dict[tuple[str, str], Any] = PrivateAttr(default_factory=dict)
     _closed: bool = PrivateAttr(default=False)
+
+    def use(self, renderer: Any) -> "WebClientCore":
+        """Register a Renderer override for its (kind, format) pairs."""
+        for fmt in renderer.formats:
+            self._render_table[(renderer.kind, fmt)] = renderer
+        return self
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = ()   # TODO: (Fetch, Search, ...) as ops
 

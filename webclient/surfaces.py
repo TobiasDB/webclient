@@ -31,12 +31,28 @@ def from_url(url: str, method: HttpMethod = "get",
     return Reference(_core_from_url(url, method, params, headers, cookies))
 
 
+class Renderer:
+    """A (kind, format) render override -- register with ``wc.use``. Subclass
+    and set ``name``/``kind``/``formats`` and implement ``render``."""
+
+    name: str = ""
+    kind: str = "html"
+    formats: list[str] = []
+
+    def render(self, document: "Document", format: str, **options: Any) -> Any:
+        raise NotImplementedError
+
+
 class WebClient:
     """The synchronous client surface (MVP): fetch a URL into a Document, or
     build a client-bound Reference to resolve. Owns a ``WebClientCore``."""
 
     def __init__(self, **policy: Any) -> None:
         self._core = WebClientCore(**policy)
+
+    def use(self, renderer: Renderer) -> "WebClient":
+        self._core.use(renderer)
+        return self
 
     def ref(self, url: str, method: HttpMethod = "get", **kw: Any) -> Reference:
         """A client-bound reference; ``.resolve()`` fetches on this client."""

@@ -7,7 +7,9 @@ so selection nests. Render / live / events are later slices.
 """
 from __future__ import annotations
 
+import copy
 import json as _json
+import re
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from urllib.parse import urljoin
 
@@ -19,21 +21,171 @@ from .web_core import Backing, WebCore
 if TYPE_CHECKING:
     from .client_core import WebClientCore
 
+_HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+_SKIP = {"script", "style"}
+_NOISE = "script, style, nav, aside, footer, header"
+_MAIN = "main, article, [role=main], #content, #main"
+
+
+class Element(BaseModel):
+    """A typed content block -- the "elements" representation."""
+
+    id: str = ""
+    type: str = "text"
+    text: str = ""
+    parent_id: str | None = None
+    metadata: dict[str, Any] = {}
+
 
 def _norm(text: str) -> str:
     return " ".join(text.split())
+
+
+def _tag(el: Any) -> str:
+    return el.tag.lower() if isinstance(el.tag, str) else ""
+
+
+def _inline(el: Any) -> str:
+    parts = [el.text or ""]
+    for child in el:
+        tag = _tag(child)
+        if tag in _SKIP:
+            parts.append(child.tail or "")
+            continue
+        inner = _inline(child)
+        if tag == "a":
+            parts.append(f"[{inner}]({child.get('href', '')})")
+        elif tag in ("strong", "b"):
+            parts.append(f"**{inner}**")
+        elif tag in ("em", "i"):
+            parts.append(f"*{inner}*")
+        elif tag == "code":
+            parts.append(f"`{inner}`")
+        elif tag == "img":
+            parts.append(f"![{child.get('alt', '')}]({child.get('src', '')})")
+        else:
+            parts.append(inner)
+        parts.append(child.tail or "")
+    return _norm("".join(parts))
+
+
+def _md_blocks(el: Any, out: list[str]) -> None:
+    for child in el:
+        tag = _tag(child)
+        if tag in _SKIP:
+            continue
+        if tag in _HEADINGS:
+            out.append("#" * int(tag[1]) + " " + _inline(child))
+        elif tag == "p":
+            out.append(_inline(child))
+        elif tag in ("ul", "ol"):
+            items = [f"{'-' if tag == 'ul' else str(i + 1) + '.'} {_inline(li)}"
+                     for i, li in enumerate(child.findall("li"))]
+            if items:
+                out.append("\n".join(items))
+        elif tag == "pre":
+            out.append("```\n" + "".join(child.itertext()).strip("\n") + "\n```")
+        elif tag == "blockquote":
+            out.append("> " + _inline(child))
+        else:
+            _md_blocks(child, out)
+
+
+def _main_container(root: Any) -> Any:
+    found = root.cssselect(_MAIN)
+    return found[0] if found else root
+
+
+def _html_elements(root: Any) -> list[Element]:
+    out: list[Element] = []
+    counter = 0
+    section: str | None = None
+
+    def next_id() -> str:
+        nonlocal counter
+        counter += 1
+        return f"e{counter}"
+
+    def walk(el: Any) -> None:
+        nonlocal section
+        for child in el:
+            tag = _tag(child)
+            if tag in _SKIP:
+                continue
+            if tag in _HEADINGS:
+                section = next_id()
+                out.append(Element(id=section, type="title",
+                                   text=_norm("".join(child.itertext()))))
+            elif tag in ("p", "li"):
+                out.append(Element(id=next_id(),
+                                   type="text" if tag == "p" else "list_item",
+                                   text=_norm("".join(child.itertext())),
+                                   parent_id=section))
+            else:
+                walk(child)
+
+    walk(root)
+    return out
+
+
+def _json_elements(value: Any) -> list[Element]:
+    out: list[Element] = []
+
+    def walk(v: Any, path: str, parent: str | None) -> None:
+        if isinstance(v, dict):
+            for k, item in v.items():
+                walk(item, f"{path}.{k}" if path else k, path or None)
+        elif isinstance(v, list):
+            for i, item in enumerate(v):
+                walk(item, f"{path}[{i}]", path or None)
+        else:
+            out.append(Element(id=path, type="text", text=str(v), parent_id=parent))
+
+    walk(value, "", None)
+    return out
 
 
 class HtmlBacking(Backing):
     """Tree ops for html/xml. ``select``/``select_all`` yield element
     DocumentCores; ``attr``/``text`` read from the element (or body)."""
 
-    provides = frozenset({"select", "select_all", "attr"})
-    props = frozenset({"text"})
+    provides = frozenset({"select", "select_all", "attr", "render"})
+    props = frozenset({"text", "title"})
     gate = "tree"
 
     def applies(self, core: "DocumentCore") -> bool:
         return core.kind in ("html", "xml")
+
+    def title(self, core: "DocumentCore") -> str | None:
+        node = self._find(core, "title")
+        return _norm("".join(node[0].itertext())) if node else None
+
+    def render(self, core: "DocumentCore", format: str, **options: Any) -> Any:
+        override = _override(core, format)
+        if override is not None:
+            return override
+        if format == "html":
+            return (core.content or b"").decode(core.encoding or "utf-8", "replace")
+        root = self._tree(core)
+        if format == "links":
+            return [from_url(urljoin(core.final_url or core.url, el.get("href")))
+                    for el in root.cssselect("a[href]") if el.get("href")]
+        if format == "markdown":
+            target = _main_container(root) if options.get("main_content_only") else root
+            blocks: list[str] = []
+            _md_blocks(target, blocks)
+            return "\n\n".join(b for b in blocks if b.strip())
+        if format == "text":
+            target = copy.deepcopy(_main_container(root))
+            for noise in target.cssselect(_NOISE):
+                if noise.getparent() is not None:
+                    noise.getparent().remove(noise)
+            blocks = [_norm("".join(el.itertext())) for el in target.iter()
+                      if _tag(el) in _HEADINGS or _tag(el) in ("p", "li", "pre", "blockquote")]
+            return "\n\n".join(b for b in blocks if b) or _norm("".join(target.itertext()))
+        if format == "elements":
+            return _html_elements(root)
+        raise LookupError(f"no html render format {format!r}")
 
     def _tree(self, core: "DocumentCore") -> Any:
         if core._element is not None:
@@ -78,12 +230,20 @@ class JsonBacking(Backing):
     """Dotted-path ops for json. A selected node is a DocumentCore holding the
     sub-value; ``attr('value')`` / ``text`` read it."""
 
-    provides = frozenset({"select", "attr"})
+    provides = frozenset({"select", "attr", "render"})
     props = frozenset({"text"})
     gate = "tree"
 
     def applies(self, core: "DocumentCore") -> bool:
         return core.kind == "json"
+
+    def render(self, core: "DocumentCore", format: str, **options: Any) -> Any:
+        override = _override(core, format)
+        if override is not None:
+            return override
+        if format != "elements":
+            raise LookupError(f"no json render format {format!r}")
+        return _json_elements(self._data(core))
 
     def _data(self, core: "DocumentCore") -> Any:
         if core._element is not None:
@@ -108,6 +268,18 @@ class JsonBacking(Backing):
     def text(self, core: "DocumentCore") -> str:
         value = self._data(core)
         return value if isinstance(value, str) else _json.dumps(value)
+
+
+def _override(core: "DocumentCore", format: str) -> Any:
+    """A registered ``Renderer`` override for (kind, format), applied to the
+    document surface -- else ``None`` (use the built-in render)."""
+    client = core._client
+    table = getattr(client, "_render_table", None) if client is not None else None
+    renderer = table.get((core.kind, format)) if table else None
+    if renderer is None:
+        return None
+    from ..surface import wrap
+    return renderer.render(wrap(core), format)
 
 
 def _element(parent: "DocumentCore", node: Any) -> "DocumentCore":
