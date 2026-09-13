@@ -53,6 +53,8 @@ class Surface:
             def call(*args: Any, **kwargs: Any) -> Any:
                 return wrap(core.dispatch(name, *args, **kwargs))
             return call
+        if isinstance(getattr(cls, name, None), property):   # a core property (ok, ...)
+            return wrap(getattr(core, name))
         raise AttributeError(name)
 
     def __repr__(self) -> str:

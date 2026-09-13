@@ -15,6 +15,7 @@ from urllib.parse import urljoin
 
 from pydantic import BaseModel, PrivateAttr
 
+from ..errors import WebError
 from .reference_core import ReferenceCore, from_url
 from .web_core import Backing, WebCore
 
@@ -145,6 +146,30 @@ def _json_elements(value: Any) -> list[Element]:
     return out
 
 
+class StatusBacking(Backing):
+    """Status / value ops, available even on a not-ok document: ``is_ok`` /
+    ``is_empty`` (a ``Field``), ``message`` (the error text)."""
+
+    provides = frozenset({"is_ok", "is_empty"})
+    props = frozenset({"message"})
+    gate = "ok"
+
+    def applies(self, core: "DocumentCore") -> bool:
+        return True
+
+    def is_ok(self, core: "DocumentCore") -> Any:
+        from ..collection import Field
+        return Field(core.ok)
+
+    def is_empty(self, core: "DocumentCore") -> Any:
+        from ..collection import Field
+        empty = core._missing or not core.ok or not (core.content or core._element)
+        return Field(bool(empty))
+
+    def message(self, core: "DocumentCore") -> str:
+        return core.error.message if core.error is not None else ""
+
+
 class HtmlBacking(Backing):
     """Tree ops for html/xml. ``select``/``select_all`` yield element
     DocumentCores; ``attr``/``text`` read from the element (or body)."""
@@ -202,7 +227,7 @@ class HtmlBacking(Backing):
         return list(root.cssselect(selector))
 
     def select(self, core: "DocumentCore", selector: str, *,
-               index: int = 0) -> "DocumentCore":
+               index: int = 0, error: Any = None) -> "DocumentCore":
         els = self._find(core, selector)
         return _element(core, els[index] if len(els) > index else None)
 
@@ -211,6 +236,8 @@ class HtmlBacking(Backing):
         return [_element(core, el) for el in self._find(core, selector)]
 
     def attr(self, core: "DocumentCore", name: str) -> "str | ReferenceCore":
+        if core._missing:
+            return ""
         el = core._element
         if name == "text":
             return self.text(core)
@@ -222,6 +249,8 @@ class HtmlBacking(Backing):
         return value
 
     def text(self, core: "DocumentCore") -> str:
+        if core._missing:
+            return ""
         el = core._element if core._element is not None else self._tree(core)
         return _norm("".join(el.itertext()))
 
@@ -263,9 +292,11 @@ class JsonBacking(Backing):
         return _element(core, value)
 
     def attr(self, core: "DocumentCore", name: str) -> Any:
-        return self._data(core)
+        return "" if core._missing else self._data(core)
 
     def text(self, core: "DocumentCore") -> str:
+        if core._missing:
+            return ""
         value = self._data(core)
         return value if isinstance(value, str) else _json.dumps(value)
 
@@ -283,11 +314,13 @@ def _override(core: "DocumentCore", format: str) -> Any:
 
 
 def _element(parent: "DocumentCore", node: Any) -> "DocumentCore":
-    """A selected element/value as a DocumentCore rooted at ``parent``."""
+    """A selected element/value as a DocumentCore rooted at ``parent``. A
+    ``None`` node means the selection missed -- a not-ok, empty sub-document."""
     sub = DocumentCore(url=parent.url, final_url=parent.final_url,
                        kind=parent.kind, status_code=parent.status_code)
     sub._client = parent._client
     sub._element = node
+    sub._missing = node is None
     return sub
 
 
@@ -303,16 +336,21 @@ class DocumentCore(WebCore, BaseModel):
     status_code: int = 0
     response_headers: dict[str, str] = {}
     encoding: str | None = None
+    error: WebError | None = None
 
     _client: Any = PrivateAttr(default=None)      # owning WebClientCore
     _element: Any = PrivateAttr(default=None)     # lxml element / json sub-value
     _tree: Any = PrivateAttr(default=None)        # cached lxml parse
     _data: Any = PrivateAttr(default=None)        # cached json
+    _missing: bool = PrivateAttr(default=False)   # a selection that missed
 
-    BACKINGS: ClassVar[tuple[Backing, ...]] = (HtmlBacking(), JsonBacking())
+    BACKINGS: ClassVar[tuple[Backing, ...]] = (
+        StatusBacking(), HtmlBacking(), JsonBacking())
 
     @property
     def ok(self) -> bool:
+        if self.error is not None or self._missing:
+            return False
         return 200 <= self.status_code < 300 or self.status_code == 0
 
 

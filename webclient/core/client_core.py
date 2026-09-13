@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from ..engine import http as engine_http
 from ..engine.loop import EngineLoop
+from ..errors import WebException, error_for
 from .document_core import DocumentCore
 from .reference_core import ReferenceCore
 from .web_core import Backing, WebCore
@@ -74,6 +75,10 @@ class WebClientCore(WebCore, BaseModel):
             response_headers=dict(resp.headers),
             encoding=engine_http.charset_of(resp.headers.get("content-type")))
         doc._client = self
+        if not (200 <= resp.status_code < 300):
+            doc.error = error_for(resp.status_code)
+            if not optional:                         # loud by default
+                raise WebException(doc.error)
         return doc
 
     def fetch(self, ref: ReferenceCore, *, optional: bool = False) -> DocumentCore:
