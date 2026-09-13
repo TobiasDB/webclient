@@ -166,8 +166,15 @@ async def _aarg(arg: Arg, context: Any, client: Any) -> Any:
 
 
 def _start(plan: Any, context: Any, client: Any) -> Any:
-    """The value a plan starts from: a reconstructed Reference (source plan) or
-    the passed context (doc/ref/field roots)."""
+    """The value a plan starts from: the bound client (WebClient root, whose
+    authoring verbs the walk dispatches), a reconstructed Reference (source
+    plan), or the passed context (doc/ref/field roots)."""
+    if plan.root == "WebClient":
+        from .surface import wrap
+
+        if client is None:
+            raise ValueError("a WebClient-rooted plan needs a bound client")
+        return wrap(client)  # an eager client surface -> dispatches ref/fetch/...
     if plan.source is not None and "document_id" not in plan.source:
         from .core.reference_core import ReferenceCore
         from .core.session_core import WebSessionCore

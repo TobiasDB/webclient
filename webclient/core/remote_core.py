@@ -73,12 +73,13 @@ class RemoteWebClientCore(WebClientCore):
         src = expr._plan.source
         if src and "document_id" in src:
             body["document_id"] = src["document_id"]
-        elif src:  # a reference-rooted plan
+        elif src:  # a reference(url)-rooted plan carries its spec
             body["url"] = _url_of(src)
-        elif isinstance(context, _RemoteDoc):
+        # a context roots a context-based plan (e.g. ref.resolve()) server-side
+        if isinstance(context, _RemoteDoc):
             body["document_id"] = context._meta["id"]
-        elif isinstance(context, Expr) and context._plan.source:
-            body["url"] = _url_of(context._plan.source)
+        elif isinstance(context, Expr):  # a client ref/fetch -- send its plan
+            body["context_plan"] = context._plan.model_dump()
         resp = self._http.post(
             f"{self.url}/execute", json=body, headers=self._headers()
         )

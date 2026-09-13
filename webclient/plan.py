@@ -30,8 +30,9 @@ class Step(BaseModel):
     kwargs: dict[str, Arg] = {}
 
 
-#: the surface types a plan may be rooted at ("" = the evaluation context)
-ROOTS = frozenset({"", "Reference", "Document", "Collection", "Field"})
+#: the surface types a plan may be rooted at ("" = the evaluation context;
+#: "WebClient" = the bound client, whose authoring verbs the executor dispatches)
+ROOTS = frozenset({"", "WebClient", "Reference", "Document", "Collection", "Field"})
 #: operators recordable as ``op`` steps
 OPERATORS = frozenset({"eq", "ne", "lt", "le", "gt", "ge", "and", "or", "not"})
 #: free functions recordable as ``fn`` steps

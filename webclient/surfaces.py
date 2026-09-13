@@ -242,13 +242,21 @@ class Session:
         return self._core.cookies
 
 
+@surface(WebClientCore)
+class _ClientDispatch(Surface):
+    """The eager view the executor uses to run a ``WebClient``-rooted plan: it
+    dispatches the client's authoring backings (ref/fetch/summary) to real
+    cores. Users always hold the lazy ``WebClient``; this is internal."""
+
+
 class _ClientBase:
-    """A thin sync/async/lazy interface over a ``WebClientCore``. The authoring
-    verbs (ref/fetch/summary/search) are the core's backings, reached through
-    the same dispatch every surface uses; the typed signatures below are
-    generated from those backings. ``execute`` (sync here, awaited in
-    ``AsyncWebClient``, remote if the core is a remote subclass) runs the plan;
-    session/recovery/lifecycle are the surface's own thin wrappers."""
+    """A thin sync/async/lazy interface over a ``WebClientCore``. It has no verb
+    bodies: like ``Document``, the authoring verbs are the core's backings, but
+    here the client is *lazy* -- ``__getattr__`` records the call into a
+    ``WebClient``-rooted plan (the executor dispatches the eager backing when the
+    plan runs). The generated stubs give the verbs their types. ``execute`` runs
+    the plan (sync here, awaited in ``AsyncWebClient``, remote if the core is a
+    remote subclass); session/recovery/lifecycle are the surface's own wrappers."""
 
     _core: WebClientCore
 
@@ -258,25 +266,23 @@ class _ClientBase:
     if TYPE_CHECKING:
         # >>> generated: WebClient surface <<<
         # fmt: off
-        def fetch(self, url: str, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "LazyDocument": ...
+        def fetch(self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "LazyDocument": ...
         def lazy(self, url: Any, method: str = ..., **kw: Any) -> "LazyReference": ...
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "LazyReference": ...
-        def summary(self, url: str, **kw: Any) -> "Lazy[dict[str, Any]]": ...
+        def summary(self, url: Any, **kw: Any) -> "Lazy[dict[str, Any]]": ...
         # fmt: on
         # >>> end generated <<<
     else:
 
-        def __getattr__(self, name: str) -> Any:  # authoring verbs -> the core's
-            if name.startswith("_"):  # backings (generated stubs give the types)
+        def __getattr__(self, name: str) -> Any:  # a verb -> a recorded plan
+            if name.startswith("_"):
                 raise AttributeError(name)
             core = object.__getattribute__(self, "_core")
             if name in type(core).ops():
-                from .surface import wrap
+                from .expr import Expr
+                from .plan import Plan
 
-                def call(*args: Any, **kwargs: Any) -> Any:
-                    return wrap(core.dispatch(name, *args, **kwargs))
-
-                return call
+                return getattr(Expr(Plan(root="WebClient"), core), name)
             raise AttributeError(name)
 
     @property

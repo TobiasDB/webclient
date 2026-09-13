@@ -71,6 +71,8 @@ def create_app(wc: WebClient | None = None, token: str | None = None) -> FastAPI
             if body["document_id"] not in app.state.docs:
                 raise HTTPException(status_code=404, detail="no such document")
             context: Any = app.state.docs[body["document_id"]]
+        elif "context_plan" in body:  # a client ref/fetch context plan
+            context = from_plan(body["context_plan"], wc_._core)
         elif sid and sid in app.state.sessions:  # resolve through the session
             context = app.state.sessions[sid]._core
         elif "url" in body:

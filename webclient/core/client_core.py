@@ -72,11 +72,12 @@ class NameScope:
 
 
 class FetchBacking(Backing):
-    """The client's authoring verbs. Each records a lazy ``Expr`` rooted at this
-    client (materialised later by ``execute``/``collect``); statically they
-    return the surface's core type, mapped to the lazy tier by the generator
-    (``ref -> LazyReference``, ``fetch -> LazyDocument``). Anything higher-level
-    (search, crawl) is just an expression the caller composes -- not a verb."""
+    """The client's authoring verbs -- eager and real like every backing op,
+    returning real cores/values (``ref -> ReferenceCore``, ``fetch ->
+    DocumentCore``, ``summary -> dict``). It is the *surface* that is lazy: the
+    client records these calls into a plan and the executor dispatches them here
+    at run time (the IO ops hand back a coroutine when already on the engine
+    loop, bridged otherwise -- like ``ReferenceCore.resolve``)."""
 
     provides = frozenset({"ref", "lazy", "fetch", "summary"})
     gate = "ok"
@@ -84,34 +85,41 @@ class FetchBacking(Backing):
     def ref(
         self, core: "WebClientCore", url: Any, method: str = "get", **kw: Any
     ) -> "ReferenceCore":
-        """A client-bound reference plan. ``url`` may be a URL string, a
-        ``Reference`` surface, or a ``ReferenceCore``."""
-        from ..expr import Expr
-        from ..plan import Plan
-
+        """A client-bound reference. ``url`` may be a URL string, a ``Reference``
+        surface, or a ``ReferenceCore``."""
         spec = getattr(url, "_core", url)  # unwrap a Reference surface
         if not isinstance(spec, ReferenceCore):
             spec = from_url(url, method, **kw)
-        return Expr(Plan(root="Reference", source=spec.model_dump()), core)  # type: ignore[return-value]
+        spec._client = core
+        return spec
 
-    #: the same client-bound reference root under its authoring alias.
+    #: the same client-bound reference under its authoring alias.
     lazy = ref
 
     def fetch(
         self,
         core: "WebClientCore",
-        url: str,
+        url: Any,
         *,
         optional: bool = False,
         error: Any = None,
         **kw: Any,
     ) -> "DocumentCore":
-        """A lazy fetch: ``ref(url).resolve()``."""
-        return self.ref(core, url, **kw).resolve(optional=optional, error=error)
+        """Resolve ``ref(url)`` into a document (via the reference's resolve op,
+        so it is async-aware on the engine loop)."""
+        ref = self.ref(core, url, **kw)
+        return ref.dispatch("resolve", optional=optional, error=error)
 
-    def summary(self, core: "WebClientCore", url: str, **kw: Any) -> "dict[str, Any]":
-        """A lazy plan resolving ``url`` to a title + markdown digest."""
-        return core.dispatch("ref", url, **kw).resolve().summary()
+    def summary(self, core: "WebClientCore", url: Any, **kw: Any) -> "dict[str, Any]":
+        """Resolve ``url`` to a title + markdown digest (async-aware)."""
+        ref = self.ref(core, url, **kw)
+
+        async def run() -> "dict[str, Any]":
+            doc = await core.afetch(ref)
+            return doc.dispatch("summary")
+
+        loop = core.loop()
+        return run() if loop.on_loop_thread() else loop.run(run())
 
 
 class WebClientCore(WebCore, BaseModel):
