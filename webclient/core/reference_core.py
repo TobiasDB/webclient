@@ -6,12 +6,15 @@ Pure data + dispatch, like every core.
 """
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from pydantic import BaseModel, PrivateAttr
 
 from .web_core import Backing, WebCore
+
+if TYPE_CHECKING:
+    from .document_core import DocumentCore
 
 HttpMethod = Literal["get", "post", "put", "patch", "delete", "head", "options"]
 DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443}
@@ -46,6 +49,21 @@ class DeriveBacking(Backing):
         return from_url(urljoin(self.url(core), href))
 
 
+class ResolveBacking(Backing):
+    """Resolve the reference into a document via the bound client."""
+
+    provides = frozenset({"resolve"})
+    gate = "ok"
+
+    def resolve(self, core: "ReferenceCore", *, browser: bool = False,
+                optional: bool = False, error: Any = None) -> "DocumentCore":
+        client = core._client or (core._session._client if core._session else None)
+        if client is None:
+            from .client_core import WebClientCore
+            client = WebClientCore()                 # process-local default (MVP)
+        return client.fetch(core, optional=optional)
+
+
 class ReferenceCore(WebCore, BaseModel):
     """A (re)resolvable request spec. ``resolve`` (a later backing) dispatches
     to the bound client; ``url`` and the derivations are the DeriveBacking."""
@@ -61,13 +79,17 @@ class ReferenceCore(WebCore, BaseModel):
     params: dict[str, str | list[str]] = {}
     headers: dict[str, str] = {}
     cookies: dict[str, str] = {}
-    # TODO(port): body/json_body/form/follow_redirects/timeout/actions/options.
+    body: bytes | None = None
+    json_body: Any | None = None
+    form: dict[str, str] | None = None
+    follow_redirects: bool = True
+    timeout: float | None = None
+    # TODO(port): actions chain / resolve options.
 
     _client: Any = PrivateAttr(default=None)
     _session: Any = PrivateAttr(default=None)
 
-    BACKINGS: ClassVar[tuple[Backing, ...]] = (DeriveBacking(),)
-    # TODO: + ResolveBacking (resolve via the client).
+    BACKINGS: ClassVar[tuple[Backing, ...]] = (DeriveBacking(), ResolveBacking())
 
 
 def from_url(url: str, method: HttpMethod = "get",

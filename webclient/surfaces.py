@@ -4,15 +4,23 @@ from __future__ import annotations
 
 from typing import Any
 
+from .core.client_core import WebClientCore
+from .core.document_core import DocumentCore
 from .core.reference_core import HttpMethod, ReferenceCore
 from .core.reference_core import from_url as _core_from_url
-from .surface import Surface, surface
+from .surface import Surface, surface, wrap
 
 
 @surface(ReferenceCore)
 class Reference(Surface):
-    """A request spec (eager). ``url`` reads; ``with_params``/``replace``/
-    ``join`` derive; ``resolve`` (later) fetches."""
+    """A request spec (eager): ``url``/``with_params``/``replace``/``join``/
+    ``resolve``."""
+
+
+@surface(DocumentCore)
+class Document(Surface):
+    """A resolved document (eager): ``select``/``select_all``/``attr``/``text``
+    (render/live/events are later slices)."""
 
 
 def from_url(url: str, method: HttpMethod = "get",
@@ -23,4 +31,32 @@ def from_url(url: str, method: HttpMethod = "get",
     return Reference(_core_from_url(url, method, params, headers, cookies))
 
 
-__all__ = ["Reference", "from_url"]
+class WebClient:
+    """The synchronous client surface (MVP): fetch a URL into a Document, or
+    build a client-bound Reference to resolve. Owns a ``WebClientCore``."""
+
+    def __init__(self, **policy: Any) -> None:
+        self._core = WebClientCore(**policy)
+
+    def ref(self, url: str, method: HttpMethod = "get", **kw: Any) -> Reference:
+        """A client-bound reference; ``.resolve()`` fetches on this client."""
+        core = _core_from_url(url, method, **kw)
+        core._client = self._core
+        return Reference(core)
+
+    def fetch(self, url: str, *, optional: bool = False, **kw: Any) -> Document:
+        """Resolve ``url`` into a Document."""
+        core = _core_from_url(url, **kw)
+        return wrap(self._core.fetch(core, optional=optional))
+
+    def close(self) -> None:
+        self._core.close()
+
+    def __enter__(self) -> "WebClient":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._core.close()
+
+
+__all__ = ["Reference", "Document", "WebClient", "from_url"]

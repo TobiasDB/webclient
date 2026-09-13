@@ -5,17 +5,14 @@ from typing import Literal
 
 import httpx
 
-from ..core.document import Reference
+from ..core.reference_core import ReferenceCore
 
 
-async def request(client: httpx.AsyncClient, ref: Reference, *,
+async def request(client: httpx.AsyncClient, ref: ReferenceCore, *,
                   headers: dict[str, str], cookies: dict[str, str],
                   timeout: float, retries: int) -> httpx.Response:
     """Perform the request described by ``ref`` with pre-merged headers and
-    cookies. Retries transport errors only, immediately, ``retries`` times
-    (ISSUES #20 -- full policy is post-v1)."""
-    # The lease-exclusive client's jar carries the cookies for this request;
-    # the pool clears it on release, so nothing leaks across sessions.
+    cookies. Retries transport errors only, immediately, ``retries`` times."""
     for name, value in cookies.items():
         client.cookies.set(name, value)
     last_error: httpx.TransportError | None = None
@@ -23,7 +20,7 @@ async def request(client: httpx.AsyncClient, ref: Reference, *,
         try:
             return await client.request(
                 ref.method.upper(),
-                ref.url,
+                ref.dispatch("url"),
                 headers=headers or None,
                 content=ref.body,
                 json=ref.json_body,
