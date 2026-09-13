@@ -65,6 +65,20 @@ class WebClient:
         core = _core_from_url(url, **kw)
         return wrap(self._core.fetch(core, optional=optional))
 
+    def execute(self, expr: Any, context: Any = None, **kw: Any) -> Any:
+        """Run a recorded lazy plan on this client. Returns the plan's result
+        (a scalar, a surface, or a list of rows)."""
+        from .executor import evaluate
+        return evaluate(expr, context, client=self._core)
+
+    def lazy(self, url: str, **kw: Any) -> Any:
+        """A lazy reference root bound to this client (companion to
+        ``collect()``): ``wc.lazy(url).resolve()...collect()``."""
+        from .expr import Expr
+        from .plan import Plan
+        return Expr(Plan(root="Reference", source=_core_from_url(url, **kw).model_dump()),
+                    self._core)
+
     def close(self) -> None:
         self._core.close()
 

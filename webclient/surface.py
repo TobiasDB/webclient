@@ -16,13 +16,19 @@ from .core.web_core import WebCore
 _REGISTRY: dict[type, type] = {}
 
 
-def wrap(value: Any) -> Any:
-    """Core -> its Surface; a list of cores -> a list of surfaces; else as-is."""
+def wrap(value: Any, *, client: Any = None) -> Any:
+    """Core -> its Surface; a list of cores -> a ``Collection`` of surfaces;
+    any other list/tuple -> the same with items wrapped; else as-is."""
     if isinstance(value, WebCore):
         cls = _REGISTRY.get(type(value))
         return cls(value) if cls is not None else value
     if isinstance(value, (list, tuple)):
-        return type(value)(wrap(v) for v in value)
+        wrapped = [wrap(v) for v in value]
+        if value and all(isinstance(v, WebCore) for v in value):
+            from .collection import Collection
+            owner = client or getattr(value[0], "_client", None)
+            return Collection(wrapped, client=owner)
+        return type(value)(wrapped)
     return value
 
 
