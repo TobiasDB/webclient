@@ -79,11 +79,15 @@ class ClientPool:
             ) from None
         finally:
             self._waiting[kind] -= 1
-        if self._idle[kind]:
-            client = self._idle[kind].pop()
-        else:
-            self._created[kind] += 1
-            client = await self._factories[kind].create()
+        try:
+            if self._idle[kind]:
+                client = self._idle[kind].pop()
+            else:
+                client = await self._factories[kind].create()
+                self._created[kind] += 1
+        except BaseException:
+            self._semaphore(kind).release()  # don't leak the permit on create failure
+            raise
         self._held[kind] += 1
         return Lease(self, client)
 
