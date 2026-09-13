@@ -10,7 +10,7 @@ are cast to (see ``webclient.gen``); at runtime every value in a chain is an
 """
 from __future__ import annotations
 
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from .plan import Arg, Plan, Step
 
@@ -127,7 +127,7 @@ def from_plan(plan: Plan | dict[str, Any], client: Any = None) -> Expr:
 # Roots and free functions
 # --------------------------------------------------------------------------- #
 
-def reference(url: str, **kwargs: Any) -> Any:
+def reference(url: str, **kwargs: Any) -> "Reference":
     """A lazy reference root starting from ``url``: an ``Expr`` recording a plan
     rooted at that request spec (statically a ``Reference``)."""
     from .core.reference_core import from_url
@@ -189,10 +189,18 @@ def filter(collection: Any, *predicates: Any) -> Any:
     return collection.filter(*predicates)
 
 
-#: the lazy roots -- an ``Expr`` rooted at each surface (statically the surface)
-doc: Any = Expr(Plan(root="Document"))
-ref: Any = Expr(Plan(root="Reference"))
-many: Any = Expr(Plan(root="Collection"))
+#: the lazy roots -- an ``Expr`` rooted at each surface (statically the surface
+#: it authors plans for; at runtime an ``Expr``).
+if TYPE_CHECKING:
+    from .collection import Collection
+    from .surfaces import Document, Reference
+    doc: "Document"
+    ref: "Reference"
+    many: "Collection[Document]"
+else:
+    doc = Expr(Plan(root="Document"))
+    ref = Expr(Plan(root="Reference"))
+    many = Expr(Plan(root="Collection"))
 
 
 __all__ = ["Expr", "lazy", "from_plan", "to_arg", "reference", "field", "when",

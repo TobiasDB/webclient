@@ -2,7 +2,7 @@
 ``webclient.gen`` from the Cores' fields + backings)."""
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 
 from pydantic import BaseModel
 
@@ -11,6 +11,13 @@ from .core.document_core import DocumentCore
 from .core.reference_core import HttpMethod, ReferenceCore
 from .core.reference_core import from_url as _core_from_url
 from .surface import Surface, surface
+
+if TYPE_CHECKING:
+    from .collection import Collection, Field
+    from .core.document_core import Element
+    from .models import (Lazy, LazyDocument, LazyField, LazyReference)
+
+T = TypeVar("T")
 
 
 @surface(ReferenceCore)
@@ -39,6 +46,26 @@ class Reference(Surface):
     def model_validate_json(cls, data: Any, **kw: Any) -> "Reference":
         return cls(ReferenceCore.model_validate_json(data, **kw))
 
+    if TYPE_CHECKING:
+        # >>> generated: Reference eager surface <<<
+        name: str
+        root: str
+        hostname: str
+        path: str
+        params: dict[str, Any]
+        @property
+        def url(self) -> str: ...
+        @property
+        def ok(self) -> bool: ...
+        @property
+        def actions(self) -> list[dict[str, Any]]: ...
+        def resolve(self, *, browser: bool = ..., optional: bool = ...,
+                    error: Any = ...) -> "Document": ...
+        def with_params(self, **params: str) -> "Reference": ...
+        def replace(self, **fields: Any) -> "Reference": ...
+        def join(self, href: str) -> "Reference": ...
+        # >>> end generated <<<
+
 
 @surface(DocumentCore)
 class Document(Surface):
@@ -53,6 +80,66 @@ class Document(Surface):
                      if k in DocumentCore.model_fields}
             core = DocumentCore(**known)
         super().__init__(core)
+
+    if TYPE_CHECKING:
+        # >>> generated: Document eager surface <<<
+        id: str
+        name: str
+        root: str
+        kind: str
+        url: str
+        content: bytes
+        status_code: int
+        session_id: str
+        created: float
+        accessed: float
+        @property
+        def ok(self) -> bool: ...
+        @property
+        def text(self) -> str: ...
+        @property
+        def title(self) -> str: ...
+        @property
+        def final_url(self) -> str | None: ...
+        @property
+        def error(self) -> Any: ...
+        @property
+        def message(self) -> str: ...
+        @property
+        def events(self) -> list[Any]: ...
+        @property
+        def action_events(self) -> list[Any]: ...
+        @property
+        def dom_mutations(self) -> list[Any]: ...
+        def select(self, selector: str, *, index: int = ...,
+                   error: Any = ...) -> "Document": ...
+        def select_all(self, selector: str, *, limit: int | None = ...,
+                       offset: int = ...) -> "Collection[Document]": ...
+        @overload
+        def attr(self, name: Literal["href", "src", "action"]) -> "Reference": ...  # type: ignore[overload-overlap]
+        @overload
+        def attr(self, name: str, *, error: Any = ...) -> "Field[str]": ...
+        def is_ok(self) -> "Field[bool]": ...
+        def is_empty(self) -> "Field[bool]": ...
+        def ref(self) -> "Reference": ...
+        def events_of(self, event_type: Any) -> list[Any]: ...
+        def reload(self) -> "Document": ...
+        def summary(self) -> dict[str, Any]: ...
+        def click(self, selector: str | None = ..., *, timeout: float = ...,
+                  optional: bool = ...) -> "Document": ...
+        def write(self, selector: str, text: str, *, timeout: float = ...,
+                  optional: bool = ...) -> "Document": ...
+        def wait_for(self, selector: str | None = ..., *,
+                     timeout: float = ...) -> "Document": ...
+        def evaluate(self, script: str) -> Any: ...
+        def screenshot(self, selector: str | None = ...) -> "Document": ...
+        @overload
+        def render(self, format: Literal["elements"]) -> "list[Element]": ...
+        @overload
+        def render(self, format: Literal["links"]) -> "Collection[Reference]": ...
+        @overload
+        def render(self, format: str, **options: Any) -> str: ...
+        # >>> end generated <<<
 
 
 #: A live (browser-backed) document is a Document with the ``page`` capability;
@@ -179,10 +266,10 @@ class _ClientBase:
         self._core.use(renderer)
         return self
 
-    def ref(self, url: Any, method: HttpMethod = "get", **kw: Any) -> Any:
+    def ref(self, url: Any, method: HttpMethod = "get", **kw: Any) -> "LazyReference":
         """A lazy client-bound reference: ``.ref(url).resolve()...`` (statically
-        a ``Reference``; at runtime an Expr recording a plan). ``url`` may be a
-        URL string, a ``Reference``, or a ``ReferenceCore``."""
+        a ``LazyReference``; at runtime an Expr recording a plan). ``url`` may be
+        a URL string, a ``Reference``, or a ``ReferenceCore``."""
         from .expr import Expr
         from .plan import Plan
         if isinstance(url, Reference):
@@ -197,7 +284,7 @@ class _ClientBase:
     lazy = ref
 
     def fetch(self, url: str, *, optional: bool = False, error: Any = None,
-              **kw: Any) -> Any:
+              **kw: Any) -> "LazyDocument":
         """A lazy fetch: ``ref(url).resolve()``; run it to materialise."""
         return self.ref(url, **kw).resolve(optional=optional, error=error)
 
@@ -254,6 +341,13 @@ class WebClient(_ClientBase):
     """The synchronous client surface: build lazy plans, run them on the engine
     loop. Owns (or is handed) a ``WebClientCore``."""
 
+    if TYPE_CHECKING:
+        @overload
+        def execute(self, expr: "Lazy[T]", context: Any = ...) -> T: ...
+        @overload
+        def execute(self, expr: Any, context: Any = ..., *,
+                    stream: bool = ...) -> Any: ...
+
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False,
                 **kw: Any) -> Any:
         """Run a recorded lazy plan on this client. A remote core round-trips
@@ -301,6 +395,16 @@ class AsyncWebClient(_ClientBase):
     """The async client surface: the very same plans as ``WebClient``, awaited.
     Execution runs the (sync) evaluator off the caller's loop so ``await`` does
     not block it."""
+
+    if TYPE_CHECKING:
+        from typing import Coroutine
+
+        @overload
+        def execute(self, expr: "Lazy[T]",
+                    context: Any = ...) -> "Coroutine[Any, Any, T]": ...
+        @overload
+        def execute(self, expr: Any, context: Any = ..., *,
+                    stream: bool = ...) -> Any: ...
 
     def execute(self, expr: Any, context: Any = None, *,
                 stream: bool = False, **kw: Any) -> Any:

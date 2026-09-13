@@ -9,10 +9,15 @@ is the value leaf (``get`` + ``is_ok``/``is_empty`` + comparisons + truthiness).
 """
 from __future__ import annotations
 
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Generic, Iterator, TypeVar
+
+T = TypeVar("T")
+
+if TYPE_CHECKING:
+    from .surfaces import Document, Reference
 
 
-class Field:
+class Field(Generic[T]):
     """A scalar leaf: a value plus whether it is present/ok."""
 
     __slots__ = ("_value", "_ok")
@@ -21,21 +26,21 @@ class Field:
         self._value = value
         self._ok = ok and value is not None
 
-    def get(self, default: Any = None) -> Any:
+    def get(self, default: Any = None) -> T:
         return self._value if self._ok else default
 
     @property
-    def value(self) -> Any:
+    def value(self) -> T:
         return self._value
 
     @property
     def ok(self) -> bool:
         return self._ok
 
-    def is_ok(self) -> "Field":
+    def is_ok(self) -> "Field[bool]":
         return Field(self._ok)
 
-    def is_empty(self) -> "Field":
+    def is_empty(self) -> "Field[bool]":
         return Field(not self._ok or self._value in ("", [], {}, None))
 
     def __bool__(self) -> bool:
@@ -72,9 +77,9 @@ def _row_of(element: Any, *, create: bool = True) -> dict[str, Any] | None:
     return core._row
 
 
-class Collection:
+class Collection(Generic[T]):
     """A set of results (elements or rows). Iterable/indexable; the row-shaping
-    ops evaluate sub-expressions per element."""
+    ops evaluate sub-expressions per element, and element ops fan out."""
 
     __slots__ = ("_items", "_client", "name", "root")
 
@@ -86,33 +91,45 @@ class Collection:
         self.name = f"col:{root}" if root else "col:"
 
     # -- container ------------------------------------------------------------
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[T]:
         return iter(self._items)
 
     def __len__(self) -> int:
         return len(self._items)
 
-    def __getitem__(self, i: int) -> Any:
+    def __getitem__(self, i: int) -> T:
         return self._items[i]
 
     def __repr__(self) -> str:
         return f"Collection({len(self._items)} items)"
 
-    def __getattr__(self, name: str) -> Any:
-        """An element op on the collection fans out over its elements: a list
-        of results (a Collection when the results are surfaces)."""
-        if name.startswith("_"):
-            raise AttributeError(name)
+    if TYPE_CHECKING:
+        # >>> generated: collection element-op lifting <<<
+        def select(self, selector: str, *, index: int = ...,
+                   error: Any = ...) -> "Collection[Document]": ...
+        def select_all(self, selector: str, *, limit: int | None = ...,
+                       offset: int = ...) -> "Collection[Document]": ...
+        def attr(self, name: str, *, error: Any = ...) -> "Collection[Field[str]]": ...
+        def text(self) -> "Collection[Field[str]]": ...
+        def render(self, format: str, **options: Any) -> "Collection[Field[Any]]": ...
+        # >>> end generated <<<
+    else:
+        def __getattr__(self, name: str) -> Any:
+            """An element op fans out over the elements: a list of results (a
+            Collection when the results are surfaces)."""
+            if name.startswith("_"):
+                raise AttributeError(name)
 
-        def fan(*args: Any, **kwargs: Any) -> Any:
-            results = [getattr(el, name)(*args, **kwargs) for el in self._items]
-            if results and all(hasattr(r, "_core") for r in results):
-                return Collection(results, client=self._client, root=self.root)
-            return results
-        return fan
+            def fan(*args: Any, **kwargs: Any) -> Any:
+                results = [getattr(el, name)(*args, **kwargs)
+                           for el in self._items]
+                if results and all(hasattr(r, "_core") for r in results):
+                    return Collection(results, client=self._client, root=self.root)
+                return results
+            return fan
 
     # -- row shaping ----------------------------------------------------------
-    def extract(self, **exprs: Any) -> "Collection":
+    def extract(self, **exprs: Any) -> "Collection[T]":
         """Annotate each element with extracted columns (its ``_row``), then
         return a collection over the same elements. Columns are evaluated in
         order against the element, so a later column can reference an earlier
@@ -129,7 +146,7 @@ class Collection:
                     row[key] = _raw(evaluate(expr, el, client=self._client))
         return self._derive(self._items)
 
-    def filter(self, *predicates: Any) -> "Collection":
+    def filter(self, *predicates: Any) -> "Collection[T]":
         """Keep the elements for which every predicate is truthy."""
         from .errors import RETURN, default_policy
         from .executor import evaluate, truthy
@@ -139,7 +156,7 @@ class Collection:
                            for p in predicates)]
         return self._derive(kept)
 
-    def documents(self, column: str) -> "Collection":
+    def documents(self, column: str) -> "Collection[Any]":
         """Flatten a column whose values are Collections/lists of documents
         into one Collection of those documents."""
         out: list[Any] = []
@@ -148,11 +165,11 @@ class Collection:
             out.extend(list(value) if value is not None else [])
         return self._derive(out)
 
-    def limit(self, n: int) -> "Collection":
+    def limit(self, n: int) -> "Collection[T]":
         """Keep at most the first ``n`` elements."""
         return self._derive(self._items[:n])
 
-    def project(self) -> list[Any]:
+    def project(self) -> list[dict[str, Any]]:
         """Materialise as a plain list: each element's extracted row if it has
         one, else the element itself."""
         out: list[Any] = []
@@ -161,7 +178,7 @@ class Collection:
             out.append(row if row is not None else el)
         return out
 
-    def _derive(self, items: list[Any]) -> "Collection":
+    def _derive(self, items: list[Any]) -> "Collection[T]":
         out = Collection(items, client=self._client, root=self.root)
         out.name = self.name
         return out
