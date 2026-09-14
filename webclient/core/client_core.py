@@ -161,6 +161,7 @@ class WebClientCore(WebCore, BaseModel):
     block_private_hosts: bool = False  # opt-in SSRF guard (loopback/private/etc.)
     retries: int = 0  # extra attempts on a retriable failure (transport/429/5xx)
     retry_backoff: float = 0.2  # base seconds; doubled each attempt (exp backoff)
+    min_interval: float = 0.0  # per-host politeness: min seconds between requests
 
     _loop: Any = PrivateAttr(default=None)
     _pool: Any = PrivateAttr(default=None)  # ClientPool (lazy)
@@ -170,6 +171,9 @@ class WebClientCore(WebCore, BaseModel):
     _scope_counter: int = PrivateAttr(default=0)  # next session scope index
     _bus: Any = PrivateAttr(default=None)  # EventBus (lazy)
     _sessions: list[Any] = PrivateAttr(default_factory=list)  # sessions to close
+    _host_next: dict[str, float] = PrivateAttr(  # host -> earliest next request time
+        default_factory=dict
+    )
 
     @property
     def bus(self) -> EventBus:
@@ -284,6 +288,18 @@ class WebClientCore(WebCore, BaseModel):
         return any(_ip_blocked(str(info[4][0])) for info in infos)
 
     # -- transport (machinery): resolve a ReferenceCore -> DocumentCore ------
+    async def _pace(self, host: str) -> None:
+        """Politeness: keep at least ``min_interval`` seconds between requests to
+        ``host`` (best-effort; concurrent same-host fetches may still bunch -- a
+        per-host token bucket would be the strict form)."""
+        import asyncio
+        import time
+
+        wait = self._host_next.get(host, 0.0) - time.monotonic()
+        if wait > 0:
+            await asyncio.sleep(wait)
+        self._host_next[host] = time.monotonic() + self.min_interval
+
     async def _afetch_once(
         self, ref: ReferenceCore, headers: dict[str, str]
     ) -> "tuple[DocumentCore, Any]":
@@ -351,6 +367,8 @@ class WebClientCore(WebCore, BaseModel):
         if browser:
             return await self._alive(ref)
         headers = {**self.default_headers, **ref.headers}
+        if self.min_interval > 0.0:
+            await self._pace(ref.hostname)
         doc, resp = await self._afetch_once(ref, headers)
         attempt = 0
         while doc.error is not None and doc.error.retriable and attempt < self.retries:

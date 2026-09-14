@@ -255,3 +255,16 @@ def test_retry_honours_retry_after_over_backoff(httpserver):
         doc = wc.fetch(httpserver.url_for("/ra")).collect()
         elapsed = time.monotonic() - start
     assert doc.ok and calls["n"] == 2 and elapsed < 2.0
+
+
+def test_min_interval_paces_same_host_requests(httpserver):
+    import time
+
+    httpserver.expect_request("/p").respond_with_data("ok", content_type="text/html")
+    url = httpserver.url_for("/p")
+    with WebClient(min_interval=0.3) as wc:
+        wc.fetch(url).collect()  # first request: sets the next-allowed time
+        start = time.monotonic()
+        wc.fetch(url).collect()  # second: paced ~0.3s after the first started
+        elapsed = time.monotonic() - start
+    assert elapsed >= 0.2  # generous margin; without pacing this is ~0
