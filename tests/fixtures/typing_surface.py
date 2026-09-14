@@ -33,6 +33,7 @@ from webclient.models import (
     LazyReference,
 )
 from webclient.query.plan import Plan
+from webclient.summary import Summary, Transport
 
 
 class _Row(BaseModel):
@@ -104,7 +105,9 @@ for _card in _page.select_all(".card"):  # iterating a Collection yields the ele
 assert_type(_wc.ref("https://e.com"), LazyReference)
 assert_type(_wc.lazy("https://e.com"), LazyReference)
 assert_type(_wc.fetch("https://e.com"), LazyDocument)
-assert_type(_wc.summary("https://e.com").collect(), dict[str, Any])
+assert_type(_wc.summary("https://e.com").collect(), Summary)
+assert_type(_wc.fetch("https://e.com").summary().collect(), Summary)
+assert_type(_wc.fetch("https://e.com").transport().collect(), Transport)
 assert_type(
     _wc.fetch("https://e.com")
     .select_all(".card")

@@ -353,8 +353,19 @@ def main() -> None:
             .project()
         )
         print("search:     ", [(h["title"], h["url"].path) for h in hits])
-        summary = wc.summary(f"{base}/").collect()
-        print("summary:    ", {k: summary[k] for k in ("title", "ok")})
+        # summary(): a token-lean, deterministic overview -- facet sections
+        # (transport / metadata / structure), keys-not-values.
+        overview = wc.summary(f"{base}/").collect()
+        assert overview.transport and overview.metadata and overview.structure
+        print(
+            "summary:    ",
+            {
+                "ok": overview.transport.ok,
+                "title": overview.metadata.title,
+                "headings": len(overview.structure.toc),
+                "cdn": overview.transport.cdn,
+            },
+        )
 
     # [async] The same facade helpers, awaited. AsyncWebClient builds the very
     #      same plans as WebClient; only the execution differs -- it bridges the

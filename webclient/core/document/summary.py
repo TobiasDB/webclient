@@ -7,10 +7,10 @@ to any document; ``metadata`` / ``structure`` need an html/xml tree.
 from __future__ import annotations
 
 import json as _json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlparse
 
-from ...summary import Form, Metadata, Structure, TocEntry, Transport
+from ...summary import FACETS, Form, Metadata, Structure, Summary, TocEntry, Transport
 from ..web_core import Backing
 from .html import _norm, tree
 
@@ -196,4 +196,31 @@ class StructureBacking(Backing):
         )
 
 
-__all__ = ["TransportBacking", "MetadataBacking", "StructureBacking"]
+class SummaryBacking(Backing):
+    """The unifier: ``doc.summary(*include, exclude=...)`` assembles the requested
+    facet sections into a :class:`Summary` (default: every applicable facet). A
+    facet whose backing does not apply to this document (e.g. ``metadata`` on
+    json, ``runtime`` on a static fetch) is simply left ``None``. Supersedes the
+    old title/markdown digest -- markdown is reachable via ``render('markdown')``."""
+
+    provides = frozenset({"summary"})
+    gate = "summary"
+
+    def applies(self, core: "DocumentCore") -> bool:
+        return True
+
+    def summary(
+        self, core: "DocumentCore", *include: str, exclude: Any = ()
+    ) -> Summary:
+        drop = {exclude} if isinstance(exclude, str) else set(exclude)
+        want = (set(include) if include else set(FACETS)) - drop
+        data = {f: core.dispatch(f) for f in FACETS if f in want and core.has_op(f)}
+        return Summary(**data)
+
+
+__all__ = [
+    "TransportBacking",
+    "MetadataBacking",
+    "StructureBacking",
+    "SummaryBacking",
+]

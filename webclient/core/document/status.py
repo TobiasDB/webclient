@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from ...collection import Field
 from ..web_core import Backing
@@ -16,7 +16,7 @@ class StatusBacking(Backing):
     """Status / value ops, available even on a not-ok document: ``is_ok`` /
     ``is_empty`` (a ``Field``), ``message`` (the error text)."""
 
-    provides = frozenset({"is_ok", "is_empty", "ref", "summary", "reload"})
+    provides = frozenset({"is_ok", "is_empty", "ref", "reload"})
     props = frozenset({"message"})
     gate = "ok"
 
@@ -33,15 +33,6 @@ class StatusBacking(Backing):
         return cast(
             "DocumentCore", core._client.loop().run(core._client._areload(core))
         )
-
-    def summary(self, core: "DocumentCore") -> dict[str, Any]:
-        """A page digest: url / ok, plus title + markdown when available."""
-        out: dict[str, Any] = {"url": core.final_url or core.url, "ok": core.ok}
-        if core.has_op("title"):
-            out["title"] = core.dispatch("title")
-        if core.has_op("render"):
-            out["markdown"] = core.dispatch("render", "markdown")
-        return out
 
     def is_ok(self, core: "DocumentCore") -> "Field[bool]":
         return Field(core.ok)

@@ -16,7 +16,6 @@ T = TypeVar("T")
 M = TypeVar("M")  # a row model (e.g. a pydantic BaseModel) for project(model)
 
 if TYPE_CHECKING:
-    from .summary import Metadata, Structure, Transport
     from .surfaces import Document, Reference
 
 

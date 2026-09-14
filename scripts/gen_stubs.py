@@ -32,7 +32,7 @@ from webclient.collection import Field  # noqa: E402
 from webclient.core.client import WebClientCore  # noqa: E402
 from webclient.core.document import DocumentCore, Element  # noqa: E402
 from webclient.core.reference import ReferenceCore  # noqa: E402
-from webclient.summary import Metadata, Structure, Transport  # noqa: E402
+from webclient.summary import Metadata, Structure, Summary, Transport  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SURFACES = ROOT / "webclient" / "surfaces.py"
@@ -58,6 +58,7 @@ _NS = {
     "Transport": Transport,
     "Metadata": Metadata,
     "Structure": Structure,
+    "Summary": Summary,
     "Any": Any,
 }
 _SCALAR = {str: "str", int: "int", float: "float", bytes: "bytes", bool: "bool"}
@@ -66,6 +67,14 @@ _SKIP_FIELDS = {ReferenceCore: set[str](), DocumentCore: set[str]()}
 
 
 # -- type classification (was webclient/typeinfo.py; only the generator uses it)
+
+
+def _is_model(tp: Any) -> bool:
+    """A pydantic data model (e.g. ``Summary``) -- NOT a Core (those map to their
+    surface). A model return is a terminal value collected as a ``Lazy[T]``."""
+    from pydantic import BaseModel
+
+    return isinstance(tp, type) and issubclass(tp, BaseModel) and tp not in CORES
 
 
 def _classify(tp: Any) -> str:
@@ -173,10 +182,17 @@ def _render(tp: Any, tier: str) -> str:
     if typing.get_origin(inner) is Field:  # a value leaf
         base = _name(_element_type(inner))
         return f"Field[{base}]" if tier == "eager" else f"LazyField[{base}]"
-    base = _name(inner)  # a plain scalar
+    base = _name(inner)  # a plain scalar or a pydantic data model
+    if tier == "eager":
+        return base
     if tier == "client":
         return f"Lazy[{base}]"
-    return base if tier == "eager" else f"LazyField[{base}]"
+    # lazy tier: a scalar leaf is Field-wrapped by ``_materialize`` (chainable); a
+    # data model is a terminal value you collect -- a ``Lazy[T]`` handle, like
+    # ``project()`` -- since ``_materialize`` leaves a model unwrapped.
+    if _is_model(inner):
+        return f"Lazy[{base}]"
+    return f"LazyField[{base}]"
 
 
 def _field(tp: Any, tier: str) -> str:

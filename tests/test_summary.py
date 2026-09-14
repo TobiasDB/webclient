@@ -4,7 +4,7 @@ projections of a resolved Document (keys-not-values, no escalation)."""
 import pytest
 
 from webclient import WebClient
-from webclient.summary import Metadata, Structure, Transport
+from webclient.summary import Metadata, Structure, Summary, Transport
 
 PAGE = """
 <html lang="en">
@@ -77,6 +77,22 @@ def test_structure_facet_maps_body_shape(page):
     assert s.pagination == "next-link"
     assert s.media_img == 2
     assert s.word_count and s.reading_time_min == 1
+
+
+def test_summary_unifier_assembles_and_selects_facets(page):
+    full = page.summary()  # default: every applicable facet
+    assert isinstance(full, Summary)
+    assert full.transport and full.metadata and full.structure
+    assert (
+        full.runtime is None and full.probe is None
+    )  # not applicable to a static fetch
+    assert full.metadata.title == "Widgets"
+
+    only = page.summary("transport", "metadata")
+    assert only.transport and only.metadata and only.structure is None
+
+    less = page.summary(exclude="structure")
+    assert less.transport and less.metadata and less.structure is None
 
 
 def test_metadata_and_structure_absent_on_json(httpserver):

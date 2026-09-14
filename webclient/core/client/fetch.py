@@ -13,6 +13,7 @@ from ..reference import HttpMethod, ReferenceCore, from_url
 from ..web_core import Backing
 
 if TYPE_CHECKING:
+    from ...summary import Summary
     from . import WebClientCore
 
 
@@ -57,18 +58,19 @@ class FetchBacking(Backing):
             DocumentCore, ref.dispatch("resolve", optional=optional, error=error)
         )
 
-    def summary(self, core: "WebClientCore", url: Any, **kw: Any) -> "dict[str, Any]":
-        """Resolve ``url`` to a title + markdown digest (async-aware)."""
+    def summary(
+        self, core: "WebClientCore", url: Any, *include: str, **kw: Any
+    ) -> "Summary":
+        """Resolve ``url`` and project it to a :class:`Summary` (async-aware).
+        ``include`` selects facets (default: all applicable)."""
         ref = self.ref(core, url, **kw)
 
-        async def run() -> "dict[str, Any]":
+        async def run() -> "Summary":
             doc = await core.afetch(ref)
-            return cast("dict[str, Any]", doc.dispatch("summary"))
+            return cast("Summary", doc.dispatch("summary", *include))
 
         loop = core.loop()
-        return cast(
-            "dict[str, Any]", run() if loop.on_loop_thread() else loop.run(run())
-        )
+        return cast("Summary", run() if loop.on_loop_thread() else loop.run(run()))
 
 
 __all__ = ["FetchBacking"]

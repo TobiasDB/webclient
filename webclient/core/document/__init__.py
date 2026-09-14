@@ -23,7 +23,12 @@ from .events import EventBacking
 from .html import HtmlBacking
 from .json import JsonBacking
 from .status import StatusBacking
-from .summary import MetadataBacking, StructureBacking, TransportBacking
+from .summary import (
+    MetadataBacking,
+    StructureBacking,
+    SummaryBacking,
+    TransportBacking,
+)
 
 if TYPE_CHECKING:
     from ..client import WebClientCore  # noqa: F401
@@ -73,6 +78,7 @@ class DocumentCore(WebCore, BaseModel):
         TransportBacking(),
         MetadataBacking(),
         StructureBacking(),
+        SummaryBacking(),
     )
 
     @property
