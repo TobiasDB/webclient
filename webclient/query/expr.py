@@ -113,7 +113,7 @@ class Expr:
     def _client_for(self, context: Any) -> Any:
         client = self._client or getattr(context, "_client", None)
         if client is None:
-            from .core.client_core import WebClientCore
+            from ..core.client_core import WebClientCore
 
             client = WebClientCore()  # process-local default (MVP)
         return client
@@ -172,7 +172,7 @@ def from_plan(plan: Plan | dict[str, Any], client: Any = None) -> Expr:
 def reference(url: str, **kwargs: Any) -> "Reference":
     """A lazy reference root starting from ``url``: an ``Expr`` recording a plan
     rooted at that request spec (statically a ``Reference``)."""
-    from .core.reference_core import from_url
+    from ..core.reference_core import from_url
 
     spec = from_url(url, **kwargs).model_dump()
     return cast("Reference", Expr(Plan(root="Reference", source=spec)))
@@ -236,8 +236,8 @@ def filter(collection: Any, *predicates: Any) -> Any:
 #: the lazy roots -- an ``Expr`` rooted at each surface (statically the surface
 #: it authors plans for; at runtime an ``Expr``).
 if TYPE_CHECKING:
-    from .collection import Collection
-    from .surfaces import Document, Reference
+    from ..collection import Collection
+    from ..surfaces import Document, Reference
 
     doc: "Document"
     ref: "Reference"
@@ -260,7 +260,7 @@ class WebQuery:
     ``many``."""
 
     if TYPE_CHECKING:
-        from .models import LazyCollection, LazyDocument, LazyField, LazyReference
+        from ..models import LazyCollection, LazyDocument, LazyField, LazyReference
 
         doc: "LazyDocument"
         ref: "LazyReference"

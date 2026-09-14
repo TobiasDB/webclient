@@ -20,7 +20,7 @@ from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconne
 from fastapi.responses import JSONResponse
 
 from .errors import WebException
-from .expr import from_plan
+from .query.expr import from_plan
 from .surfaces import Document, Reference, WebClient
 
 

@@ -16,8 +16,8 @@ from typing import Any, cast
 import httpx
 from pydantic import PrivateAttr
 
-from ..expr import Expr
-from ..plan import Plan
+from ..query.expr import Expr
+from ..query.plan import Plan
 from .client_core import WebClientCore, _materialize
 from .reference_core import HttpMethod, ReferenceCore
 from .reference_core import from_url as _core_from_url

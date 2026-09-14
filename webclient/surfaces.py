@@ -202,8 +202,8 @@ class Session:
         self._core = core
 
     def ref(self, url: str, method: HttpMethod = "get", **kw: Any) -> Any:
-        from .expr import Expr
-        from .plan import Plan
+        from .query.expr import Expr
+        from .query.plan import Plan
 
         spec = _core_from_url(url, method, **kw).model_dump()
         return Expr(Plan(root="Reference", source=spec), self._core)
@@ -283,8 +283,8 @@ class _ClientBase:
                 raise AttributeError(name)
             core = object.__getattribute__(self, "_core")
             if name in type(core).ops():
-                from .expr import Expr
-                from .plan import Plan
+                from .query.expr import Expr
+                from .query.plan import Plan
 
                 return getattr(Expr(Plan(root="WebClient"), core), name)
             raise AttributeError(name)

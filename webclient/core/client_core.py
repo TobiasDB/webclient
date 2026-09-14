@@ -407,7 +407,7 @@ class WebClientCore(WebCore, BaseModel):
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
         """Run a recorded plan on this engine (sync bridge). A remote subclass
         swaps this for an HTTP round-trip; ``stream=True`` yields rows."""
-        from ..executor import evaluate
+        from ..query.executor import evaluate
 
         if stream:
             return self._stream(expr, context)
@@ -417,7 +417,7 @@ class WebClientCore(WebCore, BaseModel):
         """Await a plan on the engine loop without blocking the caller's loop."""
         import asyncio
 
-        from ..executor import aevaluate
+        from ..query.executor import aevaluate
 
         result = await asyncio.wrap_future(
             self.loop().submit(aevaluate(expr, context, client=self))
@@ -429,7 +429,7 @@ class WebClientCore(WebCore, BaseModel):
         events (a ``_pump`` task feeds a bounded queue on the engine loop)."""
         from ..collection import Field
         from ..events import PlanEvent
-        from ..executor import astream
+        from ..query.executor import astream
 
         self.bus.publish(PlanEvent(phase="started"))
         count = 0
@@ -444,7 +444,7 @@ class WebClientCore(WebCore, BaseModel):
         bridged from the engine loop to the caller's loop as they complete)."""
         from ..collection import Field
         from ..events import PlanEvent
-        from ..executor import astream as _astream
+        from ..query.executor import astream as _astream
 
         self.bus.publish(PlanEvent(phase="started"))
         count = 0

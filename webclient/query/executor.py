@@ -86,7 +86,7 @@ def _row_of(value: Any) -> dict[str, Any] | None:
 def truthy(value: Any) -> bool:
     """Whether an evaluated value counts as true (a not-ok surface/field is
     false; otherwise normal truthiness)."""
-    from .collection import Field
+    from ..collection import Field
 
     if isinstance(value, Field):
         return bool(value)
@@ -112,7 +112,7 @@ async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> An
 async def _arun(
     value: Any, steps: list[Step], i: int, context: Any, client: Any
 ) -> Any:
-    from .collection import Collection
+    from ..collection import Collection
 
     while i < len(steps):
         step = steps[i]
@@ -152,7 +152,7 @@ async def _aapply(
         op = getattr(value, step.name, None)
         result = op() if callable(op) else op
         if _iscoro(result):
-            from .surface import wrap
+            from ..surface import wrap
 
             result = wrap(await cast(Any, result))
         return result, i + 1
@@ -166,7 +166,7 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
         if row is not None:
             column = row.get(await _aarg(call.args[0], context, client))
             if name == "field":
-                from .collection import Field
+                from ..collection import Field
 
                 return column if isinstance(column, Field) else Field(column)
             return column
@@ -178,7 +178,7 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
     kwargs = {k: await _aarg(v, context, client) for k, v in call.kwargs.items()}
     result = getattr(value, name)(*args, **kwargs)
     if _iscoro(result):  # an IO op (resolve): await, then wrap the core it yields
-        from .surface import wrap
+        from ..surface import wrap
 
         return wrap(await result)
     return result
@@ -199,15 +199,15 @@ def _start(plan: Any, context: Any, client: Any) -> Any:
     authoring verbs the walk dispatches), a reconstructed Reference (source
     plan), or the passed context (doc/ref/field roots)."""
     if plan.root == "WebClient":
-        from .surface import wrap
+        from ..surface import wrap
 
         if client is None:
             raise ValueError("a WebClient-rooted plan needs a bound client")
         return wrap(client)  # an eager client surface -> dispatches ref/fetch/...
     if plan.source is not None and "document_id" not in plan.source:
-        from .core.reference_core import ReferenceCore
-        from .core.session_core import WebSessionCore
-        from .surface import wrap
+        from ..core.reference_core import ReferenceCore
+        from ..core.session_core import WebSessionCore
+        from ..surface import wrap
 
         core = ReferenceCore(**plan.source)
         if isinstance(context, WebSessionCore):  # a session-bound reference
@@ -239,7 +239,7 @@ async def astream(
     optionally preceded by ``extract``/``filter``) and a terminal element op
     (e.g. ``.text_content``). Any other plan falls back to evaluate-then-yield.
     """
-    from .collection import Collection
+    from ..collection import Collection
 
     if not isinstance(expr, Expr):
         for row in expr if isinstance(expr, list) else [expr]:
@@ -316,8 +316,8 @@ async def _astream_collection(
     """Stream the final fan-out of ``base`` under ``shaping`` as elements
     complete. Rows (``...project()``) or per-element op results are yielded the
     moment each element finishes; a filtered-out element yields nothing."""
-    from .collection import Field, _raw, _row_of
-    from .errors import RETURN, default_policy
+    from ..collection import Field, _raw, _row_of
+    from ..errors import RETURN, default_policy
 
     items = list(base)
     is_project = (
@@ -362,7 +362,7 @@ def evaluate(expr: Any, context: Any = None, *, client: Any = None) -> Any:
     if not isinstance(expr, Expr):
         return expr
     client = client or expr._client or getattr(context, "_client", None)
-    from .core.client_core import WebClientCore
+    from ..core.client_core import WebClientCore
 
     engine = client if client is not None else WebClientCore()
     return engine.loop().run(aevaluate(expr, context, client=client))

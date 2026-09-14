@@ -32,7 +32,7 @@ from webclient.models import (
     LazyField,
     LazyReference,
 )
-from webclient.plan import Plan
+from webclient.query.plan import Plan
 
 
 class _Row(BaseModel):

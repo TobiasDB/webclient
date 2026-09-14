@@ -4,8 +4,8 @@ return types, refuses ``_``-names, JSON round-trips, validates on the wire."""
 import pytest
 
 from webclient import Reference, doc, field, from_plan, many, ref, reference
-from webclient.expr import Expr
-from webclient.plan import Plan, Step
+from webclient.query.expr import Expr
+from webclient.query.plan import Plan, Step
 
 
 def kinds(expr):

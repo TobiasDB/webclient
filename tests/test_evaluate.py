@@ -16,7 +16,7 @@ from webclient import (
     reference,
     when,
 )
-from webclient.executor import fan_out, fan_out_stream
+from webclient.query.executor import fan_out, fan_out_stream
 
 CARDS = """
 <html><body>

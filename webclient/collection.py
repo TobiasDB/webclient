@@ -154,7 +154,7 @@ class Collection(Generic[T]):
         an earlier one via ``field``; chained extracts accumulate); elements are
         evaluated concurrently, bounded by the pool. Fields store unwrapped."""
         from .errors import RETURN, default_policy
-        from .executor import aevaluate, fan_out
+        from .query.executor import aevaluate, fan_out
 
         async def one(el: Any) -> None:
             row = _row_of(el)
@@ -170,7 +170,7 @@ class Collection(Generic[T]):
     async def afilter(self, *predicates: Any) -> "Collection[T]":
         """Keep the elements for which every predicate is truthy."""
         from .errors import RETURN, default_policy
-        from .executor import aevaluate, fan_out, truthy
+        from .query.executor import aevaluate, fan_out, truthy
 
         async def keep(el: Any) -> bool:
             for p in predicates:
@@ -184,7 +184,7 @@ class Collection(Generic[T]):
         return self._derive(kept)
 
     def _limit(self) -> int:
-        from .executor import _fanout_limit
+        from .query.executor import _fanout_limit
 
         return _fanout_limit(self._client)
 

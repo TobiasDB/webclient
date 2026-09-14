@@ -16,7 +16,7 @@ from .events import (
     NetworkEvent,
     PlanEvent,
 )
-from .expr import (
+from .query.expr import (
     doc,
     field,
     filter,
