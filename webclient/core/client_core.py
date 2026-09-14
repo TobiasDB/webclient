@@ -11,6 +11,7 @@ round-trip -- so the surface is unchanged; only the core differs.
 
 from __future__ import annotations
 
+import threading
 from typing import Any, ClassVar, cast
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
@@ -59,7 +60,13 @@ def _retry_after_seconds(value: str | None) -> float | None:
 
 class NameScope:
     """An ordered, optionally LRU-capped map of scoped names to objects. Names
-    are ``{kind}:{scope:03d}-{seq:03d}``; refs and docs share the scope's seq."""
+    are ``{kind}:{scope:03d}-{seq:03d}``; refs and docs share the scope's seq.
+
+    A lock guards every mutation: ``add`` runs on the engine loop (registering a
+    resolved doc/ref) while ``get`` runs on the caller's thread (name recovery),
+    so the ``OrderedDict``'s ``move_to_end``/``popitem`` and the ``seq`` counter
+    can be touched from two threads at once -- unsynchronised that corrupts the
+    dict (mutated-during-iteration / lost names)."""
 
     def __init__(self, index: int, cap: int | None = None) -> None:
         from collections import OrderedDict
@@ -68,27 +75,32 @@ class NameScope:
         self.cap = cap
         self.seq = 0
         self._items: "OrderedDict[str, Any]" = OrderedDict()
+        self._lock = threading.Lock()
 
     def add(self, kind: str, obj: Any) -> str:
-        self.seq += 1
-        name = f"{kind}:{self.index:03d}-{self.seq:03d}"
-        self._items[name] = obj
-        if self.cap is not None:
-            while len(self._items) > self.cap:
-                self._items.popitem(last=False)  # evict least-recent
-        return name
+        with self._lock:
+            self.seq += 1
+            name = f"{kind}:{self.index:03d}-{self.seq:03d}"
+            self._items[name] = obj
+            if self.cap is not None:
+                while len(self._items) > self.cap:
+                    self._items.popitem(last=False)  # evict least-recent
+            return name
 
     def get(self, name: str) -> Any:
-        obj = self._items.get(name)
-        if obj is not None:
-            self._items.move_to_end(name)  # LRU touch
-        return obj
+        with self._lock:
+            obj = self._items.get(name)
+            if obj is not None:
+                self._items.move_to_end(name)  # LRU touch
+            return obj
 
     def clear(self) -> None:
-        self._items.clear()
+        with self._lock:
+            self._items.clear()
 
     def __len__(self) -> int:
-        return len(self._items)
+        with self._lock:
+            return len(self._items)
 
 
 class FetchBacking(Backing):
@@ -169,6 +181,7 @@ class WebClientCore(WebCore, BaseModel):
     _closed: bool = PrivateAttr(default=False)
     _scope: Any = PrivateAttr(default=None)  # the client's NameScope (000)
     _scope_counter: int = PrivateAttr(default=0)  # next session scope index
+    _scope_lock: Any = PrivateAttr(default_factory=threading.Lock)  # guards ^
     _bus: Any = PrivateAttr(default=None)  # EventBus (lazy)
     _sessions: list[Any] = PrivateAttr(default_factory=list)  # sessions to close
     _host_next: dict[str, float] = PrivateAttr(  # host -> earliest next request time
@@ -198,9 +211,12 @@ class WebClientCore(WebCore, BaseModel):
         )
 
     def new_scope(self) -> NameScope:
-        """A fresh scope for a session (index 1, 2, ...)."""
-        self._scope_counter += 1
-        return NameScope(self._scope_counter)
+        """A fresh scope for a session (index 1, 2, ...). Locked so two sessions
+        created off-thread cannot collide on the same scope index."""
+        with self._scope_lock:
+            self._scope_counter += 1
+            index = self._scope_counter
+        return NameScope(index)
 
     def _scopes(self) -> list[Any]:
         """The client scope plus every live session scope."""

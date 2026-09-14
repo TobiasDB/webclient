@@ -76,3 +76,68 @@ def test_failed_fetch_is_a_not_ok_document(site, wc):
     assert doc.ok is False and doc.error is not None
     assert doc.error.type == "HTTPStatus" and "404" in doc.message
     assert doc.is_ok().get() is False
+
+
+def test_name_scope_is_thread_safe_under_concurrent_add_get():
+    """NameScope.add runs on the engine loop while .get runs on the caller's
+    thread; the lock keeps concurrent OrderedDict mutation from corrupting it."""
+    import threading
+
+    from webclient.core.client_core import NameScope
+
+    scope = NameScope(0, cap=64)
+    errors: list[BaseException] = []
+    names: list[str] = []
+    lock = threading.Lock()
+
+    def adder() -> None:
+        try:
+            for _ in range(500):
+                n = scope.add("doc", object())
+                with lock:
+                    names.append(n)
+        except BaseException as exc:  # a race would raise here
+            errors.append(exc)
+
+    def getter() -> None:
+        try:
+            for _ in range(500):
+                with lock:
+                    sample = names[-1] if names else None
+                if sample is not None:
+                    scope.get(sample)
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=adder) for _ in range(4)]
+    threads += [threading.Thread(target=getter) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors  # no mutated-during-iteration / KeyError
+    assert len(scope) == 64  # cap held exactly, no lost/duplicated entries
+
+
+def test_new_scope_indices_are_unique_under_concurrency():
+    """Two sessions created off-thread must not collide on a scope index."""
+    import threading
+
+    with WebClient() as wc:
+        indices: list[int] = []
+        lock = threading.Lock()
+
+        def make() -> None:
+            for _ in range(50):
+                s = wc._core.new_scope()
+                with lock:
+                    indices.append(s.index)
+
+        threads = [threading.Thread(target=make) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(indices) == len(set(indices))  # all unique, none lost to a race
