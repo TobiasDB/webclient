@@ -17,6 +17,7 @@ from typing import Any
 from webclient import (
     RETURN,
     DOMUpdateEvent,
+    Event,
     NavigationEvent,
     Renderer,
     WebClient,
@@ -124,12 +125,12 @@ def main() -> None:
     with WebClient(default_headers={"user-agent": "webclient-demo"}) as wc:
 
         # [M2] Live event stream: everything observable crosses one bus.
-        wc.bus.subscribe(
-            "network",
-            lambda e: print(
-                f"event:       {e.topic} #{e.seq} {e.status_code} {e.request.path}"
-            ),
-        )
+        def _on_network(e: Event) -> None:
+            code = getattr(e, "status_code", None)
+            path = getattr(getattr(e, "request", None), "path", "")
+            print(f"event:       {e.topic} #{e.seq} {code} {path}")
+
+        wc.bus.subscribe("network", _on_network)
 
         # [M2] Fetch through a redirect; loud by default, optional=True lenient.
         shop = wc.ref(f"{base}/old").resolve().collect()
@@ -350,13 +351,12 @@ def main() -> None:
                 title=wq.doc.select(".title").text_content,
                 url=wq.doc.select("a").attr("href"),
             )
-            .collect()
             .project()
         )
         print("search:     ", [(h["title"], h["url"].path) for h in hits])
         # summary(): a token-lean, deterministic overview -- facet sections
         # (transport / metadata / structure), keys-not-values.
-        overview = wc.summary(f"{base}/").collect()
+        overview = wc.summary(f"{base}/")
         assert overview.transport and overview.metadata and overview.structure
         print(
             "summary:    ",
@@ -460,20 +460,19 @@ def main() -> None:
     port = server.servers[0].sockets[0].getsockname()[1]
 
     with RemoteWebClient(f"http://127.0.0.1:{port}", token="demo") as rc:
-        # A fetched-and-collected document is a lightweight handle carrying its
-        # metadata (title/ok) inline -- no content, no local lxml/browser.
-        remote_doc = rc.fetch(f"{base}/").collect()
+        # The same eager surface over a remote core: rc.fetch(url) round-trips
+        # once and returns a lightweight handle carrying its metadata (title/ok)
+        # inline -- no content, no local lxml/browser.
+        remote_doc = rc.fetch(f"{base}/")
         print("\nremote fetch:  ", remote_doc.title, "| ok:", remote_doc.ok)
-        # Content ops: author the whole plan and collect() once -- one round trip
-        # each, evaluated server-side. collect() of a scalar is a Field, exactly
-        # as it is locally, so the same code types and runs against either core.
-        print(
-            "remote render: ",
-            rc.fetch(f"{base}/").render("markdown").collect().get().splitlines()[0],
-        )
+        # Content ops are eager too -- each round-trips server-side and returns the
+        # materialised value, exactly like the local client.
+        print("remote render: ", remote_doc.render("markdown").splitlines()[0])
+        # A multi-element fan-out is not per-element addressable server-side, so
+        # batch it through .lazy: one recorded plan, one round-trip.
         print(
             "remote select: ",
-            rc.fetch(f"{base}/").select_all(".title").text_content.collect(),
+            remote_doc.lazy.select_all(".title").text_content.collect(),
         )
         # identical plan API -- runs server-side, no local browser/lxml
         same_plan = (

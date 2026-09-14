@@ -21,7 +21,7 @@ def _client(client: WebClient | None) -> WebClient:
 
 def fetch_markdown(url: str, *, client: WebClient | None = None, **kw: Any) -> str:
     """Fetch ``url`` and return its content rendered as markdown."""
-    return _client(client).fetch(url, **kw).collect().render("markdown")
+    return _client(client).fetch(url, **kw).render("markdown")
 
 
 def fetch_text(
@@ -33,13 +33,13 @@ def fetch_text(
 ) -> str:
     """Fetch ``url`` and return its readable text (nav/chrome stripped by
     default)."""
-    page = _client(client).fetch(url, **kw).collect()
+    page = _client(client).fetch(url, **kw)
     return page.render("text", main_content_only=main_content_only)
 
 
 def links(url: str, *, client: WebClient | None = None, **kw: Any) -> list[str]:
     """Fetch ``url`` and return its outbound link URLs (absolute)."""
-    page = _client(client).fetch(url, **kw).collect()
+    page = _client(client).fetch(url, **kw)
     return [r.url for r in page.render("links")]
 
 
@@ -59,7 +59,7 @@ def extract(
     rows = _client(client).fetch(url, **kw).select_all(result)
     if limit is not None:
         rows = rows.limit(limit)
-    return rows.extract(**exprs).collect().project()
+    return rows.extract(**exprs).project()
 
 
 __all__ = ["fetch_markdown", "fetch_text", "links", "extract"]

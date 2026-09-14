@@ -67,7 +67,7 @@ def remote(httpserver):
 
 def test_fetch_returns_handle(remote):
     rc, server = remote
-    d = rc.fetch(server.url_for("/cards")).collect()
+    d = rc.fetch(server.url_for("/cards"))
     assert d.ok and d.kind == "html" and d.title == "Shop"  # cheap meta
     assert d.id
 
@@ -78,26 +78,37 @@ def test_auth_enforced(httpserver):
     with _Server(app) as base:
         rc = RemoteWebClient(base, token="wrong")
         with pytest.raises(RemoteError, match="401"):
-            rc.fetch(httpserver.url_for("/x")).collect()
+            rc.fetch(httpserver.url_for("/x"))
         rc.close()
     app.state.wc.close()
 
 
 def test_render_over_the_wire(remote):
     rc, server = remote
-    d = rc.fetch(server.url_for("/cards")).collect()  # lazy handle
-    assert "# Featured" in d.render("markdown").collect().get()
-    assert "Curated picks." in d.render("text").collect().get()
-    assert any(u.endswith("/i/1") for u in d.render("links").collect())
-    assert isinstance(d.render("elements").collect(), list)
+    d = rc.fetch(server.url_for("/cards"))  # eager: one round-trip -> a handle
+    assert "# Featured" in d.render("markdown")  # each op round-trips eagerly
+    assert "Curated picks." in d.render("text")
+    assert any(u.endswith("/i/1") for u in d.render("links"))
+    assert isinstance(d.render("elements"), list)
 
 
-def test_select_is_one_batched_call(remote):
+def test_eager_doc_ops_round_trip(remote):
     rc, server = remote
-    d = rc.fetch(server.url_for("/cards")).collect()
-    assert d.select(".title").text_content.collect() == "Aeropress"
-    assert d.select_all(".title").text_content.collect() == ["Aeropress", "Grinder"]
-    hrefs = d.select_all("a").attr("href").collect()
+    d = rc.fetch(server.url_for("/cards"))
+    assert d.title == "Shop"  # inline metadata, no round-trip
+    assert d.select(".title").text_content == "Aeropress"  # eager: a value, not a plan
+    assert d.select("a").attr("href").endswith("/i/1")  # a single narrowed op
+    # a multi-element fan-out is not per-element addressable server-side -- batch
+    # it through .lazy (one plan, one round-trip); see the test below.
+
+
+def test_lazy_batches_doc_ops_into_one_call(remote):
+    rc, server = remote
+    d = rc.fetch(server.url_for("/cards"))
+    # d.lazy records the whole chain and runs it in ONE round-trip
+    assert d.lazy.select(".title").text_content.collect() == "Aeropress"
+    assert d.lazy.select_all(".title").text_content.collect() == ["Aeropress", "Grinder"]
+    hrefs = d.lazy.select_all("a").attr("href").collect()
     assert all(u.startswith("http") for u in hrefs)
 
 
@@ -157,7 +168,7 @@ def test_sessions(remote, httpserver):
     assert session.status == "running"
     session.fetch(server.url_for("/login")).collect()  # sets a cookie server-side
     d = session.fetch(server.url_for("/whoami")).collect()
-    assert d.render("text").collect().get().strip() == "t=1"
+    assert d.render("text").strip() == "t=1"
     session.close()
     assert session.status == "closed"
 
@@ -201,10 +212,9 @@ def test_remote_client_times_out_on_a_hung_service(httpserver):
         return Response("{}", content_type="application/json")
 
     httpserver.expect_request("/execute").respond_with_handler(slow)
-    core = RemoteWebClientCore(url=httpserver.url_for(""), timeout=0.1)
-    rc = WebClient(core=core)
+    rc = RemoteWebClientCore(url=httpserver.url_for(""), timeout=0.1)  # IS the client
     with pytest.raises(httpx.TimeoutException):
-        rc.fetch("https://example.com").collect()
+        rc.fetch("https://example.com")
     rc.close()
 
 
@@ -214,7 +224,7 @@ def test_remote_surfaces_a_structured_error(remote):
     rc, server = remote
     server.expect_request("/boom").respond_with_data("no", status=500)
     with pytest.raises(RemoteError) as info:
-        rc.fetch(server.url_for("/boom")).collect()
+        rc.fetch(server.url_for("/boom"))
     err = info.value.error
     assert err is not None
     assert err.type == "HTTPStatus"

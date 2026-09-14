@@ -135,7 +135,7 @@ def create_app(
         _auth(authorization)
         wc_: WebClient = app.state.wc
         try:
-            expr = from_plan(body["plan"], wc_._core)
+            expr = from_plan(body["plan"], wc_)
         except ValueError as exc:  # unknown root / private name / unknown op
             return _error(
                 422,
@@ -158,19 +158,19 @@ def create_app(
             context: Any = app.state.docs[body["document_id"]]
         elif "context_plan" in body:  # a client ref/fetch context plan
             try:
-                context = from_plan(body["context_plan"], wc_._core)
+                context = from_plan(body["context_plan"], wc_)
             except ValueError as exc:
                 return _error(
                     422, "InvalidPlan", str(exc), hint="the context_plan is malformed"
                 )
         elif sid and sid in app.state.sessions:  # resolve through the session
-            context = app.state.sessions[sid]._core
+            context = app.state.sessions[sid]
         elif "url" in body:
             context = wc_.ref(body["url"])
         else:
             context = None
         try:
-            result = wc_._core.execute(expr, context)  # the realization machinery
+            result = wc_.execute(expr, context)  # the realization machinery
         except WebException as exc:  # a fetch/resolve failure -> structured error
             err = exc.error
             return _error(

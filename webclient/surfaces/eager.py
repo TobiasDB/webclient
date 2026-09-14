@@ -10,7 +10,7 @@ from ..core.client import WebClientCore
 from ..core.document import DocumentCore
 from ..core.reference import HttpMethod, ReferenceCore
 from ..core.reference import from_url as _core_from_url
-from ..core.web_core import WebCore
+from ..core.session import WebSessionCore
 
 if TYPE_CHECKING:
     from ..collection import Collection, Field
@@ -98,9 +98,47 @@ if TYPE_CHECKING:  # the eager surfaces are pure typing stubs over their cores
         # fmt: on
         # >>> end generated <<<
 
+    class WebClient(WebClientCore):
+        """The synchronous eager client -- a ``WebClientCore`` itself, typed with
+        its authoring verbs. Eager: ``wc.fetch(url)`` resolves and returns a
+        ``Document`` (no ``.collect()``); ``wc.ref(url)`` a ``Reference``. Batch or
+        defer with ``wc.lazy`` (records a plan). A pure typing stub: at runtime
+        ``WebClient is WebClientCore``; the ``async``/remote clients are the same
+        surface over a different-dispatcher core."""
+
+        @property
+        def lazy(self) -> "LazyWebClient": ...  # record a plan to batch/defer
+
+        # >>> generated: WebClient eager surface <<<
+        # fmt: off
+        def fetch(self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "Document": ...
+        def ref(self, url: Any, method: str = ..., **kw: Any) -> "Reference": ...
+        def summary(self, url: Any, *include: str, **kw: Any) -> "Summary": ...
+        # fmt: on
+        # >>> end generated <<<
+
+    class Session(WebSessionCore):
+        """A session (eager) -- a scoped ``WebClientCore`` with its own identity
+        (cookies/headers/ttl). ``session.fetch(url)`` / ``session.ref(url)`` resolve
+        eagerly, threading the session identity. A pure typing stub: at runtime
+        ``Session is WebSessionCore``."""
+
+        @property
+        def lazy(self) -> "LazyWebClient": ...
+
+        # >>> generated: Session eager surface <<<
+        # fmt: off
+        def fetch(self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "Document": ...
+        def ref(self, url: Any, method: str = ..., **kw: Any) -> "Reference": ...
+        def summary(self, url: Any, *include: str, **kw: Any) -> "Summary": ...
+        # fmt: on
+        # >>> end generated <<<
+
 else:  # at runtime a surface IS its core
     Reference = ReferenceCore
     Document = DocumentCore
+    WebClient = WebClientCore
+    Session = WebSessionCore
 
 #: A live (browser-backed) document is a Document with the ``page`` capability.
 LiveDocument = Document
@@ -123,8 +161,8 @@ _DEFAULT: "WebClient | None" = None
 def default_client() -> "WebClient":
     """A process-local shared client, recreated after it is closed."""
     global _DEFAULT
-    if _DEFAULT is None or _DEFAULT._core._closed:
-        _DEFAULT = WebClient()
+    if _DEFAULT is None or _DEFAULT._closed:
+        _DEFAULT = cast("WebClient", WebClientCore())
     return _DEFAULT
 
 
@@ -140,66 +178,16 @@ class Renderer:
         raise NotImplementedError
 
 
-class Session:
-    """A logical identity (cookies/headers/ttl) spanning fetches. ``ref`` and
-    ``fetch`` return lazy references bound to this session."""
-
-    def __init__(self, core: Any) -> None:
-        self._core = core
-
-    def ref(self, url: str, method: HttpMethod = "get", **kw: Any) -> Any:
-        from ..query.expr import Expr
-        from ..query.plan import Plan
-
-        spec = _core_from_url(url, method, **kw).model_dump()
-        return Expr(Plan(root="Reference", source=spec), self._core)
-
-    def fetch(self, url: str, **kw: Any) -> Any:
-        return self.ref(url, **kw).resolve()
-
-    def close(self) -> None:
-        self._core.close()
-
-    def __enter__(self) -> "Session":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.close()
-
-    def document(self, name: str) -> Any:
-        """Recover a document from this session's scope, or ``None``."""
-        from ._base import wrap
-
-        core = self._core.document(name)
-        return wrap(core) if core is not None else None
-
-    @property
-    def id(self) -> str:
-        return cast(str, self._core.id)
-
-    @property
-    def status(self) -> str:
-        return cast(str, self._core.status)
-
-    @property
-    def expires_at(self) -> Any:
-        return self._core.expires_at
-
-    @property
-    def cookies(self) -> dict[str, str]:
-        return cast("dict[str, str]", self._core.cookies)
-
-
 class _ClientBase:
-    """A thin sync/async/lazy interface over a ``WebClientCore``. It has no verb
-    bodies: like ``Document``, the authoring verbs are the core's backings, but
-    here the client is *lazy* -- ``__getattr__`` records the call into a
-    ``WebClient``-rooted plan (the executor dispatches the eager backing when the
-    plan runs). The generated stubs give the verbs their types. The plan is
-    realized by ``.collect()``/``.acollect()`` on the recorded handle, which runs
-    the core's execute machinery (sync here, awaited in ``AsyncWebClient``, remote
-    if the core is a remote subclass); session/recovery/lifecycle are the
-    surface's own wrappers."""
+    """The async client's lazy recorder base over a ``WebClientCore``. It has no
+    verb bodies: ``__getattr__`` records each authoring verb into a ``WebClient``-
+    rooted plan (the executor dispatches the eager backing when the plan runs),
+    realized by ``await ...acollect()`` / ``.astream()``. The generated stubs give
+    the verbs their types; session / recovery / lifecycle are wrappers here.
+
+    (The *sync* client is the eager ``WebClientCore`` itself -- ``WebClient`` --
+    which resolves each verb immediately; this deferred base is what the async
+    client's ``await`` needs.)"""
 
     _core: WebClientCore
 
@@ -267,10 +255,9 @@ class _ClientBase:
         return self
 
     def session(self, **kw: Any) -> Any:
-        """A new session sharing this client's engine. A core-swap decides its
-        kind (local ``Session`` surface, or a remote session handle)."""
-        made = self._core.session(**kw)
-        return Session(made) if isinstance(made, WebCore) else made
+        """A new session sharing this client's engine -- a scoped core (which IS
+        its own surface) or a remote session handle."""
+        return self._core.session(**kw)
 
     def document(self, name: str) -> Document | None:
         """Recover a materialised Document by name (same surface object), or
@@ -292,22 +279,6 @@ class _ClientBase:
         self._core.release(doc)
 
 
-class WebClient(_ClientBase):
-    """The synchronous client surface: build lazy plans and realise them with
-    ``.collect()`` / ``.stream()``. Owns (or is handed) a ``WebClientCore``. The
-    client has no ``execute`` -- realization goes through the plan, not the
-    client (``plan.collect(...)`` calls the core internally)."""
-
-    def close(self) -> None:
-        self._core.close()
-
-    def __enter__(self) -> "WebClient":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self._core.close()
-
-
 class AsyncWebClient(_ClientBase):
     """The async client surface: the very same plans as ``WebClient``, realised
     with ``await plan.acollect()`` / ``plan.astream()`` on the engine loop off
@@ -325,13 +296,14 @@ class AsyncWebClient(_ClientBase):
         await self.aclose()
 
 
-def RemoteWebClient(url: str, token: str | None = None) -> WebClient:
-    """A ``WebClient`` over a remote core -- literally the same surface, executed
+def RemoteWebClient(url: str, token: str | None = None) -> "WebClient":
+    """A ``WebClient`` over a remote core -- literally the same eager surface, run
     server-side. A factory, not a subclass: the remote-ness is entirely in the
-    core it swaps in (``RemoteWebClientCore``)."""
+    core (``RemoteWebClientCore``), a different-dispatcher ``WebClientCore`` whose
+    client verbs round-trip a one-step plan to the service."""
     from ..core.remote import RemoteWebClientCore
 
-    return WebClient(core=RemoteWebClientCore(url=url, token=token))
+    return cast("WebClient", RemoteWebClientCore(url=url, token=token))
 
 
 __all__ = [

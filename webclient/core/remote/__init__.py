@@ -28,19 +28,60 @@ def _url_of(source: dict[str, Any]) -> str:
 
 
 class _RemoteDoc:
-    """A server-side document handle: metadata inline, ops as remote plans."""
+    """A server-side document handle -- the eager remote surface. Metadata
+    (title/ok/kind/id) is inline; every other attribute/op round-trips a plan
+    rooted at the handle's id and returns the materialised value (a value attr ->
+    its value, a call op -> a value / handle / a ``Collection`` of handles), so it
+    matches the eager ``Document`` type. Chain a batch through ``.lazy`` (one plan,
+    one round-trip) rather than a round-trip per op."""
 
     def __init__(self, meta: dict[str, Any], core: "RemoteWebClientCore") -> None:
         object.__setattr__(self, "_meta", meta)
         object.__setattr__(self, "_core", core)
 
+    def _root(self) -> Expr:
+        core = object.__getattribute__(self, "_core")
+        meta = object.__getattribute__(self, "_meta")
+        return Expr(Plan(root="Document", source={"document_id": meta["id"]}), core)
+
+    @property
+    def lazy(self) -> Expr:
+        """A recorder rooted at this remote document -- batch a chain of ops into
+        one round-trip: ``d.lazy.select(...).text_content.collect()``."""
+        return self._root()
+
+    def collect(self, context: Any = None) -> "_RemoteDoc":
+        """An eager handle is already materialised (parity with ``WebCore``)."""
+        return self
+
+    def _wrap(self, value: Any) -> Any:
+        from ...collection import Collection, Field
+
+        if isinstance(value, Field):
+            return value.get()
+        if isinstance(value, list) and value and isinstance(value[0], _RemoteDoc):
+            core = object.__getattribute__(self, "_core")
+            return Collection(value, client=core, root=self._meta["id"])
+        return value
+
     def __getattr__(self, name: str) -> Any:
         meta = object.__getattribute__(self, "_meta")
-        if name in meta:  # title / ok / kind / id
+        if name in meta:  # title / ok / kind / id -- inline, no round-trip
             return meta[name]
-        core = object.__getattribute__(self, "_core")
-        root = Expr(Plan(root="Document", source={"document_id": meta["id"]}), core)
-        return getattr(root, name)
+        if name.startswith("_"):
+            raise AttributeError(name)
+        from ..document import DocumentCore
+
+        if name in DocumentCore.prop_ops():  # a value attr -> round-trip its value
+            return self._wrap(getattr(self._root(), name).collect())
+        if name in DocumentCore.ops():  # a call op -> round-trip on call
+
+            def _call(*args: Any, **kwargs: Any) -> Any:
+                kwargs.pop("_collect", None)
+                return self._wrap(getattr(self._root(), name)(*args, **kwargs).collect())
+
+            return _call
+        raise AttributeError(name)
 
     def __repr__(self) -> str:
         return f"_RemoteDoc({object.__getattribute__(self, '_meta')})"
@@ -68,6 +109,27 @@ class RemoteWebClientCore(WebClientCore):
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+
+    # -- eager client verbs: the remote dispatcher -----------------------------
+    # The remote core has no local engine, so it cannot dispatch the FetchBacking
+    # ops in-process (there is nothing to fetch with). Instead each client verb is
+    # wrapped into a one-step ``WebClient`` plan and executed over the wire -- the
+    # "convert anything that is not a plan into a plan, then run it remotely" rule.
+    # ``fetch`` / ``summary`` resolve eagerly (one round-trip -> a ``_RemoteDoc``
+    # handle / a value); ``ref`` stays a lazy ``Expr`` so a portable plan can be
+    # collected against it (``plan.collect(rc.ref(url))``). Batch a doc's ops with
+    # ``rc.lazy`` (one plan, one round-trip) instead of per-op.
+    def _verb(self) -> Any:
+        return Expr(Plan(root="WebClient"), self)
+
+    def fetch(self, url: Any, **kw: Any) -> Any:
+        return self._verb().fetch(url, **kw).collect()
+
+    def summary(self, url: Any, *include: str, **kw: Any) -> Any:
+        return self._verb().summary(url, *include, **kw).collect()
+
+    def ref(self, url: Any, method: str = "get", **kw: Any) -> Any:
+        return self._verb().ref(url, method, **kw)
 
     # -- execution: one Plan POSTed to /execute ------------------------------
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:

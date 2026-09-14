@@ -118,6 +118,10 @@ class WebCore:
                 if name in cls.ops():
 
                     def _call(*args: Any, **kwargs: Any) -> Any:
+                        # an eager op is already materialised, so the lazy
+                        # recorder's per-call ``_collect=True`` escape hatch is a
+                        # no-op here (drop it before it reaches the backing).
+                        kwargs.pop("_collect", None)
                         return _wrap_result(self.dispatch(name, *args, **kwargs))
 
                     return _call

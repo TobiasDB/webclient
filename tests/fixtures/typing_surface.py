@@ -101,31 +101,35 @@ for _card in _page.select_all(".card"):  # iterating a Collection yields the ele
     assert_type(_card, Document)
 
 
-# -- two-tier client surface: entry points lazy; collect() -> eager ----------
-assert_type(_wc.ref("https://e.com"), LazyReference)
-assert_type(_wc.lazy.ref("https://e.com"), LazyReference)
-assert_type(_wc.fetch("https://e.com"), LazyDocument)
-assert_type(_wc.summary("https://e.com").collect(), Summary)
-assert_type(_wc.fetch("https://e.com").summary().collect(), Summary)
-assert_type(_wc.fetch("https://e.com").transport().collect(), Transport)
+# -- eager client surface: every verb resolves immediately (no collect()) ----
+assert_type(_wc.ref("https://e.com"), Reference)
+assert_type(_wc.fetch("https://e.com"), Document)
+assert_type(_wc.summary("https://e.com"), Summary)
+assert_type(_wc.fetch("https://e.com").summary(), Summary)
+assert_type(_wc.fetch("https://e.com").transport(), Transport)
 assert_type(
     _wc.fetch("https://e.com")
     .select_all(".card")
     .extract(t=wq.doc.text_content)
-    .project()
-    .collect(),
+    .project(),
     list[dict[str, Any]],
 )
-assert_type(_wc.fetch("https://e.com").select(".t"), LazyDocument)
-assert_type(_wc.fetch("https://e.com").attr("href"), LazyReference)
-assert_type(_wc.fetch("https://e.com").text_content, LazyField[str])
-assert_type(_wc.fetch("https://e.com").collect(), Document)
-assert_type(_wc.fetch("https://e.com").text_content.collect(), Field[str])
-assert_type(_wc.ref("https://e.com").resolve().collect(), Document)
+assert_type(_wc.fetch("https://e.com").select(".t"), Document)
+assert_type(_wc.fetch("https://e.com").attr("href"), Reference)
+assert_type(_wc.fetch("https://e.com").text_content, str)
+assert_type(_wc.fetch("https://e.com").collect(), Document)  # collect() is identity
+assert_type(_wc.ref("https://e.com").resolve(), Document)
 assert_type(
-    _wc.ref("https://e.com").resolve().select(".t").text_content.collect(), Field[str]
+    _wc.ref("https://e.com").resolve().select(".t").text_content, str
 )
-assert_type(_wc.ref("https://e.com").collect(), Reference)
+
+# -- .lazy: the batching/deferring recorder on the same client ---------------
+assert_type(_wc.lazy.ref("https://e.com"), LazyReference)
+assert_type(_wc.lazy.fetch("https://e.com"), LazyDocument)
+assert_type(_wc.lazy.summary("https://e.com").collect(), Summary)
+assert_type(_wc.lazy.fetch("https://e.com").select(".t"), LazyDocument)
+assert_type(_wc.lazy.fetch("https://e.com").text_content.collect(), Field[str])
+assert_type(_wc.lazy.ref("https://e.com").resolve().collect(), Document)
 
 _ac = AsyncWebClient()
 assert_type(_ac.fetch("https://e.com"), LazyDocument)

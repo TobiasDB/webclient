@@ -58,12 +58,12 @@ def test_summary_projects_a_page_overview(httpserver, wc):
         "<html><head><title>Hi</title></head><body><h1>Big</h1></body></html>",
         content_type="text/html",
     )
-    out = wc.summary(httpserver.url_for("/p")).collect()
+    out = wc.summary(httpserver.url_for("/p"))  # eager -> a Summary
     assert out.transport is not None and out.transport.ok
     assert out.metadata is not None and out.metadata.title == "Hi"
     assert out.structure is not None and out.structure.toc[0].text == "Big"
     # facet selection: only the requested section is populated
-    lean = wc.summary(httpserver.url_for("/p"), "transport").collect()
+    lean = wc.summary(httpserver.url_for("/p"), "transport")
     assert lean.transport is not None and lean.metadata is None
 
 

@@ -144,11 +144,10 @@ class Collection(Generic[T]):
 
                 def apply(el: Any) -> Any:
                     attr = getattr(el, name)
-                    # a prop op dispatches to a value (not callable); a call op
-                    # returns a dispatcher we invoke with the args.
-                    if isinstance(el, WebCore) and name in type(el).prop_ops():
-                        return attr
-                    return attr(*args, **kwargs)
+                    # a prop op already resolved to its value (not callable); a
+                    # call op returns a dispatcher we invoke with the args. Works
+                    # for a core surface and a remote handle alike.
+                    return attr(*args, **kwargs) if callable(attr) else attr
 
                 results = [apply(el) for el in self._items]
                 if results and all(isinstance(r, WebCore) for r in results):

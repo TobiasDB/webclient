@@ -13,7 +13,7 @@ differs.
 from __future__ import annotations
 
 import threading
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Self, cast
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
@@ -136,6 +136,12 @@ class WebClientCore(WebCore, BaseModel):
     )
 
     @property
+    def core(self) -> Self:
+        """The engine core. The eager surface IS the core, so ``wc.core is wc`` --
+        kept for call sites (and remote parity) that reach for ``.core``."""
+        return self
+
+    @property
     def bus(self) -> EventBus:
         if self._bus is None:
             self._bus = EventBus()
@@ -199,6 +205,9 @@ class WebClientCore(WebCore, BaseModel):
             self._loop = EngineLoop()
         return cast(EngineLoop, self._loop)
 
+    #: the engine loop under its older name (drives async fan-out / sync bridge).
+    _ensure_loop = loop
+
     @property
     def pool(self) -> Any:
         """The transport-lease pool (http clients + browser pages)."""
@@ -216,7 +225,7 @@ class WebClientCore(WebCore, BaseModel):
             self._loop.stop()
 
     # -- context manager: a core IS the eager client (``with WebClient() ...``) --
-    def __enter__(self) -> "WebClientCore":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:

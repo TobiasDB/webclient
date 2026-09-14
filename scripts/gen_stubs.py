@@ -32,6 +32,7 @@ from webclient.collection import Field  # noqa: E402
 from webclient.core.client import WebClientCore  # noqa: E402
 from webclient.core.document import DocumentCore, Element  # noqa: E402
 from webclient.core.reference import ReferenceCore  # noqa: E402
+from webclient.core.session import WebSessionCore  # noqa: E402
 from webclient.summary import (
     Metadata,
     Runtime,
@@ -451,10 +452,18 @@ def _body(region: str) -> str:
     if region == "collection element-op lifting":
         return _indented(lift_members(), 8)
     if region == "WebClient surface":
-        # an authoring root: only its verbs, in the client vocabulary (ref ->
-        # LazyReference, fetch -> LazyDocument, search -> Lazy[list[...]]); no
-        # data model.
+        # the async authoring root: its verbs in the client (lazy) vocabulary (ref
+        # -> LazyReference, fetch -> LazyDocument, summary -> Lazy[Summary]); no
+        # data model. Realized by ``await ...acollect()`` / ``.astream()``.
         verbs = members(WebClientCore, "client", fields=False, class_props=False)
+        return _indented(verbs, 8)
+    if region == "WebClient eager surface":
+        # the sync eager client: its verbs resolve immediately (fetch -> Document,
+        # ref -> Reference, summary -> Summary); no data model.
+        verbs = members(WebClientCore, "eager", fields=False, class_props=False)
+        return _indented(verbs, 8)
+    if region == "Session eager surface":
+        verbs = members(WebSessionCore, "eager", fields=False, class_props=False)
         return _indented(verbs, 8)
     raise KeyError(region)
 
@@ -462,6 +471,8 @@ def _body(region: str) -> str:
 REGIONS = [
     (SURFACES, "Reference eager surface"),
     (SURFACES, "Document eager surface"),
+    (SURFACES, "WebClient eager surface"),
+    (SURFACES, "Session eager surface"),
     (SURFACES, "WebClient surface"),
     (COLLECTION, "collection element-op lifting"),
     (MODELS, "lazy-tier"),
