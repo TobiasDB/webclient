@@ -46,7 +46,9 @@ def _inline(el: Any) -> str:
     parts = [el.text or ""]
     for child in el:
         tag = _tag(child)
-        if tag in _SKIP:
+        if tag in _SKIP or tag in ("ul", "ol", "table"):
+            # block children are rendered by _md_blocks, not inlined -- keep the
+            # tail text but do not concatenate the block's own text here.
             parts.append(child.tail or "")
             continue
         inner = _inline(child)
@@ -66,6 +68,42 @@ def _inline(el: Any) -> str:
     return _norm("".join(parts))
 
 
+def _list_md(el: Any, depth: int) -> list[str]:
+    """Markdown for a ``ul``/``ol``, recursing into nested lists with indentation.
+    Each item's own text comes from ``_inline`` (which skips its child lists)."""
+    lines: list[str] = []
+    ordered = _tag(el) == "ol"
+    idx = 0
+    for li in el:
+        if _tag(li) != "li":
+            continue
+        idx += 1
+        marker = f"{idx}." if ordered else "-"
+        lines.append("  " * depth + f"{marker} {_inline(li)}".rstrip())
+        for sub in li:
+            if _tag(sub) in ("ul", "ol"):
+                lines.extend(_list_md(sub, depth + 1))
+    return lines
+
+
+def _table_md(table: Any) -> str:
+    """A GFM pipe table: the first row is the header, the rest the body (ragged
+    rows are padded). Cells are the element's collapsed text."""
+    rows: list[list[str]] = []
+    for tr in table.iter("tr"):
+        cells = [_norm("".join(c.itertext())) for c in tr if _tag(c) in ("td", "th")]
+        if cells:
+            rows.append(cells)
+    if not rows:
+        return ""
+    width = max(len(r) for r in rows)
+    rows = [r + [""] * (width - len(r)) for r in rows]
+    md = ["| " + " | ".join(rows[0]) + " |", "| " + " | ".join(["---"] * width) + " |"]
+    for r in rows[1:]:
+        md.append("| " + " | ".join(r) + " |")
+    return "\n".join(md)
+
+
 def _md_blocks(el: Any, out: list[str]) -> None:
     for child in el:
         tag = _tag(child)
@@ -76,12 +114,13 @@ def _md_blocks(el: Any, out: list[str]) -> None:
         elif tag == "p":
             out.append(_inline(child))
         elif tag in ("ul", "ol"):
-            items = [
-                f"{'-' if tag == 'ul' else str(i + 1) + '.'} {_inline(li)}"
-                for i, li in enumerate(child.findall("li"))
-            ]
-            if items:
-                out.append("\n".join(items))
+            lines = _list_md(child, 0)
+            if lines:
+                out.append("\n".join(lines))
+        elif tag == "table":
+            table = _table_md(child)
+            if table:
+                out.append(table)
         elif tag == "pre":
             out.append("```\n" + "".join(child.itertext()).strip("\n") + "\n```")
         elif tag == "blockquote":

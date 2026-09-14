@@ -65,7 +65,9 @@ class Field(Generic[T]):
 
 
 def _raw(value: Any) -> Any:
-    """Unwrap a Field to its raw value (missing -> None); pass anything else."""
+    """Unwrap a Field to its raw value (missing -> None); pass anything else
+    (a core column -- e.g. a ``Reference`` from ``attr("href")`` -- is kept so a
+    later step can follow it; over the wire the service serialises it to a handle)."""
     return value.get() if isinstance(value, Field) else value
 
 

@@ -41,6 +41,31 @@ def test_markdown_via_view_sugar():
     assert "# Big News" in make_doc().render("markdown")
 
 
+def test_markdown_renders_tables_as_gfm():
+    html = (
+        b"<html><body><table>"
+        b"<tr><th>Weight</th><th>Material</th></tr>"
+        b"<tr><td>200g</td><td>BPA-free</td></tr>"
+        b"</table></body></html>"
+    )
+    md = Document(content=html, status_code=200).render("markdown")
+    assert "| Weight | Material |" in md
+    assert "| --- | --- |" in md
+    assert "| 200g | BPA-free |" in md
+
+
+def test_markdown_renders_nested_lists_with_indentation():
+    html = (
+        b"<html><body><ul>"
+        b"<li>one</li><li>two<ul><li>nested-a</li><li>nested-b</li></ul></li>"
+        b"</ul></body></html>"
+    )
+    md = Document(content=html, status_code=200).render("markdown")
+    assert "- one" in md and "- two" in md
+    assert "  - nested-a" in md and "  - nested-b" in md  # indented, not concatenated
+    assert "twonested" not in md
+
+
 def test_text_renderer_is_readable():
     text = make_doc().render("text")
     assert "Big News" in text and "First bold paragraph" in text
