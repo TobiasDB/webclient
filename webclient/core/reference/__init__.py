@@ -10,72 +10,29 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import parse_qs, urlparse
 
-from pydantic import BaseModel, PrivateAttr
+from pydantic import PrivateAttr
 
 from ..web_core import Backing, WebCore
-from ._shared import DEFAULT_PORTS, HttpMethod, _derive  # noqa: F401  (re-exported)
 from .derive import DeriveBacking
+from .models import HttpMethod, IReference  # noqa: F401  (HttpMethod re-exported)
 from .resolve import ResolveBacking
 
 if TYPE_CHECKING:
     from ..client import WebClientCore
-    from ..document import DocumentCore
     from ..session import WebSessionCore
     from ...surfaces.lazy import LazyReference
 
-    class IReference(BaseModel):
-        """The eager ops ``ReferenceCore`` implements, typed. Generated from the
-        reference backings; ``ReferenceCore`` inherits it, so its ops (``url`` /
-        ``join`` / ``resolve`` / ...) are statically visible on the core itself.
-        Exists only for the type checker -- at runtime it is empty, so
-        ``WebCore.__getattr__`` still dispatches every op."""
-
-        # >>> generated: Reference interface <<<
-        # fmt: off
-        @property
-        def url(self) -> str: ...
-        def join(self, href: str) -> "ReferenceCore": ...
-        def replace(self, **fields: Any) -> "ReferenceCore": ...
-        def resolve(self, *, browser: bool = ..., optional: bool = ..., error: Any = ...) -> "DocumentCore": ...
-        def with_params(self, **params: str) -> "ReferenceCore": ...
-        # fmt: on
-        # >>> end generated <<<
-
-else:
-
-    class IReference(BaseModel):  # runtime: empty -> never shadows __getattr__
-        pass
-
 
 class ReferenceCore(WebCore, IReference):
-    """A (re)resolvable request spec. ``resolve`` (a later backing) dispatches
-    to the bound client; ``url`` and the derivations are the DeriveBacking. Its
-    eager ops come from the generated ``IReference`` interface it inherits."""
+    """A (re)resolvable request spec. Its Core Fields + eager ops come from the
+    ``IReference`` model/interface it inherits (:mod:`.models`); this core adds the
+    behaviour -- ``resolve`` dispatches to the bound client (ResolveBacking), ``url``
+    and the derivations are the DeriveBacking, and ``_derive`` is the copy helper."""
 
     if TYPE_CHECKING:  # narrow WebCore.lazy (Any) to this core's lazy surface
 
         @property
         def lazy(self) -> "LazyReference": ...
-
-    # -- Core Fields (the request spec) --------------------------------------
-    kind: str = "webpage"
-    name: str = ""  # scoped name (the doc's `root`)
-    root: str = ""  # the reference this was derived from
-    hostname: str = ""
-    method: HttpMethod = "get"
-    scheme: str = "https"
-    port: int | None = None
-    path: str = ""
-    fragment: str = ""
-    params: dict[str, str | list[str]] = {}
-    headers: dict[str, str] = {}
-    cookies: dict[str, str] = {}
-    body: bytes | None = None
-    json_body: Any | None = None
-    form: dict[str, str] | None = None
-    follow_redirects: bool = True
-    timeout: float | None = None
-    actions: list[dict[str, Any]] = []  # recorded live-interaction chain (reload)
 
     # typed non-optional: a core is bound to its client before any op runs (an
     # unbound resolve gets a default via ``WebCore._bridge_io``). ``_session`` is
@@ -87,6 +44,15 @@ class ReferenceCore(WebCore, IReference):
     @property
     def ok(self) -> bool:
         return bool(self.hostname)  # a well-formed request spec
+
+    def _derive(self, copy: "ReferenceCore") -> "ReferenceCore":
+        """A derived reference: unnamed, rooted at this one, with a fresh surface
+        slot (``model_copy`` carries private attrs, else the stale surface). The
+        core owns this construction so the derive backing never hand-wires it."""
+        copy._surface = None
+        copy.name = ""
+        copy.root = self.name or self.root
+        return copy
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (DeriveBacking(), ResolveBacking())
 

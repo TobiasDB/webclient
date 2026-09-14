@@ -52,8 +52,8 @@ COLLECTION = ROOT / "webclient" / "collection.py"
 MODELS = ROOT / "webclient" / "surfaces" / "lazy.py"
 #: cores that implement their own eager ops -- the generated ``I<Core>`` interface
 #: is emitted into the core's own module (which the core inherits).
-DOCINIT = ROOT / "webclient" / "core" / "document" / "__init__.py"
-REFINIT = ROOT / "webclient" / "core" / "reference" / "__init__.py"
+DOCINIT = ROOT / "webclient" / "core" / "document" / "models.py"
+REFINIT = ROOT / "webclient" / "core" / "reference" / "models.py"
 
 #: the cores that map to a surface class (a Core-typed result -> its surface).
 CORES: tuple[type, ...] = (ReferenceCore, DocumentCore)

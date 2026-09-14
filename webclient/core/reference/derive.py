@@ -7,10 +7,11 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode, urljoin
 
 from ..web_core import Backing
-from ._shared import DEFAULT_PORTS, _derive
 
 if TYPE_CHECKING:
     from . import ReferenceCore
+
+DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443}
 
 
 class DeriveBacking(Backing):
@@ -33,11 +34,11 @@ class DeriveBacking(Backing):
         return out
 
     def replace(self, core: "ReferenceCore", **fields: Any) -> "ReferenceCore":
-        return _derive(core, core.model_copy(update=fields))
+        return core._derive(core.model_copy(update=fields))
 
     def with_params(self, core: "ReferenceCore", **params: str) -> "ReferenceCore":
-        return _derive(
-            core, core.model_copy(update={"params": {**core.params, **params}})
+        return core._derive(
+            core.model_copy(update={"params": {**core.params, **params}})
         )
 
     def join(self, core: "ReferenceCore", href: str) -> "ReferenceCore":

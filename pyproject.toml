@@ -54,10 +54,10 @@ module = [
     # overloads (attr href->Reference vs str->Field; render by format) the stubs
     # are generated from -- the overlap is by design.
     "webclient.core.document.html",
-    # the cores now carry their generated eager-op interface (``IDocument`` /
-    # ``IReference``, which the core inherits) -- same ``...``-body stub form.
-    "webclient.core.document",
-    "webclient.core.reference",
+    # the cores' generated eager-op interface (``IDocument`` / ``IReference``, in
+    # each core's models.py, which the core inherits) -- same ``...``-body stub form.
+    "webclient.core.document.models",
+    "webclient.core.reference.models",
 ]
 disable_error_code = [
     "empty-body",
