@@ -49,12 +49,14 @@ class FetchBacking(Backing):
         error: Any = None,
         **kw: Any,
     ) -> "DocumentCore":
-        """Resolve ``ref(url)`` into a document (via the reference's resolve op,
-        so it is async-aware on the engine loop)."""
+        """Resolve ``ref(url)`` into a document -- straight to the client's
+        transport (``afetch``, dispatcher-bridged), not bouncing back out through
+        the reference's ``resolve`` op (``fetch`` IS a resolve)."""
+        from ...errors import RETURN
+
         ref = self.ref(core, url, **kw)
-        return cast(
-            DocumentCore, ref.dispatch("resolve", optional=optional, error=error)
-        )
+        lenient = optional or error is RETURN
+        return cast(DocumentCore, core.bridge(core.afetch(ref, optional=lenient)))
 
     def summary(
         self, core: "WebClientCore", url: Any, *include: str, **kw: Any

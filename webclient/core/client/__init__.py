@@ -17,14 +17,13 @@ from typing import Any, ClassVar, Self, cast
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
-from ...clients import charset_of, sniff_kind
 from ...engine.loop import EngineLoop
-from ...errors import WebError, WebException, error_for
+from ...errors import WebError, WebException
 from ...events import EventBus
 from ...models import NavigationEvent, NetworkEvent
 from ..document import live as _live
 from ..document import DocumentCore
-from ..reference import HttpMethod, ReferenceCore, from_url
+from ..reference import ReferenceCore, from_url
 from ..web_core import Backing, WebCore
 from .fetch import FetchBacking
 
@@ -317,41 +316,15 @@ class WebClientCore(WebCore, BaseModel):
     async def _afetch_once(
         self, ref: ReferenceCore, headers: dict[str, str]
     ) -> "tuple[DocumentCore, Any]":
-        """One transport attempt -> ``(doc, resp)``; ``doc.error`` is set on a
-        transport failure or a non-2xx status. Never raises, never registers --
-        the caller (``afetch``) retries, then registers/raises the final doc."""
-        import time
-
-        start = time.monotonic()
-        try:
-            async with await self.pool.lease("http") as lease:
-                resp = await lease.client.send(
-                    ref, headers=headers, cookies=ref.cookies, timeout=self.timeout
-                )
-        except Exception as exc:  # transport failure
-            doc = DocumentCore(
-                url=ref.dispatch("url"),
-                status_code=0,
-                elapsed=time.monotonic() - start,
-                error=error_for(0, str(exc)),
+        """One transport attempt: lease an http client from the pool and let it do
+        the fetch (the client owns request + response interpretation). Binds the
+        resulting document to this core; never raises, never registers -- the
+        caller (``afetch``) retries, then registers/raises the final doc."""
+        async with await self.pool.lease("http") as lease:
+            doc, resp = await lease.client.fetch(
+                ref, headers=headers, cookies=ref.cookies, timeout=self.timeout
             )
-            doc._client = self
-            return doc, None
-        kind = sniff_kind(resp.headers.get("content-type"), resp.content)
-        doc = DocumentCore(
-            url=ref.dispatch("url"),
-            final_url=str(resp.url),
-            kind=kind,
-            content=resp.content,
-            status_code=resp.status_code,
-            response_headers=dict(resp.headers),
-            elapsed=time.monotonic() - start,
-            encoding=charset_of(resp.headers.get("content-type")),
-        )
         doc._client = self
-        doc._set_cookies = dict(resp.cookies)  # httpx parses Set-Cookie correctly
-        if not (200 <= resp.status_code < 300):
-            doc.error = error_for(resp.status_code)
         return doc, resp
 
     async def afetch(

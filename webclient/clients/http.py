@@ -52,6 +52,54 @@ class HTTPXClient(Client):
         assert last is not None
         raise last
 
+    async def fetch(
+        self,
+        ref: Any,
+        *,
+        headers: dict[str, str],
+        cookies: dict[str, str],
+        timeout: float,
+    ) -> "tuple[Any, httpx.Response | None]":
+        """Fetch ``ref`` into a ``(DocumentCore, response)`` -- the http client's
+        whole job: perform the request, interpret the response (sniff kind /
+        charset, capture Set-Cookie) and shape it into a document. Never raises: a
+        transport failure or a non-2xx status is recorded as ``doc.error`` (the
+        caller decides whether to retry or surface it). ``response`` is ``None`` on
+        a transport failure, else the raw ``httpx.Response`` (for redirect history
+        / ``Retry-After``)."""
+        import time
+
+        from ..core.document import DocumentCore
+        from ..errors import error_for
+
+        start = time.monotonic()
+        try:
+            resp = await self.send(
+                ref, headers=headers, cookies=cookies, timeout=timeout
+            )
+        except Exception as exc:  # transport failure -> a not-ok document
+            doc = DocumentCore(
+                url=ref.dispatch("url"),
+                status_code=0,
+                elapsed=time.monotonic() - start,
+                error=error_for(0, str(exc)),
+            )
+            return doc, None
+        doc = DocumentCore(
+            url=ref.dispatch("url"),
+            final_url=str(resp.url),
+            kind=sniff_kind(resp.headers.get("content-type"), resp.content),
+            content=resp.content,
+            status_code=resp.status_code,
+            response_headers=dict(resp.headers),
+            elapsed=time.monotonic() - start,
+            encoding=charset_of(resp.headers.get("content-type")),
+        )
+        doc._set_cookies = dict(resp.cookies)  # httpx parses Set-Cookie correctly
+        if not (200 <= resp.status_code < 300):
+            doc.error = error_for(resp.status_code)
+        return doc, resp
+
     async def reset(self) -> None:
         self._httpx.cookies.clear()
 
