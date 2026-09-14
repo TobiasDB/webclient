@@ -111,6 +111,38 @@ def test_ssrf_guard_off_by_default_allows_loopback(httpserver, wc):
     assert doc.ok  # the default policy does not block loopback
 
 
+def test_retries_recover_from_a_retriable_failure(httpserver):
+    from werkzeug.wrappers import Response
+
+    calls = {"n": 0}
+
+    def flaky(request):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return Response("busy", status=503)
+        return Response("<html><title>ok</title></html>", content_type="text/html")
+
+    httpserver.expect_request("/flaky").respond_with_handler(flaky)
+    with WebClient(retries=3, retry_backoff=0.0) as wc:
+        doc = wc.fetch(httpserver.url_for("/flaky")).collect()
+    assert doc.ok and calls["n"] == 3
+
+
+def test_no_retries_by_default(httpserver):
+    from werkzeug.wrappers import Response
+
+    calls = {"n": 0}
+
+    def always_503(request):
+        calls["n"] += 1
+        return Response("busy", status=503)
+
+    httpserver.expect_request("/down").respond_with_handler(always_503)
+    with WebClient() as wc:
+        doc = wc.fetch(httpserver.url_for("/down"), optional=True).collect()
+    assert not doc.ok and doc.status_code == 503 and calls["n"] == 1
+
+
 def test_fetch_sends_headers_params_and_method(httpserver, wc):
     httpserver.expect_request(
         "/submit",

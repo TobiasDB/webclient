@@ -139,6 +139,8 @@ class WebClientCore(WebCore, BaseModel):
     default_headers: dict[str, str] = {}
     names_cap: int | None = None
     block_private_hosts: bool = False  # opt-in SSRF guard (loopback/private/etc.)
+    retries: int = 0  # extra attempts on a retriable failure (transport/429/5xx)
+    retry_backoff: float = 0.2  # base seconds; doubled each attempt (exp backoff)
 
     _loop: Any = PrivateAttr(default=None)
     _pool: Any = PrivateAttr(default=None)  # ClientPool (lazy)
@@ -262,13 +264,55 @@ class WebClientCore(WebCore, BaseModel):
         return any(_ip_blocked(str(info[4][0])) for info in infos)
 
     # -- transport (machinery): resolve a ReferenceCore -> DocumentCore ------
+    async def _afetch_once(
+        self, ref: ReferenceCore, headers: dict[str, str]
+    ) -> "tuple[DocumentCore, Any]":
+        """One transport attempt -> ``(doc, resp)``; ``doc.error`` is set on a
+        transport failure or a non-2xx status. Never raises, never registers --
+        the caller (``afetch``) retries, then registers/raises the final doc."""
+        import time
+
+        start = time.monotonic()
+        try:
+            async with await self.pool.lease("http") as lease:
+                resp = await lease.client.send(
+                    ref, headers=headers, cookies=ref.cookies, timeout=self.timeout
+                )
+        except Exception as exc:  # transport failure
+            doc = DocumentCore(
+                url=ref.dispatch("url"),
+                status_code=0,
+                elapsed=time.monotonic() - start,
+                error=error_for(0, str(exc)),
+            )
+            doc._client = self
+            return doc, None
+        kind = engine_http.sniff_kind(resp.headers.get("content-type"), resp.content)
+        doc = DocumentCore(
+            url=ref.dispatch("url"),
+            final_url=str(resp.url),
+            kind=kind,
+            content=resp.content,
+            status_code=resp.status_code,
+            response_headers=dict(resp.headers),
+            elapsed=time.monotonic() - start,
+            encoding=engine_http.charset_of(resp.headers.get("content-type")),
+        )
+        doc._client = self
+        doc._set_cookies = dict(resp.cookies)  # httpx parses Set-Cookie correctly
+        if not (200 <= resp.status_code < 300):
+            doc.error = error_for(resp.status_code)
+        return doc, resp
+
     async def afetch(
         self, ref: ReferenceCore, *, optional: bool = False, browser: bool = False
     ) -> DocumentCore:
         """Resolve ``ref`` into a document over a leased transport (http) or a
         browser page. The core's own IO -- the ``fetch`` backing verb records a
-        plan; this is what the executor runs when that plan resolves."""
-        import time
+        plan; this is what the executor runs when that plan resolves. A retriable
+        failure (transport / 429 / 5xx) is retried up to ``retries`` times with
+        exponential backoff."""
+        import asyncio
 
         if self.block_private_hosts and await self._host_blocked(ref):
             doc = DocumentCore(
@@ -287,43 +331,17 @@ class WebClientCore(WebCore, BaseModel):
         if browser:
             return await self._alive(ref)
         headers = {**self.default_headers, **ref.headers}
-        start = time.monotonic()
-        try:
-            async with await self.pool.lease("http") as lease:
-                resp = await lease.client.send(
-                    ref, headers=headers, cookies=ref.cookies, timeout=self.timeout
-                )
-        except Exception as exc:  # transport failure
-            doc = DocumentCore(
-                url=ref.dispatch("url"),
-                status_code=0,
-                elapsed=time.monotonic() - start,
-                error=error_for(0, str(exc)),
-            )
-            doc._client = self
-            self._register(doc, ref)
-            if not optional:
-                raise WebException(cast(WebError, doc.error), document=doc) from exc
-            return doc
-        kind = engine_http.sniff_kind(resp.headers.get("content-type"), resp.content)
-        doc = DocumentCore(
-            url=ref.dispatch("url"),
-            final_url=str(resp.url),
-            kind=kind,
-            content=resp.content,
-            status_code=resp.status_code,
-            response_headers=dict(resp.headers),
-            elapsed=time.monotonic() - start,
-            encoding=engine_http.charset_of(resp.headers.get("content-type")),
-        )
-        doc._client = self
-        doc._set_cookies = dict(resp.cookies)  # httpx parses Set-Cookie correctly
+        doc, resp = await self._afetch_once(ref, headers)
+        attempt = 0
+        while doc.error is not None and doc.error.retriable and attempt < self.retries:
+            await asyncio.sleep(self.retry_backoff * (2**attempt))
+            attempt += 1
+            doc, resp = await self._afetch_once(ref, headers)
         self._register(doc, ref)
-        self._capture(doc, ref, resp)
-        if not (200 <= resp.status_code < 300):
-            doc.error = error_for(resp.status_code)
-            if not optional:  # loud by default
-                raise WebException(doc.error, document=doc)
+        if resp is not None:  # emit navigation/network events for the final doc
+            self._capture(doc, ref, resp)
+        if doc.error is not None and not optional:  # loud by default
+            raise WebException(doc.error, document=doc)
         return doc
 
     # -- plan execution (machinery): the surface's sync/async entry ----------
