@@ -25,6 +25,7 @@ from .json import JsonBacking
 from .status import StatusBacking
 from .summary import (
     MetadataBacking,
+    ProbeBacking,
     RuntimeBacking,
     StructureBacking,
     SummaryBacking,
@@ -66,6 +67,9 @@ class Document(WebCore, IDocument):
     #: a server-side handle (remote dispatcher): it holds no local content, so its
     #: content ops round-trip. Set by ``RemoteWebClientCore`` on deserialize.
     _remote_handle: bool = PrivateAttr(default=False)
+    #: what the transport ladder had to escalate to (browser/proxy/anti-bot), or
+    #: None on a plain static fetch. Read by the ``probe`` summary facet.
+    _probe: Any = PrivateAttr(default=None)  # ProbeRecord | None
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (
         StatusBacking(),
@@ -77,6 +81,7 @@ class Document(WebCore, IDocument):
         MetadataBacking(),
         StructureBacking(),
         RuntimeBacking(),
+        ProbeBacking(),
         SummaryBacking(),
     )
 

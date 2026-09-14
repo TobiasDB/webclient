@@ -3,6 +3,15 @@
 from .collection import Collection, Field
 from .core.crawl import Crawl, Edge
 from .core.document import Element, HtmlBacking, JsonBacking
+from .core.reference.models import (
+    AUTO,
+    AntiBotPolicy,
+    BrowserPolicy,
+    ProxyPolicy,
+    RatePolicy,
+    Resolve,
+    RetryPolicy,
+)
 from .core.web_core import Backing, WebCore
 from .core.client.models import SearchResult
 from .errors import RAISE, RETURN, FetchError, RemoteError, WebError, WebException
@@ -59,6 +68,13 @@ __all__ = [
     "Edge",
     "Element",
     "SearchResult",
+    "Resolve",
+    "RetryPolicy",
+    "RatePolicy",
+    "ProxyPolicy",
+    "AntiBotPolicy",
+    "BrowserPolicy",
+    "AUTO",
     "Backing",
     "WebCore",
     "HtmlBacking",

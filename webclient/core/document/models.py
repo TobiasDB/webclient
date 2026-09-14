@@ -140,6 +140,25 @@ class Probe(BaseModel):
     render_blocked: bool | None = None
 
 
+class ProbeRecord(BaseModel):
+    """The raw resolution record the transport ladder writes onto a Document as it
+    fetches / escalates -- the source the ``probe`` summary facet projects from (and
+    the wire form for a remote resolve). Richer than the facet: it also keeps the
+    tier trail. See :mod:`docs.design.resiliency`."""
+
+    was_browser_required: bool = False
+    was_proxy_required: bool = False
+    anti_bot: str | None = None  # cloudflare / datadome / perimeterx / ... / None
+    js_required: bool = False
+    paywall: bool = False
+    login_wall: bool = False
+    render_blocked: bool = False
+    escalation: list[str] = []  # tiers taken, e.g. ["static", "browser"]
+    reason: str = ""  # the final trigger, e.g. "datadome-403"
+    attempts: int = 1
+    final_tier: str = "static"
+
+
 class Summary(BaseModel):
     """A page overview: each facet an optional section (``None`` when not
     requested / not applicable)."""
@@ -204,6 +223,7 @@ class IDocument(BaseModel):
         def is_empty(self) -> "Field[bool]": ...
         def is_ok(self) -> "Field[bool]": ...
         def metadata(self) -> "Metadata": ...
+        def probe(self) -> "Probe": ...
         def ref(self) -> "Reference": ...
         def reload(self) -> "Document": ...
         @overload
@@ -238,5 +258,6 @@ __all__ = [
     "Structure",
     "Runtime",
     "Probe",
+    "ProbeRecord",
     "Summary",
 ]

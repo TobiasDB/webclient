@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from ..core.client.models import SearchResult
     from ..models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
     from ..clients import ClientPool
-    from ..summary import Metadata, Runtime, Structure, Summary, Transport
+    from ..summary import Metadata, Probe, Runtime, Structure, Summary, Transport
     from .lazy import LazyDocument, LazyReference, LazyWebClient
 
 T = TypeVar("T")
@@ -93,6 +93,7 @@ if TYPE_CHECKING:
         def is_empty(self) -> "Field[bool]": ...
         def is_ok(self) -> "Field[bool]": ...
         def metadata(self) -> "Metadata": ...
+        def probe(self) -> "Probe": ...
         def ref(self) -> "AsyncReference": ...
         async def reload(self) -> "AsyncDocument": ...  # type: ignore[override]
         @overload

@@ -24,6 +24,7 @@ from ...events import EventBus
 from ...models import NavigationEvent, NetworkEvent, PlanEvent
 from ...query.executor import aevaluate, astream, evaluate
 from ..document import Document
+from ..document.models import ProbeRecord
 from ..reference import Reference, from_url
 from ..web_core import Backing, WebCore
 from .fetch import FetchBacking
@@ -537,6 +538,13 @@ class WebClient(WebCore, IWebClient):
             doc._client = self
             doc._page = browser.page
             doc._lease = lease
+            # the read-side of the resiliency ladder: this document needed a real
+            # browser (P0 records the fact; later phases fill the rest of the trail).
+            doc._probe = ProbeRecord(
+                was_browser_required=True,
+                final_tier="browser",
+                escalation=["browser"],
+            )
             self._register(doc, ref)
             for backing in doc.choose():  # backings shape the load into events
                 backing.on_load(doc, result)
