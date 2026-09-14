@@ -42,6 +42,13 @@ def current_policy() -> "_Policy":
     return _CURRENT.get()
 
 
+def lenient(optional: bool, error: object) -> bool:
+    """Whether a failed fetch/resolve should return a not-ok document rather than
+    raise -- ``optional=True`` or ``error=RETURN``. The one place the two spellings
+    of leniency are reconciled (used by ``fetch`` and ``resolve``)."""
+    return optional or error is RETURN
+
+
 @_contextlib.contextmanager
 def default_policy(policy: "_Policy") -> "_Iterator[None]":
     token = _CURRENT.set(policy)

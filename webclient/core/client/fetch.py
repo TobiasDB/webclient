@@ -53,11 +53,10 @@ class FetchBacking(Backing):
         transport (``afetch``), not bouncing back out through the reference's
         ``resolve`` op (``fetch`` IS a resolve). An IO op: the interface bridges
         it (``dispatch``)."""
-        from ...errors import RETURN
+        from ...errors import lenient
 
         ref = self.ref(core, url, **kw)
-        lenient = optional or error is RETURN
-        return await core.afetch(ref, optional=lenient)
+        return await core.afetch(ref, optional=lenient(optional, error))
 
     async def summary(
         self, core: "WebClientCore", url: Any, *include: str, **kw: Any

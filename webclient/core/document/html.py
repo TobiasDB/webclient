@@ -190,9 +190,7 @@ class HtmlBacking(Backing):
     gate = "tree"
 
     def applies(self, core: "DocumentCore") -> bool:
-        # getattr: a registered backing (``wc.use``) is probed against every core
-        # the client owns, including client/session cores that have no ``kind``.
-        return getattr(core, "kind", None) in ("html", "xml")
+        return core.kind in ("html", "xml")
 
     def title(self, core: "DocumentCore") -> str | None:
         node = self._find(core, "title")

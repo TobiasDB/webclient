@@ -26,8 +26,9 @@ class ResolveBacking(Backing):
         optional: bool = False,
         error: Any = None,
     ) -> "DocumentCore":
-        from ...errors import RETURN
+        from ...errors import lenient
 
-        lenient = optional or error is RETURN
         target = core._session or core._client  # bound (a default by _bridge_io)
-        return await target.afetch(core, optional=lenient, browser=browser)
+        return await target.afetch(
+            core, optional=lenient(optional, error), browser=browser
+        )

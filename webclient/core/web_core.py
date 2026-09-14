@@ -91,19 +91,21 @@ class WebCore:
         return self
 
     def _extra_backings(self) -> tuple[Backing, ...]:
-        """Backings registered on this core's client via ``use(backing)`` -- they
-        are chosen BEFORE the built-in ``BACKINGS`` (so a registered backing
-        overrides / extends any op) and shared with the client's documents,
-        references and sessions."""
-        client = getattr(self, "_client", None) or self
-        return tuple(getattr(client, "_backings", ()))
+        """Backings registered on this core's client via ``use(backing)`` -- chosen
+        BEFORE the built-in ``BACKINGS`` (so a registered backing overrides /
+        extends any op) for the client's CONTENT cores (documents / references).
+        The engine cores themselves (client / session -- they have no ``_client``)
+        get none, so a document-render backing is never probed against a client
+        that has no ``kind``."""
+        client = getattr(self, "_client", None)
+        return tuple(getattr(client, "_backings", ())) if client is not None else ()
 
     def choose(self) -> list[Backing]:
         """The backings that apply to this core's current state, in order --
         the client's registered backings first, then the built-in ``BACKINGS``."""
-        return [
-            b for b in (*self._extra_backings(), *self.BACKINGS) if b.applies(self)
-        ]
+        extra = self._extra_backings()  # usually empty -- avoid the concat then
+        backings = (*extra, *self.BACKINGS) if extra else self.BACKINGS
+        return [b for b in backings if b.applies(self)]
 
     def capabilities(self) -> frozenset[str]:
         """The union of the chosen backings' gates."""

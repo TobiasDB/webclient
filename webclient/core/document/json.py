@@ -40,7 +40,7 @@ class JsonBacking(Backing):
     gate = "tree"
 
     def applies(self, core: "DocumentCore") -> bool:
-        return getattr(core, "kind", None) == "json"  # getattr: see HtmlBacking
+        return core.kind == "json"
 
     def select_all(
         self,
