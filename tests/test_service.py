@@ -308,6 +308,28 @@ def test_sitemap_maps_a_domain(client_and_server):
     assert any(u.endswith("/cards") for u in urls)
 
 
+def test_crawl_runs_on_a_named_session(client_and_server):
+    api, server = client_and_server
+    sid = api.post("/sessions", headers=AUTH, json={}).json()["id"]
+    resp = api.post(
+        "/crawl",
+        headers=AUTH,
+        json={"url": server.url_for("/cards"), "session": sid, "max_pages": 3},
+    )
+    assert resp.status_code == 200 and len(resp.json()["pages"]) >= 1
+
+
+def test_crawl_with_unknown_session_is_404(client_and_server):
+    api, server = client_and_server
+    resp = api.post(
+        "/crawl",
+        headers=AUTH,
+        json={"url": server.url_for("/cards"), "session": "sess-nope"},
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["type"] == "NoSuchSession"
+
+
 def test_execute_returns_structured_error_on_upstream_failure(client_and_server):
     api, server = client_and_server
     server.expect_request("/boom").respond_with_data("no", status=500)

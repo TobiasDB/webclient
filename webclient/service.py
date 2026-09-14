@@ -243,19 +243,30 @@ def create_app(
         return {"id": sid, "status": "closed"}
 
     # -- crawl / sitemap -----------------------------------------------------
-    def _run_crawl(body: dict[str, Any], *, sitemap: bool) -> "Any":
-        """Build and run a crawl (bounded auto over the shared engine); the caller
+    def _crawl_engine(body: dict[str, Any]) -> "Any":
+        """The engine a crawl runs on: a named ``session`` (so it fetches with that
+        session's identity / cookies -- e.g. crawling behind a login) or, by
+        default, the shared client. Returns the engine, or a JSONResponse error if
+        a ``session`` was named but is unknown."""
+        sid = body.get("session")
+        if sid is None:
+            return app.state.wc
+        if sid not in app.state.sessions:
+            return _error(404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT)
+        return app.state.sessions[sid]
+
+    def _run_crawl(engine: "Any", body: dict[str, Any], *, sitemap: bool) -> "Any":
+        """Build and run a crawl on ``engine`` (a client or session); the caller
         turns the finished crawl into a response. Raises WebException on a failure."""
-        wc_: WebClient = app.state.wc
         url = body["url"]
         if sitemap:
-            return wc_.sitemap(
+            return engine.sitemap(
                 url,
                 depth=int(body.get("depth", 2)),
                 width=int(body.get("width", 20)),
                 max_pages=int(body.get("max_pages", 1000)),
             )
-        return wc_.crawl(
+        return engine.crawl(
             url,
             auto=True,  # the HTTP tier runs a bounded auto crawl (Firecrawl-shaped)
             width=int(body.get("width", 10)),
@@ -292,10 +303,13 @@ def create_app(
                 "InvalidRequest",
                 "crawl requires a 'url'",
                 hint='POST {"url": "https://...", "max_pages": 20, '
-                '"keywords": ["pricing"]}',
+                '"keywords": ["pricing"], "session": "sess-..."}',
             )
+        engine = _crawl_engine(body)
+        if isinstance(engine, JSONResponse):
+            return engine
         try:
-            return _crawl_response(_run_crawl(body, sitemap=False))
+            return _crawl_response(_run_crawl(engine, body, sitemap=False))
         except WebException as exc:
             return _error(
                 502,
@@ -320,8 +334,11 @@ def create_app(
                 "sitemap requires a 'url'",
                 hint='POST {"url": "https://...", "depth": 2}',
             )
+        engine = _crawl_engine(body)
+        if isinstance(engine, JSONResponse):
+            return engine
         try:
-            return _crawl_response(_run_crawl(body, sitemap=True))
+            return _crawl_response(_run_crawl(engine, body, sitemap=True))
         except WebException as exc:
             return _error(
                 502,

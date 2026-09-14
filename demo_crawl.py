@@ -60,7 +60,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, *_: Any) -> None:  # quiet
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002  quiet
         pass
 
 
@@ -74,6 +74,11 @@ def _rel(url: str | None, base: str) -> str:
     return (url or "").replace(base, "") or "/"
 
 
+def _purl(page: Any, base: str) -> str:
+    """A crawled page's URL (from its transport summary), relative to ``base``."""
+    return _rel(page.transport.final_url, base) if page.transport else ""
+
+
 def main() -> None:
     base = serve()
 
@@ -84,7 +89,7 @@ def main() -> None:
         print("== turn-based frontier (caller selects each round) ==")
         with wc.crawl(f"{base}/") as crawl:
             crawl.step()  # round 1: fetch the seed, discover its edges
-            print("  fetched:  ", [_rel(p.transport.final_url, base) for p in crawl.pages])
+            print("  fetched:  ", [_purl(p, base) for p in crawl.pages])
             print(
                 "  frontier: ",
                 [(_rel(e.url, base), e.text) for e in crawl.frontier],
@@ -93,7 +98,7 @@ def main() -> None:
             picks = [e for e in crawl.frontier if "/guide" in e.url or "/api" in e.url]
             print("  expanding:", [_rel(e.url, base) for e in picks])
             crawl.step(picks)  # round 2: fetch just those
-            print("  fetched:  ", [_rel(p.transport.final_url, base) for p in crawl.pages])
+            print("  fetched:  ", [_purl(p, base) for p in crawl.pages])
             print(
                 "  frontier: ",
                 sorted(_rel(e.url, base) for e in crawl.frontier),
@@ -109,12 +114,12 @@ def main() -> None:
             crawl.run()
             for p in crawl.pages:
                 title = p.metadata.title if p.metadata else None
-                print("  page:     ", _rel(p.transport.final_url, base), "|", title)
+                print("  page:     ", _purl(p, base), "|", title)
 
         # -- 3. Sitemap: an eager, single-domain map ----------------------------
         print("\n== sitemap (eager single-domain crawl) ==")
         smap = wc.sitemap(f"{base}/", depth=2, width=20)
-        mapped = sorted(_rel(p.transport.final_url, base) for p in smap.pages if p.transport)
+        mapped = sorted(_purl(p, base) for p in smap.pages if p.transport)
         print("  pages:    ", len(smap.pages))
         print("  urls:     ", mapped)
         print("  external kept out:", "/x" not in " ".join(mapped))
