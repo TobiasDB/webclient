@@ -16,6 +16,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
+from pydantic import BaseModel
+
+from ..collection import Collection, Field
+from ..query.expr import Expr, lazy_root
+from ..query.plan import Plan
+
 #: per-op remote round-trips (on server-side handles) before nudging toward .lazy.
 _CHATTY_ROUND_TRIPS = 4
 
@@ -169,8 +175,6 @@ class WebCore:
         ``doc.lazy.select(...).collect()`` records then runs against this core).
         The generated surface stubs re-type this as the matching ``Lazy`` variant
         (``wc.lazy`` -> ``Lazy[WebClient]``, ``doc.lazy`` -> ``LazyDocument``...)."""
-        from ..query.expr import lazy_root
-
         return lazy_root(self)
 
     # -- dispatch mode (sync / async / remote), read by every core -----------
@@ -192,9 +196,6 @@ class WebCore:
         """A recorder rooted at this core for remote execution: a client -> a
         ``WebClient`` plan; a server-side document handle -> a plan rooted at its
         id; a reference -> a plan carrying its full spec."""
-        from ..query.expr import Expr
-        from ..query.plan import Plan
-
         me = cast(Any, self)
         client = getattr(self, "_client", None) or self
         if self is client:  # the remote client itself
@@ -280,8 +281,6 @@ class WebCore:
                         return _wrap_result(self.dispatch(name, *args, **kwargs))
 
                     return _call
-            from pydantic import BaseModel
-
             # delegate to pydantic's __getattr__ (private attrs); it is a runtime
             # method not in the type stubs, so fetch it dynamically.
             pyd_getattr = getattr(BaseModel, "__getattr__", None)
@@ -320,8 +319,6 @@ def _wrap_result(value: Any) -> Any:
     ``Collection`` (so the row-shaping ops apply); a single core is already its
     own surface; anything else (a ``Field``/scalar) passes through."""
     if isinstance(value, (list, tuple)) and any(isinstance(v, WebCore) for v in value):
-        from ..collection import Collection
-
         owner = getattr(value[0], "_client", None)
         root = getattr(value[0], "root", "") or getattr(value[0], "name", "")
         return Collection(list(value), client=owner, root=root)
@@ -333,8 +330,6 @@ def _unwrap_remote(value: Any) -> Any:
     a ``Field``); unwrap it back to the raw value so a remote op returns exactly
     what its local twin does (a ``str``, not a ``Field``). A list of cores still
     lifts to a ``Collection``."""
-    from ..collection import Field
-
     if isinstance(value, Field):
         return value.get()
     return _wrap_result(value)

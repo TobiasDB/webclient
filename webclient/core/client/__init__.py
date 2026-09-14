@@ -17,10 +17,13 @@ from typing import Any, ClassVar, Self, cast
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
+from ...clients import BrowserFactory, ClientPool, HTTPXFactory, PageScript
+from ...collection import Field
 from ...engine.loop import EngineLoop
 from ...errors import WebError, WebException
 from ...events import EventBus
-from ...models import NavigationEvent, NetworkEvent
+from ...models import NavigationEvent, NetworkEvent, PlanEvent
+from ...query.executor import aevaluate, astream, evaluate
 from ..document import capture as _capture
 from ..document import DocumentCore
 from ..reference import ReferenceCore, from_url
@@ -31,8 +34,6 @@ from .fetch import FetchBacking
 def _materialize(result: Any) -> Any:
     """A materialised plan result: a scalar leaf becomes a ``Field``; a surface
     or collection passes through."""
-    from ...collection import Field
-
     if isinstance(result, Field):
         return result
     if isinstance(result, (str, int, float, bool)) or result is None:
@@ -167,8 +168,6 @@ class WebClientCore(WebCore, BaseModel):
         """Build the transport pool eagerly (cheap -- no browser launch until a
         page is leased) so it is never lazily created from two threads at once.
         Sessions override this to share the parent's pool."""
-        from ...clients import BrowserFactory, ClientPool, HTTPXFactory
-
         self._pool = ClientPool(
             {"http": HTTPXFactory(), "page": BrowserFactory()},
             limits={"http": 10, "page": 4},
@@ -381,8 +380,6 @@ class WebClientCore(WebCore, BaseModel):
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
         """Run a recorded plan on this engine (sync bridge). A remote subclass
         swaps this for an HTTP round-trip; ``stream=True`` yields rows."""
-        from ...query.executor import evaluate
-
         if stream:
             return self._stream(expr, context)
         return _materialize(evaluate(expr, context, client=self))
@@ -392,8 +389,6 @@ class WebClientCore(WebCore, BaseModel):
         loop; a sync client bridges it off its background engine loop (so an async
         caller of a sync client still doesn't block its own loop)."""
         import asyncio
-
-        from ...query.executor import aevaluate
 
         if self._mode == "async":
             return _materialize(await aevaluate(expr, context, client=self))
@@ -405,10 +400,6 @@ class WebClientCore(WebCore, BaseModel):
     def _stream(self, expr: Any, context: Any) -> Any:
         """Bridge the async row stream to a sync iterator, publishing plan
         events (a ``_pump`` task feeds a bounded queue on the engine loop)."""
-        from ...collection import Field
-        from ...models import PlanEvent
-        from ...query.executor import astream
-
         self.bus.publish(PlanEvent(phase="started"))
         count = 0
         for row in self.loop().stream(astream(expr, context, client=self)):
@@ -421,16 +412,12 @@ class WebClientCore(WebCore, BaseModel):
         """Async row stream (the same truly-incremental rows as ``_stream``). An
         async client iterates loop-natively on the caller's loop; a sync client
         bridges from its engine loop as rows complete."""
-        from ...collection import Field
-        from ...models import PlanEvent
-        from ...query.executor import astream as _astream
-
         self.bus.publish(PlanEvent(phase="started"))
         count = 0
         rows = (
-            _astream(expr, context, client=self)
+            astream(expr, context, client=self)
             if self._mode == "async"
-            else self.loop().astream(_astream(expr, context, client=self))
+            else self.loop().astream(astream(expr, context, client=self))
         )
         async for row in rows:
             count += 1
@@ -459,8 +446,6 @@ class WebClientCore(WebCore, BaseModel):
         before every navigation (e.g. instrumentation), ``"load"`` once after. On
         top of the scripts the client's backings declare (``Backing.page_scripts``).
         Returns ``self`` for chaining."""
-        from ...clients import PageScript
-
         self._page_scripts.append(PageScript(source, cast(Any, phase)))
         return self
 
