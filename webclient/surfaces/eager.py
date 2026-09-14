@@ -140,7 +140,7 @@ if TYPE_CHECKING:  # the eager surfaces are pure typing stubs over their cores
         (``await ref.resolve()``); every other op is the same in-memory surface,
         and Core-returning ops stay in the async tier. A pure typing stub: at
         runtime ``AsyncReference is ReferenceCore`` -- the async-ness comes from the
-        bound client's dispatcher (``_async_mode``), not the type."""
+        bound client's dispatcher (``_mode``), not the type."""
 
         @property
         def lazy(self) -> "LazyReference": ...
@@ -256,7 +256,7 @@ if TYPE_CHECKING:
         instance flag, not a subclass): ``doc = await ac.fetch(url)`` and
         ``await ac.ref(url).resolve()`` chain async through the ``Async*`` surface
         types; in-memory ops on a resolved document are synchronous. At runtime a
-        factory (``core.client.async_client``) flipping ``_async_mode``, so its IO
+        factory (``core.client.async_client``) setting mode "async", so its IO
         ops hand back an awaitable via ``bridge``."""
 
         @property

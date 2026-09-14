@@ -134,11 +134,13 @@ class WebClientCore(WebCore, BaseModel):
     _host_next: dict[str, float] = PrivateAttr(  # host -> earliest next request time
         default_factory=dict
     )
-    #: async dispatcher flag -- an instance switch, not a subclass. When set, this
-    #: client's IO ops hand back an awaitable (see ``bridge``); the async surface
-    #: is the same core, typed through the ``Async*`` stubs. ``AsyncWebClient()``
-    #: flips it on.
-    _async_mode: bool = PrivateAttr(default=False)
+    #: the dispatch mode -- an instance switch, not a subclass. ``"sync"`` blocks
+    #: IO on a background engine loop; ``"async"`` is loop-native (IO runs on the
+    #: caller's loop, awaited); ``"remote"`` turns every op into an API call. Every
+    #: core reads its client's mode via ``WebCore._dispatch_mode``; the surface is
+    #: the same core typed through the eager / ``Async*`` stubs. ``async_client()``
+    #: sets ``"async"``; ``RemoteWebClientCore`` sets ``"remote"``.
+    _mode: str = PrivateAttr(default="sync")
 
     @property
     def core(self) -> Self:
@@ -214,28 +216,25 @@ class WebClientCore(WebCore, BaseModel):
     _ensure_loop = loop
 
     def bridge(self, coro: Any) -> Any:
-        """Run an IO coroutine under this client's dispatcher -- the one place the
-        sync / async / on-loop distinction lives, so every IO backing (``resolve``
-        / ``fetch`` / ``summary``) is dispatcher-agnostic:
+        """Run an IO coroutine under this client's dispatch mode -- the one place
+        the sync / async / on-loop distinction lives, so every IO backing
+        (``resolve`` / ``fetch`` / ``summary``) is dispatcher-agnostic:
 
-        - on the engine-loop thread (the executor is already awaiting there): hand
-          the coroutine straight back to ``await``;
-        - async client (``_async_mode``): the transport pool + browser pages live
-          on the engine-loop thread, so the coroutine must run there; hand back a
-          caller-loop awaitable over that cross-thread result;
-        - sync caller: block on the engine loop.
+        - async client: loop-native -- hand the coroutine straight back so the
+          caller ``await``s it on their own loop (this client's pool + pages bind
+          to that loop; no engine-loop thread is ever started);
+        - on the engine-loop thread (a sync client's executor is already awaiting
+          there): hand the coroutine straight back;
+        - sync caller: block on the background engine loop.
 
-        (The engine-loop hop is why an async client still submits rather than
-        awaiting the coroutine on the caller's loop directly -- the IO resources
-        are bound to that one loop. A fully loop-native async client, owning its
-        pool on the caller's loop, would be a larger change.)"""
+        Only the *sync* client uses the engine loop (a submit-and-wait pool) to
+        drive async IO from blocking code; the async client owns its IO on the
+        caller's loop."""
+        if self._mode == "async":
+            return coro
         loop = self.loop()
         if loop.on_loop_thread():
             return coro
-        if self._async_mode:
-            import asyncio
-
-            return asyncio.wrap_future(loop.submit(coro))
         return loop.run(coro)
 
     @property
@@ -262,8 +261,18 @@ class WebClientCore(WebCore, BaseModel):
         self.close()
 
     # -- async context manager (``async with AsyncWebClient() ...``). The async
-    # client is the same core with ``_async_mode`` set; these just close cleanly.
+    # client is the same core in ``"async"`` mode; close its loop-native pool on
+    # the caller's loop (a sync client has no caller-loop pool -- close in a thread).
     async def aclose(self) -> None:
+        if self._closed:
+            return
+        if self._mode == "async":
+            if self._pool is not None:
+                await self._pool.aclose()
+            for session in self._sessions:  # cascade to sessions
+                session.status = "closed"
+            self._closed = True
+            return
         import asyncio
 
         await asyncio.to_thread(self.close)
@@ -420,11 +429,15 @@ class WebClientCore(WebCore, BaseModel):
         return _materialize(evaluate(expr, context, client=self))
 
     async def aexecute(self, expr: Any, context: Any = None) -> Any:
-        """Await a plan on the engine loop without blocking the caller's loop."""
+        """Await a plan. An async client runs it loop-natively on the caller's
+        loop; a sync client bridges it off its background engine loop (so an async
+        caller of a sync client still doesn't block its own loop)."""
         import asyncio
 
         from ...query.executor import aevaluate
 
+        if self._mode == "async":
+            return _materialize(await aevaluate(expr, context, client=self))
         result = await asyncio.wrap_future(
             self.loop().submit(aevaluate(expr, context, client=self))
         )
@@ -446,15 +459,21 @@ class WebClientCore(WebCore, BaseModel):
         self.bus.publish(PlanEvent(phase="done", detail={"rows": count}))
 
     async def astream(self, expr: Any, context: Any) -> Any:
-        """Async row stream (the same truly-incremental rows as ``_stream``,
-        bridged from the engine loop to the caller's loop as they complete)."""
+        """Async row stream (the same truly-incremental rows as ``_stream``). An
+        async client iterates loop-natively on the caller's loop; a sync client
+        bridges from its engine loop as rows complete."""
         from ...collection import Field
         from ...events import PlanEvent
         from ...query.executor import astream as _astream
 
         self.bus.publish(PlanEvent(phase="started"))
         count = 0
-        async for row in self.loop().astream(_astream(expr, context, client=self)):
+        rows = (
+            _astream(expr, context, client=self)
+            if self._mode == "async"
+            else self.loop().astream(_astream(expr, context, client=self))
+        )
+        async for row in rows:
             count += 1
             self.bus.publish(PlanEvent(phase="row"))
             yield row.get() if isinstance(row, Field) else row
@@ -595,12 +614,12 @@ class WebClientCore(WebCore, BaseModel):
 
 
 def async_client(**policy: Any) -> WebClientCore:
-    """A ``WebClientCore`` in async-dispatcher mode: its IO verbs hand back an
-    awaitable (``doc = await ac.fetch(url)``). Not a subclass -- async is an
-    instance flag read by ``bridge``; the async surface is the same core typed
-    through the ``Async*`` stubs. Backs ``surfaces.AsyncWebClient``."""
+    """A ``WebClientCore`` in async-dispatcher mode: loop-native (its IO runs on
+    the caller's loop, so ``doc = await ac.fetch(url)``). Not a subclass -- the
+    mode is an instance flag read by ``bridge``; the async surface is the same
+    core typed through the ``Async*`` stubs. Backs ``surfaces.AsyncWebClient``."""
     core = WebClientCore(**policy)
-    core._async_mode = True
+    core._mode = "async"
     return core
 
 
