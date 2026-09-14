@@ -237,7 +237,7 @@ def test_retry_after_parsing():
     import time
     from email.utils import formatdate
 
-    from webclient.core.client_core import _retry_after_seconds
+    from webclient.core.client import _retry_after_seconds
 
     assert _retry_after_seconds("5") == 5.0
     assert _retry_after_seconds("  3 ") == 3.0

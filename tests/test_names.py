@@ -83,7 +83,7 @@ def test_name_scope_is_thread_safe_under_concurrent_add_get():
     thread; the lock keeps concurrent OrderedDict mutation from corrupting it."""
     import threading
 
-    from webclient.core.client_core import NameScope
+    from webclient.core.client import NameScope
 
     scope = NameScope(0, cap=64)
     errors: list[BaseException] = []
