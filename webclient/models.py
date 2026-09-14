@@ -118,6 +118,25 @@ _topic_matches = topic_matches
 
 
 # --------------------------------------------------------------------------- #
+# Content blocks
+#
+# The "elements" representation of a document -- the typed content blocks a
+# selection backing (html/json) produces from the parsed tree. A pure value
+# type, exported to users as ``webclient.Element``.
+# --------------------------------------------------------------------------- #
+
+
+class Element(BaseModel):
+    """A typed content block -- the "elements" representation of a document."""
+
+    id: str = ""
+    type: str = "text"
+    text: str = ""
+    parent_id: str | None = None
+    metadata: dict[str, Any] = {}
+
+
+# --------------------------------------------------------------------------- #
 # Summary facets
 #
 # A summary is a *shape*, not a data dump -- headers, cookies and page metadata
@@ -248,6 +267,8 @@ __all__ = [
     "PlanEvent",
     "CORE_EVENTS",
     "topic_matches",
+    # content blocks
+    "Element",
     # summary
     "FACETS",
     "TocEntry",

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...collection import Field
 from ..web_core import Backing
-from ._shared import Element, _element
+from ...models import Element
 
 if TYPE_CHECKING:
     from . import DocumentCore
@@ -56,7 +56,7 @@ class JsonBacking(Backing):
         items = items[offset:]
         if limit is not None:
             items = items[:limit]
-        return [_element(core, item) for item in items]
+        return [core._sub(item) for item in items]
 
     def render(self, core: "DocumentCore", format: str, **options: Any) -> Any:
         if format != "elements":
@@ -77,7 +77,7 @@ class JsonBacking(Backing):
                 value = value[int(tok[1:-1])] if tok.startswith("[") else value[tok]
         except (KeyError, IndexError, TypeError):
             value = None
-        return _element(core, value)
+        return core._sub(value)
 
     def attr(self, core: "DocumentCore", name: str, *, error: Any = None) -> Any:
         if core._missing:

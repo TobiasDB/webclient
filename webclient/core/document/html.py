@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 from ...collection import Field
 from ..reference import ReferenceCore, from_url
 from ..web_core import Backing
-from ._shared import Element, _element
+from ...models import Element
 
 if TYPE_CHECKING:
     from . import DocumentCore
@@ -174,7 +174,7 @@ def _miss(parent: "DocumentCore", message: str, error: Any) -> "DocumentCore":
 
     if (error or current_policy()) is RAISE:
         raise LookupError(message)
-    sub = _element(parent, None)
+    sub = parent._sub(None)
     sub.error = WebError(type="LookupError", message=message)
     return sub
 
@@ -258,7 +258,7 @@ class HtmlBacking(Backing):
         els = self._find(core, selector)
         if not (-len(els) <= index < len(els)):
             return _miss(core, f"no match for {selector!r}", error)
-        return _element(core, els[index])
+        return core._sub(els[index])
 
     def select_all(
         self,
@@ -271,7 +271,7 @@ class HtmlBacking(Backing):
         els = self._find(core, selector)[offset:]
         if limit is not None:
             els = els[:limit]
-        return [_element(core, el) for el in els]
+        return [core._sub(el) for el in els]
 
     @overload  # link attrs narrow to a Reference (overlaps the str overload)
     def attr(
