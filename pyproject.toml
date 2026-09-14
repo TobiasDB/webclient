@@ -60,6 +60,7 @@ module = [
     "webclient.core.document.models",
     "webclient.core.reference.models",
     "webclient.core.client.models",
+    "webclient.core.crawl.models",
 ]
 disable_error_code = [
     "empty-body",

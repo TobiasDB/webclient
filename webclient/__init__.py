@@ -1,6 +1,7 @@
 """webclient -- declarative web client (ground-up rewrite in progress)."""
 
 from .collection import Collection, Field
+from .core.crawl import Crawl, Edge
 from .core.document import Element, HtmlBacking, JsonBacking
 from .core.web_core import Backing, WebCore
 from .core.client.models import SearchResult
@@ -54,6 +55,8 @@ __all__ = [
     "Document",
     "LiveDocument",
     "Reference",
+    "Crawl",
+    "Edge",
     "Element",
     "SearchResult",
     "Backing",

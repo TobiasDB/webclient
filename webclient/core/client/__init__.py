@@ -32,8 +32,16 @@ from .models import IWebClient
 from .search import SearchBacking
 
 if TYPE_CHECKING:
+    from ..crawl import Crawl
     from ..session import Session
     from ...surfaces.lazy import LazyWebClient
+
+
+def _seed_urls(seeds: Any) -> list[str]:
+    """Normalise crawl seeds -- a URL string, a Reference (surface or core), or a
+    list of either -- to a list of URL strings."""
+    items = seeds if isinstance(seeds, (list, tuple)) else [seeds]
+    return [s if isinstance(s, str) else str(getattr(s, "url", s)) for s in items]
 
 
 def _materialize(result: Any) -> Any:
@@ -437,6 +445,54 @@ class WebClient(WebCore, IWebClient):
         core = Session(ttl=ttl, session_headers=headers or {}, **kw)
         core.bind(self)
         return core
+
+    # -- crawl ---------------------------------------------------------------
+    def crawl(
+        self,
+        seeds: Any,
+        *,
+        scope: str | None = None,
+        auto: bool = False,
+        width: int = 10,
+        depth: int = 3,
+        max_pages: int = 50,
+        same_origin: bool = True,
+        obey_robots: bool = True,
+        keywords: list[str] | None = None,
+        include: str | None = None,
+        exclude: str | None = None,
+    ) -> "Crawl":
+        """A scoped site traversal sharing this engine (a :class:`Crawl` core). The
+        client manages the frontier (dedup, scope, fetching); the caller steers each
+        round (``crawl.step(select)``) or lets it self-drive (``auto=True`` -> the
+        top-``width`` edges best-first by ``keywords``). Use as a context manager."""
+        from ..crawl import Crawl, Edge
+
+        urls = _seed_urls(seeds)
+        core = Crawl(
+            scope=scope or (from_url(urls[0]).hostname if urls else ""),
+            auto=auto,
+            width=width,
+            max_depth=depth,
+            max_pages=max_pages,
+            same_origin=same_origin,
+            obey_robots=obey_robots,
+            keywords=[k.lower() for k in (keywords or [])],
+            include=include,
+            exclude=exclude,
+            frontier=[Edge(url=u, depth=0) for u in urls],
+        )
+        return core.bind(self)
+
+    def sitemap(
+        self, url: Any, *, depth: int = 2, width: int = 20, max_pages: int = 1000
+    ) -> "Crawl":
+        """Map a site: an eager, single-domain :meth:`crawl` in auto mode, run to
+        completion. Returns the finished crawl -- a ``.summary()`` per page in
+        ``.pages`` plus the unresolved ``.frontier`` edges."""
+        return self.crawl(
+            url, auto=True, depth=depth, width=width, max_pages=max_pages
+        ).run()
 
     # -- live / browser ------------------------------------------------------
     def inject_script(self, source: str, *, phase: str = "init") -> Self:

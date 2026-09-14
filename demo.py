@@ -165,6 +165,20 @@ def main() -> None:
         hits = wc.search("coffee", endpoint=f"{base}/search", limit=2)
         print("search:     ", [(h.rank, h.title, h.url) for h in hits])
 
+        # [M2] Crawl: a client-held, scoped traversal used as a context manager.
+        #      The client manages the frontier (dedup/scope); the caller steers a
+        #      round (crawl.step(select)) or lets it self-drive (auto). Output is an
+        #      LLM-efficient .summary() per page + the unresolved frontier edges.
+        with wc.crawl(f"{base}/feed", auto=True, max_pages=4) as crawl:
+            crawl.step()  # one turn: fetch the seed, discover its edges
+            print("frontier:   ", [e.url.replace(base, "") for e in crawl.frontier])
+            crawl.run()   # then let it self-drive the rest
+            print("crawled:    ", [p.transport.final_url.replace(base, "")
+                                    for p in crawl.pages if p.transport])
+        # sitemap: an eager, single-domain crawl -> pages + edges (site map)
+        smap = wc.sitemap(f"{base}/", depth=1, width=10)
+        print("sitemap:    ", len(smap.pages), "pages,", len(smap.frontier), "edges")
+
         # [P1] Every object is addressable: short scoped names, a root chain
         #      (ref -> doc), recovery by name from the resolver, shop.ref().
         print(

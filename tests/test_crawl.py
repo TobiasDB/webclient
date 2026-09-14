@@ -1,0 +1,106 @@
+"""Crawl: a stateful, client-held site traversal (context manager).
+
+A small linked site is served locally (with a robots.txt), so the turn-based /
+auto / keyword / robots behaviour is exercised over the real fetch+parse path.
+"""
+
+import pytest
+
+from webclient import Crawl, Edge, WebClient
+
+# a little site: home links to /a, /docs (keyword) and an external host; /a links
+# to /b and /private (robots-disallowed); /docs links to /docs/pricing.
+PAGES = {
+    "/": '<a href="/a">Alpha</a> <a href="/docs">Pricing Docs</a>'
+    ' <a href="https://external.example/x">Elsewhere</a>',
+    "/a": '<a href="/b">Beta</a> <a href="/private">Secret</a>',
+    "/b": '<a href="/a">back to Alpha</a>',
+    "/docs": '<a href="/docs/pricing">Pricing plans</a>',
+    "/docs/pricing": "Our pricing is simple.",
+    "/private": "secret area",
+}
+
+
+@pytest.fixture
+def wc():
+    with WebClient() as client:
+        yield client
+
+
+@pytest.fixture
+def site(httpserver):
+    for path, body in PAGES.items():
+        httpserver.expect_request(path).respond_with_data(
+            f"<html><body>{body}</body></html>", content_type="text/html"
+        )
+    httpserver.expect_request("/robots.txt").respond_with_data(
+        "User-agent: *\nDisallow: /private\n", content_type="text/plain"
+    )
+    return httpserver
+
+
+def _urls(crawl: Crawl) -> list[str]:
+    return [p.transport.final_url for p in crawl.pages if p.transport]
+
+
+def test_auto_crawl_stays_same_origin(wc, site):
+    with wc.crawl(site.url_for("/"), auto=True, max_pages=10) as crawl:
+        crawl.run()
+    urls = _urls(crawl)
+    assert any(u.endswith("/a") for u in urls)  # followed same-origin links
+    assert all("external.example" not in u for u in urls)  # not the external host
+    assert crawl.done
+
+
+def test_robots_disallow_is_honoured(wc, site):
+    with wc.crawl(site.url_for("/"), auto=True, max_pages=20) as crawl:
+        crawl.run()
+    assert not any(u.endswith("/private") for u in _urls(crawl))
+
+
+def test_robots_can_be_ignored(wc, site):
+    with wc.crawl(site.url_for("/"), auto=True, max_pages=20, obey_robots=False) as crawl:
+        crawl.run()
+    assert any(u.endswith("/private") for u in _urls(crawl))
+
+
+def test_turn_based_frontier_is_caller_driven(wc, site):
+    with wc.crawl(site.url_for("/")) as crawl:
+        crawl.step()  # fetch the seed only
+        assert len(crawl.pages) == 1
+        edges = {e.url for e in crawl.frontier}
+        assert any(u.endswith("/a") for u in edges)  # discovered, not yet fetched
+        assert all("external.example" not in u for u in edges)  # out of scope
+        # the caller selects which edges to expand this round
+        picks = [e for e in crawl.frontier if e.url.endswith("/a")]
+        crawl.step(picks)
+    assert len(crawl.pages) == 2
+
+
+def test_keywords_drive_best_first(wc, site):
+    # width=1 forces a choice each round; "pricing" should steer toward /docs.
+    with wc.crawl(
+        site.url_for("/"), auto=True, keywords=["pricing"], width=1, max_pages=3
+    ) as crawl:
+        crawl.run()
+    assert any("pricing" in u.lower() for u in _urls(crawl))
+
+
+def test_edges_carry_anchor_text(wc, site):
+    with wc.crawl(site.url_for("/")) as crawl:
+        crawl.step()
+        docs = next(e for e in crawl.frontier if e.url.endswith("/docs"))
+    assert "Pricing" in docs.text  # anchor text kept (the keyword signal)
+
+
+def test_sitemap_is_an_eager_single_domain_crawl(wc, site):
+    sm = wc.sitemap(site.url_for("/"), depth=3, width=20)
+    assert isinstance(sm, Crawl) and sm.done
+    assert len(sm.pages) >= 4  # mapped several pages of the one domain
+    assert all("external.example" not in u for u in _urls(sm))
+
+
+def test_context_manager_closes_the_crawl(wc, site):
+    with wc.crawl(site.url_for("/")) as crawl:
+        assert crawl.status == "running"
+    assert crawl.status == "closed"  # aexit fired via the backing lifecycle

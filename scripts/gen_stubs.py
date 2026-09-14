@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from webclient.collection import Field  # noqa: E402
 from webclient.core.client import WebClient  # noqa: E402
+from webclient.core.crawl import Crawl  # noqa: E402
 from webclient.core.document import Document, Element  # noqa: E402
 from webclient.core.reference import Reference  # noqa: E402
 from webclient.core.session import Session  # noqa: E402
@@ -57,10 +58,11 @@ MODELS = ROOT / "webclient" / "surfaces" / "lazy.py"
 DOCINIT = ROOT / "webclient" / "core" / "document" / "models.py"
 REFINIT = ROOT / "webclient" / "core" / "reference" / "models.py"
 CLIENTMODELS = ROOT / "webclient" / "core" / "client" / "models.py"
+CRAWLMODELS = ROOT / "webclient" / "core" / "crawl" / "models.py"
 
 #: the cores that map to a surface class (a Core-typed result -> its surface).
-CORES: tuple[type, ...] = (Reference, Document)
-SURFACE = {Reference: "Reference", Document: "Document"}
+CORES: tuple[type, ...] = (Reference, Document, Crawl)
+SURFACE = {Reference: "Reference", Document: "Document", Crawl: "Crawl"}
 LAZY = {Reference: "LazyReference", Document: "LazyDocument"}
 #: the async eager tier: a Core maps to its Async surface, and its IO ops are
 #: ``async def`` (see ``members``), so ``await ac.ref(url).resolve()`` types.
@@ -79,6 +81,7 @@ _CORE_SURFACES = (
 #: modules), merged into each fn's globals for ``get_type_hints``.
 _NS = {
     "Document": Document,
+    "Crawl": Crawl,
     "Reference": Reference,
     "WebClient": WebClient,
     "Field": Field,
@@ -514,6 +517,10 @@ def _body(region: str) -> str:
         return _indented(
             members(WebClient, "eager", fields=False, class_props=False), 8
         )
+    if region == "Crawl interface":
+        return _indented(
+            members(Crawl, "eager", fields=False, class_props=False), 8
+        )
     if region == "AsyncReference surface":
         # the async view: IO ops (resolve) are ``async def``, Core returns map to
         # the Async surfaces so ``await ac.ref(url).resolve()`` chains async.
@@ -537,6 +544,7 @@ REGIONS = [
     (REFINIT, "Reference interface"),
     (DOCINIT, "Document interface"),
     (CLIENTMODELS, "WebClient interface"),
+    (CRAWLMODELS, "Crawl interface"),
     (SURFACES, "AsyncReference surface"),
     (SURFACES, "AsyncDocument surface"),
     (SURFACES, "AsyncWebClient surface"),
