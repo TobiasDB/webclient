@@ -105,6 +105,18 @@ def test_ssrf_guard_blocks_loopback_when_enabled():
         assert not doc.ok and doc.error.type == "BlockedHost"
 
 
+def test_ssrf_guard_blocks_browser_navigation_before_launch():
+    """The guard runs in afetch before the browser branch, so browser=True to a
+    blocked host is refused without launching a page (needs no playwright)."""
+    with WebClient(block_private_hosts=True) as bwc:
+        doc = (
+            bwc.ref("http://127.0.0.1:9/x")
+            .resolve(browser=True, optional=True)
+            .collect()
+        )
+        assert not doc.ok and doc.error.type == "BlockedHost"
+
+
 def test_ssrf_guard_off_by_default_allows_loopback(httpserver, wc):
     httpserver.expect_request("/ok").respond_with_data("hi")  # served on 127.0.0.1
     doc = wc.ref(httpserver.url_for("/ok")).resolve().collect()
