@@ -188,20 +188,6 @@ class WebClientCore(WebCore, BaseModel):
             *(s._scope for s in self._sessions if s._scope is not None),
         ]
 
-    def use(self, backing: Backing) -> Self:
-        """Register a ``Backing`` on this client: every core it owns (documents,
-        references, sessions) chooses it BEFORE its built-in backings, so it
-        overrides or extends any op it ``provides`` for the cores it ``applies``
-        to. The general extensibility hook. The most recently registered backing
-        wins. Returns ``self`` for chaining.
-
-        Narrow ``provides`` to only the ops you override, or you shadow the rest:
-        e.g. a ``HtmlBacking`` subclass with ``provides = frozenset({"render"})``
-        overrides ``render`` (``super()`` handles the formats you don't) while
-        ``select`` / ``attr`` / live interaction still reach their built-ins."""
-        self._backings.insert(0, backing)  # newest first -> wins the choice
-        return self
-
     BACKINGS: ClassVar[tuple[Backing, ...]] = (FetchBacking(),)
 
     # -- loop / lifecycle ----------------------------------------------------
