@@ -12,12 +12,34 @@ client records, validated (``from_plan``) before it runs.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 
 from .expr import from_plan
 from .surfaces import Document, Reference, WebClient
+
+
+class _DocStore(OrderedDict[str, Any]):
+    """An LRU-capped id->Document store, so a long-lived server does not retain
+    every document it ever returned. Evicting a stale id just means a follow-up
+    plan rooted at it gets a 404 (the client re-fetches)."""
+
+    def __init__(self, cap: int) -> None:
+        super().__init__()
+        self._cap = cap
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+        while len(self) > self._cap:
+            self.popitem(last=False)  # evict least-recently-used
+
+    def __getitem__(self, key: str) -> Any:
+        value = super().__getitem__(key)
+        self.move_to_end(key)  # LRU touch on access
+        return value
 
 
 def _serialize(value: Any, store: dict[str, Any]) -> Any:
@@ -44,12 +66,15 @@ def _serialize(value: Any, store: dict[str, Any]) -> Any:
     return value
 
 
-def create_app(wc: WebClient | None = None, token: str | None = None) -> FastAPI:
+def create_app(
+    wc: WebClient | None = None, token: str | None = None, max_docs: int = 1024
+) -> FastAPI:
     """A FastAPI app exposing a WebClient over ``/execute`` (Bearer-token
-    authorised when ``token`` is set). An existing client may be supplied."""
+    authorised when ``token`` is set). An existing client may be supplied;
+    ``max_docs`` caps the LRU document store."""
     app = FastAPI()
     app.state.wc = wc if wc is not None else WebClient()
-    app.state.docs = {}
+    app.state.docs = _DocStore(max_docs)
     app.state.sessions = {}
 
     def _auth(authorization: str | None) -> None:

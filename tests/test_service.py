@@ -42,6 +42,20 @@ def _handle(api, url):
     return rows["__doc__"]
 
 
+def test_doc_store_is_lru_bounded():
+    """The server's document store evicts least-recently-used entries so it does
+    not grow without bound."""
+    from webclient.service import _DocStore
+
+    s: _DocStore = _DocStore(2)
+    s["a"], s["b"] = object(), object()
+    s["c"] = object()  # over cap -> evict LRU "a"
+    assert list(s) == ["b", "c"]
+    _ = s["b"]  # touch -> "c" is now the LRU
+    s["d"] = object()
+    assert list(s) == ["b", "d"]
+
+
 def test_auth_required(client_and_server):
     api, server = client_and_server
     assert (
