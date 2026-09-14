@@ -127,6 +127,9 @@ class WebClientCore(WebCore, BaseModel):
     #: backings registered via ``use(...)``, chosen before the built-ins (newest
     #: first) by every core bound to this client -- the extensibility hook.
     _backings: list[Backing] = PrivateAttr(default_factory=list)
+    #: browser page scripts injected directly on this client (``inject_script``),
+    #: on top of the ones its backings declare (see ``_browser_scripts``).
+    _page_scripts: list[Any] = PrivateAttr(default_factory=list)
     _closed: bool = PrivateAttr(default=False)
     _scope: Any = PrivateAttr(default=None)  # the client's NameScope (000)
     _scope_counter: int = PrivateAttr(default=0)  # next session scope index
@@ -167,7 +170,7 @@ class WebClientCore(WebCore, BaseModel):
         from ...clients import BrowserFactory, ClientPool, HTTPXFactory
 
         self._pool = ClientPool(
-            {"http": HTTPXFactory(), "page": BrowserFactory(init_script=_live.INIT_JS)},
+            {"http": HTTPXFactory(), "page": BrowserFactory()},
             limits={"http": 10, "page": 4},
         )
 
@@ -451,6 +454,25 @@ class WebClientCore(WebCore, BaseModel):
         return core
 
     # -- live / browser ------------------------------------------------------
+    def inject_script(self, source: str, *, phase: str = "init") -> Self:
+        """Install a script on this client's browser pages: ``phase="init"`` runs
+        before every navigation (e.g. instrumentation), ``"load"`` once after. On
+        top of the scripts the client's backings declare (``Backing.page_scripts``).
+        Returns ``self`` for chaining."""
+        from ...clients import PageScript
+
+        self._page_scripts.append(PageScript(source, cast(Any, phase)))
+        return self
+
+    def _browser_scripts(self) -> list[Any]:
+        """The page scripts to install on a live page: this client's own
+        (``inject_script``) plus the ones its document backings + registered
+        backings declare. The backing owns the script; the client installs it."""
+        scripts = list(self._page_scripts)
+        for backing in (*DocumentCore.BACKINGS, *self._backings):
+            scripts.extend(backing.page_scripts)
+        return scripts
+
     async def _alive(
         self, ref: ReferenceCore, replay: list[dict[str, Any]] | None = None
     ) -> DocumentCore:
@@ -458,7 +480,10 @@ class WebClientCore(WebCore, BaseModel):
         try:
             # the browser client drives the page; we build the document + events.
             result = await lease.client.open(
-                ref.dispatch("url"), replay=replay or [], drain_js=_live._DRAIN_JS
+                ref.dispatch("url"),
+                scripts=self._browser_scripts(),
+                replay=replay or [],
+                drain_js=_live._DRAIN_JS,
             )
             doc = DocumentCore(
                 url=ref.dispatch("url"),

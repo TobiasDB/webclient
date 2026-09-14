@@ -118,3 +118,27 @@ def test_release_returns_page_to_pool(httpserver, wc):
     assert wc.pool.stats().pages_free == before + 1  # a page freed up
     with pytest.raises(Exception):  # its page is gone
         live.click("body", timeout=0.3)
+
+
+def test_injected_scripts_run_on_live_pages(httpserver):
+    """The client injects scripts (``inject_script``) and a backing declares them
+    (``Backing.page_scripts``); both are installed on every live page before
+    navigation. A fresh client so the module-scoped one is not polluted."""
+    from webclient import Backing
+    from webclient.clients import PageScript
+
+    class Marker(Backing):  # a backing that instruments live pages
+        page_scripts = (PageScript("window.__wc_marker = 'm';", "init"),)
+
+    httpserver.expect_request("/p").respond_with_data(
+        "<html><body>x</body></html>", content_type="text/html"
+    )
+    with WebClient(timeout=10.0) as c:
+        c.inject_script("window.__wc_injected = 42;")  # client-level, init phase
+        c.use(Marker())  # backing-level
+        doc = c.ref(httpserver.url_for("/p")).resolve(browser=True)
+        try:
+            assert doc.evaluate("() => window.__wc_injected") == 42
+            assert doc.evaluate("() => window.__wc_marker") == "m"
+        finally:
+            c.release(doc)

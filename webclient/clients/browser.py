@@ -1,12 +1,31 @@
 """The browser transport client -- one playwright page and the browser it comes
-from."""
+from -- plus ``PageScript``, the unit of script injection.
+
+A ``PageScript`` is content the client installs on a page at a named phase:
+``"init"`` (via ``add_init_script`` -- runs before every navigation, e.g. a
+mutation observer) or ``"load"`` (evaluated once after navigation). The *what*
+comes from above (a backing declares its scripts, the core gathers them); the
+client just installs them. So the injection point is transport, the scripts are
+domain -- clean layering.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from .base import Client, ClientFactory
+
+Phase = Literal["init", "load"]
+
+
+@dataclass(frozen=True)
+class PageScript:
+    """Script to install on a browser page. ``init`` runs before each navigation
+    (``add_init_script``); ``load`` is evaluated once after navigation."""
+
+    source: str
+    phase: Phase = "init"
 
 
 @dataclass
@@ -36,14 +55,19 @@ class BrowserClient(Client):
         self,
         url: str,
         *,
+        scripts: "tuple[PageScript, ...] | list[PageScript]" = (),
         replay: "list[dict[str, Any]]" = [],
         drain_js: str | None = None,
     ) -> PageResult:
-        """Navigate to ``url``, capturing console + network requests, replaying any
-        recorded actions, and (optionally) evaluating ``drain_js`` to discard load
+        """Navigate to ``url``, installing ``scripts`` (init before nav, load
+        after), capturing console + network requests, replaying any recorded
+        actions, and (optionally) evaluating ``drain_js`` to discard load
         mutations. Returns the raw page facts; the domain (document + events) is
         built by the caller."""
         page = self.page
+        for s in scripts:  # init scripts must be installed before navigation
+            if s.phase == "init":
+                await page.add_init_script(s.source)
         console: list[tuple[str, str]] = []
         page.on("console", lambda m: console.append((m.type, m.text)))
         network: list[tuple[str, str, str]] = []
@@ -54,6 +78,9 @@ class BrowserClient(Client):
         result = PageResult(
             page.url, (await page.content()).encode(), list(console), list(network)
         )
+        for s in scripts:  # load scripts run once, after navigation
+            if s.phase == "load":
+                await page.evaluate(s.source)
         for step in replay:  # reproduce recorded interactions (click / write)
             args = step.get("args", {})
             loc = page.locator(args.get("selector") or "*").first
@@ -70,16 +97,14 @@ class BrowserClient(Client):
 
 
 class BrowserFactory(ClientFactory):
-    """Owns one lazily-launched browser; each ``create`` opens a fresh page
-    (with an optional init script installed before navigation)."""
+    """Owns one lazily-launched browser; each ``create`` opens a fresh (blank)
+    page. Script injection is per-navigation (``BrowserClient.open``), not baked
+    into the factory, so the scripts can come from the core's backings."""
 
     kind = "page"
 
-    def __init__(
-        self, *, headless: bool = True, init_script: str | None = None
-    ) -> None:
+    def __init__(self, *, headless: bool = True) -> None:
         self.headless = headless
-        self.init_script = init_script
         self._pw: Any = None
         self._browser: Any = None
 
@@ -93,10 +118,7 @@ class BrowserFactory(ClientFactory):
 
     async def create(self) -> BrowserClient:
         browser = await self._browser_()
-        page = await browser.new_page()
-        if self.init_script:
-            await page.add_init_script(self.init_script)
-        return BrowserClient(page)
+        return BrowserClient(await browser.new_page())
 
     async def aclose(self) -> None:
         if self._browser is not None:
@@ -105,4 +127,4 @@ class BrowserFactory(ClientFactory):
             self._browser = self._pw = None
 
 
-__all__ = ["BrowserClient", "BrowserFactory"]
+__all__ = ["BrowserClient", "BrowserFactory", "PageScript", "PageResult", "Phase"]

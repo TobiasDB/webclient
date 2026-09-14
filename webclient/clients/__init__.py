@@ -9,7 +9,7 @@ a pool and leases from it; nothing above the pool sees a raw transport.
 from __future__ import annotations
 
 from .base import Client, ClientFactory
-from .browser import BrowserClient, BrowserFactory
+from .browser import BrowserClient, BrowserFactory, PageResult, PageScript
 from .http import HTTPXClient, HTTPXFactory, charset_of, sniff_kind
 from .pool import ClientPool, Lease, PoolStats
 
@@ -20,6 +20,8 @@ __all__ = [
     "HTTPXFactory",
     "BrowserClient",
     "BrowserFactory",
+    "PageScript",
+    "PageResult",
     "ClientPool",
     "Lease",
     "PoolStats",

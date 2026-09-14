@@ -43,6 +43,11 @@ class Backing:
     #: an async dispatcher they hand back an awaitable, so the async surface stub
     #: types them ``async def``. Everything else is in-memory (sync) either way.
     io: ClassVar[frozenset[str]] = frozenset()
+    #: browser page scripts this backing wants installed on live pages (a
+    #: ``clients.PageScript`` each -- ``init`` before nav / ``load`` after). The
+    #: client gathers them (``WebClientCore._browser_scripts``) and the browser
+    #: client installs them; the backing owns the *what*, the client the *how*.
+    page_scripts: ClassVar[tuple[Any, ...]] = ()
     gate: ClassVar[str] = "ok"
 
     def applies(self, core: Any) -> bool:  # Any: subclasses narrow to their core

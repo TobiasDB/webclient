@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
+from ...clients import PageScript
 from ...models import ActionEvent, ConsoleEvent, DOMUpdateEvent, NetworkEvent
 from ..web_core import Backing
 
@@ -94,6 +95,10 @@ class LiveBacking(Backing):
     #: ``select_all`` are omitted: on a *static* document (the common case) they
     #: are in-memory (HtmlBacking), so the surface types them synchronously.
     io = frozenset({"click", "write", "wait_for", "evaluate", "screenshot"})
+    #: the mutation-observer install -- this backing's ``dom_mutations`` reads what
+    #: it records (``drain``), so the backing owns the script; the client installs
+    #: it on every live page.
+    page_scripts = (PageScript(INIT_JS, "init"),)
     gate = "page"
 
     def applies(self, core: Any) -> bool:
