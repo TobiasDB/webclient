@@ -66,8 +66,7 @@ class FetchBacking(Backing):
             doc = await core.afetch(ref)
             return cast("Summary", doc.dispatch("summary", *include))
 
-        loop = core.loop()
-        return cast("Summary", run() if loop.on_loop_thread() else loop.run(run()))
+        return cast("Summary", core.bridge(run()))
 
 
 __all__ = ["FetchBacking"]

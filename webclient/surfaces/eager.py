@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
 
-from ..core.client import WebClientCore
+from ..core.client import AsyncWebClientCore, WebClientCore
 from ..core.document import DocumentCore
 from ..core.reference import HttpMethod, ReferenceCore
 from ..core.reference import from_url as _core_from_url
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from ..collection import Collection, Field
     from ..core.document import Element
     from ..summary import Metadata, Runtime, Structure, Summary, Transport
-    from .lazy import Lazy, LazyDocument, LazyReference, LazyWebClient
+    from .lazy import LazyDocument, LazyReference, LazyWebClient
 
 T = TypeVar("T")
 
@@ -178,122 +178,30 @@ class Renderer:
         raise NotImplementedError
 
 
-class _ClientBase:
-    """The async client's lazy recorder base over a ``WebClientCore``. It has no
-    verb bodies: ``__getattr__`` records each authoring verb into a ``WebClient``-
-    rooted plan (the executor dispatches the eager backing when the plan runs),
-    realized by ``await ...acollect()`` / ``.astream()``. The generated stubs give
-    the verbs their types; session / recovery / lifecycle are wrappers here.
+if TYPE_CHECKING:
 
-    (The *sync* client is the eager ``WebClientCore`` itself -- ``WebClient`` --
-    which resolves each verb immediately; this deferred base is what the async
-    client's ``await`` needs.)"""
+    class AsyncWebClient(AsyncWebClientCore):
+        """The async eager client -- the same surface as ``WebClient``, awaited at
+        the IO boundary: ``doc = await ac.fetch(url)`` / ``await ac.summary(url)``.
+        In-memory ops on the resolved document are synchronous; chain deeper IO
+        through ``ac.lazy`` plans (``await ac.lazy...acollect()`` /
+        ``.astream()``). ``ac.ref(url)`` is a (sync) request spec, handy as a lazy
+        plan's context. A pure typing stub: at runtime ``AsyncWebClient is
+        AsyncWebClientCore`` (its verbs return awaitables via ``bridge``)."""
 
-    _core: WebClientCore
+        @property
+        def lazy(self) -> "LazyWebClient": ...
 
-    def __init__(self, core: WebClientCore | None = None, **policy: Any) -> None:
-        self._core = core if core is not None else WebClientCore(**policy)
+        async def fetch(  # noqa: E704
+            self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any
+        ) -> "Document": ...
+        async def summary(  # noqa: E704
+            self, url: Any, *include: str, **kw: Any
+        ) -> "Summary": ...
+        def ref(self, url: Any, method: str = ..., **kw: Any) -> "Reference": ...
 
-    if TYPE_CHECKING:
-        # >>> generated: WebClient surface <<<
-        # fmt: off
-        def fetch(self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "LazyDocument": ...
-        def ref(self, url: Any, method: str = ..., **kw: Any) -> "LazyReference": ...
-        def summary(self, url: Any, *include: str, **kw: Any) -> "Lazy[Summary]": ...
-        # fmt: on
-        # >>> end generated <<<
-    else:
-
-        def __getattr__(self, name: str) -> Any:  # a verb -> a recorded plan
-            if name.startswith("_"):
-                raise AttributeError(name)
-            core = object.__getattribute__(self, "_core")
-            if name in type(core).ops():
-                from ..query.expr import Expr
-                from ..query.plan import Plan
-
-                return getattr(Expr(Plan(root="WebClient"), core), name)
-            raise AttributeError(name)
-
-    @property
-    def lazy(self) -> "LazyWebClient":
-        """A lazy recorder bound to this client: ``wc.lazy.fetch(url)`` records a
-        ``WebClient``-rooted plan on this client's core, run by ``.collect()``."""
-        from ..query.expr import lazy_root
-
-        return cast("LazyWebClient", lazy_root(self._core))
-
-    @property
-    def core(self) -> WebClientCore:
-        """The underlying engine core."""
-        return self._core
-
-    def _ensure_loop(self) -> Any:
-        """The engine loop (drives async fan-out / bridges sync callers)."""
-        return self._core.loop()
-
-    @property
-    def _scope(self) -> Any:
-        return self._core._scope
-
-    @property
-    def _closed(self) -> bool:
-        return getattr(self._core, "_closed", False)
-
-    @property
-    def bus(self) -> Any:
-        """The client's event bus (subscribe to network/dom/console topics)."""
-        return self._core.bus
-
-    @property
-    def pool(self) -> Any:
-        """The client's transport-lease pool (``.stats()``)."""
-        return self._core.pool
-
-    def use(self, renderer: Renderer) -> Any:
-        self._core.use(renderer)
-        return self
-
-    def session(self, **kw: Any) -> Any:
-        """A new session sharing this client's engine -- a scoped core (which IS
-        its own surface) or a remote session handle."""
-        return self._core.session(**kw)
-
-    def document(self, name: str) -> Document | None:
-        """Recover a materialised Document by name (same surface object), or
-        ``None`` if it is not (or no longer) in scope."""
-        from ._base import wrap
-
-        core = self._core.document(name)
-        return wrap(core) if core is not None else None
-
-    def reference(self, name: str) -> Reference | None:
-        """Recover a Reference by its (root) name, or ``None``."""
-        from ._base import wrap
-
-        core = self._core.reference(name)
-        return wrap(core) if core is not None else None
-
-    def release(self, doc: Document) -> None:
-        """Return a live document's browser page to the pool."""
-        self._core.release(doc)
-
-
-class AsyncWebClient(_ClientBase):
-    """The async client surface: the very same plans as ``WebClient``, realised
-    with ``await plan.acollect()`` / ``plan.astream()`` on the engine loop off
-    the caller's loop."""
-
-    async def aclose(self) -> None:
-        import asyncio
-
-        await asyncio.to_thread(self._core.close)
-
-    async def __aenter__(self) -> "AsyncWebClient":
-        return self
-
-    async def __aexit__(self, *exc: object) -> None:
-        await self.aclose()
+else:  # at runtime the async client IS its async-dispatcher core
+    AsyncWebClient = AsyncWebClientCore
 
 
 def RemoteWebClient(url: str, token: str | None = None) -> "WebClient":

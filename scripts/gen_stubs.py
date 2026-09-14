@@ -451,12 +451,6 @@ def _body(region: str) -> str:
         )
     if region == "collection element-op lifting":
         return _indented(lift_members(), 8)
-    if region == "WebClient surface":
-        # the async authoring root: its verbs in the client (lazy) vocabulary (ref
-        # -> LazyReference, fetch -> LazyDocument, summary -> Lazy[Summary]); no
-        # data model. Realized by ``await ...acollect()`` / ``.astream()``.
-        verbs = members(WebClientCore, "client", fields=False, class_props=False)
-        return _indented(verbs, 8)
     if region == "WebClient eager surface":
         # the sync eager client: its verbs resolve immediately (fetch -> Document,
         # ref -> Reference, summary -> Summary); no data model.
@@ -473,7 +467,6 @@ REGIONS = [
     (SURFACES, "Document eager surface"),
     (SURFACES, "WebClient eager surface"),
     (SURFACES, "Session eager surface"),
-    (SURFACES, "WebClient surface"),
     (COLLECTION, "collection element-op lifting"),
     (MODELS, "lazy-tier"),
 ]

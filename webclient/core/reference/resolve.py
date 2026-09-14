@@ -34,7 +34,7 @@ class ResolveBacking(Backing):
 
             target = WebClientCore()  # process-local default
         coro = target.afetch(core, optional=lenient, browser=browser)
-        loop = target.loop()
-        # On the engine loop (the async executor) hand back the coroutine to
-        # await; off it (a sync caller) bridge onto the loop.
-        return cast("DocumentCore", coro if loop.on_loop_thread() else loop.run(coro))
+        # ``bridge`` picks the dispatcher: a coroutine on the engine loop (the
+        # async executor), a caller-loop awaitable for an async client, or a
+        # blocking run for a sync caller.
+        return cast("DocumentCore", target.bridge(coro))

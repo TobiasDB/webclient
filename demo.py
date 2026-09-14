@@ -377,7 +377,7 @@ def main() -> None:
 
     async def _async_demo() -> tuple:
         async with AsyncWebClient() as ac:
-            document = await ac.fetch(f"{base}/").acollect()  # async collect
+            document = await ac.fetch(f"{base}/")  # await at the IO boundary
             rows = await (
                 wq.ref.resolve()
                 .select_all(".card")

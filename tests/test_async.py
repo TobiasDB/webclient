@@ -1,5 +1,8 @@
-"""AsyncWebClient: the same facade helpers, awaited. Same plans as the sync
-client, executed on the engine loop and bridged to the caller's loop."""
+"""AsyncWebClient: the same eager surface, awaited at the IO boundary. The async
+client is just a different dispatcher on the core -- ``await ac.fetch(url)``
+resolves on the engine loop and bridges to the caller's loop; in-memory ops on
+the resolved document are synchronous; deeper IO chains go through ``ac.lazy``
+plans (``await ...acollect()`` / ``.astream()``)."""
 
 import asyncio
 
@@ -21,12 +24,15 @@ def test_async_fetch_execute_and_stream(httpserver):
 
     async def main():
         async with AsyncWebClient() as ac:
-            # acollect(): the async twin of collect() -- the async realization
-            document = await ac.fetch(url).acollect()
+            # await ac.fetch(url): the eager async boundary -> a Document
+            document = await ac.fetch(url)
             assert document.ok and document.title == "Shop"
-            titles = await ac.fetch(url).select_all(".title").acollect()
+            # in-memory ops on the resolved document are synchronous
+            titles = document.select_all(".title")
             assert [t.text_content for t in titles] == ["Aeropress", "Grinder"]
 
+            # a deeper IO chain: a lazy plan, realised with acollect() (ac.ref(url)
+            # is an eager Reference context)
             rows = await (
                 ref.resolve()
                 .select_all(".card")

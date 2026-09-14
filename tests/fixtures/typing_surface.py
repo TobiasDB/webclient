@@ -132,11 +132,15 @@ assert_type(_wc.lazy.fetch("https://e.com").text_content.collect(), Field[str])
 assert_type(_wc.lazy.ref("https://e.com").resolve().collect(), Document)
 
 _ac = AsyncWebClient()
-assert_type(_ac.fetch("https://e.com"), LazyDocument)
+assert_type(_ac.ref("https://e.com"), Reference)  # a (sync) spec / plan context
 
 
 async def _async_surface() -> None:
-    # acollect() is the one async realization (the twin of collect())
-    assert_type(await _ac.fetch("https://e.com").acollect(), Document)
-    assert_type(await _ac.ref("https://e.com").resolve().acollect(), Document)
-    assert_type(await _ac.fetch("https://e.com").text_content.acollect(), Field[str])
+    # await at the IO boundary -> the eager surface; deeper IO via .lazy plans
+    assert_type(await _ac.fetch("https://e.com"), Document)
+    assert_type(await _ac.summary("https://e.com"), Summary)
+    assert_type((await _ac.fetch("https://e.com")).text_content, str)
+    assert_type(await _ac.lazy.ref("https://e.com").resolve().acollect(), Document)
+    assert_type(
+        await _ac.lazy.fetch("https://e.com").text_content.acollect(), Field[str]
+    )

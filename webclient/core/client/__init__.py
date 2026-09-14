@@ -208,6 +208,27 @@ class WebClientCore(WebCore, BaseModel):
     #: the engine loop under its older name (drives async fan-out / sync bridge).
     _ensure_loop = loop
 
+    #: whether this client is an *async* dispatcher -- its IO ops hand back an
+    #: awaitable (bridged to the caller's loop) instead of blocking. The async
+    #: client core sets this True; see ``bridge``.
+    _async_mode: ClassVar[bool] = False
+
+    def bridge(self, coro: Any) -> Any:
+        """Run an IO coroutine under this client's dispatcher: on the engine loop
+        (the executor) hand back the coroutine to await; for an async client hand
+        back a caller-loop awaitable (bridged off the engine loop); for a plain
+        sync caller block on the engine loop. This is the one place the sync /
+        async / on-loop distinction lives, so every IO backing (``resolve`` /
+        ``summary`` / live ops) is dispatcher-agnostic."""
+        loop = self.loop()
+        if loop.on_loop_thread():
+            return coro
+        if self._async_mode:
+            import asyncio
+
+            return asyncio.wrap_future(loop.submit(coro))
+        return loop.run(coro)
+
     @property
     def pool(self) -> Any:
         """The transport-lease pool (http clients + browser pages)."""
@@ -551,8 +572,31 @@ class WebClientCore(WebCore, BaseModel):
         doc._events.extend(events)
 
 
+class AsyncWebClientCore(WebClientCore):
+    """The async dispatcher: the very same eager surface as ``WebClientCore``, but
+    its IO verbs hand back an awaitable instead of blocking -- ``doc = await
+    ac.fetch(url)`` (bridged off the engine loop by ``bridge``). In-memory ops on
+    the resolved document stay synchronous (no IO to await); only the IO boundary
+    (``fetch`` / ``resolve`` / ``summary`` / live ops) is asynchronous. A context
+    manager: ``async with AsyncWebClient() as ac: ...``."""
+
+    _async_mode: ClassVar[bool] = True
+
+    async def aclose(self) -> None:
+        import asyncio
+
+        await asyncio.to_thread(self.close)
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
+
+
 __all__ = [
     "WebClientCore",
+    "AsyncWebClientCore",
     "NameScope",
     "FetchBacking",
     "_materialize",
