@@ -360,6 +360,36 @@ def test_failing_row_cancels_siblings(wc):
     assert len(finished) < 5  # siblings were cancelled, not drained
 
 
+def test_fan_out_surfaces_sibling_failures_in_a_note(wc):
+    # The contract is unchanged (raise the FIRST failure), but the siblings it
+    # cancelled must not vanish -- they are attached as a PEP 678 note so a
+    # traceback shows every failure, not just one.
+    async def drive():
+        gate = asyncio.Event()
+        arrived = 0
+
+        async def work(i):
+            nonlocal arrived
+            if i < 3:  # three tasks fail together once all three have arrived
+                arrived += 1
+                if arrived == 3:
+                    gate.set()
+                await gate.wait()  # wake in the same batch, then raise (no suspend)
+                raise ValueError(f"boom-{i}")
+            await asyncio.sleep(0)
+            return i
+
+        await fan_out(list(range(6)), work, limit=6)
+
+    with pytest.raises(ValueError) as excinfo:
+        wc._ensure_loop().run(drive())
+    notes = getattr(excinfo.value, "__notes__", []) or []
+    assert notes, "sibling failures should be surfaced in a note"
+    joined = " ".join(notes)
+    others = {f"boom-{i}" for i in range(3)} - {str(excinfo.value)}
+    assert all(other in joined for other in others)  # every sibling is named
+
+
 def test_per_call_collect_is_eager(site, wc):
     # op(..., _collect=True) records then collects immediately (one path).
     title = (

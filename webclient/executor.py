@@ -371,12 +371,33 @@ def evaluate(expr: Any, context: Any = None, *, client: Any = None) -> Any:
 # -- bounded fan-out ---------------------------------------------------------
 
 
+def _flatten_exceptions(exc: BaseException) -> list[BaseException]:
+    """Depth-first leaves of a (possibly nested) ExceptionGroup."""
+    if isinstance(exc, BaseExceptionGroup):
+        leaves: list[BaseException] = []
+        for member in exc.exceptions:
+            leaves.extend(_flatten_exceptions(member))
+        return leaves
+    return [exc]
+
+
+def _note_siblings(first: BaseException, siblings: list[BaseException]) -> None:
+    """Attach the other failures to ``first`` as a PEP 678 note, so a fan-out
+    that raises its first failure still surfaces the siblings it cancelled (they
+    would otherwise be silently discarded from the traceback)."""
+    if siblings:
+        detail = "; ".join(f"{type(e).__name__}: {e}" for e in siblings)
+        first.add_note(
+            f"fan-out: {len(siblings)} sibling task(s) also failed: {detail}"
+        )
+
+
 async def fan_out(
     items: list[Any], fn: Callable[[Any], Awaitable[Any]], *, limit: int
 ) -> list[Any]:
     """Run ``fn`` over ``items`` with at most ``limit`` in flight, results in
     input order. A failing task cancels its siblings and raises the first
-    failure."""
+    failure; any sibling failures are surfaced on that exception as a note."""
     results: list[Any] = [None] * len(items)
     pending = iter(range(len(items)))
 
@@ -388,11 +409,10 @@ async def fan_out(
         async with asyncio.TaskGroup() as group:
             for _ in range(min(max(limit, 1), len(items)) or 1):
                 group.create_task(worker())
-    except BaseExceptionGroup as group_exc:  # unwrap to the first failure
-        exc: BaseException = group_exc
-        while isinstance(exc, BaseExceptionGroup):
-            exc = exc.exceptions[0]
-        raise exc from None
+    except BaseExceptionGroup as group_exc:  # raise the first, note the rest
+        leaves = _flatten_exceptions(group_exc)
+        _note_siblings(leaves[0], leaves[1:])
+        raise leaves[0] from None
     return results
 
 
@@ -423,6 +443,13 @@ async def fan_out_stream(
         for _ in range(n):
             ok, value = await queue.get()
             if not ok:
+                # surface any sibling failures already queued before we unwind
+                siblings: list[BaseException] = []
+                while not queue.empty():
+                    ok2, other = queue.get_nowait()
+                    if not ok2:
+                        siblings.append(other)
+                _note_siblings(value, siblings)
                 raise value
             yield value
     finally:
