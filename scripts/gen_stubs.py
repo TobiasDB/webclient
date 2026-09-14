@@ -51,6 +51,7 @@ _CORE_SURFACES = set(SURFACE.values()) | set(LAZY.values())
 _NS = {
     "DocumentCore": DocumentCore,
     "ReferenceCore": ReferenceCore,
+    "WebClientCore": WebClientCore,
     "Field": Field,
     "Element": Element,
     "Any": Any,
