@@ -137,10 +137,10 @@ class WebCore:
         if client is None:
             if hasattr(self, "bridge"):  # a client core is its own engine
                 client = self
-            else:  # an unbound reference/document -- give it a default client
-                from .client import WebClientCore
+            else:  # an unbound reference/document -- give it the default client
+                from .client import default_client
 
-                client = WebClientCore()
+                client = default_client()
                 try:
                     self._client = client
                 except Exception:

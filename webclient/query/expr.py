@@ -118,9 +118,9 @@ class Expr:
     def _client_for(self, context: Any) -> Any:
         client = self._client or getattr(context, "_client", None)
         if client is None:
-            from ..core.client import WebClientCore
+            from ..core.client import default_client
 
-            client = WebClientCore()  # process-local default (MVP)
+            client = default_client()  # the process-local shared engine
         return client
 
     def collect(self, context: Any = None) -> Any:

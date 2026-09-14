@@ -365,9 +365,9 @@ def evaluate(expr: Any, context: Any = None, *, client: Any = None) -> Any:
     if not isinstance(expr, Expr):
         return expr
     client = client or expr._client or getattr(context, "_client", None)
-    from ..core.client import WebClientCore
+    from ..core.client import default_client
 
-    engine = client if client is not None else WebClientCore()
+    engine = client if client is not None else default_client()
     return engine.loop().run(aevaluate(expr, context, client=client))
 
 

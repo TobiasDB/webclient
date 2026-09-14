@@ -581,6 +581,20 @@ class WebClientCore(WebCore, BaseModel):
         doc._events.extend(events)
 
 
+_DEFAULT: "WebClientCore | None" = None
+
+
+def default_client() -> WebClientCore:
+    """The process-local shared engine, used wherever an operation has no bound
+    client -- an unbound reference/plan (``reference(url).resolve()``), a lazy
+    root collected without a client, etc. Recreated after it is closed, so every
+    such op shares ONE engine (pool + loop) instead of spinning up throwaways."""
+    global _DEFAULT
+    if _DEFAULT is None or _DEFAULT._closed:
+        _DEFAULT = WebClientCore()
+    return _DEFAULT
+
+
 def async_client(**policy: Any) -> WebClientCore:
     """A ``WebClientCore`` in async-dispatcher mode: loop-native (its IO runs on
     the caller's loop, so ``doc = await ac.fetch(url)``). Not a subclass -- the
@@ -594,6 +608,7 @@ def async_client(**policy: Any) -> WebClientCore:
 __all__ = [
     "WebClientCore",
     "async_client",
+    "default_client",
     "NameScope",
     "FetchBacking",
     "_materialize",

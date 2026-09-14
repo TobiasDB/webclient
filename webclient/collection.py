@@ -158,9 +158,9 @@ class Collection(Generic[T]):
 
     # -- row shaping ----------------------------------------------------------
     def _loop(self) -> Any:
-        from .core.client import WebClientCore
+        from .core.client import default_client
 
-        return (self._client or WebClientCore()).loop()
+        return (self._client or default_client()).loop()
 
     async def aextract(self, **exprs: Any) -> "Collection[T]":
         """Annotate each element with extracted columns (its ``_row``): columns

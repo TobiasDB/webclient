@@ -243,15 +243,12 @@ def from_url(
     return cast("Reference", _core_from_url(url, method, params, headers, cookies))
 
 
-_DEFAULT: "WebClient | None" = None
-
-
 def default_client() -> "WebClient":
-    """A process-local shared client, recreated after it is closed."""
-    global _DEFAULT
-    if _DEFAULT is None or _DEFAULT._closed:
-        _DEFAULT = cast("WebClient", WebClientCore())
-    return _DEFAULT
+    """The process-local shared client (recreated after close) -- the surface over
+    the one engine every unbound operation shares (see ``core.client``)."""
+    from ..core.client import default_client as _default
+
+    return cast("WebClient", _default())
 
 
 if TYPE_CHECKING:
