@@ -43,14 +43,21 @@ sessions to make room (that would silently break a client mid-use). If a
 hard-bound-with-eviction policy is ever wanted, close-and-evict the oldest and
 document that a client's next op may 404.
 
-## SSRF / host safety boundary (not yet implemented)
+## SSRF / host safety boundary (opt-in, implemented 2026-09-14)
 
-Emitted plans can currently resolve any URL, including internal/loopback hosts
-(`127.0.0.1`, `169.254.169.254`, private ranges). The only guard today is the
-`_`-prefixed-name refusal in `plan.validate_names`. A real boundary should be an
-**opt-in** policy on `WebClientCore` (an allow/deny host predicate consulted in
-`FetchBacking.ref` / the transport), defaulting to off so the test-suite's
-`127.0.0.1` fetches keep working; enabling it in the service/remote tier is where
-it matters. Left opt-in + unset for now precisely because a default-deny of
-loopback would break the local test servers -- so it needs its own task with
-tests for both the enforced and permissive modes.
+`WebClientCore.block_private_hosts` (default `False`) is the opt-in SSRF guard.
+When set, `afetch` calls `_host_blocked(ref)` before any transport: an IP literal
+or a resolved hostname that is loopback / private / link-local / reserved /
+multicast / unspecified, or `localhost`, is refused with a `BlockedHost`
+`WebError` (raising unless `optional`). It resolves names (via the loop's
+`getaddrinfo`) so a public name pointing at an internal IP is caught. Default-off
+keeps the test-suite's `127.0.0.1` fetches working; tests cover both modes.
+
+**Remaining work.**
+- TOCTOU: resolution happens in the guard, but the actual connect re-resolves --
+  a determined DNS-rebinding attacker could differ. A pinned-IP connect (resolve
+  once, connect to that IP with the Host header preserved) would close this.
+- Wire it through the service/remote tier: `create_app(...)` should be able to
+  construct its `WebClient(block_private_hosts=True)` so a hosted server is
+  protected by default; the browser path (`_alive`) is covered by the same
+  `afetch` guard, but a defence-in-depth check at navigation would be prudent.

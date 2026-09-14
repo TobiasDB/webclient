@@ -138,6 +138,7 @@ class WebClientCore(WebCore, BaseModel):
     timeout: float = 30.0
     default_headers: dict[str, str] = {}
     names_cap: int | None = None
+    block_private_hosts: bool = False  # opt-in SSRF guard (loopback/private/etc.)
 
     _loop: Any = PrivateAttr(default=None)
     _pool: Any = PrivateAttr(default=None)  # ClientPool (lazy)
@@ -225,6 +226,41 @@ class WebClientCore(WebCore, BaseModel):
         if self._loop is not None:
             self._loop.stop()
 
+    async def _host_blocked(self, ref: ReferenceCore) -> bool:
+        """Whether ``ref``'s host resolves to a loopback / private / link-local /
+        reserved address (the SSRF guard, when ``block_private_hosts``). Resolves
+        names too, so a public name pointing at an internal IP is caught; an
+        unresolvable host is left for the transport to fail normally."""
+        import asyncio
+        import ipaddress
+        import socket
+
+        def _ip_blocked(text: str) -> bool:
+            ip = ipaddress.ip_address(text)
+            return (
+                ip.is_loopback
+                or ip.is_private
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+                or ip.is_unspecified
+            )
+
+        host = ref.hostname
+        if not host:
+            return False
+        try:
+            return _ip_blocked(host)  # an IP literal
+        except ValueError:
+            pass
+        if host == "localhost" or host.endswith(".localhost"):
+            return True
+        try:
+            infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+        except socket.gaierror:
+            return False  # unresolvable -> let the transport surface the failure
+        return any(_ip_blocked(str(info[4][0])) for info in infos)
+
     # -- transport (machinery): resolve a ReferenceCore -> DocumentCore ------
     async def afetch(
         self, ref: ReferenceCore, *, optional: bool = False, browser: bool = False
@@ -234,6 +270,20 @@ class WebClientCore(WebCore, BaseModel):
         plan; this is what the executor runs when that plan resolves."""
         import time
 
+        if self.block_private_hosts and await self._host_blocked(ref):
+            doc = DocumentCore(
+                url=ref.dispatch("url"),
+                status_code=0,
+                error=WebError(
+                    type="BlockedHost",
+                    message=f"host {ref.hostname!r} is blocked by policy",
+                ),
+            )
+            doc._client = self
+            self._register(doc, ref)
+            if not optional:
+                raise WebException(cast(WebError, doc.error), document=doc)
+            return doc
         if browser:
             return await self._alive(ref)
         headers = {**self.default_headers, **ref.headers}

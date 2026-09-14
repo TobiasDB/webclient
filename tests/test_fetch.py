@@ -95,6 +95,22 @@ def test_fetch_5xx_is_retriable(httpserver, wc):
     assert doc.status_code == 503 and doc.error.retriable is True
 
 
+def test_ssrf_guard_blocks_loopback_when_enabled():
+    """With the opt-in SSRF guard, a loopback/private host is refused before any
+    transport happens."""
+    with WebClient(block_private_hosts=True) as bwc:
+        with pytest.raises(FetchError, match="blocked"):
+            bwc.fetch("http://127.0.0.1:9/x").collect()
+        doc = bwc.fetch("http://127.0.0.1:9/x", optional=True).collect()
+        assert not doc.ok and doc.error.type == "BlockedHost"
+
+
+def test_ssrf_guard_off_by_default_allows_loopback(httpserver, wc):
+    httpserver.expect_request("/ok").respond_with_data("hi")  # served on 127.0.0.1
+    doc = wc.ref(httpserver.url_for("/ok")).resolve().collect()
+    assert doc.ok  # the default policy does not block loopback
+
+
 def test_fetch_sends_headers_params_and_method(httpserver, wc):
     httpserver.expect_request(
         "/submit",
