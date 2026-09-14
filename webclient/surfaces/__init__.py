@@ -10,7 +10,7 @@ Split into three modules (one runtime behind all of them, generated stubs on top
 Re-exported here so ``from webclient.surfaces import X`` reaches every surface.
 """
 
-from ._base import Surface, surface, wrap
+from ._base import Eager, Surface, surface, wrap
 from .eager import (
     AsyncWebClient,
     Document,
@@ -26,6 +26,7 @@ from .eager import (
 from .lazy import Lazy, LazyCollection, LazyDocument, LazyField, LazyReference
 
 __all__ = [
+    "Eager",
     "Surface",
     "surface",
     "wrap",

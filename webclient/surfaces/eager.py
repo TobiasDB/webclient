@@ -11,7 +11,7 @@ from ..core.document import DocumentCore
 from ..core.reference import HttpMethod, ReferenceCore
 from ..core.reference import from_url as _core_from_url
 from ..core.web_core import WebCore
-from ._base import Surface, surface
+from ._base import Eager, surface
 
 if TYPE_CHECKING:
     from ..collection import Collection, Field
@@ -23,30 +23,11 @@ T = TypeVar("T")
 
 
 @surface(ReferenceCore)
-class Reference(Surface[ReferenceCore]):
+class Reference(Eager[ReferenceCore]):
     """A request spec (eager): ``url``/``with_params``/``replace``/``join``/
-    ``resolve``. Construct from a core (``Reference(core)``) or directly from
-    spec fields (``Reference(hostname=..., path=...)``)."""
-
-    def __init__(self, core: Any = None, **fields: Any) -> None:
-        if not isinstance(core, ReferenceCore):
-            core = ReferenceCore(**fields)
-        super().__init__(core)
-
-    # -- serialisation proxies (a Reference is a request spec on the wire) ---
-    def model_dump(self, **kw: Any) -> Any:
-        return self._core.model_dump(**kw)
-
-    def model_dump_json(self, **kw: Any) -> Any:
-        return self._core.model_dump_json(**kw)
-
-    @classmethod
-    def model_validate(cls, data: Any, **kw: Any) -> "Reference":
-        return cls(ReferenceCore.model_validate(data, **kw))
-
-    @classmethod
-    def model_validate_json(cls, data: Any, **kw: Any) -> "Reference":
-        return cls(ReferenceCore.model_validate_json(data, **kw))
+    ``resolve``. Construct from a core (``Reference(core)``) or directly from spec
+    fields (``Reference(hostname=..., path=...)``). No hand-written body -- the
+    construction and serialisation proxies live on ``Eager``."""
 
     if TYPE_CHECKING:
         # >>> generated: Reference eager surface <<<
@@ -82,18 +63,11 @@ class Reference(Surface[ReferenceCore]):
 
 
 @surface(DocumentCore)
-class Document(Surface[DocumentCore]):
+class Document(Eager[DocumentCore]):
     """A resolved document (eager): ``select``/``select_all``/``attr``/
     ``text_content``/``render``/events, plus the live interaction set when backed
-    by a page.
-    Construct from a core (``Document(core)``) or from core-field kwargs
-    (unknown keys are ignored)."""
-
-    def __init__(self, core: Any = None, **fields: Any) -> None:
-        if not isinstance(core, DocumentCore):
-            known = {k: v for k, v in fields.items() if k in DocumentCore.model_fields}
-            core = DocumentCore(**known)
-        super().__init__(core)
+    by a page. Construct from a core (``Document(core)``) or from core-field
+    kwargs. No hand-written body -- construction lives on ``Eager``."""
 
     if TYPE_CHECKING:
         # >>> generated: Document eager surface <<<
@@ -250,7 +224,7 @@ class Session:
 
 
 @surface(WebClientCore)
-class _ClientDispatch(Surface[WebClientCore]):
+class _ClientDispatch(Eager[WebClientCore]):
     """The eager view the executor uses to run a ``WebClient``-rooted plan: it
     dispatches the client's authoring backings (ref/fetch/summary) to real
     cores. Users always hold the lazy ``WebClient``; this is internal."""

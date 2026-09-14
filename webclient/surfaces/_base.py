@@ -9,7 +9,7 @@ supply the static types; this is the one runtime behind all of them.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, TypeVar, cast
 
 
 from ..core.web_core import WebCore
@@ -49,16 +49,42 @@ def wrap(value: Any, *, client: Any = None) -> Any:
     return value
 
 
-class Surface(Generic[C]):
-    """Runtime eager object: dispatches ops on ``_core``, wraps Core results.
-    Generic over its core type so subclasses (``Reference``/``Document``) get a
-    precisely-typed ``_core`` (set via object.__setattr__, so declared here)."""
+_S = TypeVar("_S", bound="Eager[Any]")
+
+
+class Eager(Generic[C]):
+    """Runtime eager object: constructs/holds a core and turns attribute access
+    into behaviour -- a data field reads through, a property op dispatches now, a
+    call op returns a dispatcher; every Core result is auto-wrapped so chaining
+    stays eager. The concrete subclasses (``Reference``/``Document``) are
+    ``@surface``-registered generated stubs with NO hand-written body -- all
+    behaviour lives here (the eager twin of ``surfaces.lazy.Lazy``)."""
 
     __slots__ = ("_core",)
     _core: C
+    _core_cls: ClassVar[type]  # the wrapped Core class, set by ``@surface``
 
-    def __init__(self, core: C) -> None:
+    def __init__(self, core: Any = None, **fields: Any) -> None:
+        cls = getattr(type(self), "_core_cls", None)
+        if cls is not None and not isinstance(core, cls):
+            known = {k: v for k, v in fields.items() if k in cls.model_fields}
+            core = cls(**known)
         object.__setattr__(self, "_core", core)
+
+    # -- serialisation proxies (the surface forwards to its pydantic core) -----
+    def model_dump(self, **kw: Any) -> Any:
+        return cast(Any, self._core).model_dump(**kw)
+
+    def model_dump_json(self, **kw: Any) -> Any:
+        return cast(Any, self._core).model_dump_json(**kw)
+
+    @classmethod
+    def model_validate(cls: type[_S], data: Any, **kw: Any) -> _S:
+        return cls(cast(Any, cls._core_cls).model_validate(data, **kw))
+
+    @classmethod
+    def model_validate_json(cls: type[_S], data: Any, **kw: Any) -> _S:
+        return cls(cast(Any, cls._core_cls).model_validate_json(data, **kw))
 
     def __setattr__(self, name: str, value: Any) -> None:
         # Binding a client onto a surface (doc._client = wc) routes to the core
@@ -98,14 +124,19 @@ _C = TypeVar("_C", bound=type)
 
 
 def surface(core_cls: type) -> "Callable[[_C], _C]":
-    """Register the decorated Surface subclass as ``core_cls``'s eager wrapper
-    (an identity decorator -- the class type is preserved)."""
+    """Register the decorated ``Eager`` subclass as ``core_cls``'s eager wrapper
+    and record the core class on it (so the shared ``__init__`` can construct it).
+    An identity decorator -- the class type is preserved."""
 
     def register(cls: _C) -> _C:
         _REGISTRY[core_cls] = cls
+        cls._core_cls = core_cls  # type: ignore[attr-defined]
         return cls
 
     return register
 
 
-__all__ = ["Surface", "wrap", "surface"]
+#: back-compat alias; the eager base is now ``Eager`` (mirrors ``lazy.Lazy``).
+Surface = Eager
+
+__all__ = ["Eager", "Surface", "wrap", "surface"]
