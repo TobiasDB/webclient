@@ -11,7 +11,7 @@ from ..core.document import DocumentCore
 from ..core.reference import HttpMethod, ReferenceCore
 from ..core.reference import from_url as _core_from_url
 from ..core.web_core import WebCore
-from ._base import Eager, surface
+from ._base import Eager
 
 if TYPE_CHECKING:
     from ..collection import Collection, Field
@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 
-@surface(ReferenceCore)
 class Reference(Eager[ReferenceCore]):
     """A request spec (eager): ``url``/``with_params``/``replace``/``join``/
     ``resolve``. Construct from a core (``Reference(core)``) or directly from spec
@@ -62,7 +61,6 @@ class Reference(Eager[ReferenceCore]):
         # >>> end generated <<<
 
 
-@surface(DocumentCore)
 class Document(Eager[DocumentCore]):
     """A resolved document (eager): ``select``/``select_all``/``attr``/
     ``text_content``/``render``/events, plus the live interaction set when backed
@@ -223,7 +221,6 @@ class Session:
         return cast("dict[str, str]", self._core.cookies)
 
 
-@surface(WebClientCore)
 class _ClientDispatch(Eager[WebClientCore]):
     """The eager view the executor uses to run a ``WebClient``-rooted plan: it
     dispatches the client's authoring backings (ref/fetch/summary) to real

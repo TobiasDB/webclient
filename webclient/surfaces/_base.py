@@ -9,7 +9,16 @@ supply the static types; this is the one runtime behind all of them.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Generic,
+    TypeVar,
+    cast,
+    get_args,
+    get_origin,
+)
 
 
 from ..core.web_core import WebCore
@@ -56,13 +65,26 @@ class Eager(Generic[C]):
     """Runtime eager object: constructs/holds a core and turns attribute access
     into behaviour -- a data field reads through, a property op dispatches now, a
     call op returns a dispatcher; every Core result is auto-wrapped so chaining
-    stays eager. The concrete subclasses (``Reference``/``Document``) are
-    ``@surface``-registered generated stubs with NO hand-written body -- all
-    behaviour lives here (the eager twin of ``surfaces.lazy.Lazy``)."""
+    stays eager. The concrete subclasses (``Reference``/``Document``) are generated
+    stubs with NO hand-written body -- all behaviour lives here (the eager twin of
+    ``surfaces.lazy.Lazy``). Each subclass declares its core in the base parameter
+    (``class Document(Eager[DocumentCore])``); ``__init_subclass__`` reads it off
+    ``__orig_bases__`` to record ``_core_cls`` and register the core->surface map
+    -- so there is no decorator to maintain."""
 
     __slots__ = ("_core",)
     _core: C
-    _core_cls: ClassVar[type]  # the wrapped Core class, set by ``@surface``
+    _core_cls: ClassVar[type]  # the wrapped Core class (auto-derived below)
+
+    def __init_subclass__(cls, **kw: Any) -> None:
+        super().__init_subclass__(**kw)
+        for base in getattr(cls, "__orig_bases__", ()):
+            if get_origin(base) is Eager:
+                args = get_args(base)
+                if args and isinstance(args[0], type) and issubclass(args[0], WebCore):
+                    cls._core_cls = args[0]
+                    _REGISTRY[args[0]] = cls
+                break
 
     def __init__(self, core: Any = None, **fields: Any) -> None:
         cls = getattr(type(self), "_core_cls", None)
@@ -120,23 +142,7 @@ class Eager(Generic[C]):
         return f"{type(self).__name__}({object.__getattribute__(self, '_core')!r})"
 
 
-_C = TypeVar("_C", bound=type)
-
-
-def surface(core_cls: type) -> "Callable[[_C], _C]":
-    """Register the decorated ``Eager`` subclass as ``core_cls``'s eager wrapper
-    and record the core class on it (so the shared ``__init__`` can construct it).
-    An identity decorator -- the class type is preserved."""
-
-    def register(cls: _C) -> _C:
-        _REGISTRY[core_cls] = cls
-        cls._core_cls = core_cls  # type: ignore[attr-defined]
-        return cls
-
-    return register
-
-
 #: back-compat alias; the eager base is now ``Eager`` (mirrors ``lazy.Lazy``).
 Surface = Eager
 
-__all__ = ["Eager", "Surface", "wrap", "surface"]
+__all__ = ["Eager", "Surface", "wrap"]
