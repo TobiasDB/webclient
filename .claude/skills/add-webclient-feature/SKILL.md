@@ -39,6 +39,8 @@ class MyBacking(Backing):
     page_scripts = ()                   # browser scripts to install on live pages
     def applies(self, core): return True   # is this backing in play for this core's state?
     def on_load(self, core, result): ...   # hook: a live browser page finished loading
+    async def aenter(self, core): ...      # hook: `with core:` opens (default no-op)
+    async def aexit(self, core, *exc): ... # hook: the core's context closes
 
     def my_op(self, core, arg, *, kw=None) -> "SomeType":
         ...   # `core` is the receiver; return a real core/value/list
