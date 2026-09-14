@@ -173,6 +173,31 @@ def test_plan_with_unknown_op_is_rejected_not_dispatched(client_and_server):
     assert resp.status_code == 422 and "__class__" in resp.text
 
 
+def test_execute_returns_structured_error_on_invalid_plan(client_and_server):
+    api, server = client_and_server
+    plan = {"root": "Document", "steps": [{"kind": "get", "name": "__class__"}]}
+    resp = api.post(
+        "/execute", headers=AUTH, json={"plan": plan, "url": server.url_for("/cards")}
+    )
+    assert resp.status_code == 422
+    err = resp.json()["error"]
+    assert err["type"] == "InvalidPlan" and err["retriable"] is False
+    assert (
+        "__class__" in err["message"] and err["hint"]
+    )  # actionable, not a bare string
+
+
+def test_execute_returns_structured_error_on_missing_document(client_and_server):
+    api, _ = client_and_server
+    plan = {"root": "Document", "steps": [{"kind": "get", "name": "title"}]}
+    resp = api.post(
+        "/execute", headers=AUTH, json={"plan": plan, "document_id": "gone"}
+    )
+    assert resp.status_code == 404
+    err = resp.json()["error"]
+    assert err["type"] == "NoSuchDocument" and err["hint"]
+
+
 def test_missing_document_404(client_and_server):
     api, _ = client_and_server
     assert api.get("/document/nope", headers=AUTH).status_code == 404

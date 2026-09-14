@@ -69,6 +69,30 @@ def _serialize(value: Any, store: dict[str, Any]) -> Any:
     return value
 
 
+def _error(
+    http_status: int,
+    type_: str,
+    message: str,
+    *,
+    retriable: bool = False,
+    hint: str | None = None,
+    status_code: int | None = None,
+) -> JSONResponse:
+    """A structured, agent-actionable error body: an autonomous caller branches on
+    ``type``/``retriable`` and follows ``hint`` instead of parsing a string. The
+    inner ``status_code`` defaults to the HTTP status but carries the *upstream*
+    status for a proxied fetch failure (a 502 wrapping an origin 500)."""
+    body: dict[str, Any] = {
+        "type": type_,
+        "message": message,
+        "status_code": http_status if status_code is None else status_code,
+        "retriable": retriable,
+    }
+    if hint is not None:
+        body["hint"] = hint
+    return JSONResponse(status_code=http_status, content={"error": body})
+
+
 def create_app(
     wc: WebClient | None = None,
     token: str | None = None,
@@ -109,15 +133,33 @@ def create_app(
         wc_: WebClient = app.state.wc
         try:
             expr = from_plan(body["plan"], wc_._core)
-        except ValueError as exc:  # unknown root / private name
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ValueError as exc:  # unknown root / private name / unknown op
+            return _error(
+                422,
+                "InvalidPlan",
+                str(exc),
+                hint="check the plan's root, operator and step names; names "
+                "starting with '_' and unknown roots/operators are refused before "
+                "dispatch",
+            )
         sid = expr._plan.session_id
         if "document_id" in body:
             if body["document_id"] not in app.state.docs:
-                raise HTTPException(status_code=404, detail="no such document")
+                return _error(
+                    404,
+                    "NoSuchDocument",
+                    f"no server-side document {body['document_id']!r}",
+                    hint="the document id expired from the store or was never "
+                    "created; re-run the fetch plan to get a fresh handle",
+                )
             context: Any = app.state.docs[body["document_id"]]
         elif "context_plan" in body:  # a client ref/fetch context plan
-            context = from_plan(body["context_plan"], wc_._core)
+            try:
+                context = from_plan(body["context_plan"], wc_._core)
+            except ValueError as exc:
+                return _error(
+                    422, "InvalidPlan", str(exc), hint="the context_plan is malformed"
+                )
         elif sid and sid in app.state.sessions:  # resolve through the session
             context = app.state.sessions[sid]._core
         elif "url" in body:
@@ -128,16 +170,14 @@ def create_app(
             result = wc_._core.execute(expr, context)  # the realization machinery
         except WebException as exc:  # a fetch/resolve failure -> structured error
             err = exc.error
-            return JSONResponse(
-                status_code=502,
-                content={
-                    "error": {
-                        "type": err.type,
-                        "message": str(exc),
-                        "status_code": err.status_code,
-                        "retriable": err.retriable,
-                    }
-                },
+            return _error(
+                502,
+                err.type,
+                str(exc),
+                retriable=err.retriable,
+                status_code=err.status_code,
+                hint="retry if retriable; otherwise the target is unavailable, "
+                "blocking, or refused by policy",
             )
         return {"rows": _serialize(result, app.state.docs)}
 
