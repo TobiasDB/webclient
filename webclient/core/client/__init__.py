@@ -456,42 +456,26 @@ class WebClientCore(WebCore, BaseModel):
     ) -> DocumentCore:
         lease = await self.pool.lease("page")
         try:
-            page = lease.client.page
-            raw: list[tuple[str, str]] = []
-            page.on("console", lambda m: raw.append((m.type, m.text)))
-            net: list[tuple[str, str, str]] = []
-            page.on(
-                "request",
-                lambda r: net.append((r.method, r.url, r.resource_type)),
+            # the browser client drives the page; we build the document + events.
+            result = await lease.client.open(
+                ref.dispatch("url"), replay=replay or [], drain_js=_live._DRAIN_JS
             )
-            url = ref.dispatch("url")
-            await page.goto(url)
             doc = DocumentCore(
-                url=url,
-                final_url=page.url,
+                url=ref.dispatch("url"),
+                final_url=result.final_url,
                 kind="html",
-                content=(await page.content()).encode(),
+                content=result.content,
                 status_code=200,
             )
             doc._client = self
-            doc._page = page
+            doc._page = lease.client.page
             doc._lease = lease
             self._register(doc, ref)
-            for level, text in raw:
+            for level, text in result.console:
                 doc._events.append(_live.console_event(level, text, doc))
-            for method, req_url, rtype in net:  # XHR/fetch the page issued
+            for method, req_url, rtype in result.network:  # XHR/fetch the page issued
                 if rtype in ("xhr", "fetch"):
                     doc._events.append(_live.network_event(method, req_url, rtype, doc))
-            for step in replay or []:  # reproduce mutated state
-                args = step.get("args", {})
-                loc = page.locator(args.get("selector") or "*").first
-                if step["op"] == "click":
-                    await loc.click()
-                elif step["op"] == "write":
-                    await loc.fill(args.get("text", "") or "")
-            # discard load/replay mutations: only post-collect interactions are
-            # captured as events (so a node's event view reflects real changes).
-            await page.evaluate(_live._DRAIN_JS)
             return doc
         except BaseException:
             await self.pool.release(lease)  # never leak the page lease on failure
