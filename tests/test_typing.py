@@ -10,6 +10,7 @@ import pytest
 ROOT = Path(__file__).parent.parent
 FIXTURE = ROOT / "tests" / "fixtures" / "typing_surface.py"
 PACKAGE = ROOT / "webclient"
+DEMO = ROOT / "demo.py"
 BIN = Path(sys.executable).parent
 
 
@@ -40,6 +41,14 @@ def test_whole_package_is_mypy_strict_clean():
 def test_whole_package_is_pyright_clean():
     """Full strictness: the entire package passes pyright."""
     _run([str(BIN / "pyright"), str(PACKAGE)])
+
+
+@pytest.mark.skipif(not (BIN / "pyright").exists(), reason="pyright not installed")
+def test_demo_is_pyright_clean():
+    """demo.py is the worked example and doubles as an acceptance test: it must
+    type-check under pyright (the editor experience), so the lazy/eager surface a
+    user actually writes -- wq roots, collect()/stream(), remote -- stays honest."""
+    _run([str(BIN / "pyright"), str(DEMO)])
 
 
 def test_collection_stub_is_generated_from_the_registry():

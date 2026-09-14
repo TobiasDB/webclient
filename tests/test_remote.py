@@ -86,8 +86,8 @@ def test_auth_enforced(httpserver):
 def test_render_over_the_wire(remote):
     rc, server = remote
     d = rc.fetch(server.url_for("/cards")).collect()  # lazy handle
-    assert "# Featured" in d.render("markdown").collect()
-    assert "Curated picks." in d.render("text").collect()
+    assert "# Featured" in d.render("markdown").collect().get()
+    assert "Curated picks." in d.render("text").collect().get()
     assert any(u.endswith("/i/1") for u in d.render("links").collect())
     assert isinstance(d.render("elements").collect(), list)
 
@@ -157,7 +157,7 @@ def test_sessions(remote, httpserver):
     assert session.status == "running"
     session.fetch(server.url_for("/login")).collect()  # sets a cookie server-side
     d = session.fetch(server.url_for("/whoami")).collect()
-    assert d.render("text").collect().strip() == "t=1"
+    assert d.render("text").collect().get().strip() == "t=1"
     session.close()
     assert session.status == "closed"
 

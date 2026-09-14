@@ -18,7 +18,7 @@ from pydantic import PrivateAttr
 
 from ..expr import Expr
 from ..plan import Plan
-from .client_core import WebClientCore
+from .client_core import WebClientCore, _materialize
 from .reference_core import HttpMethod, ReferenceCore
 from .reference_core import from_url as _core_from_url
 
@@ -96,7 +96,10 @@ class RemoteWebClientCore(WebClientCore):
             except Exception:
                 pass
             raise RemoteError(resp.status_code, resp.text[:200], error=err)
-        return self._deserialize(resp.json()["rows"])
+        # the service returns clean JSON (raw scalars); wrap a scalar leaf back
+        # into a Field just as a local ``execute`` does, so remote and local
+        # ``collect()`` agree on the result type.
+        return _materialize(self._deserialize(resp.json()["rows"]))
 
     def _deserialize(self, rows: Any) -> Any:
         if isinstance(rows, dict) and "__doc__" in rows:

@@ -448,12 +448,21 @@ def main() -> None:
     port = server.servers[0].sockets[0].getsockname()[1]
 
     with RemoteWebClient(f"http://127.0.0.1:{port}", token="demo") as rc:
-        remote_doc = rc.fetch(f"{base}/").collect()  # lazy fetch -> handle
+        # A fetched-and-collected document is a lightweight handle carrying its
+        # metadata (title/ok) inline -- no content, no local lxml/browser.
+        remote_doc = rc.fetch(f"{base}/").collect()
         print("\nremote fetch:  ", remote_doc.title, "| ok:", remote_doc.ok)
+        # Content ops: author the whole plan and collect() once -- one round trip
+        # each, evaluated server-side. collect() of a scalar is a Field, exactly
+        # as it is locally, so the same code types and runs against either core.
         print(
-            "remote render: ", remote_doc.render("markdown").collect().splitlines()[0]
+            "remote render: ",
+            rc.fetch(f"{base}/").render("markdown").collect().get().splitlines()[0],
         )
-        print("remote select: ", remote_doc.select_all(".title").text_content.collect())
+        print(
+            "remote select: ",
+            rc.fetch(f"{base}/").select_all(".title").text_content.collect(),
+        )
         # identical plan API -- runs server-side, no local browser/lxml
         same_plan = (
             wq.ref.resolve()
