@@ -125,7 +125,7 @@ def create_app(
         else:
             context = None
         try:
-            result = wc_.execute(expr, context)
+            result = wc_._core.execute(expr, context)  # the realization machinery
         except WebException as exc:  # a fetch/resolve failure -> structured error
             err = exc.error
             return JSONResponse(

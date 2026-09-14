@@ -4,7 +4,7 @@ signature blocks (marked ``>>> generated <<<``) are produced by
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Coroutine, Literal, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
 
 from .core.client_core import WebClientCore
 from .core.document_core import DocumentCore
@@ -254,9 +254,11 @@ class _ClientBase:
     bodies: like ``Document``, the authoring verbs are the core's backings, but
     here the client is *lazy* -- ``__getattr__`` records the call into a
     ``WebClient``-rooted plan (the executor dispatches the eager backing when the
-    plan runs). The generated stubs give the verbs their types. ``execute`` runs
-    the plan (sync here, awaited in ``AsyncWebClient``, remote if the core is a
-    remote subclass); session/recovery/lifecycle are the surface's own wrappers."""
+    plan runs). The generated stubs give the verbs their types. The plan is
+    realized by ``.collect()``/``.acollect()`` on the recorded handle, which runs
+    the core's execute machinery (sync here, awaited in ``AsyncWebClient``, remote
+    if the core is a remote subclass); session/recovery/lifecycle are the
+    surface's own wrappers."""
 
     _core: WebClientCore
 
@@ -343,24 +345,10 @@ class _ClientBase:
 
 
 class WebClient(_ClientBase):
-    """The synchronous client surface: build lazy plans, run them on the engine
-    loop (via the core's ``execute``). Owns (or is handed) a ``WebClientCore``."""
-
-    if TYPE_CHECKING:
-
-        @overload
-        def execute(self, expr: "Lazy[T]", context: Any = ...) -> T: ...
-        @overload
-        def execute(
-            self, expr: Any, context: Any = ..., *, stream: bool = ...
-        ) -> Any: ...
-
-    def execute(
-        self, expr: Any, context: Any = None, *, stream: bool = False, **kw: Any
-    ) -> Any:
-        """Run a recorded lazy plan on this client's core (``stream=True`` yields
-        rows one at a time). A remote core round-trips over HTTP -- same call."""
-        return self._core.execute(expr, context, stream=stream)
+    """The synchronous client surface: build lazy plans and realise them with
+    ``.collect()`` / ``.stream()``. Owns (or is handed) a ``WebClientCore``. The
+    client has no ``execute`` -- realization goes through the plan, not the
+    client (``plan.collect(...)`` calls the core internally)."""
 
     def close(self) -> None:
         self._core.close()
@@ -373,29 +361,9 @@ class WebClient(_ClientBase):
 
 
 class AsyncWebClient(_ClientBase):
-    """The async client surface: the very same plans as ``WebClient``, awaited.
-    Execution runs on the engine loop off the caller's loop so ``await`` does
-    not block it."""
-
-    if TYPE_CHECKING:
-
-        @overload
-        def execute(
-            self, expr: "Lazy[T]", context: Any = ...
-        ) -> "Coroutine[Any, Any, T]": ...
-        @overload
-        def execute(
-            self, expr: Any, context: Any = ..., *, stream: bool = ...
-        ) -> Any: ...
-
-    def execute(
-        self, expr: Any, context: Any = None, *, stream: bool = False, **kw: Any
-    ) -> Any:
-        """Awaited execution (same plans as ``WebClient``). Non-stream returns
-        an awaitable; ``stream=True`` returns an async iterator of rows."""
-        if stream:
-            return self._core.astream(expr, context)
-        return self._core.aexecute(expr, context)
+    """The async client surface: the very same plans as ``WebClient``, realised
+    with ``await plan.acollect()`` / ``plan.astream()`` on the engine loop off
+    the caller's loop."""
 
     async def aclose(self) -> None:
         import asyncio

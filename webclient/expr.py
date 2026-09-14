@@ -106,16 +106,34 @@ class Expr:
         return self._coerce("iterator")
 
     # -- evaluation ----------------------------------------------------------
-    def collect(self, context: Any = None) -> Any:
-        """Evaluate this plan and return the result -- the single lazy trigger.
-        Runs on the bound core's ``execute`` (a remote core round-trips over
-        HTTP -- same call). ``collect`` is reserved (non-recordable)."""
-        client = self._client
+    #: the single realization path: collect/acollect/stream/astream run on the
+    #: bound client (or the context's) via its ``execute`` machinery -- a remote
+    #: client round-trips over HTTP, all the same call. Users never call a
+    #: client's ``execute`` directly. These names are reserved (non-recordable).
+    def _client_for(self, context: Any) -> Any:
+        client = self._client or getattr(context, "_client", None)
         if client is None:
             from .core.client_core import WebClientCore
 
             client = WebClientCore()  # process-local default (MVP)
-        return client.execute(self, context)
+        return client
+
+    def collect(self, context: Any = None) -> Any:
+        """Evaluate this plan and return the materialised result (sync)."""
+        return self._client_for(context).execute(self, context)
+
+    async def acollect(self, context: Any = None) -> Any:
+        """The async twin of ``collect`` -- ``await lazy.acollect()`` -- runs on
+        the engine loop without blocking the caller's loop."""
+        return await self._client_for(context).aexecute(self, context)
+
+    def stream(self, context: Any = None) -> Any:
+        """Yield the plan's rows one at a time (sync iterator)."""
+        return self._client_for(context).execute(self, context, stream=True)
+
+    def astream(self, context: Any = None) -> Any:
+        """Yield the plan's rows one at a time (async iterator)."""
+        return self._client_for(context).astream(self, context)
 
     @property
     def is_lazy(self) -> bool:

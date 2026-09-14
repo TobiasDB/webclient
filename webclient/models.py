@@ -14,6 +14,7 @@ iterable leaves (hand-written, like ``Field`` / ``Collection``).
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
 
 if TYPE_CHECKING:
@@ -26,9 +27,13 @@ S = TypeVar("S")
 
 
 class Lazy(Generic[T]):
-    """Bridge: a recorded plan that materialises to ``T``."""
+    """Bridge: a recorded plan realised by one path -- ``collect``/``acollect``
+    (materialise to ``T``) or ``stream``/``astream`` (iterate rows)."""
 
     def collect(self, context: Any = ...) -> T: ...
+    async def acollect(self, context: Any = ...) -> T: ...
+    def stream(self, context: Any = ...) -> "Iterator[Any]": ...
+    def astream(self, context: Any = ...) -> "AsyncIterator[Any]": ...
 
 
 # >>> generated: lazy-tier <<<

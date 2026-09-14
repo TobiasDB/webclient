@@ -86,18 +86,18 @@ def test_auth_enforced(httpserver):
 def test_render_over_the_wire(remote):
     rc, server = remote
     d = rc.fetch(server.url_for("/cards")).collect()  # lazy handle
-    assert "# Featured" in rc.execute(d.render("markdown"))
-    assert "Curated picks." in rc.execute(d.render("text"))
-    assert any(u.endswith("/i/1") for u in rc.execute(d.render("links")))
-    assert isinstance(rc.execute(d.render("elements")), list)
+    assert "# Featured" in d.render("markdown").collect()
+    assert "Curated picks." in d.render("text").collect()
+    assert any(u.endswith("/i/1") for u in d.render("links").collect())
+    assert isinstance(d.render("elements").collect(), list)
 
 
 def test_select_is_one_batched_call(remote):
     rc, server = remote
     d = rc.fetch(server.url_for("/cards")).collect()
-    assert rc.execute(d.select(".title").attr("text")) == "Aeropress"
-    assert rc.execute(d.select_all(".title").attr("text")) == ["Aeropress", "Grinder"]
-    hrefs = rc.execute(d.select_all("a").attr("href"))
+    assert d.select(".title").attr("text").collect() == "Aeropress"
+    assert d.select_all(".title").attr("text").collect() == ["Aeropress", "Grinder"]
+    hrefs = d.select_all("a").attr("href").collect()
     assert all(u.startswith("http") for u in hrefs)
 
 
@@ -112,7 +112,7 @@ def test_plan_execution_is_portable(remote):
         .extract(name=doc.reference("link").resolve().select("name").attr("value"))
         .project()
     )
-    rows = rc.execute(plan, rc.ref(server.url_for("/cards")))
+    rows = plan.collect(rc.ref(server.url_for("/cards")))
     assert sorted(r["name"] for r in rows) == ["Aeropress", "Grinder"]
 
 
@@ -125,11 +125,11 @@ def test_plan_matches_local_client(remote, httpserver):
         .project()
     )
     remote_rows = sorted(
-        r["title"] for r in rc.execute(plan, rc.ref(server.url_for("/cards")))
+        r["title"] for r in plan.collect(rc.ref(server.url_for("/cards")))
     )
     with WebClient() as local:
         local_rows = sorted(
-            r["title"] for r in local.execute(plan, local.ref(server.url_for("/cards")))
+            r["title"] for r in plan.collect(local.ref(server.url_for("/cards")))
         )
     assert remote_rows == local_rows == ["Aeropress", "Grinder"]
 
@@ -157,7 +157,7 @@ def test_sessions(remote, httpserver):
     assert session.status == "running"
     session.fetch(server.url_for("/login")).collect()  # sets a cookie server-side
     d = session.fetch(server.url_for("/whoami")).collect()
-    assert rc.execute(d.render("text")).strip() == "t=1"
+    assert d.render("text").collect().strip() == "t=1"
     session.close()
     assert session.status == "closed"
 

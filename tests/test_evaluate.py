@@ -49,29 +49,31 @@ def site(httpserver, wc):
 
 
 def rows_of(wc, site, expr):
-    return wc.execute(expr, wc.ref(site.url_for("/cards")))
+    return expr.collect(wc.ref(site.url_for("/cards")))
 
 
 def test_scalar_plan_against_a_context(site, wc):
     page = wc.ref(site.url_for("/cards")).resolve().collect()
-    got = wc.execute(doc.select(".title").attr("text"), page)
+    got = doc.select(".title").attr("text").collect(page)
     assert isinstance(got, Field) and got.get() == "Aeropress"
 
 
 def test_rooted_plan_needs_no_context(site, wc):
     expr = reference(site.url_for("/cards")).resolve().select(".title").attr("text")
-    assert wc.execute(expr).get() == "Aeropress"
-    with pytest.raises(ValueError, match="needs a context"):
-        wc.execute(doc.select(".title"))
-
-
-def test_collect_is_the_lazy_trigger(site, wc):
-    # PLAN §8 stage: .collect() runs a rooted plan (via the process default
-    # client) -- the single evaluation trigger, additive to wc.execute.
-    expr = reference(site.url_for("/cards")).resolve().select(".title").attr("text")
     assert expr.collect().get() == "Aeropress"
-    # equivalent to executing it explicitly
-    assert expr.collect().get() == wc.execute(expr).get()
+    with pytest.raises(ValueError, match="needs a context"):
+        doc.select(".title").collect()
+
+
+def test_collect_is_the_single_trigger(site, wc):
+    # .collect() is the one realization path (it runs on the plan's bound client,
+    # or the process default, via the core's execute machinery).
+    url = site.url_for("/cards")
+    expr = reference(url).resolve().select(".title").attr("text")
+    assert expr.collect().get() == "Aeropress"  # default client
+    # a client-bound plan collects on that client's core -- same value
+    bound = wc.lazy(url).resolve().select(".title").attr("text")
+    assert bound.collect().get() == "Aeropress"
 
 
 def test_free_when_and_filter(site, wc):
@@ -81,7 +83,7 @@ def test_free_when_and_filter(site, wc):
     from webclient import when
 
     ctx = wc.ref(site.url_for("/cards"))
-    rows = wc.execute(
+    rows = (
         ref.resolve()
         .select_all(".card")
         .extract(
@@ -90,8 +92,8 @@ def test_free_when_and_filter(site, wc):
             .then("on")
             .otherwise("off"),
         )
-        .project(),
-        ctx,
+        .project()
+        .collect(ctx)
     )
     assert [(r["title"], r["state"]) for r in rows] == [
         ("Aeropress", "on"),
@@ -107,7 +109,7 @@ def test_free_when_and_filter(site, wc):
         .extract(title=doc.select(".title").attr("text"))
         .project()
     )
-    assert [r["title"] for r in wc.execute(kept, ctx)] == ["Aeropress", "Kettle"]
+    assert [r["title"] for r in kept.collect(ctx)] == ["Aeropress", "Kettle"]
 
 
 def test_client_bound_lazy_root(site, wc):
@@ -248,13 +250,12 @@ def test_nested_collections_flatten(site, wc):
 def test_stream_yields_rows_and_publishes_plan_events(site, wc):
     phases = []
     wc.bus.subscribe("plan", lambda e: phases.append(e.phase))
-    it = wc.execute(
+    it = (
         ref.resolve()
         .select_all(".card")
         .extract(title=doc.select(".title").attr("text"))
-        .project(),
-        wc.ref(site.url_for("/cards")),
-        stream=True,
+        .project()
+        .stream(wc.ref(site.url_for("/cards")))
     )
     assert sorted(r["title"] for r in it) == ["Aeropress", "Grinder", "Kettle"]
     assert phases[0] == "started" and phases[-1] == "done"

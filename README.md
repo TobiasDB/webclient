@@ -103,16 +103,23 @@ from webclient import AsyncWebClient, doc
 
 async def main():
     async with AsyncWebClient() as ac:
-        page = await ac.execute(ac.fetch("https://example.com"))
-        rows = await ac.execute(
+        page = await ac.fetch("https://example.com").acollect()   # async collect
+        rows = await (
             ac.fetch("https://shop.example/")
             .select_all(".card")
             .extract(title=doc.select(".title").attr("text"))
+            .acollect()
         )
     return page.title, rows
 
 asyncio.run(main())
 ```
+
+`.acollect()` is the async twin of `.collect()`. A *reusable* plan built from the
+`doc`/`ref` module roots is run against a supplied context by passing it to
+`.collect()`/`.acollect()`: `plan.acollect(ac.ref(url))` (sync:
+`plan.collect(wc.ref(url))`). `.collect()`/`.acollect()`/`.stream()`/`.astream()`
+are the *only* way to realize a plan -- there is no client `execute`.
 
 ## Sessions
 
@@ -146,7 +153,7 @@ from webclient import RemoteWebClient
 
 with RemoteWebClient("http://host:8000", token="secret") as rc:
     handle = rc.fetch("https://example.com").collect()   # a lightweight handle
-    markdown = rc.execute(handle.render("markdown"))     # one round trip per op
+    markdown = handle.render("markdown").collect()       # one round trip per op
 ```
 
 Serve it with `webclient.service.create_app(token=..., max_docs=..., max_sessions=...)`.

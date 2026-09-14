@@ -260,7 +260,7 @@ def main() -> None:
     #      the eager calls use; a Collection fans out per element (bounded by
     #      the pool) and rows are delivered one at a time via stream=True.
     with WebClient() as wc:
-        for row in wc.execute(plan):
+        for row in plan.collect():
             print(f"  row:       {row['title']} {row['price']} -> {row['link'].path}")
 
         # [§8] Full-lazy trigger: .collect() runs a recorded plan directly, and
@@ -287,7 +287,7 @@ def main() -> None:
         )
         print(
             "free when:  ",
-            [(r["title"], r["tier"]) for r in wc.execute(labeled, wc.ref(f"{base}/"))],
+            [(r["title"], r["tier"]) for r in labeled.collect(wc.ref(f"{base}/"))],
         )
         priced = (
             lazy_filter(
@@ -297,9 +297,7 @@ def main() -> None:
             .extract(title=doc.select(".title").attr("text"))
             .project()
         )
-        print(
-            "free filter:", [r["title"] for r in wc.execute(priced, wc.ref(f"{base}/"))]
-        )
+        print("free filter:", [r["title"] for r in priced.collect(wc.ref(f"{base}/"))])
 
         # [P3] Follow each card's link (reference -> resolve) into its JSON
         #      detail; `when/then/otherwise` branches; a missing select is a
@@ -325,7 +323,7 @@ def main() -> None:
             .project()
         )
         print("streamed:")
-        for row in wc.execute(enriched, wc.ref(f"{base}/"), stream=True):
+        for row in enriched.stream(wc.ref(f"{base}/")):
             print(
                 "  detail:   ",
                 row["title"],
@@ -372,13 +370,13 @@ def main() -> None:
 
     async def _async_demo() -> tuple:
         async with AsyncWebClient() as ac:
-            document = await ac.execute(ac.fetch(f"{base}/"))  # lazy fetch, awaited
-            rows = await ac.execute(
+            document = await ac.fetch(f"{base}/").acollect()  # async collect
+            rows = await (
                 ref.resolve()
                 .select_all(".card")
                 .extract(title=doc.select(".title").attr("text"))
-                .project(),
-                ac.ref(f"{base}/"),
+                .project()
+                .acollect(ac.ref(f"{base}/"))
             )
             return document.title, [r["title"] for r in rows]
 
@@ -458,11 +456,9 @@ def main() -> None:
         remote_doc = rc.fetch(f"{base}/").collect()  # lazy fetch -> handle
         print("\nremote fetch:  ", remote_doc.title, "| ok:", remote_doc.ok)
         print(
-            "remote render: ", rc.execute(remote_doc.render("markdown")).splitlines()[0]
+            "remote render: ", remote_doc.render("markdown").collect().splitlines()[0]
         )
-        print(
-            "remote select: ", rc.execute(remote_doc.select_all(".title").attr("text"))
-        )
+        print("remote select: ", remote_doc.select_all(".title").attr("text").collect())
         # identical plan API -- runs server-side, no local browser/lxml
         same_plan = (
             ref.resolve()
@@ -470,7 +466,7 @@ def main() -> None:
             .extract(title=doc.select(".title").attr("text"))
             .project()
         )
-        print("remote plan:   ", rc.execute(same_plan, rc.ref(f"{base}/")))
+        print("remote plan:   ", same_plan.collect(rc.ref(f"{base}/")))
     server.should_exit = True
     app.state.wc.close()
 

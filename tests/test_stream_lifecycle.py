@@ -46,14 +46,14 @@ def serve(httpserver):
 def test_fully_drained_stream_leaves_no_pump(httpserver):
     url = serve(httpserver)
     with WebClient() as wc:
-        list(wc.execute(plan(), wc.ref(url), stream=True))
+        list(plan().stream(wc.ref(url)))
         assert stranded_streams(wc) == 0
 
 
 def test_broken_stream_leaves_no_pump(httpserver):
     url = serve(httpserver)
     with WebClient() as wc:
-        rows = wc.execute(plan(), wc.ref(url), stream=True)
+        rows = plan().stream(wc.ref(url))
         for i, _ in enumerate(rows):
             if i == 1:
                 break
@@ -64,7 +64,7 @@ def test_broken_stream_leaves_no_pump(httpserver):
 def test_abandoned_stream_generator_cleans_up(httpserver):
     url = serve(httpserver)
     with WebClient() as wc:
-        it = wc.execute(plan(), wc.ref(url), stream=True)
+        it = plan().stream(wc.ref(url))
         next(it)
         del it
         gc.collect()
@@ -74,7 +74,7 @@ def test_abandoned_stream_generator_cleans_up(httpserver):
 def test_close_client_mid_stream_is_clean(httpserver):
     url = serve(httpserver)
     wc = WebClient()
-    rows = wc.execute(plan(), wc.ref(url), stream=True)
+    rows = plan().stream(wc.ref(url))
     next(rows)
     wc.close()
     assert list(rows) == []
