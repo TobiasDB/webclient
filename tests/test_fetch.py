@@ -77,6 +77,7 @@ def test_fetch_non_2xx_optional_returns_document(httpserver, wc):
     httpserver.expect_request("/gone").respond_with_data("nope", status=404)
     doc = wc.ref(httpserver.url_for("/gone")).resolve(error=RETURN).collect()
     assert not doc.ok and doc.status_code == 404
+    assert doc.error.retriable is False  # a 404 will not succeed on retry
 
 
 def test_fetch_transport_error(wc):
@@ -85,6 +86,13 @@ def test_fetch_transport_error(wc):
         wc.fetch(ref).collect()
     doc = wc.fetch(ref, optional=True).collect()
     assert doc.status_code == 0 and not doc.ok
+    assert doc.error.retriable is True  # a transport failure is worth a retry
+
+
+def test_fetch_5xx_is_retriable(httpserver, wc):
+    httpserver.expect_request("/boom").respond_with_data("no", status=503)
+    doc = wc.ref(httpserver.url_for("/boom")).resolve(error=RETURN).collect()
+    assert doc.status_code == 503 and doc.error.retriable is True
 
 
 def test_fetch_sends_headers_params_and_method(httpserver, wc):

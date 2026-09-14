@@ -52,11 +52,14 @@ def default_policy(policy: "_Policy") -> "_Iterator[None]":
 
 
 class WebError(BaseModel):
-    """A serializable failure attached to a not-ok document."""
+    """A serializable failure attached to a not-ok document. ``retriable`` is an
+    actionable hint for clients/agents: transport failures, rate limits (429) and
+    server errors (5xx) may succeed on retry; a 4xx or a bad selector will not."""
 
     type: str = "http_error"
     message: str = ""
     status_code: int = 0
+    retriable: bool = False
 
 
 class WebException(Exception):
@@ -82,12 +85,15 @@ class RemoteError(Exception):
 
 
 def error_for(status_code: int, message: str = "") -> WebError:
-    """Classify an HTTP status into a ``WebError``."""
+    """Classify an HTTP status into a ``WebError`` (incl. whether it is worth a
+    retry: transport failures, 429, and 5xx are retriable)."""
     kind = "TransportError" if status_code == 0 else "HTTPStatus"
+    retriable = status_code == 0 or status_code == 429 or 500 <= status_code < 600
     return WebError(
         type=kind,
         status_code=status_code,
         message=message or f"HTTP {status_code} for the request",
+        retriable=retriable,
     )
 
 
