@@ -83,7 +83,7 @@ class Session(WebClient):
 
     # -- fetch: the parent's pipeline + this session's identity --------------
     async def afetch(
-        self, ref: Reference, *, optional: bool = False, browser: bool = False
+        self, ref: Reference, *, optional: bool = False, browser: Any = False
     ) -> Any:
         self._guard()
         scoped = ref.model_copy(

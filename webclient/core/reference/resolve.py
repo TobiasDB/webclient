@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..web_core import Backing
 
@@ -22,7 +22,7 @@ class ResolveBacking(Backing):
         self,
         core: "Reference",
         *,
-        browser: bool = False,
+        browser: "bool | Literal['never', 'auto', 'always']" = False,
         optional: bool = False,
         error: Any = None,
     ) -> "Document":

@@ -6,7 +6,7 @@ when already on the engine loop, bridged otherwise -- like ``Reference.resolve``
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from ..document import Document
 from ..reference import HttpMethod, Reference, from_url
@@ -45,18 +45,20 @@ class FetchBacking(Backing):
         core: "WebClient",
         url: Any,
         *,
+        browser: "bool | Literal['never', 'auto', 'always']" = False,
         optional: bool = False,
         error: Any = None,
         **kw: Any,
     ) -> "Document":
         """Resolve ``ref(url)`` into a document -- straight to the client's
         transport (``afetch``), not bouncing back out through the reference's
-        ``resolve`` op (``fetch`` IS a resolve). An IO op: the interface bridges
-        it (``dispatch``)."""
+        ``resolve`` op (``fetch`` IS a resolve). ``browser`` picks the tier
+        (``False`` static / ``"auto"`` escalate-if-JS-gated / ``True`` always). An
+        IO op: the interface bridges it (``dispatch``)."""
         from ...errors import lenient
 
         ref = self.ref(core, url, **kw)
-        return await core.afetch(ref, optional=lenient(optional, error))
+        return await core.afetch(ref, optional=lenient(optional, error), browser=browser)
 
     async def summary(
         self, core: "WebClient", url: Any, *include: str, **kw: Any

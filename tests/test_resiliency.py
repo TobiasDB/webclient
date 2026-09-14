@@ -97,3 +97,37 @@ def test_static_fetch_of_normal_page_has_no_probe(httpserver, wc):
     )
     doc = wc.fetch(httpserver.url_for("/ok"))
     assert doc.summary().probe is None  # nothing to escalate -> facet absent
+
+
+# -- P2: the browser="auto" adaptive ladder (needs a real browser) -------------
+
+_SPA = (
+    "<html><body><div id='root'></div><script>"
+    "document.getElementById('root').innerHTML="
+    "'<h1>Loaded content here</h1>' + 'x'.repeat(300);"
+    "</script></body></html>"
+)
+
+
+def test_browser_auto_escalates_a_js_gated_page(httpserver, wc):
+    httpserver.expect_request("/spa").respond_with_data(_SPA, content_type="text/html")
+    url = httpserver.url_for("/spa")
+    # a plain static fetch: empty shell, records js_required, does NOT escalate
+    static = wc.fetch(url)
+    sp = static.summary().probe
+    assert sp is not None and sp.js_required and not sp.was_browser_required
+    # browser="auto": the JS-gated page is escalated to a browser render
+    auto = wc.fetch(url, browser="auto")
+    assert "Loaded content" in (auto.text_content or "")  # JS ran
+    assert auto.summary().probe.was_browser_required is True  # the facet
+    assert auto._probe.escalation == ["static", "browser"]  # the raw record's trail
+
+
+def test_browser_auto_stays_static_for_a_normal_page(httpserver, wc):
+    httpserver.expect_request("/plain").respond_with_data(
+        "<html><body><h1>Fine</h1>" + "real content " * 80 + "</body></html>",
+        content_type="text/html",
+    )
+    doc = wc.fetch(httpserver.url_for("/plain"), browser="auto")
+    assert doc._page is None  # never launched a browser
+    assert doc.summary().probe is None

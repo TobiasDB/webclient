@@ -11,7 +11,7 @@ and adds the machinery (loop, pool, bus, transport, plan execution). The verbs a
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -50,7 +50,7 @@ class IWebClient(BaseModel):
     if TYPE_CHECKING:
         # >>> generated: WebClient interface <<<
         # fmt: off
-        def fetch(self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "Document": ...
+        def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ..., **kw: Any) -> "Document": ...
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "Reference": ...
         def search(self, query: str, *, limit: int = ..., endpoint: str | None = ...) -> "list[SearchResult]": ...
         def summary(self, url: Any, *include: str, **kw: Any) -> "Summary": ...

@@ -39,6 +39,21 @@ if TYPE_CHECKING:
     from ...surfaces.lazy import LazyWebClient
 
 
+def _browser_mode(browser: Any) -> str:
+    """Normalise the ``browser`` kwarg to a tier: ``"never"`` (static only),
+    ``"auto"`` (static, escalate if JS-gated) or ``"always"`` (straight to browser).
+    Accepts a bool, a ``"never"``/``"auto"``/``"always"`` string, ``AUTO``, or a
+    ``BrowserPolicy`` (its ``when``)."""
+    if browser is True:
+        return "always"
+    if not browser:  # False / None
+        return "never"
+    if isinstance(browser, str):
+        return browser if browser in ("never", "auto", "always") else "never"
+    when = getattr(browser, "when", None)  # a BrowserPolicy
+    return when if when in ("never", "auto", "always") else "auto"
+
+
 def _probe_reason(s: Signals) -> str:
     """A short label for the most salient detected signal (ProbeRecord.reason)."""
     if s.anti_bot:
@@ -353,15 +368,17 @@ class WebClient(WebCore, IWebClient):
         return doc, resp
 
     async def afetch(
-        self, ref: Reference, *, optional: bool = False, browser: bool = False
+        self, ref: Reference, *, optional: bool = False, browser: Any = False
     ) -> Document:
         """Resolve ``ref`` into a document over a leased transport (http) or a
-        browser page. The core's own IO -- the ``fetch`` backing verb records a
-        plan; this is what the executor runs when that plan resolves. A retriable
-        failure (transport / 429 / 5xx) is retried up to ``retries`` times with
-        exponential backoff."""
+        browser page. ``browser`` picks the tier: ``False``/``"never"`` = static
+        only, ``True``/``"always"`` = straight to a browser, ``"auto"`` (or a
+        ``BrowserPolicy(when="auto")``) = static first, escalating to a browser
+        render only when the page is JS-gated (the Crawlee adaptive rule). A
+        retriable failure is retried up to ``retries`` times with exp backoff."""
         import asyncio
 
+        mode = _browser_mode(browser)
         if self.block_private_hosts and await self._host_blocked(ref):
             doc = Document(
                 url=ref.dispatch("url"),
@@ -376,7 +393,7 @@ class WebClient(WebCore, IWebClient):
             if not optional:
                 raise WebException(cast(WebError, doc.error), document=doc)
             return doc
-        if browser:
+        if mode == "always":
             return await self._alive(ref)
         headers = {**self.default_headers, **ref.headers}
         if self.min_interval > 0.0:
@@ -393,24 +410,32 @@ class WebClient(WebCore, IWebClient):
             attempt += 1
             doc, resp = await self._afetch_once(ref, headers)
         self._register(doc, ref)
-        self._observe(doc, resp)  # record what a resolver would escalate for (P1)
+        signals = self._observe(doc, resp)  # record what would escalate (P1)
+        # P2: browser="auto" -- escalate a JS-gated static page to a browser render.
+        if (
+            mode == "auto"
+            and doc.error is None
+            and signals is not None
+            and signals.needs_browser
+        ):
+            return await self._escalate_to_browser(ref, signals)
         if resp is not None:  # emit navigation/network events for the final doc
             self._capture(doc, ref, resp)
         if doc.error is not None and not optional:  # loud by default
             raise WebException(doc.error, document=doc)
         return doc
 
-    def _observe(self, doc: Document, resp: Any) -> None:
-        """Resiliency P1 (observe, no escalation): classify the static response and,
-        if anything notable is detected (anti-bot / JS-gated / paywall / login wall
-        / hard block), record it onto the document for the ``probe`` summary facet.
-        Pure detection (:mod:`webclient.resiliency.detect`), so a remote resolve
-        records the same thing."""
+    def _observe(self, doc: Document, resp: Any) -> "Signals | None":
+        """Resiliency P1 (observe): classify the static response and, if anything
+        notable is detected (anti-bot / JS-gated / paywall / login wall / hard
+        block), record it onto the document for the ``probe`` summary facet. Returns
+        the signals so ``afetch`` can decide whether to escalate. Pure detection
+        (:mod:`webclient.resiliency.detect`), so a remote resolve records the same."""
         if resp is None:
-            return
+            return None
         signals = classify(doc.status_code, resp.headers, doc._set_cookies, doc.content)
         if not signals.any:
-            return
+            return signals
         doc._probe = ProbeRecord(
             was_browser_required=False,
             anti_bot=signals.anti_bot,
@@ -421,6 +446,22 @@ class WebClient(WebCore, IWebClient):
             reason=_probe_reason(signals),
             final_tier="static",
         )
+        return signals
+
+    async def _escalate_to_browser(self, ref: Reference, signals: "Signals") -> Document:
+        """The static tier said this page is JS-gated; render it in a browser and
+        record the two-tier trail on the resulting document (the ``probe`` facet)."""
+        doc = await self._alive(ref)
+        doc._probe = ProbeRecord(
+            was_browser_required=True,
+            js_required=True,
+            anti_bot=signals.anti_bot,
+            escalation=["static", "browser"],
+            reason="js_required",
+            attempts=2,
+            final_tier="browser",
+        )
+        return doc
 
     # -- plan execution (machinery): the surface's sync/async entry ----------
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
