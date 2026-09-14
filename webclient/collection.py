@@ -142,7 +142,15 @@ class Collection(Generic[T]):
             def fan(*args: Any, **kwargs: Any) -> Any:
                 from .core.web_core import WebCore
 
-                results = [getattr(el, name)(*args, **kwargs) for el in self._items]
+                def apply(el: Any) -> Any:
+                    attr = getattr(el, name)
+                    # a prop op dispatches to a value (not callable); a call op
+                    # returns a dispatcher we invoke with the args.
+                    if isinstance(el, WebCore) and name in type(el).prop_ops():
+                        return attr
+                    return attr(*args, **kwargs)
+
+                results = [apply(el) for el in self._items]
                 if results and all(isinstance(r, WebCore) for r in results):
                     return Collection(results, client=self._client, root=self.root)
                 return results

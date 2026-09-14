@@ -215,6 +215,13 @@ class WebClientCore(WebCore, BaseModel):
         if self._loop is not None:
             self._loop.stop()
 
+    # -- context manager: a core IS the eager client (``with WebClient() ...``) --
+    def __enter__(self) -> "WebClientCore":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
     async def _host_blocked(self, ref: ReferenceCore) -> bool:
         """Whether ``ref``'s host resolves to a loopback / private / link-local /
         reserved address (the SSRF guard, when ``block_private_hosts``). Resolves
