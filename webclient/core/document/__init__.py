@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from pydantic import BaseModel, PrivateAttr
 
 from ...errors import WebError
-from ..live import LiveBacking
 from ..web_core import Backing, WebCore
+from .live import LiveBacking
 from ._shared import Element, _element, _override  # noqa: F401  (re-exported)
 from .events import EventBacking
 from .html import HtmlBacking

@@ -12,11 +12,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from ..events import ActionEvent, ConsoleEvent, DOMUpdateEvent
-from .web_core import Backing
+from ...events import ActionEvent, ConsoleEvent, DOMUpdateEvent
+from ..web_core import Backing
 
 if TYPE_CHECKING:
-    from .document_core import DocumentCore
+    from . import DocumentCore
 
 #: installed on every navigation (before page scripts) -- an id-path-tagging
 #: MutationObserver feeding ``window.__wc_mutations``.
@@ -213,7 +213,7 @@ class LiveBacking(Backing):
         await drain(core)
 
     async def _ashot(self, core: Any, selector: str | None) -> Any:
-        from .document_core import DocumentCore
+        from . import DocumentCore
 
         target = core._page if selector is None else core._page.locator(selector).first
         data = await target.screenshot(type="png")
@@ -224,8 +224,8 @@ class LiveBacking(Backing):
         return shot
 
     async def _aselect(self, core: Any, selector: str, index: int, error: Any) -> Any:
-        from ..errors import RETURN
-        from .document_core import DocumentCore
+        from ...errors import RETURN
+        from . import DocumentCore
 
         loc = core._page.locator(selector)
         if await loc.count() <= index:
@@ -255,7 +255,7 @@ class LiveBacking(Backing):
         return sub
 
     async def _aselect_all(self, core: Any, selector: str) -> list[Any]:
-        from .document_core import DocumentCore
+        from . import DocumentCore
 
         loc = core._page.locator(selector)
         out: list[Any] = []

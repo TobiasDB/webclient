@@ -21,7 +21,7 @@ from ...engine import http as engine_http
 from ...engine.loop import EngineLoop
 from ...errors import WebError, WebException, error_for
 from ...events import EventBus, NavigationEvent, NetworkEvent
-from .. import live as _live
+from ..document import live as _live
 from ..document_core import DocumentCore
 from ..reference import HttpMethod, ReferenceCore, from_url
 from ..web_core import Backing, WebCore
