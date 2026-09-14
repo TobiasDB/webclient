@@ -229,12 +229,12 @@ def test_session_cap_returns_structured_error():
     wc.close()
 
 
-def test_crawl_returns_structured_error(client_and_server):
+def test_crawl_requires_a_url(client_and_server):
     api, _ = client_and_server
-    resp = api.post("/crawl", headers=AUTH)
-    assert resp.status_code == 501
+    resp = api.post("/crawl", headers=AUTH, json={})
+    assert resp.status_code == 422
     err = resp.json()["error"]
-    assert err["type"] == "NotImplemented" and err["hint"]
+    assert err["type"] == "InvalidRequest" and err["hint"]
 
 
 def test_events_websocket_streams_and_resumes(client_and_server):
@@ -285,9 +285,27 @@ def test_search_as_a_plan(httpserver):
     wc.close()
 
 
-def test_crawl_is_not_implemented(client_and_server):
-    api, _ = client_and_server
-    assert api.post("/crawl", headers=AUTH).status_code == 501
+def test_crawl_returns_page_summaries(client_and_server):
+    api, server = client_and_server
+    resp = api.post(
+        "/crawl", headers=AUTH, json={"url": server.url_for("/cards"), "max_pages": 5}
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    # crawled the seed and its same-origin links (/i/1, /i/2)
+    assert len(data["pages"]) >= 2
+    assert any(u.endswith("/cards") for u in data["urls"])
+    assert data["done"] is True
+
+
+def test_sitemap_maps_a_domain(client_and_server):
+    api, server = client_and_server
+    resp = api.post(
+        "/sitemap", headers=AUTH, json={"url": server.url_for("/cards"), "depth": 2}
+    )
+    assert resp.status_code == 200
+    urls = resp.json()["urls"]
+    assert any(u.endswith("/cards") for u in urls)
 
 
 def test_execute_returns_structured_error_on_upstream_failure(client_and_server):

@@ -242,18 +242,95 @@ def create_app(
         app.state.sessions[sid].close()
         return {"id": sid, "status": "closed"}
 
+    # -- crawl / sitemap -----------------------------------------------------
+    def _run_crawl(body: dict[str, Any], *, sitemap: bool) -> "Any":
+        """Build and run a crawl (bounded auto over the shared engine); the caller
+        turns the finished crawl into a response. Raises WebException on a failure."""
+        wc_: WebClient = app.state.wc
+        url = body["url"]
+        if sitemap:
+            return wc_.sitemap(
+                url,
+                depth=int(body.get("depth", 2)),
+                width=int(body.get("width", 20)),
+                max_pages=int(body.get("max_pages", 1000)),
+            )
+        return wc_.crawl(
+            url,
+            auto=True,  # the HTTP tier runs a bounded auto crawl (Firecrawl-shaped)
+            width=int(body.get("width", 10)),
+            depth=int(body.get("depth", 3)),
+            max_pages=int(body.get("max_pages", 20)),
+            same_origin=bool(body.get("same_origin", True)),
+            obey_robots=bool(body.get("obey_robots", True)),
+            keywords=body.get("keywords"),
+            include=body.get("include"),
+            exclude=body.get("exclude"),
+        ).run()
+
+    def _crawl_response(crawl: Any) -> "dict[str, Any]":
+        """The LLM-efficient crawl result: a summary per page + the unresolved
+        frontier edges (and the flat URL list, for a site map)."""
+        return {
+            "pages": [p.model_dump() for p in crawl.pages],
+            "urls": [p.transport.final_url for p in crawl.pages if p.transport],
+            "frontier": [e.model_dump() for e in crawl.frontier],
+            "done": crawl.done,
+        }
+
     @app.post("/crawl", response_model=None)
     def crawl(
-        authorization: str | None = Header(default=None),
+        body: dict[str, Any], authorization: str | None = Header(default=None)
     ) -> "dict[str, Any] | JSONResponse":
+        """Bounded, same-origin crawl from ``url`` -> a ``.summary()`` per page plus
+        the unresolved frontier. Steer it with ``keywords`` (best-first),
+        ``include``/``exclude``, ``max_pages``/``depth``/``width``."""
         _auth(authorization)
-        return _error(
-            501,
-            "NotImplemented",
-            "crawl is not implemented",
-            hint="fetch and follow links yourself via /execute with a "
-            "render('links') plan, or a select_all(...) fan-out",
-        )
+        if not body.get("url"):
+            return _error(
+                422,
+                "InvalidRequest",
+                "crawl requires a 'url'",
+                hint='POST {"url": "https://...", "max_pages": 20, '
+                '"keywords": ["pricing"]}',
+            )
+        try:
+            return _crawl_response(_run_crawl(body, sitemap=False))
+        except WebException as exc:
+            return _error(
+                502,
+                exc.error.type,
+                str(exc),
+                retriable=exc.error.retriable,
+                status_code=exc.error.status_code,
+                hint="retry if retriable; else the seed is unavailable or blocked",
+            )
+
+    @app.post("/sitemap", response_model=None)
+    def sitemap(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Map a site: an eager, single-domain crawl of ``url`` -> its pages'
+        summaries + URLs and the unresolved frontier."""
+        _auth(authorization)
+        if not body.get("url"):
+            return _error(
+                422,
+                "InvalidRequest",
+                "sitemap requires a 'url'",
+                hint='POST {"url": "https://...", "depth": 2}',
+            )
+        try:
+            return _crawl_response(_run_crawl(body, sitemap=True))
+        except WebException as exc:
+            return _error(
+                502,
+                exc.error.type,
+                str(exc),
+                retriable=exc.error.retriable,
+                status_code=exc.error.status_code,
+                hint="retry if retriable; else the seed is unavailable or blocked",
+            )
 
     # -- live event stream ---------------------------------------------------
     @app.websocket("/events")
