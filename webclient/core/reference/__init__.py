@@ -19,12 +19,43 @@ from .resolve import ResolveBacking
 
 if TYPE_CHECKING:
     from ..client import WebClientCore
+    from ..document import DocumentCore
     from ..session import WebSessionCore
+    from ...surfaces.lazy import LazyReference
+
+    class IReference(BaseModel):
+        """The eager ops ``ReferenceCore`` implements, typed. Generated from the
+        reference backings; ``ReferenceCore`` inherits it, so its ops (``url`` /
+        ``join`` / ``resolve`` / ...) are statically visible on the core itself.
+        Exists only for the type checker -- at runtime it is empty, so
+        ``WebCore.__getattr__`` still dispatches every op."""
+
+        # >>> generated: Reference interface <<<
+        # fmt: off
+        @property
+        def url(self) -> str: ...
+        def join(self, href: str) -> "ReferenceCore": ...
+        def replace(self, **fields: Any) -> "ReferenceCore": ...
+        def resolve(self, *, browser: bool = ..., optional: bool = ..., error: Any = ...) -> "DocumentCore": ...
+        def with_params(self, **params: str) -> "ReferenceCore": ...
+        # fmt: on
+        # >>> end generated <<<
+
+else:
+
+    class IReference(BaseModel):  # runtime: empty -> never shadows __getattr__
+        pass
 
 
-class ReferenceCore(WebCore, BaseModel):
+class ReferenceCore(WebCore, IReference):
     """A (re)resolvable request spec. ``resolve`` (a later backing) dispatches
-    to the bound client; ``url`` and the derivations are the DeriveBacking."""
+    to the bound client; ``url`` and the derivations are the DeriveBacking. Its
+    eager ops come from the generated ``IReference`` interface it inherits."""
+
+    if TYPE_CHECKING:  # narrow WebCore.lazy (Any) to this core's lazy surface
+
+        @property
+        def lazy(self) -> "LazyReference": ...
 
     # -- Core Fields (the request spec) --------------------------------------
     kind: str = "webpage"

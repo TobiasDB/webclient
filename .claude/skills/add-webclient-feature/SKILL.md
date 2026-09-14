@@ -58,10 +58,11 @@ class MyBacking(Backing):
 3. If you added a *new* backing class, register it in that core's `BACKINGS` tuple
    (e.g. `WebClientCore.BACKINGS = (FetchBacking(), SearchBacking(), MyBacking())`).
    `BACKINGS` is data; sessions inherit the client's.
-4. **A backing composing other ops calls them via `core.dispatch("op", ...)`**, not
-   `core.op(...)` — the receiver is typed as the bare core, whose ops live behind
-   `__getattr__` (see `FetchBacking.summary`, `SearchBacking.search`). Real properties
-   (`core.ok`) are fine to access directly.
+4. **A backing composing `Document`/`Reference` ops calls them directly and typed**
+   — `doc.select(...)`, `ref.url` — because those cores *implement* their eager ops
+   via a generated interface they inherit (`IDocument` / `IReference`, in the core's
+   own module; see `SearchBacking.search`). Only the client/session cores lack an
+   interface so far, so composing a *client* op still uses `core.dispatch("op", ...)`.
 5. Regenerate: `env/bin/python scripts/gen_stubs.py`. It emits the op onto eager/async/
    lazy tiers automatically.
 
@@ -107,5 +108,13 @@ never hit the network. Async tests use an inner `async def main()` + `asyncio.ru
 - **`applies`** must be cheap and defensive — it is probed against every core the client
   owns. Gate on state the core actually has (e.g. `core._page is not None`).
 - Value models live in `models.py` so backings import them with no circular-reference risk.
+- **The core-implements-its-interface pattern** (`DocumentCore`/`ReferenceCore`): each such
+  core inherits a generated `I<Core>(BaseModel)` — populated with the eager ops under
+  `TYPE_CHECKING`, empty at runtime (so `__getattr__` still dispatches) — defined in the
+  core's own module. The eager surface is then just an alias (`Document = DocumentCore`).
+  The generator emits the interface via the `surface` tier + `HAS_INTERFACE` set (async IO
+  ops get an `[override]` ignore; `Collection` is covariant so async `Collection[...]`
+  returns override cleanly), and the core's module goes in the mypy stub-override list.
+  To give the client/session cores an interface, follow the same three touches.
 - Commit trailers for this repo: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
   and the `Claude-Session:` line. Never commit `docs/*.md` (gitignored).

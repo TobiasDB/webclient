@@ -65,7 +65,7 @@ class FetchBacking(Backing):
         selects facets (default: all applicable)."""
         ref = self.ref(core, url, **kw)
         doc = await core.afetch(ref)
-        return doc.dispatch("summary", *include)  # Any -> Summary
+        return doc.summary(*include)  # typed: DocumentCore implements its ops
 
 
 __all__ = ["FetchBacking"]

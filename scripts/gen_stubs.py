@@ -50,6 +50,10 @@ ROOT = Path(__file__).resolve().parent.parent
 SURFACES = ROOT / "webclient" / "surfaces" / "eager.py"
 COLLECTION = ROOT / "webclient" / "collection.py"
 MODELS = ROOT / "webclient" / "surfaces" / "lazy.py"
+#: cores that implement their own eager ops -- the generated ``I<Core>`` interface
+#: is emitted into the core's own module (which the core inherits).
+DOCINIT = ROOT / "webclient" / "core" / "document" / "__init__.py"
+REFINIT = ROOT / "webclient" / "core" / "reference" / "__init__.py"
 
 #: the cores that map to a surface class (a Core-typed result -> its surface).
 CORES: tuple[type, ...] = (ReferenceCore, DocumentCore)
@@ -58,6 +62,15 @@ LAZY = {ReferenceCore: "LazyReference", DocumentCore: "LazyDocument"}
 #: the async eager tier: a Core maps to its Async surface, and its IO ops are
 #: ``async def`` (see ``members``), so ``await ac.ref(url).resolve()`` types.
 SURFACE_ASYNC = {ReferenceCore: "AsyncReference", DocumentCore: "AsyncDocument"}
+#: the ``surface`` tier: the eager ops the CORE itself implements (its generated
+#: ``I<Core>`` interface, which the core inherits). Like ``eager`` but a Core maps
+#: to its own name -- ``doc.select(...) -> DocumentCore`` -- so a backing (and the
+#: core) reaches its own ops statically, with no ``dispatch("...")`` string.
+SELF = {ReferenceCore: "ReferenceCore", DocumentCore: "DocumentCore"}
+#: the cores whose ops the core itself implements via a generated interface (so the
+#: async surface's IO ops override the inherited eager ones -> need an ``override``
+#: ignore). Grows as each core gets its interface.
+HAS_INTERFACE: set[type] = {DocumentCore, ReferenceCore}
 #: bare core-surface names -- an overload returning one overlaps a later ``str``
 #: overload and needs the ``overload-overlap`` ignore.
 _CORE_SURFACES = (
@@ -192,8 +205,8 @@ def _render(tp: Any, tier: str) -> str:
     not a chainable field/list."""
     inner = _unwrap_union(tp)
     cat = _classify(inner)
-    smap = {"eager": SURFACE, "async": SURFACE_ASYNC}.get(tier, LAZY)
-    sync = tier in ("eager", "async")  # a materialised value tier (vs the lazy box)
+    smap = {"eager": SURFACE, "async": SURFACE_ASYNC, "surface": SELF}.get(tier, LAZY)
+    sync = tier in ("eager", "async", "surface")  # a materialised value tier
     if cat == "core":
         return smap[inner]
     if cat == "iterable":
@@ -331,17 +344,23 @@ def members(
     for op in sorted(props):
         fn = props[op] or _fn(_provider(core, op, "props"), op)
         ret = _render(_return(fn), tier)
-        if tier == "eager":
+        if tier != "lazy":  # a real @property on the eager/surface/async view
             lines += ["@property", f"def {op}(self) -> {ret}: ..."]
-        else:
+        else:  # the lazy tier records attribute access, so a prop is an attribute
             lines.append(f'{op}: "{ret}"')
     # call ops -- in the async tier the IO ops (resolve/fetch/summary) are
     # ``async def`` (awaited -> the async surface); the rest stay synchronous.
     io = core.io_ops() if tier == "async" else frozenset()
+    # when the core implements its ops (via its interface), the async surface's IO
+    # ops override the inherited eager ones with an ``async def`` -> silence override.
+    override = "  # type: ignore[override]" if core in HAS_INTERFACE else ""
     for op in sorted(core.ops()):
         method = _method(op, _fn(_provider(core, op, "provides"), op), tier)
         if op in io:
-            method = [ln.replace(f"def {op}(", f"async def {op}(") for ln in method]
+            method = [
+                ln.replace(f"def {op}(", f"async def {op}(") + override
+                for ln in method
+            ]
         lines += method
     return lines
 
@@ -478,15 +497,16 @@ def _indented(lines: list[str], indent: int) -> str:
 def _body(region: str) -> str:
     if region == "lazy-tier":
         return _lazy_tier()
-    if region == "Reference eager surface":
-        # the eager surface IS the core (class Reference(ReferenceCore)), so data
-        # fields and class @properties are inherited -- emit only the backing ops.
+    if region == "Reference interface":
+        # the eager ops ReferenceCore implements (its ``IReference`` interface).
         return _indented(
-            members(ReferenceCore, "eager", fields=False, class_props=False), 8
+            members(ReferenceCore, "surface", fields=False, class_props=False), 8
         )
-    if region == "Document eager surface":
+    if region == "Document interface":
+        # the eager ops DocumentCore implements (its ``IDocument`` interface, which
+        # the core inherits) -- so a backing/the core reaches them statically.
         return _indented(
-            members(DocumentCore, "eager", fields=False, class_props=False), 8
+            members(DocumentCore, "surface", fields=False, class_props=False), 8
         )
     if region == "collection element-op lifting":
         return _indented(lift_members(), 8)
@@ -518,8 +538,8 @@ def _body(region: str) -> str:
 
 
 REGIONS = [
-    (SURFACES, "Reference eager surface"),
-    (SURFACES, "Document eager surface"),
+    (REFINIT, "Reference interface"),
+    (DOCINIT, "Document interface"),
     (SURFACES, "WebClient eager surface"),
     (SURFACES, "Session eager surface"),
     (SURFACES, "AsyncReference surface"),

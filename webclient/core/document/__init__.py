@@ -12,7 +12,7 @@ the sub-core wiring), and the ``Element`` value type lives in :mod:`...models`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, overload
 
 from pydantic import BaseModel, PrivateAttr
 
@@ -33,16 +33,97 @@ from .summary import (
 )
 
 if TYPE_CHECKING:
-    from ..client import WebClientCore
+    # names the generated ``IDocument`` op annotations resolve against (its ops
+    # return real cores/collections/value models).
+    from ...collection import Collection, Field
+    from ...models import (
+        ActionEvent,
+        ConsoleEvent,
+        DOMUpdateEvent,
+        Event,
+        Metadata,
+        Runtime,
+        Structure,
+        Summary,
+        Transport,
+    )
+    from ...surfaces.lazy import LazyDocument
+    from ..client import WebClientCore  # noqa: F401
     from ..reference import ReferenceCore
 
-if TYPE_CHECKING:
-    from ..client import WebClientCore  # noqa: F401
+    E = TypeVar("E", bound="Event")  # events_of(type[E]) -> list[E]
+
+    class IDocument(BaseModel):
+        """The eager ops ``DocumentCore`` implements, typed. Generated from the
+        document backings; ``DocumentCore`` inherits it, so its ops are statically
+        visible on the core itself (a backing / the core reaches them with no
+        ``dispatch("...")`` string). Exists only for the type checker -- at runtime
+        it is empty, so ``WebCore.__getattr__`` still dispatches every op."""
+
+        # >>> generated: Document interface <<<
+        # fmt: off
+        @property
+        def action_events(self) -> list[ActionEvent]: ...
+        @property
+        def console(self) -> list[ConsoleEvent]: ...
+        @property
+        def dom_mutations(self) -> list[DOMUpdateEvent]: ...
+        @property
+        def events(self) -> list[Event]: ...
+        @property
+        def message(self) -> str: ...
+        @property
+        def text_content(self) -> str: ...
+        @property
+        def title(self) -> str: ...
+        @overload
+        def attr(self, name: Literal['href', 'src', 'action']) -> "ReferenceCore": ...
+        @overload
+        def attr(self, name: str, *, error: Any = ...) -> "Field[str]": ...
+        def click(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ...) -> "DocumentCore": ...
+        def evaluate(self, script: str) -> "Any": ...
+        @overload
+        def events_of(self, event_type: type[E]) -> "list[E]": ...
+        @overload
+        def events_of(self, event_type: str) -> "list[Event]": ...
+        def is_empty(self) -> "Field[bool]": ...
+        def is_ok(self) -> "Field[bool]": ...
+        def metadata(self) -> "Metadata": ...
+        def ref(self) -> "ReferenceCore": ...
+        def reload(self) -> "DocumentCore": ...
+        @overload
+        def render(self, format: Literal['elements']) -> "list[Element]": ...
+        @overload
+        def render(self, format: Literal['links']) -> "Collection[ReferenceCore]": ...
+        @overload
+        def render(self, format: str, **options: Any) -> "str": ...
+        def runtime(self) -> "Runtime": ...
+        def screenshot(self, selector: str | None = ...) -> "DocumentCore": ...
+        def select(self, selector: str, *, index: int = ..., error: Any = ...) -> "DocumentCore": ...
+        def select_all(self, selector: str, *, limit: int | None = ..., offset: int = ...) -> "Collection[DocumentCore]": ...
+        def structure(self) -> "Structure": ...
+        def summary(self, *include: str, exclude: Any = ...) -> "Summary": ...
+        def transport(self) -> "Transport": ...
+        def wait_for(self, selector: str | None = ..., *, timeout: float | None = ...) -> "DocumentCore": ...
+        def write(self, selector: str, text: str, *, timeout: float | None = ..., optional: bool = ...) -> "DocumentCore": ...
+        # fmt: on
+        # >>> end generated <<<
+
+else:
+
+    class IDocument(BaseModel):  # runtime: empty -> never shadows __getattr__
+        pass
 
 
-class DocumentCore(WebCore, BaseModel):
+class DocumentCore(WebCore, IDocument):
     """A resolved resource's core (+ element sub-cores). Core Fields are the
-    response; behaviour is the backings."""
+    response; behaviour is the backings. Its eager ops come from the generated
+    ``IDocument`` interface it inherits; sync/async/remote are dispatch modes."""
+
+    if TYPE_CHECKING:  # narrow WebCore.lazy (Any) to this core's lazy surface
+
+        @property
+        def lazy(self) -> "LazyDocument": ...
 
     id: str = ""
     name: str = ""  # scoped document name

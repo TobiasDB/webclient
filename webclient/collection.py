@@ -12,7 +12,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Generic, Iterator, TypeVar, cast, overload
 
-T = TypeVar("T")
+# covariant: Field/Collection/Lazy only ever *produce* T (iterate/index/get/collect),
+# never consume it, so ``Collection[AsyncDocument]`` is a ``Collection[DocumentCore]``
+# -- which lets the async surface override an inherited ``-> Collection[Document]`` op.
+T = TypeVar("T", covariant=True)
 M = TypeVar("M")  # a row model (e.g. a pydantic BaseModel) for project(model)
 
 if TYPE_CHECKING:

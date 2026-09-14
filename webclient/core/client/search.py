@@ -65,22 +65,21 @@ class SearchBacking(Backing):
         ref._client = core
         doc = await core.afetch(ref)
         results: list[SearchResult] = []
-        # a backing reads a core's ops via ``dispatch`` (the core's typed surface is
-        # the generated stub, not the bare core) -- like ``FetchBacking.summary``.
-        for hit in doc.dispatch("select_all", self.RESULT):  # ``limit``: real hits
+        # the core implements its ops (via its generated interface), so a backing
+        # reads them directly and typed -- no ``dispatch("...")`` string, no cast.
+        for hit in doc.select_all(self.RESULT):  # ``limit`` counts real hits, below
             if len(results) >= limit:
                 break
-            link = hit.dispatch("select", self.LINK, error=RETURN)
+            link = hit.select(self.LINK, error=RETURN)
             if not link.ok:  # a non-result row (ads / "no results") -- skip
                 continue
-            snippet = hit.dispatch("select", self.SNIPPET, error=RETURN)
-            href = link.dispatch("attr", "href").dispatch("url")
+            snippet = hit.select(self.SNIPPET, error=RETURN)
             results.append(
                 SearchResult(
                     rank=len(results) + 1,  # 1-based rank among the real hits
-                    title=(link.dispatch("text_content") or "").strip(),
-                    url=_target(href),
-                    description=(snippet.dispatch("text_content") or "").strip(),
+                    title=(link.text_content or "").strip(),
+                    url=_target(link.attr("href").url),
+                    description=(snippet.text_content or "").strip(),
                 )
             )
         return results

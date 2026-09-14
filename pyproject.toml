@@ -54,6 +54,10 @@ module = [
     # overloads (attr href->Reference vs str->Field; render by format) the stubs
     # are generated from -- the overlap is by design.
     "webclient.core.document.html",
+    # the cores now carry their generated eager-op interface (``IDocument`` /
+    # ``IReference``, which the core inherits) -- same ``...``-body stub form.
+    "webclient.core.document",
+    "webclient.core.reference",
 ]
 disable_error_code = [
     "empty-body",
@@ -64,15 +68,13 @@ disable_error_code = [
 
 # A backing op declares its SURFACE return type (what ``gen_stubs`` renders) but
 # returns a value that is ``Any`` because the cores cross-reference through some
-# ``Any``-typed private attrs (``_page`` is a playwright Page, ``dispatch`` is
-# generic). That is the intended pattern -- the surface stubs re-assert the type,
-# so backings do NOT ``cast``. Relax only ``no-any-return`` on the two backing
-# modules that still hit it (live: ``return core`` on the Any page; the client's
-# ``summary``: ``doc.dispatch(...)``); every other strict check still applies, and
-# the client/reference seam is now typed (``_client`` / ``_ref``), not ``Any``.
+# ``Any``-typed private attrs (``_page`` is a playwright Page). That is the intended
+# pattern -- the surface stubs re-assert the type, so backings do NOT ``cast``.
+# Relax only ``no-any-return`` on ``live`` (``return core`` on the Any page). The
+# client's ``summary`` no longer needs it: DocumentCore now implements ``summary``
+# (via its interface), so ``doc.summary(...)`` is typed, not ``dispatch(...) -> Any``.
 [[tool.mypy.overrides]]
 module = [
-    "webclient.core.client.fetch",
     "webclient.core.document.live",
 ]
 disable_error_code = ["no-any-return"]
