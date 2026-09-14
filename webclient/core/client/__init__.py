@@ -28,6 +28,7 @@ from ..reference import ReferenceCore, from_url
 from ..web_core import Backing, WebCore
 from .fetch import FetchBacking
 from .loop import EngineLoop
+from .search import SearchBacking
 
 
 def _materialize(result: Any) -> Any:
@@ -187,7 +188,7 @@ class WebClientCore(WebCore, BaseModel):
             *(s._scope for s in self._sessions if s._scope is not None),
         ]
 
-    BACKINGS: ClassVar[tuple[Backing, ...]] = (FetchBacking(),)
+    BACKINGS: ClassVar[tuple[Backing, ...]] = (FetchBacking(), SearchBacking())
 
     # -- loop / lifecycle ----------------------------------------------------
     def loop(self) -> EngineLoop:
@@ -594,6 +595,7 @@ __all__ = [
     "default_client",
     "NameScope",
     "FetchBacking",
+    "SearchBacking",
     "_materialize",
     "_retry_after_seconds",
 ]

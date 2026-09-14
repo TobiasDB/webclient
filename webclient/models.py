@@ -137,6 +137,25 @@ class Element(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Search
+#
+# A search hit -- the structured shape an agent or human reads back from
+# ``client.search(query)``: title / url / description, all as the search
+# provider gave them, plus the 1-based rank on the results page.
+# --------------------------------------------------------------------------- #
+
+
+class SearchResult(BaseModel):
+    """One search hit: ``title`` / ``url`` / ``description`` as the provider gave
+    them, plus ``rank`` (1-based position on the results page)."""
+
+    rank: int = 0
+    title: str = ""
+    url: str = ""
+    description: str = ""
+
+
+# --------------------------------------------------------------------------- #
 # Summary facets
 #
 # A summary is a *shape*, not a data dump -- headers, cookies and page metadata
@@ -269,6 +288,8 @@ __all__ = [
     "topic_matches",
     # content blocks
     "Element",
+    # search
+    "SearchResult",
     # summary
     "FACETS",
     "TocEntry",

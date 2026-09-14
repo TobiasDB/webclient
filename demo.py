@@ -51,6 +51,25 @@ APP = b"""
 </body></html>
 """
 
+# a search-engine results page (DuckDuckGo-shaped): three hits, one an ad row.
+SEARCH = b"""
+<html><body>
+  <div class="result result--ad"><span>Sponsored</span></div>
+  <div class="result">
+    <a class="result__a" href="https://example.com/aeropress">Aeropress Guide</a>
+    <a class="result__snippet">How to brew a great cup with an Aeropress.</a>
+  </div>
+  <div class="result">
+    <a class="result__a" href="https://example.com/grinder">Best Burr Grinders</a>
+    <a class="result__snippet">A roundup of burr grinders for espresso.</a>
+  </div>
+  <div class="result">
+    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fkettle">Gooseneck Kettles</a>
+    <a class="result__snippet">Pouring control for pour-over coffee.</a>
+  </div>
+</body></html>
+"""
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
@@ -85,6 +104,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"welcome")
             return
+        elif self.path.startswith("/search"):  # a search-engine results page
+            body, ctype = SEARCH, "text/html; charset=utf-8"
         elif self.path == "/app":  # a JS-driven live page
             body, ctype = APP, "text/html"
         elif self.path == "/old":  # a redirect hop
@@ -137,6 +158,12 @@ def main() -> None:
         print("final url:  ", shop.final_url)
         missing = wc.ref(f"{base}/nope").resolve(error=RETURN).collect()
         print("optional:   ", missing.status_code, "ok:", missing.ok)
+
+        # [M2] Search: a client verb returning structured hits (title/url/desc),
+        #      built on the interface itself (fetch + select). DDG by default;
+        #      point it at the demo's own results page here.
+        hits = wc.search("coffee", endpoint=f"{base}/search", limit=2)
+        print("search:     ", [(h.rank, h.title, h.url) for h in hits])
 
         # [P1] Every object is addressable: short scoped names, a root chain
         #      (ref -> doc), recovery by name from the resolver, shop.ref().

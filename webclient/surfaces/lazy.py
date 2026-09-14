@@ -23,7 +23,7 @@ from ..query.plan import Plan, Step
 if TYPE_CHECKING:
     from ..collection import Collection, Field
     from ..core.document import Element
-    from ..models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
+    from ..models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event, SearchResult
     from ..summary import Metadata, Runtime, Structure, Summary, Transport
     from .eager import Document, Reference
 
@@ -187,6 +187,9 @@ class LazyWebClient:
     def fetch(
         self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any
     ) -> "LazyDocument": ...
+    def search(
+        self, query: str, *, limit: int = ..., endpoint: str | None = ...
+    ) -> "Lazy[list[SearchResult]]": ...
     def summary(self, url: Any, *include: str, **kw: Any) -> "Lazy[Summary]": ...
 
 
