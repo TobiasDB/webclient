@@ -66,6 +66,17 @@ class Backing:
         console/network signals into events here. Default: nothing. So the client
         never needs to know how a backing shapes events."""
 
+    #: lifecycle hooks -- when the core is used as a context manager, ``WebCore``'s
+    #: ``__enter__``/``__aenter__`` fire ``aenter`` on each chosen backing and its
+    #: ``__exit__``/``__aexit__`` fire ``aexit`` (a backing that owns a scoped
+    #: resource, e.g. ``CrawlBacking``, uses these). Both are ``async`` and bridged
+    #: like an IO op, so the sync ``with`` and async ``async with`` forms both work.
+    async def aenter(self, core: Any) -> None:
+        """Hook: the core's context is opening (``with``/``async with``). Default: nothing."""
+
+    async def aexit(self, core: Any, *exc: Any) -> None:
+        """Hook: the core's context is closing. Default: nothing."""
+
 
 class WebCore:
     """Capabilities + Dispatch + Backing + Choose.
@@ -165,6 +176,31 @@ class WebCore:
     def has_op(self, op: str) -> bool:
         """Whether any chosen backing provides ``op`` (call or prop)."""
         return any(op in b.provides or op in b.props for b in self.choose())
+
+    # -- lifecycle: a core is a context manager, delegating to its backings ---
+    def _lifecycle(self, hook: str) -> "list[Backing]":
+        """The chosen backings that actually override ``aenter``/``aexit`` (so a
+        plain core with no lifecycle backing is a no-op context manager)."""
+        base = getattr(Backing, hook)
+        return [b for b in self.choose() if getattr(type(b), hook) is not base]
+
+    def __enter__(self) -> "Self":
+        for b in self._lifecycle("aenter"):
+            self._bridge_io(b.aenter(self))
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        for b in self._lifecycle("aexit"):
+            self._bridge_io(b.aexit(self, *exc))
+
+    async def __aenter__(self) -> "Self":
+        for b in self._lifecycle("aenter"):
+            await b.aenter(self)
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        for b in self._lifecycle("aexit"):
+            await b.aexit(self, *exc)
 
     # -- realization: an eager value is already realised -----------------------
     def collect(self, context: Any = None) -> "Self":
