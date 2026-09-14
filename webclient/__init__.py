@@ -27,6 +27,7 @@ from .expr import (
     ref,
     reference,
     when,
+    wq,
 )
 from .core.remote_core import RemoteWebClientCore
 from .surfaces import (
@@ -63,6 +64,7 @@ __all__ = [
     "doc",
     "ref",
     "many",
+    "wq",
     "field",
     "when",
     "filter",

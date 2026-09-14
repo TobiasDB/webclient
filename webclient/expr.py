@@ -248,6 +248,44 @@ else:
     many = Expr(Plan(root="Collection"))
 
 
+class WebQuery:
+    """The lazy authoring namespace (``from webclient import wq``). ``wq.doc`` /
+    ``wq.ref`` / ``wq.many`` are the lazy roots -- an ``Expr`` recording a plan,
+    statically the *lazy* surface (``LazyDocument`` / ``LazyReference`` /
+    ``LazyCollection``) so ``.collect()`` / ``.stream()`` / ``._plan`` and the
+    recorder-only ``.field()`` / ``.reference()`` are all visible to the type
+    checker. ``wq.reference(url)`` roots a plan at a URL; ``wq.when`` /
+    ``wq.field`` / ``wq.filter`` are the free builders. Namespacing them under
+    ``wq`` keeps the roots from shadowing locals named ``doc`` / ``ref`` /
+    ``many``."""
+
+    if TYPE_CHECKING:
+        from .models import LazyCollection, LazyDocument, LazyField, LazyReference
+
+        doc: "LazyDocument"
+        ref: "LazyReference"
+        many: "LazyCollection[LazyDocument]"
+
+        def reference(self, url: str, **kwargs: Any) -> "LazyReference": ...
+        def field(self, name: str) -> "LazyField[Any]": ...
+
+    else:
+        doc = doc
+        ref = ref
+        many = many
+        reference = staticmethod(reference)
+        field = staticmethod(field)
+
+    when = staticmethod(when)
+    filter = staticmethod(filter)
+    is_ok = staticmethod(is_ok)
+    is_empty = staticmethod(is_empty)
+
+
+#: the singleton lazy-authoring namespace.
+wq = WebQuery()
+
+
 __all__ = [
     "Expr",
     "lazy",
@@ -262,4 +300,6 @@ __all__ = [
     "doc",
     "ref",
     "many",
+    "wq",
+    "WebQuery",
 ]

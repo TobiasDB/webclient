@@ -12,19 +12,16 @@ from __future__ import annotations
 
 import http.server
 import threading
+from typing import Any
 
 from webclient import (
     RETURN,
     DOMUpdateEvent,
     NavigationEvent,
-    Reference,
     Renderer,
-    from_url,
-    reference,
     WebClient,
-    doc,
-    ref,
     from_url,
+    wq,
 )
 
 PAGE = b"""
@@ -104,7 +101,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, *args):  # quiet
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002  quiet
         pass
 
 
@@ -242,15 +239,15 @@ def main() -> None:
     #      `doc`/`ref` are lazy roots; every op call appends a step to a typed
     #      Plan -- the wire form for the service. Reference(url) roots a plan.
     plan = (
-        reference(f"{base}/")
+        wq.reference(f"{base}/")
         .resolve()
         .select_all(".card")
         .extract(
-            title=doc.select(".title").text_content,
-            price=doc.select(".price").text_content,
-            link=doc.select("a").attr("href"),
+            title=wq.doc.select(".title").text_content,
+            price=wq.doc.select(".price").text_content,
+            link=wq.doc.select("a").attr("href"),
         )
-        .filter(doc.field("price") != "")
+        .filter(wq.doc.field("price") != "")
         .project()
     )
     print("\nlazy plan:  ", plan._plan.describe()[:60], "...")
@@ -270,16 +267,14 @@ def main() -> None:
         bound = wc.lazy(f"{base}/").resolve().select(".title").text_content
         print("wc.lazy:    ", bound.collect().get())
 
-        # [§8] Polars-style free when()/filter() on the lazy surface.
-        from webclient import filter as lazy_filter
-        from webclient import when
+        # [§8] Polars-style free wq.when()/filter() on the lazy surface.
 
         labeled = (
-            ref.resolve()
+            wq.ref.resolve()
             .select_all(".card")
             .extract(
-                title=doc.select(".title").text_content,
-                tier=when(doc.select(".price").text_content != "")
+                title=wq.doc.select(".title").text_content,
+                tier=wq.when(wq.doc.select(".price").text_content != "")
                 .then("priced")
                 .otherwise("free"),
             )
@@ -290,11 +285,11 @@ def main() -> None:
             [(r["title"], r["tier"]) for r in labeled.collect(wc.ref(f"{base}/"))],
         )
         priced = (
-            lazy_filter(
-                ref.resolve().select_all(".card"),
-                doc.select(".price").text_content != "",
+            wq.filter(
+                wq.ref.resolve().select_all(".card"),
+                wq.doc.select(".price").text_content != "",
             )
-            .extract(title=doc.select(".title").text_content)
+            .extract(title=wq.doc.select(".title").text_content)
             .project()
         )
         print("free filter:", [r["title"] for r in priced.collect(wc.ref(f"{base}/"))])
@@ -303,20 +298,20 @@ def main() -> None:
         #      detail; `when/then/otherwise` branches; a missing select is a
         #      not-ok field under the plan default, never an aborted plan.
         enriched = (
-            ref.resolve()
+            wq.ref.resolve()
             .select_all(".card")
             .extract(
-                title=doc.select(".title").text_content,
-                link=doc.select("a.link").attr("href"),
-                missing=doc.select(".nope").text_content,
+                title=wq.doc.select(".title").text_content,
+                link=wq.doc.select("a.link").attr("href"),
+                missing=wq.doc.select(".nope").text_content,
             )
             .extract(
-                name=doc.reference("link").resolve().select("name").attr("value"),
-                stock=doc.reference("link")
+                name=wq.doc.reference("link").resolve().select("name").attr("value"),
+                stock=wq.doc.reference("link")
                 .resolve()
                 .select("stock.count")
                 .attr("value"),
-                tag=when(doc.field("title") == "Grinder")
+                tag=wq.when(wq.doc.field("title") == "Grinder")
                 .then("bulky")
                 .otherwise("small"),
             )
@@ -338,7 +333,7 @@ def main() -> None:
         # [P3] Eager and lazy agree: the same extract on a resolved page.
         page = wc.ref(f"{base}/").resolve().collect()
         cards = page.select_all(".card").extract(
-            title=doc.select(".title").text_content
+            title=wq.doc.select(".title").text_content
         )
         print("eager:      ", cards.name, "->", [r["title"] for r in cards.project()])
 
@@ -351,8 +346,8 @@ def main() -> None:
             .select_all(".card")
             .limit(2)
             .extract(
-                title=doc.select(".title").text_content,
-                url=doc.select("a").attr("href"),
+                title=wq.doc.select(".title").text_content,
+                url=wq.doc.select("a").attr("href"),
             )
             .collect()
             .project()
@@ -372,9 +367,9 @@ def main() -> None:
         async with AsyncWebClient() as ac:
             document = await ac.fetch(f"{base}/").acollect()  # async collect
             rows = await (
-                ref.resolve()
+                wq.ref.resolve()
                 .select_all(".card")
-                .extract(title=doc.select(".title").text_content)
+                .extract(title=wq.doc.select(".title").text_content)
                 .project()
                 .acollect(ac.ref(f"{base}/"))
             )
@@ -396,7 +391,7 @@ def main() -> None:
         handle = api.post(
             "/execute",
             headers=auth,
-            json={"plan": ref.resolve()._plan.model_dump(), "url": f"{base}/"},
+            json={"plan": wq.ref.resolve()._plan.model_dump(), "url": f"{base}/"},
         ).json()["rows"]["__doc__"]
         print("\nservice fetch:", {k: handle[k] for k in ("kind", "ok", "title")})
         did = handle["id"]
@@ -404,7 +399,7 @@ def main() -> None:
             "/execute",
             headers=auth,
             json={
-                "plan": doc.render("markdown")._plan.model_dump(),
+                "plan": wq.doc.render("markdown")._plan.model_dump(),
                 "document_id": did,
             },
         ).json()
@@ -413,15 +408,15 @@ def main() -> None:
             "/execute",
             headers=auth,
             json={
-                "plan": doc.select_all(".title").text_content._plan.model_dump(),
+                "plan": wq.doc.select_all(".title").text_content._plan.model_dump(),
                 "document_id": did,
             },
         ).json()
         print("service select:", titles["rows"])
         plan = (
-            ref.resolve()
+            wq.ref.resolve()
             .select_all(".card")
-            .extract(title=doc.select(".title").text_content)
+            .extract(title=wq.doc.select(".title").text_content)
             .project()
             ._plan
         )
@@ -461,9 +456,9 @@ def main() -> None:
         print("remote select: ", remote_doc.select_all(".title").text_content.collect())
         # identical plan API -- runs server-side, no local browser/lxml
         same_plan = (
-            ref.resolve()
+            wq.ref.resolve()
             .select_all(".card")
-            .extract(title=doc.select(".title").text_content)
+            .extract(title=wq.doc.select(".title").text_content)
             .project()
         )
         print("remote plan:   ", same_plan.collect(rc.ref(f"{base}/")))

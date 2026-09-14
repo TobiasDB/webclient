@@ -57,7 +57,7 @@ _NS = {
 }
 _SCALAR = {str: "str", int: "int", float: "float", bytes: "bytes", bool: "bool"}
 _UNION = (typing.Union, getattr(_types, "UnionType", None))
-_SKIP_FIELDS = {ReferenceCore: {"actions"}, DocumentCore: set[str]()}
+_SKIP_FIELDS = {ReferenceCore: set[str](), DocumentCore: set[str]()}
 
 
 # -- type classification (was webclient/typeinfo.py; only the generator uses it)
@@ -295,32 +295,45 @@ def members(
     return lines
 
 
-def _lift(op: str, fn: Any) -> str | None:
-    """The Collection-lifted form of a Document op: ``T -> Collection[T]`` /
-    ``scalar -> Collection[Field[scalar]]``; ``None`` to skip (non-liftable).
-    An overloaded op lifts by its broadest (last) overload."""
+def _lift(
+    op: str, fn: Any, tier: str = "eager", *, is_prop: bool = False
+) -> str | None:
+    """The Collection-lifted form of a Document op, in ``tier`` vocabulary:
+    ``T -> Collection[T]`` / ``scalar -> Collection[Field[scalar]]`` (eager), or
+    the ``Lazy*`` mirror (lazy); ``None`` to skip (non-liftable). An overloaded op
+    lifts by its broadest (last) overload. A lazy prop lift is a recorded
+    attribute (like ``LazyDocument.text_content``), not a method."""
+    box = "Collection" if tier == "eager" else "LazyCollection"
+    surfaces = set(SURFACE.values()) if tier == "eager" else set(LAZY.values())
+    field = "Field" if tier == "eager" else "LazyField"
     overloads = typing.get_overloads(fn)
-    ret = _render(_return(overloads[-1] if overloads else fn), "eager")
-    if ret in SURFACE.values() or ret.startswith("Collection["):
-        inner = ret[len("Collection[") : -1] if ret.startswith("Collection[") else ret
-        lifted = f"Collection[{inner}]"
-    elif ret.startswith("Field["):
-        lifted = f"Collection[{ret}]"
-    elif ret in _SCALAR.values():
-        lifted = f"Collection[Field[{ret}]]"
+    ret = _render(_return(overloads[-1] if overloads else fn), tier)
+    if ret in surfaces or ret.startswith(f"{box}["):
+        inner = ret[len(f"{box}[") : -1] if ret.startswith(f"{box}[") else ret
+        lifted = f"{box}[{inner}]"
+    elif ret.startswith(f"{field}["):
+        lifted = f"{box}[{ret}]"
+    elif ret in _SCALAR.values():  # an eager scalar stays raw -> wrap on lift
+        lifted = f"{box}[{field}[{ret}]]"
     else:
         return None  # Any / list / dict -- nothing sensible to lift
-    params = _params(typing.get_overloads(fn)[-1] if typing.get_overloads(fn) else fn)
+    if tier != "eager" and is_prop:  # recorded as a bare attribute access
+        return f'{op}: "{lifted}"'
+    params = _params(overloads[-1] if overloads else fn)
     sig = f"self, {params}" if params else "self"
     return f'def {op}({sig}) -> "{lifted}": ...'
 
 
-def lift_members() -> list[str]:
-    """Element ops lifted onto a Collection (fan-out keeps the element type)."""
+def lift_members(tier: str = "eager") -> list[str]:
+    """Element ops lifted onto a Collection (fan-out keeps the element type),
+    in ``tier`` vocabulary (eager Collection, or lazy LazyCollection)."""
     lines: list[str] = []
     for op in sorted(set(DocumentCore.ops()) | set(DocumentCore.prop_ops())):
+        is_prop = op not in DocumentCore.ops()
         kind = "provides" if op in DocumentCore.ops() else "props"
-        row = _lift(op, _fn(_provider(DocumentCore, op, kind), op))
+        row = _lift(
+            op, _fn(_provider(DocumentCore, op, kind), op), tier, is_prop=is_prop
+        )
         if row is not None:
             lines.append(row)
     return lines
@@ -340,13 +353,24 @@ _LAZY_FIELD = """class LazyField(Lazy["Field[S]"], Generic[S]):
     def __invert__(self) -> "LazyField[bool]": ...
     def collect(self, context: Any = ...) -> "Field[S]": ..."""
 
-_LAZY_COLLECTION = """class LazyCollection(Lazy["Collection[T]"], Generic[T]):
-    def extract(self, **exprs: Any) -> "LazyCollection[T]": ...
-    def filter(self, *predicates: Any) -> "LazyCollection[T]": ...
-    def limit(self, n: int) -> "LazyCollection[T]": ...
-    def documents(self, column: str) -> "LazyCollection[LazyDocument]": ...
-    def project(self) -> "Lazy[list[dict[str, Any]]]": ...
-    def collect(self, context: Any = ...) -> "Collection[T]": ..."""
+#: LazyCollection's row-shaping ops (the lazy mirror of Collection's own methods);
+#: the element-op lift (select/attr/text_content/...) is generated alongside.
+_LAZY_COLLECTION_SHAPING = [
+    'def extract(self, **exprs: Any) -> "LazyCollection[T]": ...',
+    'def filter(self, *predicates: Any) -> "LazyCollection[T]": ...',
+    'def limit(self, n: int) -> "LazyCollection[T]": ...',
+    'def documents(self, column: str) -> "LazyCollection[LazyDocument]": ...',
+    'def project(self) -> "Lazy[list[dict[str, Any]]]": ...',
+    'def collect(self, context: Any = ...) -> "Collection[T]": ...',
+]
+
+
+def _lazy_collection() -> str:
+    """LazyCollection: the lazy element-op lift (fan-out keeps the element type)
+    plus the row-shaping ops -- the lazy mirror of the eager Collection."""
+    body = lift_members("lazy") + _LAZY_COLLECTION_SHAPING
+    head = 'class LazyCollection(Lazy["Collection[T]"], Generic[T]):'
+    return head + "\n" + "\n".join("    " + line for line in body)
 
 
 def _lazy_class(core: type) -> str:
@@ -369,7 +393,7 @@ def _lazy_tier() -> str:
         _LAZY_FIELD,
         _lazy_class(ReferenceCore),
         _lazy_class(DocumentCore),
-        _LAZY_COLLECTION,
+        _lazy_collection(),
     ]
     return "# fmt: off\n" + "\n\n\n".join(blocks) + "\n# fmt: on"
 

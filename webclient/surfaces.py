@@ -67,6 +67,7 @@ class Reference(Surface[ReferenceCore]):
         form: Any
         follow_redirects: bool
         timeout: float | None
+        actions: Any
         @property
         def ok(self) -> bool: ...
         @property

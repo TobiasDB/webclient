@@ -1,12 +1,19 @@
 """The typing gate: this file must pass mypy --strict and pyright.
 
-It exercises the typed surface -- the lazy authoring roots (doc/ref/many/
-reference), the eager materialised tier (Document/Reference/Field/Collection),
-and the two-tier client surface (WebClient/AsyncWebClient with the lazy tier in
-webclient.models). The stubs are generated/verified by scripts/gen_stubs.py.
+It exercises the typed surface in three parts:
+  * the lazy authoring namespace ``wq`` (``wq.doc``/``ref``/``many`` +
+    ``wq.reference``) -- every op returns a lazy type, and ``collect``/``stream``/
+    ``_plan``/``field``/``reference`` are visible to the checker;
+  * the eager materialised tier (Document/Reference/Field/Collection), reached
+    from genuinely eager values (``client.fetch(...).collect()``);
+  * the two-tier client surface (WebClient/AsyncWebClient, lazy tier in
+    webclient.models).
+The stubs are generated/verified by scripts/gen_stubs.py.
 """
 
 from typing import Any, assert_type
+
+from pydantic import BaseModel
 
 from webclient import (
     AsyncWebClient,
@@ -16,83 +23,92 @@ from webclient import (
     Field,
     Reference,
     WebClient,
-    doc,
-    many,
-    ref,
-    reference,
+    wq,
 )
-from pydantic import BaseModel
-
-from webclient.models import LazyDocument, LazyField, LazyReference
+from webclient.models import (
+    Lazy,
+    LazyCollection,
+    LazyDocument,
+    LazyField,
+    LazyReference,
+)
+from webclient.plan import Plan
 
 
 class _Row(BaseModel):
     title: str
 
 
-# -- lazy authoring roots ---------------------------------------------------
-assert_type(doc, Document)
-assert_type(many, Collection[Document])
-assert_type(ref, Reference)
+# -- lazy authoring namespace (wq): roots are lazy, ops return lazy types ----
+assert_type(wq.doc, LazyDocument)
+assert_type(wq.ref, LazyReference)
+assert_type(wq.many, LazyCollection[LazyDocument])
 
-# element ops on a Document
-assert_type(doc.select("a").select_all("li"), Collection[Document])
-assert_type(doc.text_content, str)  # eager scalar is raw; the lazy tier wraps it
-assert_type(doc.attr("href"), Reference)  # link attrs narrow
-assert_type(doc.attr("href").resolve().text_content, str)
-assert_type(ref.resolve(), Document)
+assert_type(wq.doc.select("a").select_all("li"), LazyCollection[LazyDocument])
+assert_type(wq.doc.text_content, LazyField[str])
+assert_type(wq.doc.attr("href"), LazyReference)  # link attrs narrow
+assert_type(wq.doc.attr("name"), LazyField[str])
+assert_type(wq.doc.attr("href").resolve().text_content, LazyField[str])
+assert_type(wq.doc.field("x"), LazyField[Any])  # recorder-only helpers
+assert_type(wq.doc.reference("x"), LazyReference)
+assert_type(wq.ref.resolve(), LazyDocument)
 
-# a Field materialises to its value
-title: Field[str] = Field[str]()
-assert_type(title.get(), str)
-assert_type(title.is_ok(), Field[bool])
-
-# Collection lifts element ops and keeps the element type
-assert_type(many.select("a"), Collection[Document])
-# NOTE: the collection lift renders a scalar prop as a method (def text_content())
-# whereas Document/LazyDocument expose it as a property -- a tier inconsistency to
-# resolve in the vocabulary/type-safety pass (#4/#7).
-assert_type(many.text_content(), Collection[Field[str]])
-assert_type(many.filter(title == "x"), Collection[Document])
-assert_type(many.extract(name=title), Collection[Document])
-assert_type(many.project(), list[dict[str, Any]])
-assert_type(many.project(_Row), list[_Row])  # schema-guided -> typed rows
-
-# reference("url") is a lazy root, typed as Reference
-assert_type(reference("https://e.com"), Reference)
-assert_type(reference("https://e.com").resolve().select("a").text_content, str)
-
-# extract -> project pipeline
+# wq.reference(url) roots a lazy plan at a URL
+assert_type(wq.reference("https://e.com"), LazyReference)
 assert_type(
-    doc.select_all("li").extract(t=doc.text_content).project(), list[dict[str, Any]]
+    wq.reference("https://e.com").resolve().select("a").text_content, LazyField[str]
 )
 
-# render() is the single representation function, typed per format
-res_doc = reference("https://e.com").resolve()
-assert_type(res_doc.render("markdown"), str)
-assert_type(res_doc.render("elements"), list[Element])
-assert_type(res_doc.render("links"), Collection[Reference])
+# the lazy collection lift keeps element ops (fan-out), then the row-shaping ops
+assert_type(wq.many.select("a"), LazyCollection[LazyDocument])
+assert_type(wq.many.text_content, LazyCollection[LazyField[str]])
+assert_type(wq.doc.select_all(".t").attr("name"), LazyCollection[LazyField[str]])
+assert_type(wq.many.filter(wq.doc.field("x")), LazyCollection[LazyDocument])
+assert_type(wq.many.extract(name=wq.doc.text_content), LazyCollection[LazyDocument])
 
-# iterating a Collection yields the element type
-for _card in doc.select_all(".card"):
+# extract -> project -> a Lazy[list[dict]] handle you collect (or introspect)
+_rows = wq.ref.resolve().select_all(".card").extract(t=wq.doc.text_content).project()
+assert_type(_rows, Lazy[list[dict[str, Any]]])
+assert_type(_rows.collect(), list[dict[str, Any]])
+assert_type(_rows._plan, Plan)  # introspection is typed
+assert_type(wq.doc.select(".t").text_content.collect(), Field[str])
+assert_type(wq.doc.select(".t").text_content._plan, Plan)
+
+
+# -- eager materialised tier: from genuinely eager values --------------------
+_wc = WebClient()
+_page = _wc.fetch("https://e.com").collect()
+assert_type(_page, Document)
+assert_type(_page.select("a").select_all("li"), Collection[Document])
+assert_type(_page.text_content, str)  # an eager scalar is raw
+assert_type(_page.attr("href"), Reference)
+assert_type(_page.render("markdown"), str)
+assert_type(_page.render("elements"), list[Element])
+assert_type(_page.render("links"), Collection[Reference])
+
+_cards = _page.select_all(".card")
+assert_type(_cards, Collection[Document])
+assert_type(_cards.select("a"), Collection[Document])
+assert_type(_cards.project(), list[dict[str, Any]])
+assert_type(_cards.project(_Row), list[_Row])  # schema-guided -> typed rows
+
+_title: Field[str] = Field[str]()
+assert_type(_title.get(), str)
+assert_type(_title.is_ok(), Field[bool])
+
+for _card in _page.select_all(".card"):  # iterating a Collection yields the element
     assert_type(_card, Document)
 
 
-# -- two-tier lazy client surface: entry points are lazy; collect()/execute()
-#    materialise to the eager tier.
-_wc = WebClient()
+# -- two-tier client surface: entry points lazy; collect() -> eager ----------
 assert_type(_wc.ref("https://e.com"), LazyReference)
 assert_type(_wc.lazy("https://e.com"), LazyReference)
 assert_type(_wc.fetch("https://e.com"), LazyDocument)
-
-# summary records a plan you collect (a Lazy[T] handle)
 assert_type(_wc.summary("https://e.com").collect(), dict[str, Any])
-
-# a lazy extract->project pipeline is itself a Lazy handle; collect() materialises
 assert_type(
     _wc.fetch("https://e.com")
     .select_all(".card")
-    .extract(t=doc.text_content)
+    .extract(t=wq.doc.text_content)
     .project()
     .collect(),
     list[dict[str, Any]],
@@ -106,11 +122,8 @@ assert_type(_wc.ref("https://e.com").resolve().collect(), Document)
 assert_type(
     _wc.ref("https://e.com").resolve().select(".t").text_content.collect(), Field[str]
 )
-
-# a client-bound plan collects on that client (the one realization path)
 assert_type(_wc.ref("https://e.com").collect(), Reference)
 
-# the async client awaits to the same materialised model
 _ac = AsyncWebClient()
 assert_type(_ac.fetch("https://e.com"), LazyDocument)
 
