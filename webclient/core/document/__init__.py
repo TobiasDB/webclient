@@ -69,6 +69,9 @@ class DocumentCore(WebCore, BaseModel):
     _set_cookies: dict[str, str] = PrivateAttr(  # transport-parsed Set-Cookie
         default_factory=dict
     )
+    #: a server-side handle (remote dispatcher): it holds no local content, so its
+    #: content ops round-trip. Set by ``RemoteWebClientCore`` on deserialize.
+    _remote_handle: bool = PrivateAttr(default=False)
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (
         StatusBacking(),

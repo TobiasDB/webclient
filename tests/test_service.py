@@ -100,7 +100,7 @@ def test_auth_required(client_and_server):
 def test_fetch_returns_handle_not_html(client_and_server):
     api, server = client_and_server
     meta = _handle(api, server.url_for("/cards"))
-    assert meta["ok"] and meta["kind"] == "html" and meta["title"] == "Shop"
+    assert meta["ok"] and meta["kind"] == "html"  # lightweight handle
     assert "content" not in meta and "html" not in meta  # handle only
     assert meta["id"]
 
@@ -117,8 +117,8 @@ def test_render_via_execute(client_and_server):
     api, server = client_and_server
     doc_id = _handle(api, server.url_for("/cards"))["id"]
     assert "Aeropress" in _exec(api, doc_id, doc.render("markdown"))
-    links = _exec(api, doc_id, doc.render("links"))
-    assert any(u.endswith("/i/1") for u in links)
+    links = _exec(api, doc_id, doc.render("links"))  # References -> {"__ref__": spec}
+    assert any(u["__ref__"]["path"] == "/i/1" for u in links)
     assert isinstance(_exec(api, doc_id, doc.render("elements")), list)
 
 
@@ -130,8 +130,8 @@ def test_select_via_execute(client_and_server):
         "Aeropress",
         "Grinder",
     ]
-    hrefs = _exec(api, doc_id, doc.select_all("a").attr("href"))
-    assert all(u.startswith("http") for u in hrefs)
+    hrefs = _exec(api, doc_id, doc.select_all("a").attr("href"))  # -> {"__ref__": spec}
+    assert all(u["__ref__"]["scheme"] in ("http", "https") for u in hrefs)
 
 
 def test_session_lifecycle(client_and_server):

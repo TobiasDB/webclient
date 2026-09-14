@@ -407,7 +407,7 @@ def main() -> None:
             headers=auth,
             json={"plan": wq.ref.resolve()._plan.model_dump(), "url": f"{base}/"},
         ).json()["rows"]["__doc__"]
-        print("\nservice fetch:", {k: handle[k] for k in ("kind", "ok", "title")})
+        print("\nservice fetch:", {k: handle[k] for k in ("kind", "ok")})
         did = handle["id"]
         md = api.post(
             "/execute",

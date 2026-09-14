@@ -11,6 +11,8 @@ import pytest
 import uvicorn
 
 from webclient import (
+    Document,
+    Reference,
     RemoteError,
     RemoteWebClient,
     RemoteWebClientCore,
@@ -88,16 +90,20 @@ def test_render_over_the_wire(remote):
     d = rc.fetch(server.url_for("/cards"))  # eager: one round-trip -> a handle
     assert "# Featured" in d.render("markdown")  # each op round-trips eagerly
     assert "Curated picks." in d.render("text")
-    assert any(u.endswith("/i/1") for u in d.render("links"))
+    # render("links") -> real References (same as local), reached by .url
+    assert any(u.url.endswith("/i/1") for u in d.render("links"))
     assert isinstance(d.render("elements"), list)
 
 
 def test_eager_doc_ops_round_trip(remote):
     rc, server = remote
     d = rc.fetch(server.url_for("/cards"))
-    assert d.title == "Shop"  # inline metadata, no round-trip
+    assert isinstance(d, Document)  # a real DocumentCore handle, not a special type
+    assert d.ok and d.kind == "html"  # inline metadata, no round-trip
+    assert d.title == "Shop"  # a prop op -> one round-trip
     assert d.select(".title").text_content == "Aeropress"  # eager: a value, not a plan
-    assert d.select("a").attr("href").endswith("/i/1")  # a single narrowed op
+    href = d.select("a").attr("href")  # a single narrowed op -> a real Reference
+    assert isinstance(href, Reference) and href.url.endswith("/i/1")
     # a multi-element fan-out is not per-element addressable server-side -- batch
     # it through .lazy (one plan, one round-trip); see the test below.
 
@@ -109,7 +115,7 @@ def test_lazy_batches_doc_ops_into_one_call(remote):
     assert d.lazy.select(".title").text_content.collect() == "Aeropress"
     assert d.lazy.select_all(".title").text_content.collect() == ["Aeropress", "Grinder"]
     hrefs = d.lazy.select_all("a").attr("href").collect()
-    assert all(u.startswith("http") for u in hrefs)
+    assert all(u.url.startswith("http") for u in hrefs)
 
 
 def test_plan_execution_is_portable(remote):
