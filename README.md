@@ -74,6 +74,29 @@ other attributes return a `Field`. `render(...)` supports
 `"markdown"`, `"text"` (`main_content_only=True` to strip nav/chrome),
 `"elements"` (typed blocks), `"links"`, and `"html"`.
 
+## Task verbs -- for scripts and LLM tools
+
+`webclient.tools` wraps the surface in a few functions that hide the plan
+machinery and return ready-to-use values (markdown / text / links / rows) -- the
+shape a quick script or an LLM tool wants:
+
+```python
+from webclient.tools import fetch_markdown, fetch_text, links, extract
+
+md = fetch_markdown("https://example.com")               # -> str (markdown)
+text = fetch_text("https://example.com")                 # -> str (nav stripped)
+urls = links("https://example.com")                      # -> list[str]
+rows = extract(                                          # -> list[dict]
+    "https://shop.example/",
+    ".card",                                             # a CSS selector per row
+    {"title": ".title", "price": ".price"},              # column -> CSS selector
+    limit=20,
+)
+```
+
+Each accepts an optional `client=` (defaults to a process-local one; pass your own
+`with WebClient() as wc` for lifecycle control).
+
 ## Async -- the same plans, awaited
 
 ```python
