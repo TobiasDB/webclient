@@ -72,7 +72,7 @@ def test_collect_is_the_single_trigger(site, wc):
     expr = reference(url).resolve().select(".title").text_content
     assert expr.collect().get() == "Aeropress"  # default client
     # a client-bound plan collects on that client's core -- same value
-    bound = wc.lazy(url).resolve().select(".title").text_content
+    bound = wc.lazy.ref(url).resolve().select(".title").text_content
     assert bound.collect().get() == "Aeropress"
 
 
@@ -113,10 +113,10 @@ def test_free_when_and_filter(site, wc):
 
 
 def test_client_bound_lazy_root(site, wc):
-    # wc.lazy(url): a lazy root bound to THIS client; collect() runs on its core
-    # (not the process default). The companion to Expr.collect() (PLAN §8).
+    # wc.lazy.ref(url): a lazy root bound to THIS client; collect() runs on its
+    # core (not the process default). The companion to Expr.collect() (PLAN §8).
     rows = (
-        wc.lazy(site.url_for("/cards"))
+        wc.lazy.ref(site.url_for("/cards"))
         .resolve()
         .select_all(".card")
         .extract(title=doc.select(".title").text_content)
@@ -124,7 +124,7 @@ def test_client_bound_lazy_root(site, wc):
         .collect()
     )
     assert [r["title"] for r in rows] == ["Aeropress", "Grinder", "Kettle"]
-    one = wc.lazy(site.url_for("/cards")).resolve().select(".title").text_content
+    one = wc.lazy.ref(site.url_for("/cards")).resolve().select(".title").text_content
     assert one.collect().get() == "Aeropress"
 
 

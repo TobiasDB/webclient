@@ -25,7 +25,7 @@ class FetchBacking(Backing):
     at run time (the IO ops hand back a coroutine when already on the engine
     loop, bridged otherwise -- like ``ReferenceCore.resolve``)."""
 
-    provides = frozenset({"ref", "lazy", "fetch", "summary"})
+    provides = frozenset({"ref", "fetch", "summary"})
     gate = "ok"
 
     def ref(
@@ -38,9 +38,6 @@ class FetchBacking(Backing):
             spec = from_url(url, cast(HttpMethod, method), **kw)
         spec._client = core
         return spec
-
-    #: the same client-bound reference under its authoring alias.
-    lazy = ref
 
     def fetch(
         self,

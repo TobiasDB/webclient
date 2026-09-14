@@ -169,4 +169,25 @@ class LazyCollection(Lazy["Collection[T]"], Generic[T]):
 # >>> end generated <<<
 
 
-__all__ = ["Lazy", "LazyField", "LazyReference", "LazyDocument", "LazyCollection"]
+class LazyWebClient:
+    """The lazy recorder rooted at a client/session (``wc.lazy``): its authoring
+    verbs record a ``WebClient``-rooted plan bound to that engine, so
+    ``wc.lazy.fetch(url).collect()`` records then runs on the client's core. Hand
+    written (an authoring root, not a collectable value); its verbs mirror the
+    client tier (``ref`` -> ``LazyReference``, ``fetch`` -> ``LazyDocument``)."""
+
+    def ref(self, url: Any, method: str = ..., **kw: Any) -> "LazyReference": ...
+    def fetch(
+        self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any
+    ) -> "LazyDocument": ...
+    def summary(self, url: Any, *include: str, **kw: Any) -> "Lazy[Summary]": ...
+
+
+__all__ = [
+    "Lazy",
+    "LazyField",
+    "LazyReference",
+    "LazyDocument",
+    "LazyCollection",
+    "LazyWebClient",
+]

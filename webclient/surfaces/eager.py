@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from ..collection import Collection, Field
     from ..core.document import Element
     from ..summary import Metadata, Runtime, Structure, Summary, Transport
-    from .lazy import Lazy, LazyDocument, LazyReference
+    from .lazy import Lazy, LazyDocument, LazyReference, LazyWebClient
 
 T = TypeVar("T")
 
@@ -28,6 +28,9 @@ if TYPE_CHECKING:  # the eager surfaces are pure typing stubs over their cores
         ops (``url``/``with_params``/``replace``/``join``/``resolve``). A pure
         typing stub: at runtime ``Reference is ReferenceCore`` and the core
         dispatches its own ops (``WebCore.__getattr__``)."""
+
+        @property
+        def lazy(self) -> "LazyReference": ...  # a recorder bound to this ref
 
         # >>> generated: Reference eager surface <<<
         # fmt: off
@@ -45,6 +48,9 @@ if TYPE_CHECKING:  # the eager surfaces are pure typing stubs over their cores
         its ops (``select``/``attr``/``text_content``/``render``/events + the live
         interaction set). A pure typing stub: at runtime ``Document is
         DocumentCore``."""
+
+        @property
+        def lazy(self) -> "LazyDocument": ...  # a recorder bound to this document
 
         # >>> generated: Document eager surface <<<
         # fmt: off
@@ -204,7 +210,6 @@ class _ClientBase:
         # >>> generated: WebClient surface <<<
         # fmt: off
         def fetch(self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "LazyDocument": ...
-        def lazy(self, url: Any, method: str = ..., **kw: Any) -> "LazyReference": ...
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "LazyReference": ...
         def summary(self, url: Any, *include: str, **kw: Any) -> "Lazy[Summary]": ...
         # fmt: on
@@ -221,6 +226,14 @@ class _ClientBase:
 
                 return getattr(Expr(Plan(root="WebClient"), core), name)
             raise AttributeError(name)
+
+    @property
+    def lazy(self) -> "LazyWebClient":
+        """A lazy recorder bound to this client: ``wc.lazy.fetch(url)`` records a
+        ``WebClient``-rooted plan on this client's core, run by ``.collect()``."""
+        from ..query.expr import lazy_root
+
+        return cast("LazyWebClient", lazy_root(self._core))
 
     @property
     def core(self) -> WebClientCore:

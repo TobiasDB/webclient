@@ -262,10 +262,10 @@ def main() -> None:
             print(f"  row:       {row['title']} {row['price']} -> {row['link'].path}")
 
         # [§8] Full-lazy trigger: .collect() runs a recorded plan directly, and
-        #      wc.lazy(url) is a lazy root bound to THIS client (companion to
-        #      collect()). Same result as wc.execute; the surface is moving lazy.
+        #      wc.lazy is a lazy recorder bound to THIS client (companion to
+        #      collect()). wc.lazy.ref(url) roots a client-bound plan.
         print("collect:    ", plan.collect()[0]["title"])
-        bound = wc.lazy(f"{base}/").resolve().select(".title").text_content
+        bound = wc.lazy.ref(f"{base}/").resolve().select(".title").text_content
         print("wc.lazy:    ", bound.collect().get())
 
         # [§8] Polars-style free wq.when()/filter() on the lazy surface.

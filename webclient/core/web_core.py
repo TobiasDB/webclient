@@ -14,7 +14,7 @@ fields + its backings' ops (see ``scripts.gen_stubs``), never hand-written.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 
 class UnsupportedOp(TypeError):
@@ -79,6 +79,26 @@ class WebCore:
     def has_op(self, op: str) -> bool:
         """Whether any chosen backing provides ``op`` (call or prop)."""
         return any(op in b.provides or op in b.props for b in self.choose())
+
+    # -- realization: an eager value is already realised -----------------------
+    def collect(self, context: Any = None) -> "Self":
+        """An eager surface is already materialised, so ``collect`` is identity
+        (the lazy recorder's ``collect`` runs the plan; this is the eager twin so
+        the same ``x.collect()`` works whether ``x`` is eager or lazy)."""
+        return self
+
+    async def acollect(self, context: Any = None) -> "Self":
+        return self
+
+    @property
+    def lazy(self) -> Any:
+        """A lazy recorder rooted at this surface (bound to it so
+        ``doc.lazy.select(...).collect()`` records then runs against this core).
+        The generated surface stubs re-type this as the matching ``Lazy`` variant
+        (``wc.lazy`` -> ``Lazy[WebClient]``, ``doc.lazy`` -> ``LazyDocument``...)."""
+        from ..query.expr import lazy_root
+
+        return lazy_root(self)
 
     # -- a core IS its own eager surface -------------------------------------
     if not TYPE_CHECKING:  # hidden from type checkers -- the eager surface stubs

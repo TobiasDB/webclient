@@ -28,17 +28,19 @@ _MISSING: Any = _Missing()
 class Expr:
     """A recorded chain rooted at a ``Plan`` (optionally bound to a client)."""
 
-    __slots__ = ("_plan", "_client")
+    __slots__ = ("_plan", "_client", "_context")
     _plan: Plan  # declared so mypy reads these, not the recording __getattr__
     _client: Any
+    _context: Any  # a materialised surface this recorder is bound to (doc.lazy)
 
-    def __init__(self, plan: Plan, client: Any = None) -> None:
+    def __init__(self, plan: Plan, client: Any = None, context: Any = None) -> None:
         object.__setattr__(self, "_plan", plan)
         object.__setattr__(self, "_client", client)
+        object.__setattr__(self, "_context", context)
 
     # -- recording -----------------------------------------------------------
     def _extend(self, step: Step) -> "Expr":
-        return Expr(self._plan.extend(step), self._client)
+        return Expr(self._plan.extend(step), self._client, self._context)
 
     def __getattr__(self, name: str) -> "Expr":
         if name.startswith("_"):  # the one safety boundary
@@ -110,6 +112,9 @@ class Expr:
     #: bound client (or the context's) via its ``execute`` machinery -- a remote
     #: client round-trips over HTTP, all the same call. Users never call a
     #: client's ``execute`` directly. These names are reserved (non-recordable).
+    def _ctx(self, context: Any) -> Any:
+        return context if context is not None else self._context
+
     def _client_for(self, context: Any) -> Any:
         client = self._client or getattr(context, "_client", None)
         if client is None:
@@ -120,19 +125,23 @@ class Expr:
 
     def collect(self, context: Any = None) -> Any:
         """Evaluate this plan and return the materialised result (sync)."""
+        context = self._ctx(context)
         return self._client_for(context).execute(self, context)
 
     async def acollect(self, context: Any = None) -> Any:
         """The async twin of ``collect`` -- ``await lazy.acollect()`` -- runs on
         the engine loop without blocking the caller's loop."""
+        context = self._ctx(context)
         return await self._client_for(context).aexecute(self, context)
 
     def stream(self, context: Any = None) -> Any:
         """Yield the plan's rows one at a time (sync iterator)."""
+        context = self._ctx(context)
         return self._client_for(context).execute(self, context, stream=True)
 
     def astream(self, context: Any = None) -> Any:
         """Yield the plan's rows one at a time (async iterator)."""
+        context = self._ctx(context)
         return self._client_for(context).astream(self, context)
 
     @property
@@ -153,6 +162,20 @@ def lazy(cls: type[T], *, plan: Plan | None = None, client: Any = None) -> T:
     """A recording root for ``cls`` -- statically ``cls``, at runtime an
     ``Expr``."""
     return cast(T, Expr(plan or Plan(root=cls.__name__), client))
+
+
+def lazy_root(core: Any) -> "Expr":
+    """A lazy recorder rooted at a materialised surface ``core`` -- exposed as its
+    ``.lazy`` property (see ``WebCore.lazy``).
+
+    An engine core (client / session -- it has ``execute``) roots a ``WebClient``
+    plan bound to itself, so ``wc.lazy.fetch(url).collect()`` records the verbs and
+    runs them on that engine. Any other resolved surface (a document / reference)
+    binds itself as the recorder's *context*, so ``doc.lazy.select(...).collect()``
+    records a chain and runs it against that document."""
+    if hasattr(core, "execute"):  # an engine core drives its own authoring verbs
+        return Expr(Plan(root="WebClient"), client=core)
+    return Expr(Plan(), client=getattr(core, "_client", None), context=core)
 
 
 def from_plan(plan: Plan | dict[str, Any], client: Any = None) -> Expr:
@@ -289,6 +312,7 @@ wq = WebQuery()
 __all__ = [
     "Expr",
     "lazy",
+    "lazy_root",
     "from_plan",
     "to_arg",
     "reference",

@@ -103,7 +103,7 @@ for _card in _page.select_all(".card"):  # iterating a Collection yields the ele
 
 # -- two-tier client surface: entry points lazy; collect() -> eager ----------
 assert_type(_wc.ref("https://e.com"), LazyReference)
-assert_type(_wc.lazy("https://e.com"), LazyReference)
+assert_type(_wc.lazy.ref("https://e.com"), LazyReference)
 assert_type(_wc.fetch("https://e.com"), LazyDocument)
 assert_type(_wc.summary("https://e.com").collect(), Summary)
 assert_type(_wc.fetch("https://e.com").summary().collect(), Summary)
