@@ -3,6 +3,41 @@
 *Status: design (research-driven). Build base for the resiliency feature. Planning
 only — no code yet. Composes with the Summary `probe` facet (its read-side).*
 
+## Update (2026-09-14) — confirmed decisions & current architecture
+
+**Decisions locked:**
+- **API:** each concern kwarg accepts **`Policy | "auto" | None`** — a Policy object
+  to configure manually, `"auto"` for cheapest-first / escalate-on-evidence, or
+  omitted = off/inherit. Bare `resolve()` / `fetch()` stays **static-only**;
+  escalation is opt-in (like today's retries).
+- **Home:** the five Policy models + the `Resolve` bundle are pydantic value models,
+  so they follow the per-package `models.py` convention → **`core/reference/models.py`**
+  (a `Reference` is "a resolvable request spec"; it sits low in the dep graph, so the
+  client/session import `Resolve` for their default field and a `Reference` can carry a
+  `resolve: Resolve` override with no cycle).
+
+**Re-grounding on the current code (names/anchors have moved):**
+- Cores are `WebClient` / `Document` / `Reference` / `Session` (no `Core` suffix), each
+  implementing a generated `I<Core>` interface (fields + ops) in its `models.py`.
+  Policies are **Core Fields** → a default `resolve: Resolve` on `IWebClient` (optional
+  on `IReference`); **no new surface classes** (the core IS the surface).
+- `WebClient.afetch(ref, *, optional, browser)` is still the single transport entry —
+  the ladder + `_aresolve_laddered(ref, policy)` live here (machinery, not a backing).
+  `Reference.resolve(...)` (ResolveBacking) and `WebClient.fetch` thread the per-call
+  policy in; **every higher verb — `search`, and `crawl` / `sitemap` — funnels through
+  `afetch`, so policies apply to them for free.**
+- **Read-side is already built:** the `Probe` facet exists (`core/document/models.py`).
+  P0 adds `Document._probe: ProbeRecord | None` the ladder writes; the facet reads it.
+  Composes with the "top-of-class Summary" work.
+- Detection stays pure (`webclient/resiliency/detect.py`) so the `remote` core-swap runs
+  the identical ladder server-side; the crawl/service tiers inherit it unchanged.
+
+**P0 (first commit, zero behaviour change):** the 5 models + `Resolve` in
+`core/reference/models.py`; map today's `retries` / `retry_backoff` / `min_interval` /
+`proxy` onto `RetryPolicy` / `RatePolicy` / `ProxyPolicy`; add the `resolve=` default
+field + per-call kwargs (carried, not yet acted on); add `Document._probe` + populate
+the `Probe` facet trivially (`was_browser_required` from the browser flag).
+
 The caller writes, per concern:
 
 ```python
