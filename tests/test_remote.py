@@ -206,3 +206,16 @@ def test_remote_client_times_out_on_a_hung_service(httpserver):
     with pytest.raises(httpx.TimeoutException):
         rc.fetch("https://example.com").collect()
     rc.close()
+
+
+def test_remote_surfaces_a_structured_error(remote):
+    """A server-side fetch failure comes back as a RemoteError carrying the
+    structured WebError, so `.error.retriable` works the same as locally."""
+    rc, server = remote
+    server.expect_request("/boom").respond_with_data("no", status=500)
+    with pytest.raises(RemoteError) as info:
+        rc.fetch(server.url_for("/boom")).collect()
+    err = info.value.error
+    assert err is not None
+    assert err.type == "HTTPStatus"
+    assert err.status_code == 500 and err.retriable is True

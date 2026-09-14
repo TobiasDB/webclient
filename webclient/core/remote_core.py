@@ -86,9 +86,16 @@ class RemoteWebClientCore(WebClientCore):
             f"{self.url}/execute", json=body, headers=self._headers()
         )
         if not (200 <= resp.status_code < 300):
-            from ..errors import RemoteError
+            from ..errors import RemoteError, WebError
 
-            raise RemoteError(resp.status_code, resp.text[:200])
+            err: WebError | None = None
+            try:  # the service sends {"error": {type, message, status_code, ...}}
+                payload = resp.json()
+                if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+                    err = WebError(**payload["error"])
+            except Exception:
+                pass
+            raise RemoteError(resp.status_code, resp.text[:200], error=err)
         return self._deserialize(resp.json()["rows"])
 
     def _deserialize(self, rows: Any) -> Any:

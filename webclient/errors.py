@@ -77,11 +77,16 @@ FetchError = WebException
 
 
 class RemoteError(Exception):
-    """A remote ``/execute`` call returned a non-2xx response."""
+    """A remote ``/execute`` call returned a non-2xx response. ``error`` carries
+    the server's structured ``WebError`` when it sent one (so ``.error.retriable``
+    works the same as on a local failure)."""
 
-    def __init__(self, status_code: int, detail: str = "") -> None:
+    def __init__(
+        self, status_code: int, detail: str = "", error: "WebError | None" = None
+    ) -> None:
         super().__init__(f"remote execute failed: {status_code} {detail}".strip())
         self.status_code = status_code
+        self.error = error
 
 
 def error_for(status_code: int, message: str = "") -> WebError:
