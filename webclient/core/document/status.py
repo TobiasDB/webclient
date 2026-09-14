@@ -18,6 +18,7 @@ class StatusBacking(Backing):
 
     provides = frozenset({"is_ok", "is_empty", "ref", "reload"})
     props = frozenset({"message"})
+    io = frozenset({"reload"})  # re-resolves -> awaitable under async
     gate = "ok"
 
     def applies(self, core: "DocumentCore") -> bool:
@@ -29,9 +30,10 @@ class StatusBacking(Backing):
 
     def reload(self, core: "DocumentCore") -> "DocumentCore":
         """Re-resolve on a fresh page, replaying the recorded action chain --
-        available even after the page was released."""
+        available even after the page was released. IO -> dispatched through the
+        client's ``bridge`` (blocks for sync, awaitable for async)."""
         return cast(
-            "DocumentCore", core._client.loop().run(core._client._areload(core))
+            "DocumentCore", core._client.bridge(core._client._areload(core))
         )
 
     def is_ok(self, core: "DocumentCore") -> "Field[bool]":
