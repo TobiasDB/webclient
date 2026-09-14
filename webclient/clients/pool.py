@@ -14,7 +14,7 @@ import asyncio
 
 from pydantic import BaseModel
 
-from .engine.clients import Client, ClientFactory
+from .base import Client, ClientFactory
 
 
 class PoolStats(BaseModel):

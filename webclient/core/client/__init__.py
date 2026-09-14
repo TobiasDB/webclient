@@ -17,7 +17,7 @@ from typing import Any, ClassVar, Self, cast
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
-from ...engine import http as engine_http
+from ...clients import charset_of, sniff_kind
 from ...engine.loop import EngineLoop
 from ...errors import WebError, WebException, error_for
 from ...events import EventBus
@@ -165,8 +165,7 @@ class WebClientCore(WebCore, BaseModel):
         """Build the transport pool eagerly (cheap -- no browser launch until a
         page is leased) so it is never lazily created from two threads at once.
         Sessions override this to share the parent's pool."""
-        from ...engine.clients import BrowserFactory, HTTPXFactory
-        from ...pool import ClientPool
+        from ...clients import BrowserFactory, ClientPool, HTTPXFactory
 
         self._pool = ClientPool(
             {"http": HTTPXFactory(), "page": BrowserFactory(init_script=_live.INIT_JS)},
@@ -338,7 +337,7 @@ class WebClientCore(WebCore, BaseModel):
             )
             doc._client = self
             return doc, None
-        kind = engine_http.sniff_kind(resp.headers.get("content-type"), resp.content)
+        kind = sniff_kind(resp.headers.get("content-type"), resp.content)
         doc = DocumentCore(
             url=ref.dispatch("url"),
             final_url=str(resp.url),
@@ -347,7 +346,7 @@ class WebClientCore(WebCore, BaseModel):
             status_code=resp.status_code,
             response_headers=dict(resp.headers),
             elapsed=time.monotonic() - start,
-            encoding=engine_http.charset_of(resp.headers.get("content-type")),
+            encoding=charset_of(resp.headers.get("content-type")),
         )
         doc._client = self
         doc._set_cookies = dict(resp.cookies)  # httpx parses Set-Cookie correctly

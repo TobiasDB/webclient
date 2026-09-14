@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from ..core.document import Element
     from ..events import EventBus
     from ..models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
-    from ..pool import ClientPool
+    from ..clients import ClientPool
     from ..summary import Metadata, Runtime, Structure, Summary, Transport
     from .lazy import LazyDocument, LazyReference, LazyWebClient
 
