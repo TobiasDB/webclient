@@ -25,6 +25,19 @@ def _norm(text: str) -> str:
     return " ".join(text.split())
 
 
+def tree(core: "DocumentCore") -> Any:
+    """The parsed lxml root for a document (an element sub-core is its own
+    element; otherwise parse ``content`` once and cache it on the core). Shared
+    by ``HtmlBacking`` and the summary facets."""
+    if core._element is not None:
+        return core._element
+    if core._tree is None:
+        from lxml import html as _lh
+
+        core._tree = _lh.fromstring(_decode(core) or "<html></html>")
+    return core._tree
+
+
 def _tag(el: Any) -> str:
     return el.tag.lower() if isinstance(el.tag, str) else ""
 
@@ -230,13 +243,7 @@ class HtmlBacking(Backing):
         raise LookupError(f"no html render format {format!r}")
 
     def _tree(self, core: "DocumentCore") -> Any:
-        if core._element is not None:
-            return core._element
-        if core._tree is None:
-            from lxml import html as _lh
-
-            core._tree = _lh.fromstring(_decode(core) or "<html></html>")
-        return core._tree
+        return tree(core)
 
     def _find(self, core: "DocumentCore", selector: str) -> list[Any]:
         if selector.rstrip().endswith(("text()",)) or "/@" in selector:

@@ -32,6 +32,7 @@ from webclient.collection import Field  # noqa: E402
 from webclient.core.client import WebClientCore  # noqa: E402
 from webclient.core.document import DocumentCore, Element  # noqa: E402
 from webclient.core.reference import ReferenceCore  # noqa: E402
+from webclient.summary import Metadata, Structure, Transport  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SURFACES = ROOT / "webclient" / "surfaces.py"
@@ -54,6 +55,9 @@ _NS = {
     "WebClientCore": WebClientCore,
     "Field": Field,
     "Element": Element,
+    "Transport": Transport,
+    "Metadata": Metadata,
+    "Structure": Structure,
     "Any": Any,
 }
 _SCALAR = {str: "str", int: "int", float: "float", bytes: "bytes", bool: "bool"}
