@@ -1,4 +1,4 @@
-"""Remote backend: a ``WebClientCore`` in ``"remote"`` dispatch mode.
+"""Remote backend: a ``WebClient`` in ``"remote"`` dispatch mode.
 
 Remote is not a separate client or a special surface -- it is the SAME cores in a
 third dispatch mode (see ``WebCore._dispatch_mode``): every op that needs the
@@ -6,8 +6,8 @@ server (IO ops, and every content op on a server-side document handle) is
 recorded onto the core's remote root and ``collect``ed in one round-trip to a
 ``webclient.service`` app, so a ``WebClient`` over it builds the very same plans
 with no local browser or lxml -- only httpx + pydantic. A fetched document comes
-back as a real ``DocumentCore`` (a lightweight handle: id/kind/ok inline, its
-content ops round-trip), a reference as a real ``ReferenceCore`` -- no bespoke
+back as a real ``Document`` (a lightweight handle: id/kind/ok inline, its
+content ops round-trip), a reference as a real ``Reference`` -- no bespoke
 handle type, no interface exceptions. Batch a chain/fan-out with ``.lazy``.
 """
 
@@ -19,17 +19,17 @@ import httpx
 from pydantic import PrivateAttr
 
 from ...query.expr import Expr
-from ..client import WebClientCore, _materialize
-from ..document import DocumentCore
-from ..reference import ReferenceCore
+from ..client import WebClient, _materialize
+from ..document import Document
+from ..reference import Reference
 
 
 def _url_of(source: dict[str, Any]) -> str:
-    return cast(str, ReferenceCore(**source).dispatch("url"))
+    return cast(str, Reference(**source).dispatch("url"))
 
 
-class RemoteWebClientCore(WebClientCore):
-    """A ``WebClientCore`` in ``"remote"`` mode: its ``execute`` POSTs one Plan to
+class RemoteWebClientCore(WebClient):
+    """A ``WebClient`` in ``"remote"`` mode: its ``execute`` POSTs one Plan to
     ``/execute`` instead of running locally, and ``WebCore``'s remote dispatcher
     turns every server-needing op into such a POST. The surface is unchanged; only
     the dispatch mode differs."""
@@ -69,7 +69,7 @@ class RemoteWebClientCore(WebClientCore):
         # recorded Expr by its plan.
         if getattr(context, "_remote_handle", False):
             body["document_id"] = context.id
-        elif isinstance(context, ReferenceCore):
+        elif isinstance(context, Reference):
             body["url"] = context.dispatch("url")
         elif isinstance(context, Expr):
             body["context_plan"] = context._plan.model_dump()
@@ -96,18 +96,18 @@ class RemoteWebClientCore(WebClientCore):
         if isinstance(rows, dict) and "__doc__" in rows:
             return self._doc_handle(rows["__doc__"])
         if isinstance(rows, dict) and "__ref__" in rows:
-            ref = ReferenceCore(**rows["__ref__"])
+            ref = Reference(**rows["__ref__"])
             ref._client = self
             return ref
         if isinstance(rows, list):
             return [self._deserialize(r) for r in rows]
         return rows
 
-    def _doc_handle(self, meta: dict[str, Any]) -> DocumentCore:
-        """A server-side document as a real ``DocumentCore``: id/kind/ok are inline
+    def _doc_handle(self, meta: dict[str, Any]) -> Document:
+        """A server-side document as a real ``Document``: id/kind/ok are inline
         (``status_code`` set so the ``ok`` property agrees), content ops round-trip
         (``_remote_handle``)."""
-        doc = DocumentCore(
+        doc = Document(
             url="",
             kind=meta.get("kind", "html"),
             status_code=200 if meta.get("ok", True) else 502,
@@ -154,7 +154,7 @@ class RemoteWebSessionCore(RemoteWebClientCore):
     def model_post_init(self, ctx: Any) -> None:
         # share the parent's http (set in ``_bind``) -- don't open our own; skip
         # RemoteWebClientCore.model_post_init (which would) and just mark the mode.
-        WebClientCore.model_post_init(self, ctx)
+        WebClient.model_post_init(self, ctx)
         self._mode = "remote"
 
     def _bind(

@@ -1,12 +1,12 @@
-"""DocumentCore: the core behind a document.
+"""Document: the core behind a document.
 
 Core Fields = the resolved response (the surface's data). Backings = per-medium
 op providers, one module each: :mod:`.html` (HtmlBacking -- css/xpath select,
 attr, text_content, render), :mod:`.json` (JsonBacking -- dotted path),
 :mod:`.status` (StatusBacking -- ok/error/is_ok/reload/summary), :mod:`.events`
 (EventBacking) and :mod:`..live` (LiveBacking -- browser interaction). A selected
-element is itself a DocumentCore (subtree / json sub-value), so selection nests:
-a selection backing asks the core for the child via ``DocumentCore._sub`` (it owns
+element is itself a Document (subtree / json sub-value), so selection nests:
+a selection backing asks the core for the child via ``Document._sub`` (it owns
 the sub-core wiring), and the ``Element`` value type lives in :mod:`...models`.
 """
 
@@ -33,11 +33,11 @@ from .summary import (
 
 if TYPE_CHECKING:
     from ...surfaces.lazy import LazyDocument
-    from ..client import WebClientCore  # noqa: F401
-    from ..reference import ReferenceCore
+    from ..client import WebClient  # noqa: F401
+    from ..reference import Reference
 
 
-class DocumentCore(WebCore, IDocument):
+class Document(WebCore, IDocument):
     """A resolved resource's core (+ element sub-cores). Its Core Fields + eager
     ops come from the ``IDocument`` model/interface it inherits (:mod:`.models`);
     this core adds the behaviour -- the backings, dispatch, and ``_sub`` (the
@@ -48,9 +48,9 @@ class DocumentCore(WebCore, IDocument):
         @property
         def lazy(self) -> "LazyDocument": ...
 
-    # non-optional: a document is client-bound before any op (see ReferenceCore).
-    _client: "WebClientCore" = PrivateAttr(default=None)  # type: ignore[assignment]
-    _ref: "ReferenceCore | None" = PrivateAttr(default=None)  # producing reference
+    # non-optional: a document is client-bound before any op (see Reference).
+    _client: "WebClient" = PrivateAttr(default=None)  # type: ignore[assignment]
+    _ref: "Reference | None" = PrivateAttr(default=None)  # producing reference
     _element: Any = PrivateAttr(default=None)  # lxml element / json sub-value
     _tree: Any = PrivateAttr(default=None)  # cached lxml parse
     _data: Any = PrivateAttr(default=None)  # cached json
@@ -86,8 +86,8 @@ class DocumentCore(WebCore, IDocument):
             return False
         return 200 <= self.status_code < 300 or self.status_code == 0
 
-    def _sub(self, node: Any) -> "DocumentCore":
-        """A selected element / sub-value as a child ``DocumentCore`` rooted at
+    def _sub(self, node: Any) -> "Document":
+        """A selected element / sub-value as a child ``Document`` rooted at
         this one -- a ``None`` node means the selection missed (a not-ok, empty
         sub-document). The core owns this construction so a selection backing
         (html / json) never hand-wires a sub-core's internals (client, root, the
@@ -100,7 +100,7 @@ class DocumentCore(WebCore, IDocument):
                 content = _lh.tostring(node)  # the element's own bytes
             except Exception:
                 content = b""
-        sub = DocumentCore(
+        sub = Document(
             url=self.url,
             final_url=self.final_url,
             kind=self.kind,
@@ -115,4 +115,4 @@ class DocumentCore(WebCore, IDocument):
         return sub
 
 
-__all__ = ["DocumentCore", "Element", "HtmlBacking", "JsonBacking"]
+__all__ = ["Document", "Element", "HtmlBacking", "JsonBacking"]

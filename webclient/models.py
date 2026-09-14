@@ -53,7 +53,7 @@ class NetworkEvent(Event):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     topic: Topic = "network"
-    request: Any = None  # the ReferenceCore for this request
+    request: Any = None  # the Reference for this request
     status_code: int | None = None
     body: bytes | None = None
     resource_type: str | None = None  # browser sub-request kind: xhr/fetch/document/...

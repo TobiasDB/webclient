@@ -58,7 +58,7 @@ def _serialize(value: Any, store: dict[str, Any]) -> Any:
         store[value.name] = value
         handle = {"id": value.name, "kind": value.kind, "ok": value.ok}
         return {"__doc__": handle}
-    if isinstance(value, Reference):  # rebuilt client-side as a real ReferenceCore
+    if isinstance(value, Reference):  # rebuilt client-side as a real Reference
         return {"__ref__": value.model_dump(mode="json")}
     if isinstance(value, list):
         return [_serialize(v, store) for v in value]

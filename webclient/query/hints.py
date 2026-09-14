@@ -33,15 +33,15 @@ def _ns() -> dict[str, Any]:
     global _NS
     if _NS is None:
         from ..collection import Collection, Field
-        from ..core.client import WebClientCore
-        from ..core.document import DocumentCore, Element
-        from ..core.reference import HttpMethod, ReferenceCore
+        from ..core.client import WebClient
+        from ..core.document import Document, Element
+        from ..core.reference import HttpMethod, Reference
         from ..summary import Metadata, Runtime, Structure, Summary, Transport
 
         _NS = {
-            "ReferenceCore": ReferenceCore,
-            "DocumentCore": DocumentCore,
-            "WebClientCore": WebClientCore,
+            "Reference": Reference,
+            "Document": Document,
+            "WebClient": WebClient,
             "Element": Element,
             "Field": Field,
             "Collection": Collection,

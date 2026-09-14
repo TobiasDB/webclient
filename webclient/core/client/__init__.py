@@ -1,4 +1,4 @@
-"""WebClientCore: the engine core.
+"""WebClient: the engine core.
 
 Holds the engine loop, a ``ClientPool`` (leasing http clients + browser pages),
 the event bus, registered backings (``use``) and name scopes, and the machinery that drives
@@ -23,8 +23,8 @@ from ...errors import WebError, WebException
 from ...events import EventBus
 from ...models import NavigationEvent, NetworkEvent, PlanEvent
 from ...query.executor import aevaluate, astream, evaluate
-from ..document import DocumentCore
-from ..reference import ReferenceCore, from_url
+from ..document import Document
+from ..reference import Reference, from_url
 from ..web_core import Backing, WebCore
 from .fetch import FetchBacking
 from .loop import EngineLoop
@@ -32,7 +32,7 @@ from .models import IWebClient
 from .search import SearchBacking
 
 if TYPE_CHECKING:
-    from ..session import WebSessionCore
+    from ..session import Session
     from ...surfaces.lazy import LazyWebClient
 
 
@@ -111,7 +111,7 @@ class NameScope:
             return len(self._items)
 
 
-class WebClientCore(WebCore, IWebClient):
+class WebClient(WebCore, IWebClient):
     """The engine: its Core Fields (policy) + eager verbs come from the
     ``IWebClient`` model/interface it inherits (:mod:`.models`); this core adds the
     machinery (loop, ClientPool, bus, name scopes, transport + plan execution). Its
@@ -264,7 +264,7 @@ class WebClientCore(WebCore, IWebClient):
     async def __aexit__(self, *exc: object) -> None:
         await self.aclose()
 
-    async def _host_blocked(self, ref: ReferenceCore) -> bool:
+    async def _host_blocked(self, ref: Reference) -> bool:
         """Whether ``ref``'s host resolves to a loopback / private / link-local /
         reserved address (the SSRF guard, when ``block_private_hosts``). Resolves
         names too, so a public name pointing at an internal IP is caught; an
@@ -299,7 +299,7 @@ class WebClientCore(WebCore, IWebClient):
             return False  # unresolvable -> let the transport surface the failure
         return any(_ip_blocked(str(info[4][0])) for info in infos)
 
-    # -- transport (machinery): resolve a ReferenceCore -> DocumentCore ------
+    # -- transport (machinery): resolve a Reference -> Document ------
     async def _pace(self, host: str) -> None:
         """Politeness: keep at least ``min_interval`` seconds between requests to
         ``host`` (best-effort; concurrent same-host fetches may still bunch -- a
@@ -313,8 +313,8 @@ class WebClientCore(WebCore, IWebClient):
         self._host_next[host] = time.monotonic() + self.min_interval
 
     async def _afetch_once(
-        self, ref: ReferenceCore, headers: dict[str, str]
-    ) -> "tuple[DocumentCore, Any]":
+        self, ref: Reference, headers: dict[str, str]
+    ) -> "tuple[Document, Any]":
         """One transport attempt: lease an http client from the pool and let it do
         the fetch (the client owns request + response interpretation). Binds the
         resulting document to this core; never raises, never registers -- the
@@ -328,8 +328,8 @@ class WebClientCore(WebCore, IWebClient):
         return doc, resp
 
     async def afetch(
-        self, ref: ReferenceCore, *, optional: bool = False, browser: bool = False
-    ) -> DocumentCore:
+        self, ref: Reference, *, optional: bool = False, browser: bool = False
+    ) -> Document:
         """Resolve ``ref`` into a document over a leased transport (http) or a
         browser page. The core's own IO -- the ``fetch`` backing verb records a
         plan; this is what the executor runs when that plan resolves. A retriable
@@ -338,7 +338,7 @@ class WebClientCore(WebCore, IWebClient):
         import asyncio
 
         if self.block_private_hosts and await self._host_blocked(ref):
-            doc = DocumentCore(
+            doc = Document(
                 url=ref.dispatch("url"),
                 status_code=0,
                 error=WebError(
@@ -430,11 +430,11 @@ class WebClientCore(WebCore, IWebClient):
         ttl: float | None = None,
         headers: dict[str, str] | None = None,
         **kw: Any,
-    ) -> "WebSessionCore":
-        """A new session sharing this engine (a scoped ``WebSessionCore``)."""
-        from ..session import WebSessionCore
+    ) -> "Session":
+        """A new session sharing this engine (a scoped ``Session``)."""
+        from ..session import Session
 
-        core = WebSessionCore(ttl=ttl, session_headers=headers or {}, **kw)
+        core = Session(ttl=ttl, session_headers=headers or {}, **kw)
         core.bind(self)
         return core
 
@@ -452,13 +452,13 @@ class WebClientCore(WebCore, IWebClient):
         (``inject_script``) plus the ones its document backings + registered
         backings declare. The backing owns the script; the client installs it."""
         scripts = list(self._page_scripts)
-        for backing in (*DocumentCore.BACKINGS, *self._backings):
+        for backing in (*Document.BACKINGS, *self._backings):
             scripts.extend(backing.page_scripts)
         return scripts
 
     async def _alive(
-        self, ref: ReferenceCore, replay: list[dict[str, Any]] | None = None
-    ) -> DocumentCore:
+        self, ref: Reference, replay: list[dict[str, Any]] | None = None
+    ) -> Document:
         lease = await self.pool.lease("page")
         browser = cast(Any, lease.client)  # the leased BrowserClient (subclass)
         try:
@@ -471,7 +471,7 @@ class WebClientCore(WebCore, IWebClient):
                 scripts=self._browser_scripts(),
                 replay=replay or [],
             )
-            doc = DocumentCore(
+            doc = Document(
                 url=ref.dispatch("url"),
                 final_url=result.final_url,
                 kind="html",
@@ -489,7 +489,7 @@ class WebClientCore(WebCore, IWebClient):
             await self.pool.release(lease)  # never leak the page lease on failure
             raise
 
-    async def areload(self, core: DocumentCore) -> DocumentCore:
+    async def areload(self, core: Document) -> Document:
         ref = core._ref
         if ref is None:
             raise ValueError("cannot reload a document with no source reference")
@@ -497,7 +497,7 @@ class WebClientCore(WebCore, IWebClient):
             return await self._alive(ref, replay=list(ref.actions))
         return await self.afetch(ref)  # plain HTTP refetch
 
-    def release(self, doc: DocumentCore) -> None:
+    def release(self, doc: Document) -> None:
         """Return a live document's page lease to the pool."""
         if doc._lease is not None:
             self.loop().run(self.pool.release(doc._lease))
@@ -505,7 +505,7 @@ class WebClientCore(WebCore, IWebClient):
             doc._page = None
 
     # -- naming / recovery ---------------------------------------------------
-    def _register(self, doc: DocumentCore, ref: ReferenceCore) -> None:
+    def _register(self, doc: Document, ref: Reference) -> None:
         """Give the reference and document scoped names in the owning scope
         (a session's, else the client's) and index them for recovery."""
         import time
@@ -519,26 +519,26 @@ class WebClientCore(WebCore, IWebClient):
         doc.created = doc.accessed = time.time()
         doc._ref = ref
 
-    def document(self, name: str) -> DocumentCore | None:
+    def document(self, name: str) -> Document | None:
         """Recover a materialised document by name from any live scope."""
         import time
 
         for scope in self._scopes():
             obj = scope.get(name)
-            if isinstance(obj, DocumentCore):
+            if isinstance(obj, Document):
                 obj.accessed = time.time()
                 return obj
         return None
 
-    def reference(self, name: str) -> ReferenceCore | None:
+    def reference(self, name: str) -> Reference | None:
         """Recover a reference by its (root) name from any live scope."""
         for scope in self._scopes():
             obj = scope.get(name)
-            if isinstance(obj, ReferenceCore):
+            if isinstance(obj, Reference):
                 return obj
         return None
 
-    def _capture(self, doc: DocumentCore, ref: ReferenceCore, resp: Any) -> None:
+    def _capture(self, doc: Document, ref: Reference, resp: Any) -> None:
         """Emit a NavigationEvent per redirect hop plus a final NetworkEvent,
         routed onto the document and published on the bus."""
         events: list[Any] = []
@@ -564,32 +564,32 @@ class WebClientCore(WebCore, IWebClient):
         doc._events.extend(events)
 
 
-_DEFAULT: "WebClientCore | None" = None
+_DEFAULT: "WebClient | None" = None
 
 
-def default_client() -> WebClientCore:
+def default_client() -> WebClient:
     """The process-local shared engine, used wherever an operation has no bound
     client -- an unbound reference/plan (``reference(url).resolve()``), a lazy
     root collected without a client, etc. Recreated after it is closed, so every
     such op shares ONE engine (pool + loop) instead of spinning up throwaways."""
     global _DEFAULT
     if _DEFAULT is None or _DEFAULT._closed:
-        _DEFAULT = WebClientCore()
+        _DEFAULT = WebClient()
     return _DEFAULT
 
 
-def async_client(**policy: Any) -> WebClientCore:
-    """A ``WebClientCore`` in async-dispatcher mode: loop-native (its IO runs on
+def async_client(**policy: Any) -> WebClient:
+    """A ``WebClient`` in async-dispatcher mode: loop-native (its IO runs on
     the caller's loop, so ``doc = await ac.fetch(url)``). Not a subclass -- the
     mode is an instance flag read by ``bridge``; the async surface is the same
     core typed through the ``Async*`` stubs. Backs ``surfaces.AsyncWebClient``."""
-    core = WebClientCore(**policy)
+    core = WebClient(**policy)
     core._mode = "async"
     return core
 
 
 __all__ = [
-    "WebClientCore",
+    "WebClient",
     "async_client",
     "default_client",
     "NameScope",

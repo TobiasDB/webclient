@@ -1,4 +1,4 @@
-"""ReferenceCore: the core behind a reference -- a request spec.
+"""Reference: the core behind a reference -- a request spec.
 
 Core Fields = the request spec. Backings provide the derivations (``url`` prop,
 ``with_params`` / ``replace`` / ``join`` -- :mod:`.derive`) and ``resolve`` (via
@@ -18,12 +18,12 @@ from .models import HttpMethod, IReference  # noqa: F401  (HttpMethod re-exporte
 from .resolve import ResolveBacking
 
 if TYPE_CHECKING:
-    from ..client import WebClientCore
-    from ..session import WebSessionCore
+    from ..client import WebClient
+    from ..session import Session
     from ...surfaces.lazy import LazyReference
 
 
-class ReferenceCore(WebCore, IReference):
+class Reference(WebCore, IReference):
     """A (re)resolvable request spec. Its Core Fields + eager ops come from the
     ``IReference`` model/interface it inherits (:mod:`.models`); this core adds the
     behaviour -- ``resolve`` dispatches to the bound client (ResolveBacking), ``url``
@@ -37,15 +37,15 @@ class ReferenceCore(WebCore, IReference):
     # typed non-optional: a core is bound to its client before any op runs (an
     # unbound resolve gets a default via ``WebCore._bridge_io``). ``_session`` is
     # genuinely optional (only session-scoped references have one).
-    _client: "WebClientCore" = PrivateAttr(default=None)  # type: ignore[assignment]
-    _session: "WebSessionCore | None" = PrivateAttr(default=None)
+    _client: "WebClient" = PrivateAttr(default=None)  # type: ignore[assignment]
+    _session: "Session | None" = PrivateAttr(default=None)
     _surface: Any = PrivateAttr(default=None)  # the core's single eager surface
 
     @property
     def ok(self) -> bool:
         return bool(self.hostname)  # a well-formed request spec
 
-    def _derive(self, copy: "ReferenceCore") -> "ReferenceCore":
+    def _derive(self, copy: "Reference") -> "Reference":
         """A derived reference: unnamed, rooted at this one, with a fresh surface
         slot (``model_copy`` carries private attrs, else the stale surface). The
         core owns this construction so the derive backing never hand-wires it."""
@@ -63,15 +63,15 @@ def from_url(
     params: dict[str, str | list[str]] | None = None,
     headers: dict[str, str] | None = None,
     cookies: dict[str, str] | None = None,
-) -> ReferenceCore:
-    """Build a ReferenceCore from a URL string."""
+) -> Reference:
+    """Build a Reference from a URL string."""
     parsed = urlparse(url)
     query: dict[str, str | list[str]] = {
         k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed.query).items()
     }
     if params:
         query.update(params)
-    return ReferenceCore(
+    return Reference(
         hostname=parsed.hostname or "",
         method=method,
         scheme=parsed.scheme or "https",
@@ -85,7 +85,7 @@ def from_url(
 
 
 __all__ = [
-    "ReferenceCore",
+    "Reference",
     "DeriveBacking",
     "ResolveBacking",
     "HttpMethod",

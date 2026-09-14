@@ -1,6 +1,6 @@
 """Live page backing (M4): interaction on a real browser page.
 
-A live ``DocumentCore`` carries a playwright ``_page``; this backing provides
+A live ``Document`` carries a playwright ``_page``; this backing provides
 the interaction set (``click`` / ``write`` / ``wait_for``), live selection, and
 ``reload``. Every op runs on the engine loop (where the browser lives) and
 bridges back synchronously, so the eager surface stays sync. Console messages
@@ -23,7 +23,7 @@ from ...models import ActionEvent, ConsoleEvent, DOMUpdateEvent, NetworkEvent
 from ..web_core import Backing
 
 if TYPE_CHECKING:
-    from . import DocumentCore
+    from . import Document
 
 #: installed on every navigation -- an id-path-tagging MutationObserver feeding
 #: ``window.__wc_mutations`` (see ``LiveBacking.page_scripts``).
@@ -141,7 +141,7 @@ class LiveBacking(Backing):
         *,
         timeout: float | None = None,
         optional: bool = False,
-    ) -> "DocumentCore":
+    ) -> "Document":
         await self._aact(
             core, "click", selector=selector, timeout=timeout, optional=optional
         )
@@ -155,7 +155,7 @@ class LiveBacking(Backing):
         *,
         timeout: float | None = None,
         optional: bool = False,
-    ) -> "DocumentCore":
+    ) -> "Document":
         await self._aact(
             core, "write", selector=selector, text=text, timeout=timeout, optional=optional
         )
@@ -163,7 +163,7 @@ class LiveBacking(Backing):
 
     async def wait_for(
         self, core: Any, selector: str | None = None, *, timeout: float | None = None
-    ) -> "DocumentCore":
+    ) -> "Document":
         await self._await_for(core, selector, timeout)
         return core
 
@@ -172,22 +172,22 @@ class LiveBacking(Backing):
     # engine loop here (a live+async selection is an untested edge).
     def select(
         self, core: Any, selector: str, *, index: int = 0, error: Any = None
-    ) -> "DocumentCore":
+    ) -> "Document":
         return cast(
-            "DocumentCore",
+            "Document",
             self._loop(core).run(self._aselect(core, selector, index, error)),
         )
 
-    def select_all(self, core: Any, selector: str) -> "list[DocumentCore]":
+    def select_all(self, core: Any, selector: str) -> "list[Document]":
         return cast(
-            "list[DocumentCore]",
+            "list[Document]",
             self._loop(core).run(self._aselect_all(core, selector)),
         )
 
     async def evaluate(self, core: Any, script: str) -> Any:
         return await core._page.evaluate(script)
 
-    async def screenshot(self, core: Any, selector: str | None = None) -> "DocumentCore":
+    async def screenshot(self, core: Any, selector: str | None = None) -> "Document":
         return await self._ashot(core, selector)
 
     # -- async bodies --------------------------------------------------------
@@ -247,11 +247,11 @@ class LiveBacking(Backing):
         await drain(core)
 
     async def _ashot(self, core: Any, selector: str | None) -> Any:
-        from . import DocumentCore
+        from . import Document
 
         target = core._page if selector is None else core._page.locator(selector).first
         data = await target.screenshot(type="png")
-        shot = DocumentCore(
+        shot = Document(
             url=core.url, kind="binary", content=data, status_code=core.status_code
         )
         shot._client = core._client
@@ -259,18 +259,18 @@ class LiveBacking(Backing):
 
     async def _aselect(self, core: Any, selector: str, index: int, error: Any) -> Any:
         from ...errors import RETURN
-        from . import DocumentCore
+        from . import Document
 
         loc = core._page.locator(selector)
         if await loc.count() <= index:
             if error is not RETURN:  # live select is loud by default
                 raise LookupError(f"no match for {selector!r}")
-            sub = DocumentCore(url=core.url, kind="html", status_code=core.status_code)
+            sub = Document(url=core.url, kind="html", status_code=core.status_code)
             sub._client = core._client
             sub._missing = True
             return sub
         html = await loc.nth(index).evaluate("el => el.outerHTML")
-        sub = DocumentCore(
+        sub = Document(
             url=core.url,
             final_url=core.final_url,
             kind="html",
@@ -289,13 +289,13 @@ class LiveBacking(Backing):
         return sub
 
     async def _aselect_all(self, core: Any, selector: str) -> list[Any]:
-        from . import DocumentCore
+        from . import Document
 
         loc = core._page.locator(selector)
         out: list[Any] = []
         for i in range(await loc.count()):
             html = await loc.nth(i).evaluate("el => el.outerHTML")
-            sub = DocumentCore(
+            sub = Document(
                 url=core.url,
                 final_url=core.final_url,
                 kind="html",

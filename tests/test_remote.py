@@ -98,7 +98,7 @@ def test_render_over_the_wire(remote):
 def test_eager_doc_ops_round_trip(remote):
     rc, server = remote
     d = rc.fetch(server.url_for("/cards"))
-    assert isinstance(d, Document)  # a real DocumentCore handle, not a special type
+    assert isinstance(d, Document)  # a real Document handle, not a special type
     assert d.ok and d.kind == "html"  # inline metadata, no round-trip
     assert d.title == "Shop"  # a prop op -> one round-trip
     assert d.select(".title").text_content == "Aeropress"  # eager: a value, not a plan

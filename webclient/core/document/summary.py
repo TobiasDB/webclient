@@ -26,7 +26,7 @@ from .models import (
 from .html import _norm, tree
 
 if TYPE_CHECKING:
-    from . import DocumentCore
+    from . import Document
 
 _HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 
@@ -67,10 +67,10 @@ class TransportBacking(Backing):
     provides = frozenset({"transport"})
     gate = "summary"
 
-    def applies(self, core: "DocumentCore") -> bool:
+    def applies(self, core: "Document") -> bool:
         return True
 
-    def transport(self, core: "DocumentCore") -> Transport:
+    def transport(self, core: "Document") -> Transport:
         h = {k.lower(): v for k, v in core.response_headers.items()}
         final = core.final_url or core.url
         return Transport(
@@ -116,10 +116,10 @@ class MetadataBacking(Backing):
     provides = frozenset({"metadata"})
     gate = "summary"
 
-    def applies(self, core: "DocumentCore") -> bool:
+    def applies(self, core: "Document") -> bool:
         return core.kind in ("html", "xml")
 
-    def metadata(self, core: "DocumentCore") -> Metadata:
+    def metadata(self, core: "Document") -> Metadata:
         root = tree(core)
 
         def meta(**attr: str) -> str | None:
@@ -166,10 +166,10 @@ class StructureBacking(Backing):
     provides = frozenset({"structure"})
     gate = "summary"
 
-    def applies(self, core: "DocumentCore") -> bool:
+    def applies(self, core: "Document") -> bool:
         return core.kind in ("html", "xml")
 
-    def structure(self, core: "DocumentCore") -> Structure:
+    def structure(self, core: "Document") -> Structure:
         root = tree(core)
         base = core.final_url or core.url
         host = urlparse(base).hostname or ""
@@ -237,7 +237,7 @@ class RuntimeBacking(Backing):
     provides = frozenset({"runtime"})
     gate = "summary"
 
-    def applies(self, core: "DocumentCore") -> bool:
+    def applies(self, core: "Document") -> bool:
         if core.kind not in ("html", "xml"):
             return False
         if core._page is not None:
@@ -251,7 +251,7 @@ class RuntimeBacking(Backing):
             for e in core._events
         )
 
-    def runtime(self, core: "DocumentCore") -> Runtime:
+    def runtime(self, core: "Document") -> Runtime:
         xhr = [
             e
             for e in core._events
@@ -292,11 +292,11 @@ class SummaryBacking(Backing):
     provides = frozenset({"summary"})
     gate = "summary"
 
-    def applies(self, core: "DocumentCore") -> bool:
+    def applies(self, core: "Document") -> bool:
         return True
 
     def summary(
-        self, core: "DocumentCore", *include: str, exclude: Any = ()
+        self, core: "Document", *include: str, exclude: Any = ()
     ) -> Summary:
         drop = {exclude} if isinstance(exclude, str) else set(exclude)
         want = (set(include) if include else set(FACETS)) - drop

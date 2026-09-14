@@ -208,12 +208,12 @@ def _start(plan: Any, context: Any, client: Any) -> Any:
             raise ValueError("a WebClient-rooted plan needs a bound client")
         return wrap(client)  # an eager client surface -> dispatches ref/fetch/...
     if plan.source is not None and "document_id" not in plan.source:
-        from ..core.reference import ReferenceCore
-        from ..core.session import WebSessionCore
+        from ..core.reference import Reference
+        from ..core.session import Session
         from ..surfaces import wrap
 
-        core = ReferenceCore(**plan.source)
-        if isinstance(context, WebSessionCore):  # a session-bound reference
+        core = Reference(**plan.source)
+        if isinstance(context, Session):  # a session-bound reference
             core._session = context
             core._client = context
         else:

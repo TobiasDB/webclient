@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Any
 from ..web_core import Backing
 
 if TYPE_CHECKING:
-    from ..document import DocumentCore
-    from . import ReferenceCore
+    from ..document import Document
+    from . import Reference
 
 
 class ResolveBacking(Backing):
@@ -20,12 +20,12 @@ class ResolveBacking(Backing):
 
     async def resolve(
         self,
-        core: "ReferenceCore",
+        core: "Reference",
         *,
         browser: bool = False,
         optional: bool = False,
         error: Any = None,
-    ) -> "DocumentCore":
+    ) -> "Document":
         from ...errors import lenient
 
         target = core._session or core._client  # bound (a default by _bridge_io)

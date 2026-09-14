@@ -11,7 +11,7 @@ from ..web_core import Backing
 from .models import Element
 
 if TYPE_CHECKING:
-    from . import DocumentCore
+    from . import Document
 
 
 def _json_elements(value: Any) -> list[Element]:
@@ -32,24 +32,24 @@ def _json_elements(value: Any) -> list[Element]:
 
 
 class JsonBacking(Backing):
-    """Dotted-path ops for json. A selected node is a DocumentCore holding the
+    """Dotted-path ops for json. A selected node is a Document holding the
     sub-value; ``attr('value')`` / ``text_content`` read it."""
 
     provides = frozenset({"select", "select_all", "attr", "render"})
     props = frozenset({"text_content"})
     gate = "tree"
 
-    def applies(self, core: "DocumentCore") -> bool:
+    def applies(self, core: "Document") -> bool:
         return core.kind == "json"
 
     def select_all(
         self,
-        core: "DocumentCore",
+        core: "Document",
         path: str,
         *,
         limit: int | None = None,
         offset: int = 0,
-    ) -> "list[DocumentCore]":
+    ) -> "list[Document]":
         node = self.select(core, path)
         data = None if node._missing else node._element
         items = list(data) if isinstance(data, list) else []
@@ -58,19 +58,19 @@ class JsonBacking(Backing):
             items = items[:limit]
         return [core._sub(item) for item in items]
 
-    def render(self, core: "DocumentCore", format: str, **options: Any) -> Any:
+    def render(self, core: "Document", format: str, **options: Any) -> Any:
         if format != "elements":
             raise LookupError(f"no json render format {format!r}")
         return _json_elements(self._data(core))
 
-    def _data(self, core: "DocumentCore") -> Any:
+    def _data(self, core: "Document") -> Any:
         if core._element is not None:
             return core._element  # a selected sub-value
         if core._data is None:
             core._data = _json.loads(core.content or b"null")
         return core._data
 
-    def select(self, core: "DocumentCore", path: str) -> "DocumentCore":
+    def select(self, core: "Document", path: str) -> "Document":
         value = self._data(core)
         try:
             for tok in re.findall(r"[^.\[\]]+|\[\d+\]", path):
@@ -79,7 +79,7 @@ class JsonBacking(Backing):
             value = None
         return core._sub(value)
 
-    def attr(self, core: "DocumentCore", name: str, *, error: Any = None) -> Any:
+    def attr(self, core: "Document", name: str, *, error: Any = None) -> Any:
         if core._missing:
             return Field(None, ok=False)
         data = self._data(core)
@@ -87,7 +87,7 @@ class JsonBacking(Backing):
             return Field(data[name])
         return Field(data)
 
-    def text_content(self, core: "DocumentCore") -> "str | None":
+    def text_content(self, core: "Document") -> "str | None":
         if core._missing:
             return None
         value = self._data(core)

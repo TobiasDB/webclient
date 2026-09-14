@@ -4,7 +4,7 @@
 
 Each kind (``http`` / ``page``) is capped by a semaphore. http clients are
 recycled (reset then returned to an idle list); pages are closed on release.
-The pool is the only thing that creates or holds transports; ``WebClientCore``
+The pool is the only thing that creates or holds transports; ``WebClient``
 just leases.
 """
 

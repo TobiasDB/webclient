@@ -60,7 +60,7 @@ class HTTPXClient(Client):
         cookies: dict[str, str],
         timeout: float,
     ) -> "tuple[Any, httpx.Response | None]":
-        """Fetch ``ref`` into a ``(DocumentCore, response)`` -- the http client's
+        """Fetch ``ref`` into a ``(Document, response)`` -- the http client's
         whole job: perform the request, interpret the response (sniff kind /
         charset, capture Set-Cookie) and shape it into a document. Never raises: a
         transport failure or a non-2xx status is recorded as ``doc.error`` (the
@@ -69,7 +69,7 @@ class HTTPXClient(Client):
         / ``Retry-After``)."""
         import time
 
-        from ..core.document import DocumentCore
+        from ..core.document import Document
         from ..errors import error_for
 
         start = time.monotonic()
@@ -78,14 +78,14 @@ class HTTPXClient(Client):
                 ref, headers=headers, cookies=cookies, timeout=timeout
             )
         except Exception as exc:  # transport failure -> a not-ok document
-            doc = DocumentCore(
+            doc = Document(
                 url=ref.dispatch("url"),
                 status_code=0,
                 elapsed=time.monotonic() - start,
                 error=error_for(0, str(exc)),
             )
             return doc, None
-        doc = DocumentCore(
+        doc = Document(
             url=ref.dispatch("url"),
             final_url=str(resp.url),
             kind=sniff_kind(resp.headers.get("content-type"), resp.content),

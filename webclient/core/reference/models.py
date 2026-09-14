@@ -1,8 +1,8 @@
-"""ReferenceCore's model + interface.
+"""Reference's model + interface.
 
 ``IReference`` is the request spec: its Core Fields (the data) plus, under
-``TYPE_CHECKING``, the eager ops ``ReferenceCore`` implements (generated from the
-reference backings). ``ReferenceCore`` inherits it and adds only behaviour
+``TYPE_CHECKING``, the eager ops ``Reference`` implements (generated from the
+reference backings). ``Reference`` inherits it and adds only behaviour
 (backings, dispatch, ``_derive``). ``HttpMethod`` (the method type its fields use)
 lives here too, so the ``derive`` backing and ``from_url`` share it with no cycle.
 """
@@ -16,14 +16,14 @@ from pydantic import BaseModel
 HttpMethod = Literal["get", "post", "put", "patch", "delete", "head", "options"]
 
 if TYPE_CHECKING:
-    from . import ReferenceCore  # noqa: F401  (the ops return the core itself)
-    from ..document import DocumentCore  # noqa: F401  (Reference.resolve -> Document)
+    from . import Reference  # noqa: F401  (the ops return the core itself)
+    from ..document import Document  # noqa: F401  (Reference.resolve -> Document)
     from ...surfaces.lazy import LazyReference  # noqa: F401
 
 
 class IReference(BaseModel):
     """A (re)resolvable request spec: the Core Fields, plus (for the checker) the
-    eager ops ``ReferenceCore`` implements -- ``url`` / ``with_params`` / ``replace``
+    eager ops ``Reference`` implements -- ``url`` / ``with_params`` / ``replace``
     / ``join`` / ``resolve``. The ops are ``TYPE_CHECKING``-only, so at runtime this
     is just the data model and ``WebCore.__getattr__`` dispatches every op."""
 
@@ -52,10 +52,10 @@ class IReference(BaseModel):
         # fmt: off
         @property
         def url(self) -> str: ...
-        def join(self, href: str) -> "ReferenceCore": ...
-        def replace(self, **fields: Any) -> "ReferenceCore": ...
-        def resolve(self, *, browser: bool = ..., optional: bool = ..., error: Any = ...) -> "DocumentCore": ...
-        def with_params(self, **params: str) -> "ReferenceCore": ...
+        def join(self, href: str) -> "Reference": ...
+        def replace(self, **fields: Any) -> "Reference": ...
+        def resolve(self, *, browser: bool = ..., optional: bool = ..., error: Any = ...) -> "Document": ...
+        def with_params(self, **params: str) -> "Reference": ...
         # fmt: on
         # >>> end generated <<<
         pass

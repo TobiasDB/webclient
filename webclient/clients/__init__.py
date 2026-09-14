@@ -2,7 +2,7 @@
 
 The one place that touches httpx / playwright. A ``Client`` (``HTTPXClient`` /
 ``BrowserClient``) owns the transport work for its medium; a ``ClientFactory``
-builds it; the ``ClientPool`` bounds and recycles leases. ``WebClientCore`` holds
+builds it; the ``ClientPool`` bounds and recycles leases. ``WebClient`` holds
 a pool and leases from it; nothing above the pool sees a raw transport.
 """
 

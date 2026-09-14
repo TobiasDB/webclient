@@ -6,12 +6,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
 
-from ..core.client import WebClientCore
+from ..core.client import WebClient
 from ..core.client import async_client as _async_client
-from ..core.document import DocumentCore
-from ..core.reference import HttpMethod, ReferenceCore
+from ..core.document import Document
+from ..core.reference import HttpMethod, Reference
 from ..core.reference import from_url as _core_from_url
-from ..core.session import WebSessionCore
+from ..core.session import Session
 
 if TYPE_CHECKING:
     from ..collection import Collection, Field
@@ -27,22 +27,18 @@ T = TypeVar("T")
 E = TypeVar("E", bound="Event")  # an event subtype, for events_of(cls) -> list[cls]
 
 
-if TYPE_CHECKING:  # the eager surfaces are pure typing stubs over their cores
+# The eager surfaces ARE the cores: ``Reference`` / ``Document`` / ``WebClient`` /
+# ``Session`` are the core classes themselves (imported above) -- each implements its
+# verbs+fields via the ``I<Core>`` interface it inherits, and its typed accessors
+# (``pool``/``bus``/``session``/``lazy``) live on the core. Only the async / lazy
+# views are distinct typed stubs over the same cores.
+if TYPE_CHECKING:
 
-    # The eager surface IS the core: each core implements its verbs+fields via the
-    # generated ``I<Core>`` interface it inherits (core/reference|document|client), and
-    # its typed accessors (``pool``/``bus``/``session``/``lazy``) live on the core too,
-    # so the surface is just an alias -- no phantom subclass.
-    Reference = ReferenceCore
-    Document = DocumentCore
-    WebClient = WebClientCore
-    Session = WebSessionCore
-
-    class AsyncReference(ReferenceCore):
+    class AsyncReference(Reference):
         """The async view of a :class:`Reference`: ``resolve`` is awaitable
         (``await ref.resolve()``); every other op is the same in-memory surface,
         and Core-returning ops stay in the async tier. A pure typing stub: at
-        runtime ``AsyncReference is ReferenceCore`` -- the async-ness comes from the
+        runtime ``AsyncReference is Reference`` -- the async-ness comes from the
         bound client's dispatcher (``_mode``), not the type."""
 
         @property
@@ -59,11 +55,11 @@ if TYPE_CHECKING:  # the eager surfaces are pure typing stubs over their cores
         # fmt: on
         # >>> end generated <<<
 
-    class AsyncDocument(DocumentCore):
+    class AsyncDocument(Document):
         """The async view of a :class:`Document`: in-memory ops are synchronous;
         Core-returning ops stay in the async tier so a later IO op is awaitable
         (``await doc.select('a').attr('href').resolve()``). A pure typing stub: at
-        runtime ``AsyncDocument is DocumentCore``."""
+        runtime ``AsyncDocument is Document``."""
 
         @property
         def lazy(self) -> "LazyDocument": ...
@@ -117,13 +113,9 @@ if TYPE_CHECKING:  # the eager surfaces are pure typing stubs over their cores
         # fmt: on
         # >>> end generated <<<
 
-else:  # at runtime a surface IS its core
-    Reference = ReferenceCore
-    Document = DocumentCore
-    WebClient = WebClientCore
-    Session = WebSessionCore
-    AsyncReference = ReferenceCore
-    AsyncDocument = DocumentCore
+else:  # at runtime the async view IS the core (dispatch mode, not a subtype)
+    AsyncReference = Reference
+    AsyncDocument = Document
 
 #: A live (browser-backed) document is a Document with the ``page`` capability.
 LiveDocument = Document
@@ -150,7 +142,7 @@ def default_client() -> "WebClient":
 
 if TYPE_CHECKING:
 
-    class AsyncWebClient(WebClientCore):
+    class AsyncWebClient(WebClient):
         """The async eager client -- the very same core with async dispatch (an
         instance flag, not a subclass): ``doc = await ac.fetch(url)`` and
         ``await ac.ref(url).resolve()`` chain async through the ``Async*`` surface
@@ -184,7 +176,7 @@ else:  # at runtime the async client is the core in async-dispatcher mode
 def RemoteWebClient(url: str, token: str | None = None) -> "WebClient":
     """A ``WebClient`` over a remote core -- literally the same eager surface, run
     server-side. A factory, not a subclass: the remote-ness is entirely in the
-    core (``RemoteWebClientCore``), a different-dispatcher ``WebClientCore`` whose
+    core (``RemoteWebClientCore``), a different-dispatcher ``WebClient`` whose
     client verbs round-trip a one-step plan to the service."""
     from ..core.remote import RemoteWebClientCore
 

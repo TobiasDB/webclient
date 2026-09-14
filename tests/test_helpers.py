@@ -1,8 +1,8 @@
-"""P5/P6: the final-URL join fix, WebClientCore, and search/summary."""
+"""P5/P6: the final-URL join fix, WebClient, and search/summary."""
 
 import pytest
 
-from webclient import WebClient, WebClientCore, doc
+from webclient import WebClient, WebClient, doc
 
 RESULTS = """
 <html><body>
@@ -68,7 +68,7 @@ def test_summary_projects_a_page_overview(httpserver, wc):
 
 
 def test_core_is_the_async_surface(wc):
-    assert isinstance(wc.core, WebClientCore)
+    assert isinstance(wc.core, WebClient)
 
 
 def test_project_into_a_pydantic_model(httpserver, wc):

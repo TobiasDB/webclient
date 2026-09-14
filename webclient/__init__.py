@@ -1,8 +1,7 @@
 """webclient -- declarative web client (ground-up rewrite in progress)."""
 
 from .collection import Collection, Field
-from .core.client import WebClientCore
-from .core.document import DocumentCore, Element, HtmlBacking, JsonBacking
+from .core.document import Element, HtmlBacking, JsonBacking
 from .core.web_core import Backing, WebCore
 from .core.client.models import SearchResult
 from .errors import RAISE, RETURN, FetchError, RemoteError, WebError, WebException
@@ -50,11 +49,9 @@ __all__ = [
     "AsyncReference",
     "AsyncDocument",
     "RemoteWebClient",
-    "WebClientCore",
     "RemoteWebClientCore",
     "Session",
     "Document",
-    "DocumentCore",
     "LiveDocument",
     "Reference",
     "Element",

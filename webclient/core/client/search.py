@@ -22,7 +22,7 @@ from .models import SearchResult
 from ..web_core import Backing
 
 if TYPE_CHECKING:
-    from . import WebClientCore
+    from . import WebClient
 
 
 def _target(url: str) -> str:
@@ -53,7 +53,7 @@ class SearchBacking(Backing):
 
     async def search(
         self,
-        core: "WebClientCore",
+        core: "WebClient",
         query: str,
         *,
         limit: int = 10,

@@ -1,7 +1,7 @@
-"""WebSessionCore: a scoped ``WebClientCore``.
+"""Session: a scoped ``WebClient``.
 
 A session is the same engine core as the client, sharing its loop / http client
-/ browser pool / event bus / plugins with a parent ``WebClientCore``, but with
+/ browser pool / event bus / plugins with a parent ``WebClient``, but with
 its own identity (headers + cookies + name scope) and a ttl'd lifecycle. It
 reuses the parent's whole fetch pipeline (``afetch``) -- it only injects its
 identity into the request, absorbs Set-Cookie, and guards the lifecycle. It has
@@ -16,8 +16,8 @@ from uuid import uuid4
 
 from pydantic import PrivateAttr
 
-from ..client import WebClientCore
-from ..reference import ReferenceCore
+from ..client import WebClient
+from ..reference import Reference
 
 if TYPE_CHECKING:
     from ...clients import ClientPool
@@ -25,8 +25,8 @@ if TYPE_CHECKING:
     from ..client.loop import EngineLoop
 
 
-class WebSessionCore(WebClientCore):
-    """A ``WebClientCore`` scoped to one logical identity."""
+class Session(WebClient):
+    """A ``WebClient`` scoped to one logical identity."""
 
     id: str = ""
     status: Literal["running", "expired", "closed"] = "running"
@@ -47,7 +47,7 @@ class WebSessionCore(WebClientCore):
     def _init_transport(self) -> None:
         """A session shares the parent's pool (set in ``bind``)."""
 
-    def bind(self, parent: WebClientCore) -> "WebSessionCore":
+    def bind(self, parent: WebClient) -> "Session":
         """Share ``parent``'s engine (loop / http / browser / bus / plugins) and
         take a fresh name scope from it."""
         self._parent = parent
@@ -83,7 +83,7 @@ class WebSessionCore(WebClientCore):
 
     # -- fetch: the parent's pipeline + this session's identity --------------
     async def afetch(
-        self, ref: ReferenceCore, *, optional: bool = False, browser: bool = False
+        self, ref: Reference, *, optional: bool = False, browser: bool = False
     ) -> Any:
         self._guard()
         scoped = ref.model_copy(
@@ -110,10 +110,10 @@ class WebSessionCore(WebClientCore):
 
     def document(self, name: str) -> Any:
         """Recover a document from THIS session's scope only."""
-        from ..document import DocumentCore
+        from ..document import Document
 
         obj = self._scope.get(name) if self._scope is not None else None
-        return obj if isinstance(obj, DocumentCore) else None
+        return obj if isinstance(obj, Document) else None
 
 
-__all__ = ["WebSessionCore"]
+__all__ = ["Session"]

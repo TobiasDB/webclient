@@ -98,12 +98,12 @@ def test_summary_unifier_assembles_and_selects_facets(page):
 def test_runtime_facet_reads_captured_browser_events():
     # runtime reads DOM/network events a browser render captured -- no browser
     # needed for the projection itself, so we seed the events directly.
-    from webclient.core.document import DocumentCore
+    from webclient.core.document import Document
     from webclient.core.document.live import network_event
     from webclient.events import DOMUpdateEvent
     from webclient.summary import Runtime
 
-    doc = DocumentCore(
+    doc = Document(
         kind="html",
         url="https://app.example/",
         content=b'<html><script src="/_next/app.js"></script><div id="root"></div></html>',

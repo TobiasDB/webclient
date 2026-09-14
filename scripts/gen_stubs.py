@@ -29,10 +29,10 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from webclient.collection import Field  # noqa: E402
-from webclient.core.client import WebClientCore  # noqa: E402
-from webclient.core.document import DocumentCore, Element  # noqa: E402
-from webclient.core.reference import ReferenceCore  # noqa: E402
-from webclient.core.session import WebSessionCore  # noqa: E402
+from webclient.core.client import WebClient  # noqa: E402
+from webclient.core.document import Document, Element  # noqa: E402
+from webclient.core.reference import Reference  # noqa: E402
+from webclient.core.session import Session  # noqa: E402
 from webclient.core.document.models import (  # noqa: E402
     Metadata,
     Runtime,
@@ -59,21 +59,16 @@ REFINIT = ROOT / "webclient" / "core" / "reference" / "models.py"
 CLIENTMODELS = ROOT / "webclient" / "core" / "client" / "models.py"
 
 #: the cores that map to a surface class (a Core-typed result -> its surface).
-CORES: tuple[type, ...] = (ReferenceCore, DocumentCore)
-SURFACE = {ReferenceCore: "Reference", DocumentCore: "Document"}
-LAZY = {ReferenceCore: "LazyReference", DocumentCore: "LazyDocument"}
+CORES: tuple[type, ...] = (Reference, Document)
+SURFACE = {Reference: "Reference", Document: "Document"}
+LAZY = {Reference: "LazyReference", Document: "LazyDocument"}
 #: the async eager tier: a Core maps to its Async surface, and its IO ops are
 #: ``async def`` (see ``members``), so ``await ac.ref(url).resolve()`` types.
-SURFACE_ASYNC = {ReferenceCore: "AsyncReference", DocumentCore: "AsyncDocument"}
-#: the ``surface`` tier: the eager ops the CORE itself implements (its generated
-#: ``I<Core>`` interface, which the core inherits). Like ``eager`` but a Core maps
-#: to its own name -- ``doc.select(...) -> DocumentCore`` -- so a backing (and the
-#: core) reaches its own ops statically, with no ``dispatch("...")`` string.
-SELF = {ReferenceCore: "ReferenceCore", DocumentCore: "DocumentCore"}
+SURFACE_ASYNC = {Reference: "AsyncReference", Document: "AsyncDocument"}
 #: the cores whose ops the core itself implements via a generated interface (so the
 #: async surface's IO ops override the inherited eager ones -> need an ``override``
 #: ignore). Grows as each core gets its interface.
-HAS_INTERFACE: set[type] = {DocumentCore, ReferenceCore, WebClientCore}
+HAS_INTERFACE: set[type] = {Document, Reference, WebClient}
 #: bare core-surface names -- an overload returning one overlaps a later ``str``
 #: overload and needs the ``overload-overlap`` ignore.
 _CORE_SURFACES = (
@@ -83,9 +78,9 @@ _CORE_SURFACES = (
 #: names the resolved annotations may reference (TYPE_CHECKING-only in their own
 #: modules), merged into each fn's globals for ``get_type_hints``.
 _NS = {
-    "DocumentCore": DocumentCore,
-    "ReferenceCore": ReferenceCore,
-    "WebClientCore": WebClientCore,
+    "Document": Document,
+    "Reference": Reference,
+    "WebClient": WebClient,
     "Field": Field,
     "Element": Element,
     "Transport": Transport,
@@ -102,7 +97,7 @@ _NS = {
 }
 _SCALAR = {str: "str", int: "int", float: "float", bytes: "bytes", bool: "bool"}
 _UNION = (typing.Union, getattr(_types, "UnionType", None))
-_SKIP_FIELDS = {ReferenceCore: set[str](), DocumentCore: set[str]()}
+_SKIP_FIELDS = {Reference: set[str](), Document: set[str]()}
 
 
 # -- type classification (was webclient/typeinfo.py; only the generator uses it)
@@ -208,8 +203,8 @@ def _render(tp: Any, tier: str) -> str:
     not a chainable field/list."""
     inner = _unwrap_union(tp)
     cat = _classify(inner)
-    smap = {"eager": SURFACE, "async": SURFACE_ASYNC, "surface": SELF}.get(tier, LAZY)
-    sync = tier in ("eager", "async", "surface")  # a materialised value tier
+    smap = {"eager": SURFACE, "async": SURFACE_ASYNC}.get(tier, LAZY)
+    sync = tier in ("eager", "async")  # a materialised value tier
     if cat == "core":
         return smap[inner]
     if cat == "iterable":
@@ -401,11 +396,11 @@ def lift_members(tier: str = "eager") -> list[str]:
     """Element ops lifted onto a Collection (fan-out keeps the element type),
     in ``tier`` vocabulary (eager Collection, or lazy LazyCollection)."""
     lines: list[str] = []
-    for op in sorted(set(DocumentCore.ops()) | set(DocumentCore.prop_ops())):
-        is_prop = op not in DocumentCore.ops()
-        kind = "provides" if op in DocumentCore.ops() else "props"
+    for op in sorted(set(Document.ops()) | set(Document.prop_ops())):
+        is_prop = op not in Document.ops()
+        kind = "provides" if op in Document.ops() else "props"
         row = _lift(
-            op, _fn(_provider(DocumentCore, op, kind), op), tier, is_prop=is_prop
+            op, _fn(_provider(Document, op, kind), op), tier, is_prop=is_prop
         )
         if row is not None:
             lines.append(row)
@@ -450,7 +445,7 @@ def _lazy_class(core: type) -> str:
     """A derived lazy surface: the same members as eager, in lazy vocabulary,
     plus the recorder-only helpers (``field``/``reference``) and ``collect``."""
     extras: list[str] = []
-    if core is DocumentCore:
+    if core is Document:
         extras += [
             'def field(self, name: str) -> "LazyField[Any]": ...',
             'def reference(self, name: str) -> "LazyReference": ...',
@@ -465,8 +460,8 @@ def _lazy_client_class() -> str:
     """LazyWebClient: the lazy recorder rooted at a client/session (``wc.lazy``).
     An authoring root, not a collectable ``Lazy[Surface]`` -- so its verbs use the
     ``client`` tier (a value return is a ``Lazy[T]`` handle you ``.collect()``).
-    Generated from ``WebClientCore``'s verbs, like every other tier."""
-    body = members(WebClientCore, "client", fields=False, class_props=False)
+    Generated from ``WebClient``'s verbs, like every other tier."""
+    body = members(WebClient, "client", fields=False, class_props=False)
     lines = [
         "class LazyWebClient:",
         '    """The lazy recorder rooted at a client/session (``wc.lazy``): its verbs',
@@ -480,8 +475,8 @@ def _lazy_client_class() -> str:
 def _lazy_tier() -> str:
     blocks = [
         _LAZY_FIELD,
-        _lazy_class(ReferenceCore),
-        _lazy_class(DocumentCore),
+        _lazy_class(Reference),
+        _lazy_class(Document),
         _lazy_collection(),
         _lazy_client_class(),
     ]
@@ -501,39 +496,39 @@ def _body(region: str) -> str:
     if region == "lazy-tier":
         return _lazy_tier()
     if region == "Reference interface":
-        # the eager ops ReferenceCore implements (its ``IReference`` interface).
+        # the eager ops Reference implements (its ``IReference`` interface).
         return _indented(
-            members(ReferenceCore, "surface", fields=False, class_props=False), 8
+            members(Reference, "eager", fields=False, class_props=False), 8
         )
     if region == "Document interface":
-        # the eager ops DocumentCore implements (its ``IDocument`` interface, which
+        # the eager ops Document implements (its ``IDocument`` interface, which
         # the core inherits) -- so a backing/the core reaches them statically.
         return _indented(
-            members(DocumentCore, "surface", fields=False, class_props=False), 8
+            members(Document, "eager", fields=False, class_props=False), 8
         )
     if region == "collection element-op lifting":
         return _indented(lift_members(), 8)
     if region == "WebClient interface":
-        # the eager verbs WebClientCore implements (its ``IWebClient`` interface,
-        # which the core -- and so WebSessionCore -- inherits).
+        # the eager verbs WebClient implements (its ``IWebClient`` interface,
+        # which the core -- and so Session -- inherits).
         return _indented(
-            members(WebClientCore, "surface", fields=False, class_props=False), 8
+            members(WebClient, "eager", fields=False, class_props=False), 8
         )
     if region == "AsyncReference surface":
         # the async view: IO ops (resolve) are ``async def``, Core returns map to
         # the Async surfaces so ``await ac.ref(url).resolve()`` chains async.
         return _indented(
-            members(ReferenceCore, "async", fields=False, class_props=False), 8
+            members(Reference, "async", fields=False, class_props=False), 8
         )
     if region == "AsyncDocument surface":
         return _indented(
-            members(DocumentCore, "async", fields=False, class_props=False), 8
+            members(Document, "async", fields=False, class_props=False), 8
         )
     if region == "AsyncWebClient surface":
         # the async client's verbs: ``async def fetch/summary`` -> the async
         # surface, sync ``ref`` -> AsyncReference.
         return _indented(
-            members(WebClientCore, "async", fields=False, class_props=False), 8
+            members(WebClient, "async", fields=False, class_props=False), 8
         )
     raise KeyError(region)
 

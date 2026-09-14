@@ -1,9 +1,9 @@
-"""WebClientCore's model + interface, and the value models the client backings
+"""WebClient's model + interface, and the value models the client backings
 produce.
 
 ``IWebClient`` is the client's Core Fields (policy) plus, under ``TYPE_CHECKING``,
 the eager authoring verbs it implements (``fetch`` / ``ref`` / ``search`` /
-``summary``, generated from the client backings). ``WebClientCore`` inherits it
+``summary``, generated from the client backings). ``WebClient`` inherits it
 and adds the machinery (loop, pool, bus, transport, plan execution). The verbs are
 ``TYPE_CHECKING``-only, so at runtime this is just the policy model and
 ``WebCore.__getattr__`` dispatches every verb.
@@ -16,9 +16,9 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
-    from ..document import DocumentCore  # noqa: F401  (fetch -> Document)
+    from ..document import Document  # noqa: F401  (fetch -> Document)
     from ..document.models import Summary  # noqa: F401  (summary -> Summary)
-    from ..reference import ReferenceCore  # noqa: F401  (ref -> Reference)
+    from ..reference import Reference  # noqa: F401  (ref -> Reference)
 
 
 class SearchResult(BaseModel):
@@ -33,7 +33,7 @@ class SearchResult(BaseModel):
 
 class IWebClient(BaseModel):
     """The client's Core Fields (policy), plus (for the checker) the eager
-    authoring verbs ``WebClientCore`` implements -- ``fetch`` / ``ref`` / ``search``
+    authoring verbs ``WebClient`` implements -- ``fetch`` / ``ref`` / ``search``
     / ``summary``. The verbs are ``TYPE_CHECKING``-only, so at runtime this is just
     the policy model."""
 
@@ -50,8 +50,8 @@ class IWebClient(BaseModel):
     if TYPE_CHECKING:
         # >>> generated: WebClient interface <<<
         # fmt: off
-        def fetch(self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "DocumentCore": ...
-        def ref(self, url: Any, method: str = ..., **kw: Any) -> "ReferenceCore": ...
+        def fetch(self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "Document": ...
+        def ref(self, url: Any, method: str = ..., **kw: Any) -> "Reference": ...
         def search(self, query: str, *, limit: int = ..., endpoint: str | None = ...) -> "list[SearchResult]": ...
         def summary(self, url: Any, *include: str, **kw: Any) -> "Summary": ...
         # fmt: on

@@ -5,7 +5,7 @@ Every core (client / session / document / reference) is a ``WebCore``: it holds
 a set of ``Backing``s, CHOOSES which apply to its current state, and DISPATCHES
 an op to the first chosen backing that ``provides`` it. Its capabilities are
 the union of the chosen backings' gates. This generalises the (clean) backing
-dispatch that ``DocumentCore`` used, so all four cores share one mechanism.
+dispatch that ``Document`` used, so all four cores share one mechanism.
 
 The cores carry data ("Core Fields") and talk to each other; the user-facing
 surface (``LazyDocument`` / ``Document`` / ...) is GENERATED from a core's
@@ -51,7 +51,7 @@ class Backing:
     io: ClassVar[frozenset[str]] = frozenset()
     #: browser page scripts this backing wants installed on live pages (a
     #: ``clients.PageScript`` each -- ``init`` before nav / ``load`` after). The
-    #: client gathers them (``WebClientCore._browser_scripts``) and the browser
+    #: client gathers them (``WebClient._browser_scripts``) and the browser
     #: client installs them; the backing owns the *what*, the client the *how*.
     page_scripts: ClassVar[tuple[Any, ...]] = ()
     gate: ClassVar[str] = "ok"

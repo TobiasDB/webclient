@@ -8,12 +8,12 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 from urllib.parse import urljoin
 
 from ...collection import Field
-from ..reference import ReferenceCore, from_url
+from ..reference import Reference, from_url
 from ..web_core import Backing
 from .models import Element
 
 if TYPE_CHECKING:
-    from . import DocumentCore
+    from . import Document
 
 _HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 _SKIP = {"script", "style"}
@@ -25,7 +25,7 @@ def _norm(text: str) -> str:
     return " ".join(text.split())
 
 
-def tree(core: "DocumentCore") -> Any:
+def tree(core: "Document") -> Any:
     """The parsed lxml root for a document (an element sub-core is its own
     element; otherwise parse ``content`` once and cache it on the core). Shared
     by ``HtmlBacking`` and the summary facets."""
@@ -155,7 +155,7 @@ def _html_elements(root: Any) -> list[Element]:
     return out
 
 
-def _decode(core: "DocumentCore") -> str:
+def _decode(core: "Document") -> str:
     """Decode the response bytes: the declared encoding first, else utf-8 with
     a latin-1 fallback (covers undeclared single-byte pages)."""
     if isinstance(core._element, str):
@@ -168,7 +168,7 @@ def _decode(core: "DocumentCore") -> str:
         return (core.content or b"").decode("latin-1", "replace")
 
 
-def _miss(parent: "DocumentCore", message: str, error: Any) -> "DocumentCore":
+def _miss(parent: "Document", message: str, error: Any) -> "Document":
     """A missing selection: raise under RAISE, else a not-ok sub-document."""
     from ...errors import RAISE, WebError, current_policy
 
@@ -181,7 +181,7 @@ def _miss(parent: "DocumentCore", message: str, error: Any) -> "DocumentCore":
 
 class HtmlBacking(Backing):
     """Tree ops for html/xml. ``select``/``select_all`` yield element
-    DocumentCores; ``text_content`` reads the element's decoded text (all
+    Documents; ``text_content`` reads the element's decoded text (all
     descendant text, tags stripped -- the DOM ``textContent``); ``attr`` reads a
     real HTML attribute."""
 
@@ -189,25 +189,25 @@ class HtmlBacking(Backing):
     props = frozenset({"text_content", "title"})
     gate = "tree"
 
-    def applies(self, core: "DocumentCore") -> bool:
+    def applies(self, core: "Document") -> bool:
         return core.kind in ("html", "xml")
 
-    def title(self, core: "DocumentCore") -> str | None:
+    def title(self, core: "Document") -> str | None:
         node = self._find(core, "title")
         return _norm("".join(node[0].itertext())) if node else None
 
     @overload
     def render(
-        self, core: "DocumentCore", format: Literal["elements"]
+        self, core: "Document", format: Literal["elements"]
     ) -> "list[Element]": ...  # noqa: E501
     @overload
     def render(
-        self, core: "DocumentCore", format: Literal["links"]
-    ) -> "list[ReferenceCore]": ...  # noqa: E501
+        self, core: "Document", format: Literal["links"]
+    ) -> "list[Reference]": ...  # noqa: E501
     @overload
-    def render(self, core: "DocumentCore", format: str, **options: Any) -> str: ...
+    def render(self, core: "Document", format: str, **options: Any) -> str: ...
 
-    def render(self, core: "DocumentCore", format: str, **options: Any) -> Any:
+    def render(self, core: "Document", format: str, **options: Any) -> Any:
         if format == "html":
             return (core.content or b"").decode(core.encoding or "utf-8", "replace")
         root = self._tree(core)
@@ -239,10 +239,10 @@ class HtmlBacking(Backing):
             return _html_elements(root)
         raise LookupError(f"no html render format {format!r}")
 
-    def _tree(self, core: "DocumentCore") -> Any:
+    def _tree(self, core: "Document") -> Any:
         return tree(core)
 
-    def _find(self, core: "DocumentCore", selector: str) -> list[Any]:
+    def _find(self, core: "Document", selector: str) -> list[Any]:
         if selector.rstrip().endswith(("text()",)) or "/@" in selector:
             raise ValueError(
                 "select yields elements; use .attr() for an attribute or text"
@@ -253,8 +253,8 @@ class HtmlBacking(Backing):
         return list(root.cssselect(selector))
 
     def select(
-        self, core: "DocumentCore", selector: str, *, index: int = 0, error: Any = None
-    ) -> "DocumentCore":
+        self, core: "Document", selector: str, *, index: int = 0, error: Any = None
+    ) -> "Document":
         els = self._find(core, selector)
         if not (-len(els) <= index < len(els)):
             return _miss(core, f"no match for {selector!r}", error)
@@ -262,12 +262,12 @@ class HtmlBacking(Backing):
 
     def select_all(
         self,
-        core: "DocumentCore",
+        core: "Document",
         selector: str,
         *,
         limit: int | None = None,
         offset: int = 0,
-    ) -> "list[DocumentCore]":
+    ) -> "list[Document]":
         els = self._find(core, selector)[offset:]
         if limit is not None:
             els = els[:limit]
@@ -275,14 +275,14 @@ class HtmlBacking(Backing):
 
     @overload  # link attrs narrow to a Reference (overlaps the str overload)
     def attr(
-        self, core: "DocumentCore", name: Literal["href", "src", "action"]
-    ) -> "ReferenceCore": ...  # type: ignore[overload-overlap]  # noqa: E501
+        self, core: "Document", name: Literal["href", "src", "action"]
+    ) -> "Reference": ...  # type: ignore[overload-overlap]  # noqa: E501
     @overload
     def attr(
-        self, core: "DocumentCore", name: str, *, error: Any = None
+        self, core: "Document", name: str, *, error: Any = None
     ) -> "Field[str]": ...  # noqa: E501
 
-    def attr(self, core: "DocumentCore", name: str, *, error: Any = None) -> Any:
+    def attr(self, core: "Document", name: str, *, error: Any = None) -> Any:
         if core._missing:
             return Field(None, ok=False)
         el = core._element
@@ -299,7 +299,7 @@ class HtmlBacking(Backing):
             return Field(None, ok=False)
         return Field(value)
 
-    def text_content(self, core: "DocumentCore") -> "str | None":
+    def text_content(self, core: "Document") -> "str | None":
         if core._missing:
             return None
         el = core._element if core._element is not None else self._tree(core)
