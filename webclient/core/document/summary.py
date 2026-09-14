@@ -10,7 +10,18 @@ import json as _json
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlparse
 
-from ...summary import FACETS, Form, Metadata, Structure, Summary, TocEntry, Transport
+from ...events import DOMUpdateEvent, NetworkEvent
+from ...summary import (
+    FACETS,
+    Form,
+    Metadata,
+    Runtime,
+    Structure,
+    Summary,
+    TocEntry,
+    Transport,
+    XhrCall,
+)
 from ..web_core import Backing
 from .html import _norm, tree
 
@@ -18,6 +29,19 @@ if TYPE_CHECKING:
     from . import DocumentCore
 
 _HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+#: (framework name, a marker substring in the served HTML)
+_FRAMEWORKS = (
+    ("next", "__NEXT_DATA__"),
+    ("next", "/_next/"),
+    ("nuxt", "__NUXT__"),
+    ("nuxt", "/_nuxt/"),
+    ("react", "data-reactroot"),
+    ("react", "react-dom"),
+    ("angular", "ng-version"),
+    ("vue", "data-v-"),
+    ("svelte", "svelte-"),
+)
 
 
 def _cdn(h: dict[str, str]) -> str | None:
@@ -196,6 +220,68 @@ class StructureBacking(Backing):
         )
 
 
+def _framework(html: str) -> str | None:
+    for name, marker in _FRAMEWORKS:
+        if marker in html:
+            return name
+    return None
+
+
+class RuntimeBacking(Backing):
+    """The ``runtime`` facet: browser-only signals read from captured DOM/network
+    events (applies only to a browser-rendered document; ``None`` on a static
+    fetch). ``xhr_endpoints`` come from the page's XHR/fetch requests, ``is_spa`` /
+    ``framework`` from framework markers + hydration, ``dynamic_elements`` from the
+    DOM mutations captured after interaction."""
+
+    provides = frozenset({"runtime"})
+    gate = "summary"
+
+    def applies(self, core: "DocumentCore") -> bool:
+        if core.kind not in ("html", "xml"):
+            return False
+        if core._page is not None:
+            return True
+        # a browser render captured DOM mutations or XHR/fetch sub-requests; a
+        # static fetch's transport NavigationEvent (resource_type None) does not
+        # count -- runtime is a browser-only facet.
+        return any(
+            isinstance(e, DOMUpdateEvent)
+            or (isinstance(e, NetworkEvent) and e.resource_type in ("xhr", "fetch"))
+            for e in core._events
+        )
+
+    def runtime(self, core: "DocumentCore") -> Runtime:
+        xhr = [
+            e
+            for e in core._events
+            if isinstance(e, NetworkEvent) and e.resource_type in ("xhr", "fetch")
+        ]
+        mutations = [e for e in core._events if isinstance(e, DOMUpdateEvent)]
+        html = (core.content or b"").decode(core.encoding or "utf-8", "replace")
+        framework = _framework(html)
+        return Runtime(
+            is_spa=framework is not None or bool(mutations),
+            framework=framework,
+            uses_xhr=any(e.resource_type == "xhr" for e in xhr),
+            uses_fetch=any(e.resource_type == "fetch" for e in xhr),
+            xhr_endpoints=[
+                XhrCall(
+                    method=(
+                        str(e.request.method).upper()
+                        if e.request is not None
+                        else "GET"
+                    ),
+                    url=str(e.request.dispatch("url")) if e.request is not None else "",
+                )
+                for e in xhr
+            ],
+            dynamic_elements=sorted(
+                {f"{e.kind}:{e.selector}" if e.selector else e.kind for e in mutations}
+            ),
+        )
+
+
 class SummaryBacking(Backing):
     """The unifier: ``doc.summary(*include, exclude=...)`` assembles the requested
     facet sections into a :class:`Summary` (default: every applicable facet). A
@@ -222,5 +308,6 @@ __all__ = [
     "TransportBacking",
     "MetadataBacking",
     "StructureBacking",
+    "RuntimeBacking",
     "SummaryBacking",
 ]

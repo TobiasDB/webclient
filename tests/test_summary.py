@@ -95,6 +95,36 @@ def test_summary_unifier_assembles_and_selects_facets(page):
     assert less.transport and less.metadata and less.structure is None
 
 
+def test_runtime_facet_reads_captured_browser_events():
+    # runtime reads DOM/network events a browser render captured -- no browser
+    # needed for the projection itself, so we seed the events directly.
+    from webclient.core.document import DocumentCore
+    from webclient.core.document.live import network_event
+    from webclient.events import DOMUpdateEvent
+    from webclient.summary import Runtime
+
+    doc = DocumentCore(
+        kind="html",
+        url="https://app.example/",
+        content=b'<html><script src="/_next/app.js"></script><div id="root"></div></html>',
+        status_code=200,
+    )
+    doc._events = [
+        network_event("GET", "https://app.example/api/items", "xhr", doc),
+        network_event("POST", "https://app.example/api/track", "fetch", doc),
+        DOMUpdateEvent(kind="added", selector="#cart"),
+    ]
+    r = doc.dispatch("runtime")
+    assert isinstance(r, Runtime)
+    assert r.framework == "next" and r.is_spa is True
+    assert r.uses_xhr and r.uses_fetch
+    assert {c.method for c in r.xhr_endpoints} == {"GET", "POST"}
+    assert any("api/items" in c.url for c in r.xhr_endpoints)
+    assert r.dynamic_elements == ["added:#cart"]
+    # the unifier now includes the runtime section (it applies -- events captured)
+    assert doc.dispatch("summary").runtime is not None
+
+
 def test_metadata_and_structure_absent_on_json(httpserver):
     httpserver.expect_request("/j").respond_with_json({"a": 1})
     with WebClient() as wc:

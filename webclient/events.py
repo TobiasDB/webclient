@@ -44,6 +44,7 @@ class NetworkEvent(Event):
     request: Any = None  # the ReferenceCore for this request
     status_code: int | None = None
     body: bytes | None = None
+    resource_type: str | None = None  # browser sub-request kind: xhr/fetch/document/...
 
 
 class NavigationEvent(NetworkEvent):

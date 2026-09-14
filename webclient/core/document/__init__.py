@@ -25,6 +25,7 @@ from .json import JsonBacking
 from .status import StatusBacking
 from .summary import (
     MetadataBacking,
+    RuntimeBacking,
     StructureBacking,
     SummaryBacking,
     TransportBacking,
@@ -78,6 +79,7 @@ class DocumentCore(WebCore, BaseModel):
         TransportBacking(),
         MetadataBacking(),
         StructureBacking(),
+        RuntimeBacking(),
         SummaryBacking(),
     )
 

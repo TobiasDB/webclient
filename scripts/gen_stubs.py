@@ -32,7 +32,13 @@ from webclient.collection import Field  # noqa: E402
 from webclient.core.client import WebClientCore  # noqa: E402
 from webclient.core.document import DocumentCore, Element  # noqa: E402
 from webclient.core.reference import ReferenceCore  # noqa: E402
-from webclient.summary import Metadata, Structure, Summary, Transport  # noqa: E402
+from webclient.summary import (
+    Metadata,
+    Runtime,
+    Structure,
+    Summary,
+    Transport,
+)  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SURFACES = ROOT / "webclient" / "surfaces.py"
@@ -57,6 +63,7 @@ _NS = {
     "Element": Element,
     "Transport": Transport,
     "Metadata": Metadata,
+    "Runtime": Runtime,
     "Structure": Structure,
     "Summary": Summary,
     "Any": Any,

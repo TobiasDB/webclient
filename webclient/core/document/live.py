@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from ...events import ActionEvent, ConsoleEvent, DOMUpdateEvent
+from ...events import ActionEvent, ConsoleEvent, DOMUpdateEvent, NetworkEvent
 from ..web_core import Backing
 
 if TYPE_CHECKING:
@@ -68,6 +68,18 @@ async def drain(doc: Any) -> None:
 def console_event(level: str, text: str, doc: Any) -> ConsoleEvent:
     return ConsoleEvent(
         level=cast(Any, _LEVELS.get(level, "log")), text=text, document_id=doc.name
+    )
+
+
+def network_event(method: str, url: str, resource_type: str, doc: Any) -> NetworkEvent:
+    """A browser sub-request captured onto the document (an XHR/fetch the page
+    made) -- the raw material for the summary ``runtime`` facet's xhr_endpoints."""
+    from ..reference import from_url
+
+    return NetworkEvent(
+        request=from_url(url, cast(Any, method.lower())),
+        resource_type=resource_type,
+        document_id=doc.name,
     )
 
 
@@ -274,4 +286,4 @@ class LiveBacking(Backing):
         return out
 
 
-__all__ = ["LiveBacking", "INIT_JS", "drain", "console_event"]
+__all__ = ["LiveBacking", "INIT_JS", "drain", "console_event", "network_event"]

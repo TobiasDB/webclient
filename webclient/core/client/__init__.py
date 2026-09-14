@@ -425,6 +425,11 @@ class WebClientCore(WebCore, BaseModel):
             page = lease.client.page
             raw: list[tuple[str, str]] = []
             page.on("console", lambda m: raw.append((m.type, m.text)))
+            net: list[tuple[str, str, str]] = []
+            page.on(
+                "request",
+                lambda r: net.append((r.method, r.url, r.resource_type)),
+            )
             url = ref.dispatch("url")
             await page.goto(url)
             doc = DocumentCore(
@@ -440,6 +445,9 @@ class WebClientCore(WebCore, BaseModel):
             self._register(doc, ref)
             for level, text in raw:
                 doc._events.append(_live.console_event(level, text, doc))
+            for method, req_url, rtype in net:  # XHR/fetch the page issued
+                if rtype in ("xhr", "fetch"):
+                    doc._events.append(_live.network_event(method, req_url, rtype, doc))
             for step in replay or []:  # reproduce mutated state
                 args = step.get("args", {})
                 loc = page.locator(args.get("selector") or "*").first
