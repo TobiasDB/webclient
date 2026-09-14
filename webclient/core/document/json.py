@@ -1,0 +1,100 @@
+"""JsonBacking: dotted-path ops for json documents."""
+
+from __future__ import annotations
+
+import json as _json
+import re
+from typing import TYPE_CHECKING, Any
+
+from ...collection import Field
+from ..web_core import Backing
+from ._shared import Element, _element, _override
+
+if TYPE_CHECKING:
+    from . import DocumentCore
+
+
+def _json_elements(value: Any) -> list[Element]:
+    out: list[Element] = []
+
+    def walk(v: Any, path: str, parent: str | None) -> None:
+        if isinstance(v, dict):
+            for k, item in v.items():
+                walk(item, f"{path}.{k}" if path else k, path or None)
+        elif isinstance(v, list):
+            for i, item in enumerate(v):
+                walk(item, f"{path}[{i}]", path or None)
+        else:
+            out.append(Element(id=path, type="text", text=str(v), parent_id=parent))
+
+    walk(value, "", None)
+    return out
+
+
+class JsonBacking(Backing):
+    """Dotted-path ops for json. A selected node is a DocumentCore holding the
+    sub-value; ``attr('value')`` / ``text_content`` read it."""
+
+    provides = frozenset({"select", "select_all", "attr", "render"})
+    props = frozenset({"text_content"})
+    gate = "tree"
+
+    def applies(self, core: "DocumentCore") -> bool:
+        return core.kind == "json"
+
+    def select_all(
+        self,
+        core: "DocumentCore",
+        path: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> "list[DocumentCore]":
+        node = self.select(core, path)
+        data = None if node._missing else node._element
+        items = list(data) if isinstance(data, list) else []
+        items = items[offset:]
+        if limit is not None:
+            items = items[:limit]
+        return [_element(core, item) for item in items]
+
+    def render(self, core: "DocumentCore", format: str, **options: Any) -> Any:
+        override = _override(core, format)
+        if override is not None:
+            return override
+        if format != "elements":
+            raise LookupError(f"no json render format {format!r}")
+        return _json_elements(self._data(core))
+
+    def _data(self, core: "DocumentCore") -> Any:
+        if core._element is not None:
+            return core._element  # a selected sub-value
+        if core._data is None:
+            core._data = _json.loads(core.content or b"null")
+        return core._data
+
+    def select(self, core: "DocumentCore", path: str) -> "DocumentCore":
+        value = self._data(core)
+        try:
+            for tok in re.findall(r"[^.\[\]]+|\[\d+\]", path):
+                value = value[int(tok[1:-1])] if tok.startswith("[") else value[tok]
+        except (KeyError, IndexError, TypeError):
+            value = None
+        return _element(core, value)
+
+    def attr(self, core: "DocumentCore", name: str, *, error: Any = None) -> Any:
+        if core._missing:
+            return Field(None, ok=False)
+        data = self._data(core)
+        if name != "value" and isinstance(data, dict) and name in data:
+            return Field(data[name])
+        return Field(data)
+
+    def text_content(self, core: "DocumentCore") -> "str | None":
+        if core._missing:
+            return None
+        value = self._data(core)
+        return value if isinstance(value, str) else _json.dumps(value)
+
+
+__all__ = ["JsonBacking"]

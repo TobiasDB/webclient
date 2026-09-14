@@ -49,10 +49,10 @@ module = [
     "webclient.models",
     "webclient.surfaces",
     "webclient.collection",
-    # document_core hand-writes the same intentionally-overlapping backing
+    # the html backing hand-writes the same intentionally-overlapping backing
     # overloads (attr href->Reference vs str->Field; render by format) the stubs
     # are generated from -- the overlap is by design.
-    "webclient.core.document_core",
+    "webclient.core.document.html",
 ]
 disable_error_code = [
     "empty-body",
