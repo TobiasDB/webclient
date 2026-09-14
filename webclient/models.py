@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
 
 if TYPE_CHECKING:
     from .collection import Collection, Field
-    from .core.document_core import Element
+    from .core.document import Element
     from .query.plan import Plan
     from .surfaces import Document, Reference
 

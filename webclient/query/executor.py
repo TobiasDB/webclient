@@ -205,8 +205,8 @@ def _start(plan: Any, context: Any, client: Any) -> Any:
             raise ValueError("a WebClient-rooted plan needs a bound client")
         return wrap(client)  # an eager client surface -> dispatches ref/fetch/...
     if plan.source is not None and "document_id" not in plan.source:
-        from ..core.reference_core import ReferenceCore
-        from ..core.session_core import WebSessionCore
+        from ..core.reference import ReferenceCore
+        from ..core.session import WebSessionCore
         from ..surface import wrap
 
         core = ReferenceCore(**plan.source)
@@ -362,7 +362,7 @@ def evaluate(expr: Any, context: Any = None, *, client: Any = None) -> Any:
     if not isinstance(expr, Expr):
         return expr
     client = client or expr._client or getattr(context, "_client", None)
-    from ..core.client_core import WebClientCore
+    from ..core.client import WebClientCore
 
     engine = client if client is not None else WebClientCore()
     return engine.loop().run(aevaluate(expr, context, client=client))

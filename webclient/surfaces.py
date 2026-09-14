@@ -6,16 +6,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
 
-from .core.client_core import WebClientCore
-from .core.document_core import DocumentCore
-from .core.reference_core import HttpMethod, ReferenceCore
-from .core.reference_core import from_url as _core_from_url
+from .core.client import WebClientCore
+from .core.document import DocumentCore
+from .core.reference import HttpMethod, ReferenceCore
+from .core.reference import from_url as _core_from_url
 from .core.web_core import WebCore
 from .surface import Surface, surface
 
 if TYPE_CHECKING:
     from .collection import Collection, Field
-    from .core.document_core import Element
+    from .core.document import Element
     from .models import Lazy, LazyDocument, LazyReference
 
 T = TypeVar("T")
@@ -383,7 +383,7 @@ def RemoteWebClient(url: str, token: str | None = None) -> WebClient:
     """A ``WebClient`` over a remote core -- literally the same surface, executed
     server-side. A factory, not a subclass: the remote-ness is entirely in the
     core it swaps in (``RemoteWebClientCore``)."""
-    from .core.remote_core import RemoteWebClientCore
+    from .core.remote import RemoteWebClientCore
 
     return WebClient(core=RemoteWebClientCore(url=url, token=token))
 

@@ -29,9 +29,9 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from webclient.collection import Field  # noqa: E402
-from webclient.core.client_core import WebClientCore  # noqa: E402
-from webclient.core.document_core import DocumentCore, Element  # noqa: E402
-from webclient.core.reference_core import ReferenceCore  # noqa: E402
+from webclient.core.client import WebClientCore  # noqa: E402
+from webclient.core.document import DocumentCore, Element  # noqa: E402
+from webclient.core.reference import ReferenceCore  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SURFACES = ROOT / "webclient" / "surfaces.py"

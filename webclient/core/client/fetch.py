@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from ..document_core import DocumentCore
+from ..document import DocumentCore
 from ..reference import HttpMethod, ReferenceCore, from_url
 from ..web_core import Backing
 

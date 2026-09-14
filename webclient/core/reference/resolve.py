@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 from ..web_core import Backing
 
 if TYPE_CHECKING:
-    from ..document_core import DocumentCore
+    from ..document import DocumentCore
     from . import ReferenceCore
 
 
@@ -30,7 +30,7 @@ class ResolveBacking(Backing):
         lenient = optional or error is RETURN
         target = core._session or core._client
         if target is None:
-            from ..client_core import WebClientCore
+            from ..client import WebClientCore
 
             target = WebClientCore()  # process-local default
         coro = target.afetch(core, optional=lenient, browser=browser)

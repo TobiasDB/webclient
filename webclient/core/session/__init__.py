@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from pydantic import PrivateAttr
 
-from ..client_core import WebClientCore
+from ..client import WebClientCore
 from ..reference import ReferenceCore
 
 
@@ -105,7 +105,7 @@ class WebSessionCore(WebClientCore):
 
     def document(self, name: str) -> Any:
         """Recover a document from THIS session's scope only."""
-        from ..document_core import DocumentCore
+        from ..document import DocumentCore
 
         obj = self._scope.get(name) if self._scope is not None else None
         return obj if isinstance(obj, DocumentCore) else None

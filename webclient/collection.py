@@ -144,7 +144,7 @@ class Collection(Generic[T]):
 
     # -- row shaping ----------------------------------------------------------
     def _loop(self) -> Any:
-        from .core.client_core import WebClientCore
+        from .core.client import WebClientCore
 
         return (self._client or WebClientCore()).loop()
 

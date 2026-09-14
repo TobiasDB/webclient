@@ -22,7 +22,7 @@ from ...engine.loop import EngineLoop
 from ...errors import WebError, WebException, error_for
 from ...events import EventBus, NavigationEvent, NetworkEvent
 from ..document import live as _live
-from ..document_core import DocumentCore
+from ..document import DocumentCore
 from ..reference import HttpMethod, ReferenceCore, from_url
 from ..web_core import Backing, WebCore
 from .fetch import FetchBacking

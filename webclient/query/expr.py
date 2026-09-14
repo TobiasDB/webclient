@@ -113,7 +113,7 @@ class Expr:
     def _client_for(self, context: Any) -> Any:
         client = self._client or getattr(context, "_client", None)
         if client is None:
-            from ..core.client_core import WebClientCore
+            from ..core.client import WebClientCore
 
             client = WebClientCore()  # process-local default (MVP)
         return client
@@ -172,7 +172,7 @@ def from_plan(plan: Plan | dict[str, Any], client: Any = None) -> Expr:
 def reference(url: str, **kwargs: Any) -> "Reference":
     """A lazy reference root starting from ``url``: an ``Expr`` recording a plan
     rooted at that request spec (statically a ``Reference``)."""
-    from ..core.reference_core import from_url
+    from ..core.reference import from_url
 
     spec = from_url(url, **kwargs).model_dump()
     return cast("Reference", Expr(Plan(root="Reference", source=spec)))

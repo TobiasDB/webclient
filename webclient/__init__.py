@@ -1,8 +1,8 @@
 """webclient -- declarative web client (ground-up rewrite in progress)."""
 
 from .collection import Collection, Field
-from .core.client_core import WebClientCore
-from .core.document_core import Element
+from .core.client import WebClientCore
+from .core.document import Element
 from .errors import RAISE, RETURN, FetchError, RemoteError, WebError, WebException
 from .events import (
     ActionEvent,
@@ -29,7 +29,7 @@ from .query.expr import (
     when,
     wq,
 )
-from .core.remote_core import RemoteWebClientCore
+from .core.remote import RemoteWebClientCore
 from .surfaces import (
     AsyncWebClient,
     Document,
