@@ -18,11 +18,11 @@ from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
 
 if TYPE_CHECKING:
-    from .collection import Collection, Field
-    from .core.document import Element
-    from .summary import Metadata, Runtime, Structure, Summary, Transport
-    from .query.plan import Plan
-    from .surfaces import Document, Reference
+    from ..collection import Collection, Field
+    from ..core.document import Element
+    from ..summary import Metadata, Runtime, Structure, Summary, Transport
+    from ..query.plan import Plan
+    from .eager import Document, Reference
 
 T = TypeVar("T")
 S = TypeVar("S")

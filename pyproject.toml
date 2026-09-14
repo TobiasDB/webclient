@@ -47,8 +47,8 @@ strict = true
 # only those, only here -- every other strict check still applies to these files.
 [[tool.mypy.overrides]]
 module = [
-    "webclient.models",
-    "webclient.surfaces",
+    "webclient.surfaces.lazy",
+    "webclient.surfaces.eager",
     "webclient.collection",
     # the html backing hand-writes the same intentionally-overlapping backing
     # overloads (attr href->Reference vs str->Field; render by format) the stubs

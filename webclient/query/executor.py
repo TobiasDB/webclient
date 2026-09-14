@@ -152,7 +152,7 @@ async def _aapply(
         op = getattr(value, step.name, None)
         result = op() if callable(op) else op
         if _iscoro(result):
-            from ..surface import wrap
+            from ..surfaces import wrap
 
             result = wrap(await cast(Any, result))
         return result, i + 1
@@ -178,7 +178,7 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
     kwargs = {k: await _aarg(v, context, client) for k, v in call.kwargs.items()}
     result = getattr(value, name)(*args, **kwargs)
     if _iscoro(result):  # an IO op (resolve): await, then wrap the core it yields
-        from ..surface import wrap
+        from ..surfaces import wrap
 
         return wrap(await result)
     return result
@@ -199,7 +199,7 @@ def _start(plan: Any, context: Any, client: Any) -> Any:
     authoring verbs the walk dispatches), a reconstructed Reference (source
     plan), or the passed context (doc/ref/field roots)."""
     if plan.root == "WebClient":
-        from ..surface import wrap
+        from ..surfaces import wrap
 
         if client is None:
             raise ValueError("a WebClient-rooted plan needs a bound client")
@@ -207,7 +207,7 @@ def _start(plan: Any, context: Any, client: Any) -> Any:
     if plan.source is not None and "document_id" not in plan.source:
         from ..core.reference import ReferenceCore
         from ..core.session import WebSessionCore
-        from ..surface import wrap
+        from ..surfaces import wrap
 
         core = ReferenceCore(**plan.source)
         if isinstance(context, WebSessionCore):  # a session-bound reference

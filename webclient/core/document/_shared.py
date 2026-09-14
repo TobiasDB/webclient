@@ -32,7 +32,7 @@ def _override(core: "DocumentCore", format: str) -> Any:
     renderer = table.get((core.kind, format)) if table else None
     if renderer is None:
         return None
-    from ...surface import wrap
+    from ...surfaces import wrap
 
     return renderer.render(wrap(core), format)
 

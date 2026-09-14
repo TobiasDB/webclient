@@ -6,18 +6,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
 
-from .core.client import WebClientCore
-from .core.document import DocumentCore
-from .core.reference import HttpMethod, ReferenceCore
-from .core.reference import from_url as _core_from_url
-from .core.web_core import WebCore
-from .surface import Surface, surface
+from ..core.client import WebClientCore
+from ..core.document import DocumentCore
+from ..core.reference import HttpMethod, ReferenceCore
+from ..core.reference import from_url as _core_from_url
+from ..core.web_core import WebCore
+from ._base import Surface, surface
 
 if TYPE_CHECKING:
-    from .collection import Collection, Field
-    from .core.document import Element
-    from .summary import Metadata, Runtime, Structure, Summary, Transport
-    from .models import Lazy, LazyDocument, LazyReference
+    from ..collection import Collection, Field
+    from ..core.document import Element
+    from ..summary import Metadata, Runtime, Structure, Summary, Transport
+    from .lazy import Lazy, LazyDocument, LazyReference
 
 T = TypeVar("T")
 
@@ -207,8 +207,8 @@ class Session:
         self._core = core
 
     def ref(self, url: str, method: HttpMethod = "get", **kw: Any) -> Any:
-        from .query.expr import Expr
-        from .query.plan import Plan
+        from ..query.expr import Expr
+        from ..query.plan import Plan
 
         spec = _core_from_url(url, method, **kw).model_dump()
         return Expr(Plan(root="Reference", source=spec), self._core)
@@ -227,7 +227,7 @@ class Session:
 
     def document(self, name: str) -> Any:
         """Recover a document from this session's scope, or ``None``."""
-        from .surface import wrap
+        from ._base import wrap
 
         core = self._core.document(name)
         return wrap(core) if core is not None else None
@@ -288,8 +288,8 @@ class _ClientBase:
                 raise AttributeError(name)
             core = object.__getattribute__(self, "_core")
             if name in type(core).ops():
-                from .query.expr import Expr
-                from .query.plan import Plan
+                from ..query.expr import Expr
+                from ..query.plan import Plan
 
                 return getattr(Expr(Plan(root="WebClient"), core), name)
             raise AttributeError(name)
@@ -334,14 +334,14 @@ class _ClientBase:
     def document(self, name: str) -> Document | None:
         """Recover a materialised Document by name (same surface object), or
         ``None`` if it is not (or no longer) in scope."""
-        from .surface import wrap
+        from ._base import wrap
 
         core = self._core.document(name)
         return wrap(core) if core is not None else None
 
     def reference(self, name: str) -> Reference | None:
         """Recover a Reference by its (root) name, or ``None``."""
-        from .surface import wrap
+        from ._base import wrap
 
         core = self._core.reference(name)
         return wrap(core) if core is not None else None
@@ -388,7 +388,7 @@ def RemoteWebClient(url: str, token: str | None = None) -> WebClient:
     """A ``WebClient`` over a remote core -- literally the same surface, executed
     server-side. A factory, not a subclass: the remote-ness is entirely in the
     core it swaps in (``RemoteWebClientCore``)."""
-    from .core.remote import RemoteWebClientCore
+    from ..core.remote import RemoteWebClientCore
 
     return WebClient(core=RemoteWebClientCore(url=url, token=token))
 

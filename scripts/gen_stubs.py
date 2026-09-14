@@ -41,9 +41,9 @@ from webclient.summary import (
 )  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-SURFACES = ROOT / "webclient" / "surfaces.py"
+SURFACES = ROOT / "webclient" / "surfaces" / "eager.py"
 COLLECTION = ROOT / "webclient" / "collection.py"
-MODELS = ROOT / "webclient" / "models.py"
+MODELS = ROOT / "webclient" / "surfaces" / "lazy.py"
 
 #: the cores that map to a surface class (a Core-typed result -> its surface).
 CORES: tuple[type, ...] = (ReferenceCore, DocumentCore)

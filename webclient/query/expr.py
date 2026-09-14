@@ -260,7 +260,7 @@ class WebQuery:
     ``many``."""
 
     if TYPE_CHECKING:
-        from ..models import LazyCollection, LazyDocument, LazyField, LazyReference
+        from ..surfaces import LazyCollection, LazyDocument, LazyField, LazyReference
 
         doc: "LazyDocument"
         ref: "LazyReference"

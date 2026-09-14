@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar
 
 
-from .core.web_core import WebCore
+from ..core.web_core import WebCore
 
 C = TypeVar("C", bound=WebCore)
 
@@ -41,7 +41,7 @@ def wrap(value: Any, *, client: Any = None) -> Any:
     if isinstance(value, (list, tuple)):
         if not any(isinstance(v, WebCore) for v in value):
             return value  # nothing to wrap; preserve identity
-        from .collection import Collection
+        from ..collection import Collection
 
         owner = client or getattr(value[0], "_client", None)
         root = getattr(value[0], "root", "") or getattr(value[0], "name", "")
