@@ -85,7 +85,7 @@ def test_json_query():
         status_code=200,
         content=b'{"items": [{"name": "n0"}, {"name": "n1"}]}',
     )
-    assert doc.select("items[1].name").text == "n1"
+    assert doc.select("items[1].name").text_content == "n1"
 
 
 def test_unknown_format_raises():

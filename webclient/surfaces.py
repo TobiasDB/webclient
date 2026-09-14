@@ -81,8 +81,9 @@ class Reference(Surface[ReferenceCore]):
 
 @surface(DocumentCore)
 class Document(Surface[DocumentCore]):
-    """A resolved document (eager): ``select``/``select_all``/``attr``/``text``/
-    ``render``/events, plus the live interaction set when backed by a page.
+    """A resolved document (eager): ``select``/``select_all``/``attr``/
+    ``text_content``/``render``/events, plus the live interaction set when backed
+    by a page.
     Construct from a core (``Document(core)``) or from core-field kwargs
     (unknown keys are ignored)."""
 
@@ -123,7 +124,7 @@ class Document(Surface[DocumentCore]):
         @property
         def ok(self) -> bool: ...
         @property
-        def text(self) -> str: ...
+        def text_content(self) -> str: ...
         @property
         def title(self) -> str: ...
         @overload

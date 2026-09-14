@@ -25,12 +25,12 @@ def test_async_fetch_execute_and_stream(httpserver):
             document = await ac.fetch(url).acollect()
             assert document.ok and document.title == "Shop"
             titles = await ac.fetch(url).select_all(".title").acollect()
-            assert [t.text for t in titles] == ["Aeropress", "Grinder"]
+            assert [t.text_content for t in titles] == ["Aeropress", "Grinder"]
 
             rows = await (
                 ref.resolve()
                 .select_all(".card")
-                .extract(t=doc.select(".title").attr("text"))
+                .extract(t=doc.select(".title").text_content)
                 .project()
                 .acollect(ac.ref(url))
             )
@@ -40,8 +40,7 @@ def test_async_fetch_execute_and_stream(httpserver):
                 row
                 async for row in ref.resolve()
                 .select_all(".title")
-                .attr("text")
-                .astream(ac.ref(url))
+                .text_content.astream(ac.ref(url))
             ]
             assert sorted(streamed) == ["Aeropress", "Grinder"]
 

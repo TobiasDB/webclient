@@ -54,12 +54,12 @@ def rows_of(wc, site, expr):
 
 def test_scalar_plan_against_a_context(site, wc):
     page = wc.ref(site.url_for("/cards")).resolve().collect()
-    got = doc.select(".title").attr("text").collect(page)
+    got = doc.select(".title").text_content.collect(page)
     assert isinstance(got, Field) and got.get() == "Aeropress"
 
 
 def test_rooted_plan_needs_no_context(site, wc):
-    expr = reference(site.url_for("/cards")).resolve().select(".title").attr("text")
+    expr = reference(site.url_for("/cards")).resolve().select(".title").text_content
     assert expr.collect().get() == "Aeropress"
     with pytest.raises(ValueError, match="needs a context"):
         doc.select(".title").collect()
@@ -69,10 +69,10 @@ def test_collect_is_the_single_trigger(site, wc):
     # .collect() is the one realization path (it runs on the plan's bound client,
     # or the process default, via the core's execute machinery).
     url = site.url_for("/cards")
-    expr = reference(url).resolve().select(".title").attr("text")
+    expr = reference(url).resolve().select(".title").text_content
     assert expr.collect().get() == "Aeropress"  # default client
     # a client-bound plan collects on that client's core -- same value
-    bound = wc.lazy(url).resolve().select(".title").attr("text")
+    bound = wc.lazy(url).resolve().select(".title").text_content
     assert bound.collect().get() == "Aeropress"
 
 
@@ -87,8 +87,8 @@ def test_free_when_and_filter(site, wc):
         ref.resolve()
         .select_all(".card")
         .extract(
-            title=doc.select(".title").attr("text"),
-            state=when(doc.select(".status").attr("text") == "Active")
+            title=doc.select(".title").text_content,
+            state=when(doc.select(".status").text_content == "Active")
             .then("on")
             .otherwise("off"),
         )
@@ -104,9 +104,9 @@ def test_free_when_and_filter(site, wc):
     kept = (
         lazy_filter(
             ref.resolve().select_all(".card"),
-            doc.select(".status").attr("text") == "Active",
+            doc.select(".status").text_content == "Active",
         )
-        .extract(title=doc.select(".title").attr("text"))
+        .extract(title=doc.select(".title").text_content)
         .project()
     )
     assert [r["title"] for r in kept.collect(ctx)] == ["Aeropress", "Kettle"]
@@ -119,12 +119,12 @@ def test_client_bound_lazy_root(site, wc):
         wc.lazy(site.url_for("/cards"))
         .resolve()
         .select_all(".card")
-        .extract(title=doc.select(".title").attr("text"))
+        .extract(title=doc.select(".title").text_content)
         .project()
         .collect()
     )
     assert [r["title"] for r in rows] == ["Aeropress", "Grinder", "Kettle"]
-    one = wc.lazy(site.url_for("/cards")).resolve().select(".title").attr("text")
+    one = wc.lazy(site.url_for("/cards")).resolve().select(".title").text_content
     assert one.collect().get() == "Aeropress"
 
 
@@ -135,8 +135,8 @@ def test_extract_rows_and_project(site, wc):
         ref.resolve()
         .select_all(".card")
         .extract(
-            title=doc.select(".title").attr("text"),
-            active=doc.select(".status").attr("text") == "Active",
+            title=doc.select(".title").text_content,
+            active=doc.select(".status").text_content == "Active",
         )
         .project(),
     )
@@ -152,12 +152,12 @@ def test_filter_on_expression_and_on_extracted_field(site, wc):
         ref.resolve()
         .select_all(".card")
         .extract(
-            title=doc.select(".title").attr("text"),
-            active=doc.select(".status").attr("text") == "Active",
+            title=doc.select(".title").text_content,
+            active=doc.select(".status").text_content == "Active",
         )
     )
     by_expr = rows_of(
-        wc, site, base.filter(doc.select(".status").attr("text") == "Active").project()
+        wc, site, base.filter(doc.select(".status").text_content == "Active").project()
     )
     by_field = rows_of(wc, site, base.filter(doc.field("active")).project())
     assert sorted(r["title"] for r in by_expr) == ["Aeropress", "Kettle"]
@@ -171,7 +171,7 @@ def test_follow_links_via_reference_and_param(site, wc):
         ref.resolve()
         .select_all(".card")
         .extract(
-            title=doc.select(".title").attr("text"),
+            title=doc.select(".title").text_content,
             link=doc.select("a").attr("href"),
         )
         .extract(
@@ -192,8 +192,8 @@ def test_missing_field_is_not_ok_under_the_plan_default(site, wc):
         ref.resolve()
         .select_all(".card")
         .extract(
-            title=doc.select(".title").attr("text"),
-            oops=doc.select(".nope").attr("text"),
+            title=doc.select(".title").text_content,
+            oops=doc.select(".nope").text_content,
         )
     )
     rows = rows_of(wc, site, base.project())
@@ -209,19 +209,19 @@ def test_raise_policy_aborts_the_plan(site, wc):
             site,
             ref.resolve()
             .select_all(".card")
-            .extract(oops=doc.select(".nope", error=RAISE).attr("text")),
+            .extract(oops=doc.select(".nope", error=RAISE).text_content),
         )
 
 
 def test_when_then_otherwise_and_sibling_field(site, wc):
-    status = doc.select(".status").attr("text")
+    status = doc.select(".status").text_content
     rows = rows_of(
         wc,
         site,
         ref.resolve()
         .select_all(".card")
         .extract(
-            title=doc.select(".title").attr("text"),
+            title=doc.select(".title").text_content,
             flag=when(status == "Active").then("on").otherwise("off"),
             again=doc.field("title"),
         )
@@ -253,7 +253,7 @@ def test_stream_yields_rows_and_publishes_plan_events(site, wc):
     it = (
         ref.resolve()
         .select_all(".card")
-        .extract(title=doc.select(".title").attr("text"))
+        .extract(title=doc.select(".title").text_content)
         .project()
         .stream(wc.ref(site.url_for("/cards")))
     )
@@ -266,8 +266,8 @@ def test_eager_and_lazy_agree(site, wc):
     page = wc.ref(site.url_for("/cards")).resolve().collect()
     cards = page.select_all(".card")
     cards.extract(
-        title=doc.select(".title").attr("text"),
-        active=doc.select(".status").attr("text") == "Active",
+        title=doc.select(".title").text_content,
+        active=doc.select(".status").text_content == "Active",
     )
     eager = cards.filter(doc.field("active")).project()
     lazy_rows = rows_of(
@@ -276,8 +276,8 @@ def test_eager_and_lazy_agree(site, wc):
         ref.resolve()
         .select_all(".card")
         .extract(
-            title=doc.select(".title").attr("text"),
-            active=doc.select(".status").attr("text") == "Active",
+            title=doc.select(".title").text_content,
+            active=doc.select(".status").text_content == "Active",
         )
         .filter(doc.field("active"))
         .project(),
@@ -365,4 +365,4 @@ def test_per_call_collect_is_eager(site, wc):
     title = (
         wc.ref(site.url_for("/cards")).resolve().select(".title", _collect=True)
     )  # a materialised Document
-    assert title.attr("text").get() == "Aeropress"  # eager from here
+    assert title.text_content == "Aeropress"  # eager from here (a str)

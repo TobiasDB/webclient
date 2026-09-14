@@ -31,7 +31,7 @@ _DROP = object()
 _ELEMENT_OPS = frozenset(
     {
         "attr",
-        "text",
+        "text_content",
         "title",
         "render",
         "ref",
@@ -237,7 +237,7 @@ async def astream(
     each row/element is yielded the moment its element finishes -- nothing is
     materialised first. Two tail shapes stream: a terminal ``project()`` (rows,
     optionally preceded by ``extract``/``filter``) and a terminal element op
-    (e.g. ``.attr("text")``). Any other plan falls back to evaluate-then-yield.
+    (e.g. ``.text_content``). Any other plan falls back to evaluate-then-yield.
     """
     from .collection import Collection
 

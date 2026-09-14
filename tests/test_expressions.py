@@ -43,7 +43,7 @@ def test_reference_url_is_a_lazy_root_with_a_source():
 
 
 def test_comparisons_and_logic_record_as_op_steps():
-    expr = (doc.attr("text") == "x") & ~(doc.attr("a") != "y")
+    expr = (doc.text_content == "x") & ~(doc.attr("a") != "y")
     assert expr._plan.steps[-1].kind == "op" and expr._plan.steps[-1].name == "and"
     other = expr._plan.steps[-1].args[0].plan
     assert [s.name for s in other.steps if s.kind == "op"] == ["ne", "not"]
@@ -61,7 +61,7 @@ def test_python_coercion_is_refused_on_expressions():
 
 
 def test_extract_and_functions_record_subplans():
-    expr = many.extract(title=doc.select(".t").attr("text"), flag=field("title"))
+    expr = many.extract(title=doc.select(".t").text_content, flag=field("title"))
     call = expr._plan.steps[1]
     assert call.kwargs["title"].plan.root == "Document"
     assert call.kwargs["flag"].plan.steps[0].name == "field"
@@ -71,7 +71,7 @@ def test_extract_and_functions_record_subplans():
 
 
 def test_json_roundtrip_and_wire_validation():
-    expr = ref.resolve().select_all(".card").extract(t=doc.attr("text")).project()
+    expr = ref.resolve().select_all(".card").extract(t=doc.text_content).project()
     wire = expr._plan.model_dump_json()
     back = from_plan(Plan.model_validate_json(wire))
     assert back._plan == expr._plan and back.is_lazy

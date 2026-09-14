@@ -1,7 +1,7 @@
 """DocumentCore: the core behind a document.
 
 Core Fields = the resolved response (the surface's data). Backings = per-medium
-op providers: HtmlBacking (css/xpath select, attr, text, render), JsonBacking
+op providers: HtmlBacking (css/xpath select, attr, text_content, render), JsonBacking
 (dotted path), plus StatusBacking (ok/error/is_ok/reload/summary), EventBacking
 (events) and LiveBacking (browser interaction). A selected element is itself a
 DocumentCore (subtree / json sub-value), so selection nests.
@@ -252,10 +252,12 @@ class EventBacking(Backing):
 
 class HtmlBacking(Backing):
     """Tree ops for html/xml. ``select``/``select_all`` yield element
-    DocumentCores; ``attr``/``text`` read from the element (or body)."""
+    DocumentCores; ``text_content`` reads the element's decoded text (all
+    descendant text, tags stripped -- the DOM ``textContent``); ``attr`` reads a
+    real HTML attribute."""
 
     provides = frozenset({"select", "select_all", "attr", "render"})
-    props = frozenset({"text", "title"})
+    props = frozenset({"text_content", "title"})
     gate = "tree"
 
     def applies(self, core: "DocumentCore") -> bool:
@@ -363,8 +365,6 @@ class HtmlBacking(Backing):
     def attr(self, core: "DocumentCore", name: str, *, error: Any = None) -> Any:
         if core._missing:
             return Field(None, ok=False)
-        if name == "text":
-            return Field(self.text(core))
         el = core._element
         value = el.get(name) if el is not None else None
         if name in ("href", "src", "action"):
@@ -379,7 +379,7 @@ class HtmlBacking(Backing):
             return Field(None, ok=False)
         return Field(value)
 
-    def text(self, core: "DocumentCore") -> "str | None":
+    def text_content(self, core: "DocumentCore") -> "str | None":
         if core._missing:
             return None
         el = core._element if core._element is not None else self._tree(core)
@@ -388,10 +388,10 @@ class HtmlBacking(Backing):
 
 class JsonBacking(Backing):
     """Dotted-path ops for json. A selected node is a DocumentCore holding the
-    sub-value; ``attr('value')`` / ``text`` read it."""
+    sub-value; ``attr('value')`` / ``text_content`` read it."""
 
     provides = frozenset({"select", "select_all", "attr", "render"})
-    props = frozenset({"text"})
+    props = frozenset({"text_content"})
     gate = "tree"
 
     def applies(self, core: "DocumentCore") -> bool:
@@ -445,7 +445,7 @@ class JsonBacking(Backing):
             return Field(data[name])
         return Field(data)
 
-    def text(self, core: "DocumentCore") -> "str | None":
+    def text_content(self, core: "DocumentCore") -> "str | None":
         if core._missing:
             return None
         value = self._data(core)

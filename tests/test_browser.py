@@ -44,21 +44,21 @@ def app(httpserver, wc):
 def test_browser_fetch_returns_live_document(app):
     assert isinstance(app, LiveDocument)
     assert app.ok and app.kind == "html"
-    assert app.select("h2").text == "Card One"
-    assert app.select('//div[@id="c2"]/h2').text == "Card Two"  # xpath
+    assert app.select("h2").text_content == "Card One"
+    assert app.select('//div[@id="c2"]/h2').text_content == "Card Two"  # xpath
 
 
 def test_click_mutates_dom_and_records_everything(app):
     app.click("#c1 button")
     app.wait_for(".added", timeout=5.0)
-    assert app.select(".added").text == "added-one"
+    assert app.select(".added").text_content == "added-one"
     assert [a.action for a in app.action_events if a.action == "click"] == ["click"]
     assert any(isinstance(e, DOMUpdateEvent) for e in app.dom_mutations)
 
 
 def test_write_and_live_state(app):
     app.write("#name", "Ada")
-    assert app.select("#out").text == "Ada"
+    assert app.select("#out").text_content == "Ada"
     assert app.evaluate("document.querySelector('#name').value") == "Ada"
 
 
@@ -103,7 +103,7 @@ def test_reload_reproduces_state(httpserver, wc):
     fresh = live.reload()  # re-resolves + replays the action chain
     try:
         assert fresh.select(".added", error=RETURN).ok
-        assert fresh.select("#out").text == "Bob"
+        assert fresh.select("#out").text_content == "Bob"
     finally:
         wc.release(fresh)
 

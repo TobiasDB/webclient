@@ -12,7 +12,7 @@ is **generated** from those backings (`scripts/gen_stubs.py`), so the types neve
 drift from the runtime.
 
 > Status: a solid, well-typed engine kernel with a task-verb layer
-> (`webclient.tools`). Crawling and true incremental streaming are not built yet.
+> (`webclient.tools`) and truly incremental streaming. Crawling is not built yet.
 
 ## Install
 
@@ -49,7 +49,7 @@ with WebClient() as wc:
 
     # eager: walk a materialised Document
     for card in page.select_all(".card"):
-        title = card.select(".title").text            # a str
+        title = card.select(".title").text_content            # a str
         href = card.select("a").attr("href")          # a Reference (link attrs narrow)
         print(title, href.url)
 
@@ -58,7 +58,7 @@ with WebClient() as wc:
         wc.fetch("https://shop.example/")
         .select_all(".card")
         .extract(
-            title=doc.select(".title").attr("text"),
+            title=doc.select(".title").text_content,
             link=doc.select("a").attr("href"),
         )
         .collect()      # -> a Collection
@@ -107,7 +107,7 @@ async def main():
         rows = await (
             ac.fetch("https://shop.example/")
             .select_all(".card")
-            .extract(title=doc.select(".title").attr("text"))
+            .extract(title=doc.select(".title").text_content)
             .acollect()
         )
     return page.title, rows
@@ -139,7 +139,7 @@ With the `browser` extra, resolve on a real page and interact with it:
 ```python
 live = wc.ref("https://app.example/").resolve(browser=True).collect()
 live.click("#load-more")
-print(live.select("#cart li").text)
+print(live.select("#cart li").text_content)
 wc.release(live)   # return the page to the pool
 ```
 

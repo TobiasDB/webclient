@@ -42,7 +42,7 @@ def test_ref_roundtrips_request_and_action_chain(site, wc):
     rebuilt.actions.append({"op": "click", "args": ["#go"]})
     again = Reference.model_validate_json(rebuilt.model_dump_json())
     assert again.model_dump() == rebuilt.model_dump()  # binding is private state
-    assert wc.fetch(again).collect().select("h1").text == "2"
+    assert wc.fetch(again).collect().select("h1").text_content == "2"
 
 
 def test_derived_references_are_unnamed_and_rooted(site, wc):

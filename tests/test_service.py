@@ -125,8 +125,8 @@ def test_render_via_execute(client_and_server):
 def test_select_via_execute(client_and_server):
     api, server = client_and_server
     doc_id = _handle(api, server.url_for("/cards"))["id"]
-    assert _exec(api, doc_id, doc.select(".title").attr("text")) == "Aeropress"
-    assert _exec(api, doc_id, doc.select_all(".title").attr("text")) == [
+    assert _exec(api, doc_id, doc.select(".title").text_content) == "Aeropress"
+    assert _exec(api, doc_id, doc.select_all(".title").text_content) == [
         "Aeropress",
         "Grinder",
     ]
@@ -149,7 +149,7 @@ def test_plan_submission(client_and_server):
         ref.resolve()
         .select_all(".card")
         .extract(
-            title=doc.select(".title").attr("text"), link=doc.select("a").attr("href")
+            title=doc.select(".title").text_content, link=doc.select("a").attr("href")
         )
         .extract(name=doc.reference("link").resolve().select("name").attr("value"))
         .project()
@@ -206,7 +206,7 @@ def test_search_as_a_plan(httpserver):
         ref.resolve()
         .select_all(".result", limit=1)
         .extract(
-            title=doc.select(".result__a").attr("text"),
+            title=doc.select(".result__a").text_content,
             url=doc.select(".result__a").attr("href"),
         )
         .project()

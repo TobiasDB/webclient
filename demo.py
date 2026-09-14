@@ -166,14 +166,14 @@ def main() -> None:
 
         # [M1] Selection: css or xpath, elements only; index/optional knobs.
         for card in shop.select_all(".card"):
-            title = card.select(".title").text
-            price = card.select("./span[@class='price']").text  # xpath
+            title = card.select(".title").text_content
+            price = card.select("./span[@class='price']").text_content  # xpath
             link = card.select("a").attr("href")  # -> Reference
             # [M2] Follow the link: json selection uses a dotted path.
             item = link.resolve()
             print(
                 f"card:        {title} {price} -> "
-                f"{item.select('name').text} (stock {item.select('stock.count').text})"
+                f"{item.select('name').text_content} (stock {item.select('stock.count').text_content})"
             )
 
         # [render] One render(format) surface, dispatched to the backing for
@@ -219,7 +219,7 @@ def main() -> None:
         live = wc.ref(f"{base}/app").resolve(browser=True).collect()
         live.write("#qty", "3").click("#add")
         live.wait_for("#cart li", timeout=5.0)
-        print("live dom:   ", live.select("#cart li").text)
+        print("live dom:   ", live.select("#cart li").text_content)
         print("console:    ", [e.text for e in live.console])
         print("dom events: ", len(live.dom_mutations), "mutations captured")
 
@@ -246,8 +246,8 @@ def main() -> None:
         .resolve()
         .select_all(".card")
         .extract(
-            title=doc.select(".title").attr("text"),
-            price=doc.select(".price").attr("text"),
+            title=doc.select(".title").text_content,
+            price=doc.select(".price").text_content,
             link=doc.select("a").attr("href"),
         )
         .filter(doc.field("price") != "")
@@ -267,7 +267,7 @@ def main() -> None:
         #      wc.lazy(url) is a lazy root bound to THIS client (companion to
         #      collect()). Same result as wc.execute; the surface is moving lazy.
         print("collect:    ", plan.collect()[0]["title"])
-        bound = wc.lazy(f"{base}/").resolve().select(".title").attr("text")
+        bound = wc.lazy(f"{base}/").resolve().select(".title").text_content
         print("wc.lazy:    ", bound.collect().get())
 
         # [§8] Polars-style free when()/filter() on the lazy surface.
@@ -278,8 +278,8 @@ def main() -> None:
             ref.resolve()
             .select_all(".card")
             .extract(
-                title=doc.select(".title").attr("text"),
-                tier=when(doc.select(".price").attr("text") != "")
+                title=doc.select(".title").text_content,
+                tier=when(doc.select(".price").text_content != "")
                 .then("priced")
                 .otherwise("free"),
             )
@@ -292,9 +292,9 @@ def main() -> None:
         priced = (
             lazy_filter(
                 ref.resolve().select_all(".card"),
-                doc.select(".price").attr("text") != "",
+                doc.select(".price").text_content != "",
             )
-            .extract(title=doc.select(".title").attr("text"))
+            .extract(title=doc.select(".title").text_content)
             .project()
         )
         print("free filter:", [r["title"] for r in priced.collect(wc.ref(f"{base}/"))])
@@ -306,9 +306,9 @@ def main() -> None:
             ref.resolve()
             .select_all(".card")
             .extract(
-                title=doc.select(".title").attr("text"),
+                title=doc.select(".title").text_content,
                 link=doc.select("a.link").attr("href"),
-                missing=doc.select(".nope").attr("text"),
+                missing=doc.select(".nope").text_content,
             )
             .extract(
                 name=doc.reference("link").resolve().select("name").attr("value"),
@@ -338,7 +338,7 @@ def main() -> None:
         # [P3] Eager and lazy agree: the same extract on a resolved page.
         page = wc.ref(f"{base}/").resolve().collect()
         cards = page.select_all(".card").extract(
-            title=doc.select(".title").attr("text")
+            title=doc.select(".title").text_content
         )
         print("eager:      ", cards.name, "->", [r["title"] for r in cards.project()])
 
@@ -351,7 +351,7 @@ def main() -> None:
             .select_all(".card")
             .limit(2)
             .extract(
-                title=doc.select(".title").attr("text"),
+                title=doc.select(".title").text_content,
                 url=doc.select("a").attr("href"),
             )
             .collect()
@@ -374,7 +374,7 @@ def main() -> None:
             rows = await (
                 ref.resolve()
                 .select_all(".card")
-                .extract(title=doc.select(".title").attr("text"))
+                .extract(title=doc.select(".title").text_content)
                 .project()
                 .acollect(ac.ref(f"{base}/"))
             )
@@ -413,7 +413,7 @@ def main() -> None:
             "/execute",
             headers=auth,
             json={
-                "plan": doc.select_all(".title").attr("text")._plan.model_dump(),
+                "plan": doc.select_all(".title").text_content._plan.model_dump(),
                 "document_id": did,
             },
         ).json()
@@ -421,7 +421,7 @@ def main() -> None:
         plan = (
             ref.resolve()
             .select_all(".card")
-            .extract(title=doc.select(".title").attr("text"))
+            .extract(title=doc.select(".title").text_content)
             .project()
             ._plan
         )
@@ -458,12 +458,12 @@ def main() -> None:
         print(
             "remote render: ", remote_doc.render("markdown").collect().splitlines()[0]
         )
-        print("remote select: ", remote_doc.select_all(".title").attr("text").collect())
+        print("remote select: ", remote_doc.select_all(".title").text_content.collect())
         # identical plan API -- runs server-side, no local browser/lxml
         same_plan = (
             ref.resolve()
             .select_all(".card")
-            .extract(title=doc.select(".title").attr("text"))
+            .extract(title=doc.select(".title").text_content)
             .project()
         )
         print("remote plan:   ", same_plan.collect(rc.ref(f"{base}/")))

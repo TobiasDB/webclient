@@ -95,8 +95,8 @@ def test_render_over_the_wire(remote):
 def test_select_is_one_batched_call(remote):
     rc, server = remote
     d = rc.fetch(server.url_for("/cards")).collect()
-    assert d.select(".title").attr("text").collect() == "Aeropress"
-    assert d.select_all(".title").attr("text").collect() == ["Aeropress", "Grinder"]
+    assert d.select(".title").text_content.collect() == "Aeropress"
+    assert d.select_all(".title").text_content.collect() == ["Aeropress", "Grinder"]
     hrefs = d.select_all("a").attr("href").collect()
     assert all(u.startswith("http") for u in hrefs)
 
@@ -107,7 +107,7 @@ def test_plan_execution_is_portable(remote):
         ref.resolve()
         .select_all(".card")
         .extract(
-            title=doc.select(".title").attr("text"), link=doc.select("a").attr("href")
+            title=doc.select(".title").text_content, link=doc.select("a").attr("href")
         )
         .extract(name=doc.reference("link").resolve().select("name").attr("value"))
         .project()
@@ -121,7 +121,7 @@ def test_plan_matches_local_client(remote, httpserver):
     plan = (
         ref.resolve()
         .select_all(".card")
-        .extract(title=doc.select(".title").attr("text"))
+        .extract(title=doc.select(".title").text_content)
         .project()
     )
     remote_rows = sorted(
@@ -178,7 +178,7 @@ def test_remote_needs_no_browser_or_lxml():
         "    return _real(name, *a, **k)\n"
         "builtins.__import__ = guard\n"
         "from webclient import RemoteWebClient, doc, ref\n"
-        "plan = ref.resolve().select_all('.card').extract(t=doc.select('.t').attr('text'))\n"
+        "plan = ref.resolve().select_all('.card').extract(t=doc.select('.t').text_content)\n"
         "assert plan._plan.root == 'Reference'\n"
         "import sys\n"
         "assert 'lxml' not in sys.modules and 'playwright' not in sys.modules\n"

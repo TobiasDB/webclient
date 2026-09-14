@@ -99,7 +99,7 @@ class LazyDocument(Lazy["Document"]):
     events: "list[Any]"
     message: "LazyField[str]"
     ok: "LazyField[bool]"
-    text: "LazyField[str]"
+    text_content: "LazyField[str]"
     title: "LazyField[str]"
     @overload
     def attr(self, name: Literal['href', 'src', 'action']) -> "LazyReference": ...  # type: ignore[overload-overlap]

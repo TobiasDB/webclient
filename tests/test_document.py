@@ -31,12 +31,12 @@ def make_doc(**overrides) -> Document:
 
 def test_text_uses_declared_encoding_first():
     doc = make_doc(content="café".encode("latin-1"), encoding="latin-1")
-    assert doc.text == "café"
+    assert doc.text_content == "café"
 
 
 def test_text_detects_encoding_when_undeclared():
     doc = make_doc(content="décor première café".encode("latin-1"), encoding=None)
-    assert "café" in doc.text
+    assert "café" in doc.text_content
 
 
 def test_ok_is_2xx():
@@ -48,12 +48,12 @@ def test_ok_is_2xx():
 
 
 def test_select_css():
-    assert make_doc().select(".card .title").text == "First Card"
+    assert make_doc().select(".card .title").text_content == "First Card"
 
 
 def test_select_xpath():
     node = make_doc().select('//div[@class="card"][2]//h2')
-    assert node.text == "Second Card"
+    assert node.text_content == "Second Card"
 
 
 def test_select_index_and_negative_index():
@@ -102,7 +102,7 @@ def test_json_select_and_attr_value():
     doc = make_doc(kind="json", content=b'{"items": [{"n": 1}, {"n": 2}], "name": "x"}')
     assert doc.select("name").attr("value").get() == "x"
     assert [d.attr("n").get() for d in doc.select_all("items")] == [1, 2]
-    assert doc.select("items[1].n").text == "2"
+    assert doc.select("items[1].n").text_content == "2"
 
 
 # -- elements are documents (P3) -------------------------------------------- #
@@ -110,14 +110,14 @@ def test_json_select_and_attr_value():
 
 def test_element_text_is_whitespace_normalized():
     el = make_doc().select(".card .title")
-    assert el.text == "First Card" and el.attr("text").get() == "First Card"
+    assert el.text_content == "First Card"
     assert isinstance(el, Document) and el.kind == "html"
     assert el.content.startswith(b"<h2")  # element bytes
 
 
 def test_element_select_is_scoped_to_element():
     card = make_doc().select(".card", index=2)
-    assert card.select(".status").text == "Inactive"
+    assert card.select(".status").text_content == "Inactive"
     assert card.status_code == 200 and card.url == "https://example.com/list"
 
 
@@ -160,15 +160,15 @@ def test_json_data():
     )
     import json as _j
 
-    assert _j.loads(doc.text) == {"a": [1, 2]}
+    assert _j.loads(doc.text_content) == {"a": [1, 2]}
 
 
 def test_xml_selection_and_lenient_parse():
     xml = b"<feed><entry><title>One</title></entry><entry><title>Two</title>"
     doc = Document(kind="xml", hostname="e.com", content=xml, status_code=200)
-    titles = [n.text for n in doc.select_all("//entry/title")]
+    titles = [n.text_content for n in doc.select_all("//entry/title")]
     assert titles == ["One", "Two"]  # unclosed tags recovered
-    assert doc.select("entry title").text == "One"  # css works too
+    assert doc.select("entry title").text_content == "One"  # css works too
 
 
 def test_events_of_by_class_and_topic_prefix():

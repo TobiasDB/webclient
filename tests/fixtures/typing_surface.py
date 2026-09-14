@@ -37,9 +37,9 @@ assert_type(ref, Reference)
 
 # element ops on a Document
 assert_type(doc.select("a").select_all("li"), Collection[Document])
-assert_type(doc.attr("text"), Field[str])
+assert_type(doc.text_content, str)  # eager scalar is raw; the lazy tier wraps it
 assert_type(doc.attr("href"), Reference)  # link attrs narrow
-assert_type(doc.attr("href").resolve().attr("text"), Field[str])
+assert_type(doc.attr("href").resolve().text_content, str)
 assert_type(ref.resolve(), Document)
 
 # a Field materialises to its value
@@ -49,7 +49,10 @@ assert_type(title.is_ok(), Field[bool])
 
 # Collection lifts element ops and keeps the element type
 assert_type(many.select("a"), Collection[Document])
-assert_type(many.attr("text"), Collection[Field[str]])
+# NOTE: the collection lift renders a scalar prop as a method (def text_content())
+# whereas Document/LazyDocument expose it as a property -- a tier inconsistency to
+# resolve in the vocabulary/type-safety pass (#4/#7).
+assert_type(many.text_content(), Collection[Field[str]])
 assert_type(many.filter(title == "x"), Collection[Document])
 assert_type(many.extract(name=title), Collection[Document])
 assert_type(many.project(), list[dict[str, Any]])
@@ -57,11 +60,11 @@ assert_type(many.project(_Row), list[_Row])  # schema-guided -> typed rows
 
 # reference("url") is a lazy root, typed as Reference
 assert_type(reference("https://e.com"), Reference)
-assert_type(reference("https://e.com").resolve().select("a").attr("text"), Field[str])
+assert_type(reference("https://e.com").resolve().select("a").text_content, str)
 
 # extract -> project pipeline
 assert_type(
-    doc.select_all("li").extract(t=doc.attr("text")).project(), list[dict[str, Any]]
+    doc.select_all("li").extract(t=doc.text_content).project(), list[dict[str, Any]]
 )
 
 # render() is the single representation function, typed per format
@@ -89,19 +92,19 @@ assert_type(_wc.summary("https://e.com").collect(), dict[str, Any])
 assert_type(
     _wc.fetch("https://e.com")
     .select_all(".card")
-    .extract(t=doc.attr("text"))
+    .extract(t=doc.text_content)
     .project()
     .collect(),
     list[dict[str, Any]],
 )
 assert_type(_wc.fetch("https://e.com").select(".t"), LazyDocument)
 assert_type(_wc.fetch("https://e.com").attr("href"), LazyReference)
-assert_type(_wc.fetch("https://e.com").attr("text"), LazyField[str])
+assert_type(_wc.fetch("https://e.com").text_content, LazyField[str])
 assert_type(_wc.fetch("https://e.com").collect(), Document)
-assert_type(_wc.fetch("https://e.com").attr("text").collect(), Field[str])
+assert_type(_wc.fetch("https://e.com").text_content.collect(), Field[str])
 assert_type(_wc.ref("https://e.com").resolve().collect(), Document)
 assert_type(
-    _wc.ref("https://e.com").resolve().select(".t").attr("text").collect(), Field[str]
+    _wc.ref("https://e.com").resolve().select(".t").text_content.collect(), Field[str]
 )
 
 # a client-bound plan collects on that client (the one realization path)
@@ -116,4 +119,4 @@ async def _async_surface() -> None:
     # acollect() is the one async realization (the twin of collect())
     assert_type(await _ac.fetch("https://e.com").acollect(), Document)
     assert_type(await _ac.ref("https://e.com").resolve().acollect(), Document)
-    assert_type(await _ac.fetch("https://e.com").attr("text").acollect(), Field[str])
+    assert_type(await _ac.fetch("https://e.com").text_content.acollect(), Field[str])
