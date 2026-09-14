@@ -80,6 +80,34 @@ class WebCore:
         """Whether any chosen backing provides ``op`` (call or prop)."""
         return any(op in b.provides or op in b.props for b in self.choose())
 
+    # -- a core IS its own eager surface -------------------------------------
+    def __getattr__(self, name: str) -> Any:
+        """A resolved core is directly usable as its eager surface: an op name
+        dispatches immediately (a prop op returns its value; a call op returns a
+        dispatcher), a list of cores comes back as a ``Collection``. Non-op names
+        delegate to the next ``__getattr__`` in the MRO -- pydantic's, for the
+        cores' private attrs (``_page``/``_client``/...). This is why no wrapper
+        (``Surface``) is needed: the typed ``Document``/``Reference`` are pure
+        stubs over the core."""
+        if not name.startswith("_"):
+            cls = type(self)
+            if name in cls.prop_ops():
+                return _wrap_result(self.dispatch(name))
+            if name in cls.ops():
+
+                def _call(*args: Any, **kwargs: Any) -> Any:
+                    return _wrap_result(self.dispatch(name, *args, **kwargs))
+
+                return _call
+        from pydantic import BaseModel
+
+        # delegate to pydantic's __getattr__ (the cores' private attrs); it is a
+        # runtime method not in the type stubs, so fetch it dynamically.
+        pyd_getattr = getattr(BaseModel, "__getattr__", None)
+        if pyd_getattr is not None:
+            return pyd_getattr(self, name)
+        raise AttributeError(name)
+
     # -- op surface (for generation) ----------------------------------------
     @classmethod
     def ops(cls) -> dict[str, Backing]:
@@ -98,6 +126,19 @@ class WebCore:
             for op in backing.props:
                 table.setdefault(op, backing)
         return table
+
+
+def _wrap_result(value: Any) -> Any:
+    """Present a dispatch result as an eager value: a list of cores becomes a
+    ``Collection`` (so the row-shaping ops apply); a single core is already its
+    own surface; anything else (a ``Field``/scalar) passes through."""
+    if isinstance(value, (list, tuple)) and any(isinstance(v, WebCore) for v in value):
+        from ..collection import Collection
+
+        owner = getattr(value[0], "_client", None)
+        root = getattr(value[0], "root", "") or getattr(value[0], "name", "")
+        return Collection(list(value), client=owner, root=root)
+    return value
 
 
 __all__ = ["WebCore", "Backing", "UnsupportedOp"]
