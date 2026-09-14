@@ -32,11 +32,27 @@ only — no code yet. Composes with the Summary `probe` facet (its read-side).*
 - Detection stays pure (`webclient/resiliency/detect.py`) so the `remote` core-swap runs
   the identical ladder server-side; the crawl/service tiers inherit it unchanged.
 
-**P0 (first commit, zero behaviour change):** the 5 models + `Resolve` in
-`core/reference/models.py`; map today's `retries` / `retry_backoff` / `min_interval` /
-`proxy` onto `RetryPolicy` / `RatePolicy` / `ProxyPolicy`; add the `resolve=` default
-field + per-call kwargs (carried, not yet acted on); add `Document._probe` + populate
-the `Probe` facet trivially (`was_browser_required` from the browser flag).
+**Build status (2026-09-14):**
+- **P0 ✅ shipped** — the 5 frozen models + `Resolve` in `core/reference/models.py`
+  (`.auto()` per concern; `resolve_policy(value, cls)` normalises `Policy|"auto"|AUTO|
+  None`); `ProbeRecord` + `Document._probe` + the `ProbeBacking` lighting up the
+  `probe` summary facet.
+- **P1 ✅ shipped** — `webclient/resiliency/detect.py`: pure `classify(...) -> Signals`
+  (anti-bot vendor only on a real challenge, not a bare CDN header; JS-gated; block;
+  paywall; login wall). `WebClient._observe` records a `ProbeRecord` on every static
+  fetch — OBSERVE ONLY, so an agent sees "datadome-blocked / JS-gated / login-walled"
+  in the summary.
+- **P2 ✅ shipped** — `browser="auto"` (or `BrowserPolicy(when="auto")`): static first,
+  escalate to a browser render only when the page is JS-gated (`_escalate_to_browser`
+  records the two-tier trail). `resolve`/`fetch` widened to `bool | "never"|"auto"|
+  "always"`; a bare fetch stays static-only.
+- **P3 (rate/proxy) / P4 (anti-bot/stealth/captcha) — remaining.** RATE (adaptive
+  AutoThrottle) is in-process and buildable next; **proxy rotation, stealth and captcha
+  need external backends** (proxy pools, a stealth browser service, a solver), reached
+  through the `RemoteWebClient` core-swap — the policy models + detection + probe hooks
+  are in place, but the live backends are out of scope for an offline build. The clear
+  next in-process step is threading `retry`/`rate` off a client-default `Resolve` (map
+  today's `retries`/`min_interval` onto it) so those two policies drive the machinery.
 
 The caller writes, per concern:
 
