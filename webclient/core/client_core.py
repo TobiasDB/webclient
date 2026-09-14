@@ -37,6 +37,26 @@ def _materialize(result: Any) -> Any:
     return result
 
 
+def _retry_after_seconds(value: str | None) -> float | None:
+    """Parse a ``Retry-After`` header (delta-seconds or an HTTP-date) into a
+    non-negative delay, or ``None`` if absent/unparseable."""
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return max(0.0, float(int(value)))
+    except ValueError:
+        pass
+    try:
+        import time
+        from email.utils import parsedate_to_datetime
+
+        when = parsedate_to_datetime(value)
+        return max(0.0, when.timestamp() - time.time())
+    except Exception:
+        return None
+
+
 class NameScope:
     """An ordered, optionally LRU-capped map of scoped names to objects. Names
     are ``{kind}:{scope:03d}-{seq:03d}``; refs and docs share the scope's seq."""
@@ -334,7 +354,12 @@ class WebClientCore(WebCore, BaseModel):
         doc, resp = await self._afetch_once(ref, headers)
         attempt = 0
         while doc.error is not None and doc.error.retriable and attempt < self.retries:
-            await asyncio.sleep(self.retry_backoff * (2**attempt))
+            delay = self.retry_backoff * (2**attempt)
+            if resp is not None:  # honour a server-sent Retry-After (429/503)
+                after = _retry_after_seconds(resp.headers.get("retry-after"))
+                if after is not None:
+                    delay = min(after, 60.0)  # cap so a huge value can't stall us
+            await asyncio.sleep(delay)
             attempt += 1
             doc, resp = await self._afetch_once(ref, headers)
         self._register(doc, ref)

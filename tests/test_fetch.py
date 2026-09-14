@@ -219,3 +219,39 @@ def test_engine_loop_reentrancy_guard(wc):
 
     with pytest.raises(RuntimeError, match="loop thread"):
         loop.run(outer())
+
+
+def test_retry_after_parsing():
+    import time
+    from email.utils import formatdate
+
+    from webclient.core.client_core import _retry_after_seconds
+
+    assert _retry_after_seconds("5") == 5.0
+    assert _retry_after_seconds("  3 ") == 3.0
+    assert _retry_after_seconds(None) is None
+    assert _retry_after_seconds("soon") is None
+    future = _retry_after_seconds(formatdate(time.time() + 10, usegmt=True))
+    assert future is not None and 5 < future <= 10
+
+
+def test_retry_honours_retry_after_over_backoff(httpserver):
+    import time
+
+    from werkzeug.wrappers import Response
+
+    calls = {"n": 0}
+
+    def flaky(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return Response("busy", status=503, headers={"Retry-After": "0"})
+        return Response("<html><title>ok</title></html>", content_type="text/html")
+
+    httpserver.expect_request("/ra").respond_with_handler(flaky)
+    # a large backoff: if Retry-After were ignored the retry would wait ~5s
+    with WebClient(retries=1, retry_backoff=5.0) as wc:
+        start = time.monotonic()
+        doc = wc.fetch(httpserver.url_for("/ra")).collect()
+        elapsed = time.monotonic() - start
+    assert doc.ok and calls["n"] == 2 and elapsed < 2.0
