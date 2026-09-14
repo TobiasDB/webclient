@@ -1,7 +1,7 @@
 """WebClientCore: the engine core.
 
 Holds the engine loop, a ``ClientPool`` (leasing http clients + browser pages),
-the event bus, renderer plugins and name scopes, and the machinery that drives
+the event bus, registered backings (``use``) and name scopes, and the machinery that drives
 transport (``afetch``) and plan execution (``execute``/``aexecute``). Its
 user-facing features are backings (``FetchBacking``: ref/fetch/summary --
 :mod:`.fetch`); the ``WebClient`` / ``AsyncWebClient`` surface is a thin
@@ -125,7 +125,9 @@ class WebClientCore(WebCore, BaseModel):
 
     _loop: Any = PrivateAttr(default=None)
     _pool: Any = PrivateAttr(default=None)  # ClientPool (lazy)
-    _render_table: dict[tuple[str, str], Any] = PrivateAttr(default_factory=dict)
+    #: backings registered via ``use(...)``, chosen before the built-ins (newest
+    #: first) by every core bound to this client -- the extensibility hook.
+    _backings: list[Backing] = PrivateAttr(default_factory=list)
     _closed: bool = PrivateAttr(default=False)
     _scope: Any = PrivateAttr(default=None)  # the client's NameScope (000)
     _scope_counter: int = PrivateAttr(default=0)  # next session scope index
@@ -186,23 +188,18 @@ class WebClientCore(WebCore, BaseModel):
             *(s._scope for s in self._sessions if s._scope is not None),
         ]
 
-    def use(self, renderer: Any) -> "WebClientCore":
-        """Register a Renderer override for its (kind, format) pairs; a second
-        renderer claiming the same (kind, format) shadows the first (warned)."""
-        import logging
+    def use(self, backing: Backing) -> Self:
+        """Register a ``Backing`` on this client: every core it owns (documents,
+        references, sessions) chooses it BEFORE its built-in backings, so it
+        overrides or extends any op it ``provides`` for the cores it ``applies``
+        to. The general extensibility hook. The most recently registered backing
+        wins. Returns ``self`` for chaining.
 
-        log = logging.getLogger("webclient")
-        for fmt in renderer.formats:
-            existing = self._render_table.get((renderer.kind, fmt))
-            if existing is not None:
-                log.warning(
-                    "renderer %r shadows %r for (%s, %s)",
-                    renderer.name,
-                    existing.name,
-                    renderer.kind,
-                    fmt,
-                )
-            self._render_table[(renderer.kind, fmt)] = renderer
+        Narrow ``provides`` to only the ops you override, or you shadow the rest:
+        e.g. a ``HtmlBacking`` subclass with ``provides = frozenset({"render"})``
+        overrides ``render`` (``super()`` handles the formats you don't) while
+        ``select`` / ``attr`` / live interaction still reach their built-ins."""
+        self._backings.insert(0, backing)  # newest first -> wins the choice
         return self
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (FetchBacking(),)

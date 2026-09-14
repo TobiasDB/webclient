@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 from ...collection import Field
 from ..reference import ReferenceCore, from_url
 from ..web_core import Backing
-from ._shared import Element, _element, _override
+from ._shared import Element, _element
 
 if TYPE_CHECKING:
     from . import DocumentCore
@@ -190,7 +190,9 @@ class HtmlBacking(Backing):
     gate = "tree"
 
     def applies(self, core: "DocumentCore") -> bool:
-        return core.kind in ("html", "xml")
+        # getattr: a registered backing (``wc.use``) is probed against every core
+        # the client owns, including client/session cores that have no ``kind``.
+        return getattr(core, "kind", None) in ("html", "xml")
 
     def title(self, core: "DocumentCore") -> str | None:
         node = self._find(core, "title")
@@ -208,9 +210,6 @@ class HtmlBacking(Backing):
     def render(self, core: "DocumentCore", format: str, **options: Any) -> str: ...
 
     def render(self, core: "DocumentCore", format: str, **options: Any) -> Any:
-        override = _override(core, format)
-        if override is not None:
-            return override
         if format == "html":
             return (core.content or b"").decode(core.encoding or "utf-8", "replace")
         root = self._tree(core)

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from webclient import Document, Element, Reference, Renderer
+from webclient import Document, Element, Reference
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -93,53 +93,49 @@ def test_unknown_format_raises():
         make_doc().render("pdf")
 
 
-def test_custom_renderer_overrides_backing_builtin(caplog):
-    """A custom Renderer for a (kind, format) overrides the backing's built-in
-    render. Core rendering is now a backing (not a registered renderer), so
-    nothing is shadowed and no warning is logged."""
-    from webclient import WebClient
+def test_custom_backing_overrides_builtin_render():
+    """The extensibility hook is ``wc.use(backing)``: a registered backing is
+    chosen before the built-ins for the cores it applies to, so an HtmlBacking
+    subclass can override one render format and ``super()`` the rest."""
+    from webclient import HtmlBacking, WebClient
 
-    class Upper(Renderer):
-        name: str = "upper"
-        kind: str = "html"  # type: ignore[assignment]
-        formats: list[str] = ["markdown"]
+    class Upper(HtmlBacking):
+        provides = frozenset({"render"})  # override render only
 
-        def render(self, document, format, **options):
-            return "UPPER"
-
-    with WebClient() as wc:
-        with caplog.at_level("WARNING", logger="webclient"):
-            wc.use(Upper())
-        assert not any("shadows" in r.message for r in caplog.records)
-        doc = make_doc()
-        doc._client = wc.core  # a core (the surface IS a core now; no unwrapping)
-        assert doc.render("markdown") == "UPPER"
-
-
-def test_second_custom_renderer_shadows_first_with_warning(caplog):
-    """Two custom renderers claiming the same (kind, format): the second
-    shadows the first, and that shadowing is warned (ISSUES #16)."""
-    from webclient import WebClient
-
-    class Upper(Renderer):
-        name: str = "upper"
-        kind: str = "html"  # type: ignore[assignment]
-        formats: list[str] = ["markdown"]
-
-        def render(self, document, format, **options):
-            return "UPPER"
-
-    class Lower(Upper):
-        name: str = "lower"
-
-        def render(self, document, format, **options):
-            return "lower"
+        def render(self, core, format, **options):
+            if format == "markdown":
+                return "UPPER"
+            return super().render(core, format, **options)
 
     with WebClient() as wc:
         wc.use(Upper())
-        with caplog.at_level("WARNING", logger="webclient"):
-            wc.use(Lower())
-        assert any("shadows" in r.message for r in caplog.records)
         doc = make_doc()
         doc._client = wc.core  # a core (the surface IS a core now; no unwrapping)
+        assert doc.render("markdown") == "UPPER"  # overridden
+        assert "<html" in doc.render("html").lower()  # other formats: super()
+        assert doc.select("h1").text_content == "Big News"  # select still built-in
+
+
+def test_latest_registered_backing_wins():
+    """Two backings overriding the same op: the most recently registered wins
+    (chosen first)."""
+    from webclient import HtmlBacking, WebClient
+
+    class Upper(HtmlBacking):
+        provides = frozenset({"render"})
+
+        def render(self, core, format, **options):
+            return "UPPER" if format == "markdown" else super().render(core, format)
+
+    class Lower(HtmlBacking):
+        provides = frozenset({"render"})
+
+        def render(self, core, format, **options):
+            return "lower" if format == "markdown" else super().render(core, format)
+
+    with WebClient() as wc:
+        wc.use(Upper())
+        wc.use(Lower())  # newest -> wins
+        doc = make_doc()
+        doc._client = wc.core
         assert doc.render("markdown") == "lower"

@@ -6,7 +6,7 @@ attr, text_content, render), :mod:`.json` (JsonBacking -- dotted path),
 :mod:`.status` (StatusBacking -- ok/error/is_ok/reload/summary), :mod:`.events`
 (EventBacking) and :mod:`..live` (LiveBacking -- browser interaction). A selected
 element is itself a DocumentCore (subtree / json sub-value), so selection nests.
-Shared helpers (``Element``/``_element``/``_override``) live in :mod:`._shared`.
+Shared helpers (``Element``/``_element``) live in :mod:`._shared`.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pydantic import BaseModel, PrivateAttr
 from ...errors import WebError
 from ..web_core import Backing, WebCore
 from .live import LiveBacking
-from ._shared import Element, _element, _override  # noqa: F401  (re-exported)
+from ._shared import Element, _element  # noqa: F401  (re-exported)
 from .events import EventBacking
 from .html import HtmlBacking
 from .json import JsonBacking

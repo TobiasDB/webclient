@@ -254,18 +254,6 @@ def default_client() -> "WebClient":
     return _DEFAULT
 
 
-class Renderer:
-    """A (kind, format) render override -- register with ``wc.use``. Subclass
-    and set ``name``/``kind``/``formats`` and implement ``render``."""
-
-    name: str = ""
-    kind: str = "html"
-    formats: list[str] = []
-
-    def render(self, document: "Document", format: str, **options: Any) -> Any:
-        raise NotImplementedError
-
-
 if TYPE_CHECKING:
 
     class AsyncWebClient(WebClientCore):

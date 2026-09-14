@@ -2,7 +2,8 @@
 
 from .collection import Collection, Field
 from .core.client import WebClientCore
-from .core.document import Element
+from .core.document import DocumentCore, Element, HtmlBacking, JsonBacking
+from .core.web_core import Backing, WebCore
 from .errors import RAISE, RETURN, FetchError, RemoteError, WebError, WebException
 from .events import (
     ActionEvent,
@@ -26,7 +27,6 @@ from .surfaces import (
     LiveDocument,
     Reference,
     RemoteWebClient,
-    Renderer,
     Session,
     WebClient,
     default_client,
@@ -53,10 +53,14 @@ __all__ = [
     "RemoteWebClientCore",
     "Session",
     "Document",
+    "DocumentCore",
     "LiveDocument",
     "Reference",
     "Element",
-    "Renderer",
+    "Backing",
+    "WebCore",
+    "HtmlBacking",
+    "JsonBacking",
     "from_url",
     "from_plan",
     "default_client",

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...collection import Field
 from ..web_core import Backing
-from ._shared import Element, _element, _override
+from ._shared import Element, _element
 
 if TYPE_CHECKING:
     from . import DocumentCore
@@ -40,7 +40,7 @@ class JsonBacking(Backing):
     gate = "tree"
 
     def applies(self, core: "DocumentCore") -> bool:
-        return core.kind == "json"
+        return getattr(core, "kind", None) == "json"  # getattr: see HtmlBacking
 
     def select_all(
         self,
@@ -59,9 +59,6 @@ class JsonBacking(Backing):
         return [_element(core, item) for item in items]
 
     def render(self, core: "DocumentCore", format: str, **options: Any) -> Any:
-        override = _override(core, format)
-        if override is not None:
-            return override
         if format != "elements":
             raise LookupError(f"no json render format {format!r}")
         return _json_elements(self._data(core))

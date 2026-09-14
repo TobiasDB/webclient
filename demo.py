@@ -18,8 +18,8 @@ from webclient import (
     RETURN,
     DOMUpdateEvent,
     Event,
+    HtmlBacking,
     NavigationEvent,
-    Renderer,
     WebClient,
     from_url,
     wq,
@@ -193,14 +193,16 @@ def main() -> None:
         print("navigations:", [e.status_code for e in shop.events_of(NavigationEvent)])
         print("actions:    ", list(shop.action_events))  # empty until browser (M4)
 
-        # [M2] Plugins: replace a core renderer by registration alone.
-        class Shouty(Renderer):
-            name: str = "shouty"
-            kind: str = "html"  # type: ignore[assignment]
-            formats: list[str] = ["markdown"]
+        # [M2] Plugins: extend behaviour by registering a Backing. A registered
+        #      backing is chosen before the built-ins, so this HtmlBacking subclass
+        #      overrides the "markdown" render and super()s every other format.
+        class Shouty(HtmlBacking):
+            provides = frozenset({"render"})  # override render only; super()s the rest
 
-            def render(self, document, format, **options):
-                return document.title.upper()
+            def render(self, core: Any, format: str, **options: Any) -> Any:
+                if format == "markdown":
+                    return core.dispatch("title").upper()
+                return super().render(core, format, **options)
 
         wc.use(Shouty())
         print("plugin:     ", shop.render("markdown"))

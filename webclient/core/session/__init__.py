@@ -46,7 +46,7 @@ class WebSessionCore(WebClientCore):
         """Share ``parent``'s engine (loop / http / browser / bus / plugins) and
         take a fresh name scope from it."""
         self._parent = parent
-        self._render_table = parent._render_table  # plugins are shared
+        self._backings = parent._backings  # registered backings are shared
         self._scope = parent.new_scope()
         parent._sessions.append(self)
         return self

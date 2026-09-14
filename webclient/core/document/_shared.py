@@ -1,8 +1,8 @@
 """Shared document helpers used by more than one backing: the ``Element`` block
-model, the element-subcore factory (``_element``), and the renderer-override hook
-(``_override``). Kept out of ``__init__`` so the backing modules can import them
-without a backing<->``__init__`` cycle; ``_element`` imports ``DocumentCore``
-lazily at call time (after the package has finished loading)."""
+model and the element-subcore factory (``_element``). Kept out of ``__init__`` so
+the backing modules can import them without a backing<->``__init__`` cycle;
+``_element`` imports ``DocumentCore`` lazily at call time (after the package has
+finished loading)."""
 
 from __future__ import annotations
 
@@ -22,19 +22,6 @@ class Element(BaseModel):
     text: str = ""
     parent_id: str | None = None
     metadata: dict[str, Any] = {}
-
-
-def _override(core: "DocumentCore", format: str) -> Any:
-    """A registered ``Renderer`` override for (kind, format), applied to the
-    document surface -- else ``None`` (use the built-in render)."""
-    client = core._client
-    table = getattr(client, "_render_table", None) if client is not None else None
-    renderer = table.get((core.kind, format)) if table else None
-    if renderer is None:
-        return None
-    from ...surfaces import wrap
-
-    return renderer.render(wrap(core), format)
 
 
 def _element(parent: "DocumentCore", node: Any) -> "DocumentCore":

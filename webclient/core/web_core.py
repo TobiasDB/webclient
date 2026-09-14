@@ -59,9 +59,21 @@ class WebCore:
     BACKINGS: ClassVar[tuple[Backing, ...]] = ()
 
     # -- choose / capabilities ----------------------------------------------
+    def _extra_backings(self) -> tuple[Backing, ...]:
+        """Backings registered on this core's client via ``wc.use(backing)`` --
+        they are chosen BEFORE the built-in ``BACKINGS`` (so a registered backing
+        overrides / extends any op) and shared with the client's documents,
+        references and sessions. The extensibility hook: layer behaviour by
+        registering a backing, not by a bespoke plugin type."""
+        client = getattr(self, "_client", None) or self
+        return tuple(getattr(client, "_backings", ()))
+
     def choose(self) -> list[Backing]:
-        """The backings that apply to this core's current state, in order."""
-        return [b for b in self.BACKINGS if b.applies(self)]
+        """The backings that apply to this core's current state, in order --
+        the client's registered backings first, then the built-in ``BACKINGS``."""
+        return [
+            b for b in (*self._extra_backings(), *self.BACKINGS) if b.applies(self)
+        ]
 
     def capabilities(self) -> frozenset[str]:
         """The union of the chosen backings' gates."""
@@ -163,7 +175,12 @@ class WebCore:
             if not name.startswith("_"):
                 cls = type(self)
                 is_prop = name in cls.prop_ops()
-                if is_prop or name in cls.ops():
+                is_call = name in cls.ops()
+                if not (is_prop or is_call):  # an op a registered backing adds
+                    for b in self._extra_backings():
+                        is_prop = is_prop or name in b.props
+                        is_call = is_call or name in b.provides
+                if is_prop or is_call:
                     if self._dispatch_mode() == "remote" and self._goes_remote(name):
                         return self._remote_call(name, is_prop)
                     if is_prop:
