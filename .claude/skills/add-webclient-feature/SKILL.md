@@ -21,7 +21,7 @@ You should touch **zero** dispatch/machinery code.
 Key files:
 - `webclient/core/web_core.py` — `WebCore` + `Backing` base (the dispatch core; don't edit for a feature).
 - `webclient/core/<kind>/` — one package per core; one backing per module.
-- `webclient/models.py` — pure pydantic value models (Events, Summary, Element, SearchResult). No cores, no cycles — safe to import anywhere.
+- `webclient/models.py` — the cross-cutting **Event** taxonomy (pydantic, no cores). A core's own value models + its `I<Core>` interface live in that core's `models.py` (e.g. `core/document/models.py`: `IDocument`, `Element`, `Summary` facets).
 - `webclient/clients/` — the transport layer (httpx/browser/pool); the ONLY place touching httpx/playwright.
 - `scripts/gen_stubs.py` — generates every typed surface from the backings.
 - `webclient/surfaces/eager.py` / `lazy.py` — the generated stubs (op bodies are generated; the `TYPE_CHECKING` import headers are hand-maintained).
@@ -68,11 +68,15 @@ class MyBacking(Backing):
 
 ## Recipe: add a value model (structured result)
 
-1. Add the pydantic model to `webclient/models.py` (with a section comment + `__all__` entry).
-   Keep it pure data — no imports of cores.
-2. Export it from `webclient/__init__.py` if it's user-facing.
-3. **Import it at module level in the backing** that returns it (not under `TYPE_CHECKING`)
-   — the generator resolves return annotations from the backing module's globals.
+1. Add the pydantic model to **the backing's own core package `models.py`** —
+   `core/document/models.py` (document backings: `Element`, `Summary` facets),
+   `core/client/models.py` (client backings: `SearchResult`) — with an `__all__`
+   entry. Keep it pure data. (The top-level `webclient/models.py` is now only the
+   cross-cutting **Event** taxonomy — don't add core-specific models there.)
+2. Export it for users: re-export from `webclient/__init__.py` (and, for document
+   value types, from `webclient/summary.py`) so the public import paths keep working.
+3. **Import it at module level in the backing** that returns it (`from .models import
+   MyModel`) — the generator resolves return annotations from the backing's globals.
 4. Add its name to the `TYPE_CHECKING` import header of `surfaces/eager.py` AND
    `surfaces/lazy.py` (these headers are hand-maintained; the emitted `list[MyModel]`
    must resolve there).
@@ -107,7 +111,9 @@ never hit the network. Async tests use an inner `async def main()` + `asyncio.ru
   the sync client won't bridge it correctly.
 - **`applies`** must be cheap and defensive — it is probed against every core the client
   owns. Gate on state the core actually has (e.g. `core._page is not None`).
-- Value models live in `models.py` so backings import them with no circular-reference risk.
+- Value models live in a `models.py` (per-core-package for a core's own models; the
+  top-level one for the cross-cutting event taxonomy) — pure data, no cycle risk. Each
+  core's `models.py` also holds its `I<Core>` interface (fields + ops); see below.
 - **The core-implements-its-interface pattern** (`DocumentCore`/`ReferenceCore`): each such
   core inherits a generated `I<Core>(BaseModel)` — populated with the eager ops under
   `TYPE_CHECKING`, empty at runtime (so `__getattr__` still dispatches) — defined in the

@@ -17,8 +17,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ...errors import RETURN
-from ...models import SearchResult
 from ..reference import from_url
+from .models import SearchResult
 from ..web_core import Backing
 
 if TYPE_CHECKING:

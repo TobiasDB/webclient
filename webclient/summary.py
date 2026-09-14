@@ -8,7 +8,7 @@ keeps working. The facets are assembled by ``webclient.core.document.summary``.
 
 from __future__ import annotations
 
-from .models import (
+from .core.document.models import (
     FACETS,
     Form,
     Metadata,

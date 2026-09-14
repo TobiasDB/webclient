@@ -1,13 +1,14 @@
-"""Shared pure-data models -- the pydantic value types the cores, backings and
-surfaces all pass around: the **Event** taxonomy and the **Summary** facets.
+"""The cross-cutting **Event** taxonomy -- the pydantic event types the bus,
+registry and backings across every core share.
 
 This module depends on nothing but ``pydantic`` + ``typing`` (no cores, no
 backings, no engine), so any module can import it at top level with no
-circular-reference risk. The runtime machinery that *uses* these models lives
-elsewhere -- the event bus/registry in :mod:`webclient.events`, the summary
-facet backings in :mod:`webclient.core.document.summary` -- and imports from
-here. ``webclient.events`` / ``webclient.summary`` re-export these names, so the
-existing import paths keep working.
+circular-reference risk. The runtime machinery that *uses* these lives elsewhere
+-- the event bus/registry in :mod:`webclient.events`, which re-exports these
+names so ``from webclient.events import NetworkEvent`` keeps working. A core's own
+value models now live with that core (its ``models.py``): the document's
+``Element`` / ``Summary`` facets in :mod:`webclient.core.document.models`, the
+client's ``SearchResult`` in :mod:`webclient.core.client.models`.
 """
 
 from __future__ import annotations
@@ -117,159 +118,11 @@ def topic_matches(pattern: Topic, topic: Topic) -> bool:
 _topic_matches = topic_matches
 
 
-# --------------------------------------------------------------------------- #
-# Content blocks
-#
-# The "elements" representation of a document -- the typed content blocks a
-# selection backing (html/json) produces from the parsed tree. A pure value
-# type, exported to users as ``webclient.Element``.
-# --------------------------------------------------------------------------- #
-
-
-class Element(BaseModel):
-    """A typed content block -- the "elements" representation of a document."""
-
-    id: str = ""
-    type: str = "text"
-    text: str = ""
-    parent_id: str | None = None
-    metadata: dict[str, Any] = {}
-
-
-# --------------------------------------------------------------------------- #
-# Search
-#
-# A search hit -- the structured shape an agent or human reads back from
-# ``client.search(query)``: title / url / description, all as the search
-# provider gave them, plus the 1-based rank on the results page.
-# --------------------------------------------------------------------------- #
-
-
-class SearchResult(BaseModel):
-    """One search hit: ``title`` / ``url`` / ``description`` as the provider gave
-    them, plus ``rank`` (1-based position on the results page)."""
-
-    rank: int = 0
-    title: str = ""
-    url: str = ""
-    description: str = ""
-
-
-# --------------------------------------------------------------------------- #
-# Summary facets
-#
-# A summary is a *shape*, not a data dump -- headers, cookies and page metadata
-# are reported as KEYS / TYPES, not values. It is assembled from independent
-# facet backings, each an optional section (``None`` when not requested / not
-# applicable). Populated by ``webclient.core.document.summary``.
-# --------------------------------------------------------------------------- #
-
-#: the facet sections, in order; the selector for ``summary(include=...)``.
-FACETS = ("transport", "metadata", "structure", "runtime", "probe")
-
-
-class TocEntry(BaseModel):
-    level: int
-    text: str
-
-
-class Form(BaseModel):
-    method: str = "get"
-    action: str | None = None
-    field_names: list[str] = []
-
-
-class XhrCall(BaseModel):
-    method: str
-    url: str
-
-
-class Transport(BaseModel):
-    """Transport facts -- free from any resolved document (values only for the
-    few that *are* the summary; headers/cookies are key lists)."""
-
-    final_url: str
-    status_code: int
-    ok: bool
-    kind: str
-    redirect_chain: list[str] = []
-    duration_ms: float | None = None
-    content_type: str | None = None
-    encoding: str | None = None
-    size_bytes: int | None = None
-    header_keys: list[str] = []
-    set_cookie_keys: list[str] = []
-    server: str | None = None
-    cdn: str | None = None
-    region: str | None = None
-
-
-class Metadata(BaseModel):
-    """Head / schema metadata -- title/description are values; og and JSON-LD are
-    reported as key/type names."""
-
-    title: str | None = None
-    description: str | None = None
-    lang: str | None = None
-    canonical_url: str | None = None
-    schema_types: list[str] = []
-    og_keys: list[str] = []
-    page_type: str | None = None
-    feeds: list[str] = []
-    sitemap_url: str | None = None
-
-
-class Structure(BaseModel):
-    """Body shape -- counts, a table of contents, forms (as field-name lists) and
-    detected pagination."""
-
-    toc: list[TocEntry] = []
-    word_count: int | None = None
-    reading_time_min: int | None = None
-    main_content_present: bool | None = None
-    links_internal: int = 0
-    links_external: int = 0
-    link_sample: list[str] = []
-    forms: list[Form] = []
-    pagination: str | None = None
-    media_img: int = 0
-    media_video: int = 0
-
-
-class Runtime(BaseModel):
-    """Browser-only signals, read from captured DOM/network events (``None`` on a
-    static fetch)."""
-
-    is_spa: bool | None = None
-    framework: str | None = None
-    uses_xhr: bool | None = None
-    uses_fetch: bool | None = None
-    xhr_endpoints: list[XhrCall] = []
-    dynamic_elements: list[str] = []
-
-
-class Probe(BaseModel):
-    """What an auto-resolve had to escalate to (``None`` unless the resolution
-    recorded it) -- the read-side of the resiliency layer."""
-
-    was_browser_required: bool | None = None
-    was_proxy_required: bool | None = None
-    anti_bot: str | None = None
-    js_required: bool | None = None
-    paywall: bool | None = None
-    login_wall: bool | None = None
-    render_blocked: bool | None = None
-
-
-class Summary(BaseModel):
-    """A page overview: each facet an optional section (``None`` when not
-    requested / not applicable)."""
-
-    transport: Transport | None = None
-    metadata: Metadata | None = None
-    structure: Structure | None = None
-    runtime: Runtime | None = None
-    probe: Probe | None = None
+# A core's own data models now live with that core (its ``models.py``): the
+# document's ``Element`` + ``Summary`` facets in :mod:`webclient.core.document.models`
+# (re-exported by :mod:`webclient.summary`), the client's ``SearchResult`` in
+# :mod:`webclient.core.client.models`. This module stays the cross-cutting event
+# taxonomy -- what the bus/registry and backings across every core share.
 
 
 __all__ = [
@@ -286,19 +139,4 @@ __all__ = [
     "PlanEvent",
     "CORE_EVENTS",
     "topic_matches",
-    # content blocks
-    "Element",
-    # search
-    "SearchResult",
-    # summary
-    "FACETS",
-    "TocEntry",
-    "Form",
-    "XhrCall",
-    "Transport",
-    "Metadata",
-    "Structure",
-    "Runtime",
-    "Probe",
-    "Summary",
 ]

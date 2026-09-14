@@ -33,16 +33,18 @@ from webclient.core.client import WebClientCore  # noqa: E402
 from webclient.core.document import DocumentCore, Element  # noqa: E402
 from webclient.core.reference import ReferenceCore  # noqa: E402
 from webclient.core.session import WebSessionCore  # noqa: E402
-from webclient.models import (  # noqa: E402
-    ActionEvent,
-    ConsoleEvent,
-    DOMUpdateEvent,
-    Event,
+from webclient.core.document.models import (  # noqa: E402
     Metadata,
     Runtime,
     Structure,
     Summary,
     Transport,
+)
+from webclient.models import (  # noqa: E402
+    ActionEvent,
+    ConsoleEvent,
+    DOMUpdateEvent,
+    Event,
 )
 from webclient.models import E as _EventTypeVar  # noqa: E402
 

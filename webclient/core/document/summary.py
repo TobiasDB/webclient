@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlparse
 
 from ...models import DOMUpdateEvent, NetworkEvent
-from ...summary import (
+from ..web_core import Backing
+from .models import (
     FACETS,
     Form,
     Metadata,
@@ -22,7 +23,6 @@ from ...summary import (
     Transport,
     XhrCall,
 )
-from ..web_core import Backing
 from .html import _norm, tree
 
 if TYPE_CHECKING:

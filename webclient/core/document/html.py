@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 from ...collection import Field
 from ..reference import ReferenceCore, from_url
 from ..web_core import Backing
-from ...models import Element
+from .models import Element
 
 if TYPE_CHECKING:
     from . import DocumentCore

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...collection import Field
 from ..web_core import Backing
-from ...models import Element
+from .models import Element
 
 if TYPE_CHECKING:
     from . import DocumentCore

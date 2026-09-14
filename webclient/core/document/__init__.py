@@ -16,10 +16,9 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import PrivateAttr
 
-from ...models import Element  # noqa: F401  (re-exported as the document's block type)
 from ..web_core import Backing, WebCore
 from .live import LiveBacking
-from .models import IDocument
+from .models import Element, IDocument  # noqa: F401  (Element re-exported)
 from .events import EventBacking
 from .html import HtmlBacking
 from .json import JsonBacking

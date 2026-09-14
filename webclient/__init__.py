@@ -4,7 +4,7 @@ from .collection import Collection, Field
 from .core.client import WebClientCore
 from .core.document import DocumentCore, Element, HtmlBacking, JsonBacking
 from .core.web_core import Backing, WebCore
-from .models import SearchResult
+from .core.client.models import SearchResult
 from .errors import RAISE, RETURN, FetchError, RemoteError, WebError, WebException
 from .events import (
     ActionEvent,
