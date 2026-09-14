@@ -23,11 +23,13 @@ from ..query.plan import Plan, Step
 if TYPE_CHECKING:
     from ..collection import Collection, Field
     from ..core.document import Element
+    from ..events import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
     from ..summary import Metadata, Runtime, Structure, Summary, Transport
     from .eager import Document, Reference
 
 T = TypeVar("T")
 S = TypeVar("S")
+E = TypeVar("E", bound="Event")  # an event subtype, for events_of(cls) -> list[cls]
 
 
 class Lazy(Generic[T]):
@@ -104,10 +106,10 @@ class LazyDocument(Lazy["Document"]):
     created: LazyField[float]
     accessed: LazyField[float]
     error: LazyField[Any]
-    action_events: "list[Any]"
-    console: "list[Any]"
-    dom_mutations: "list[Any]"
-    events: "list[Any]"
+    action_events: "list[ActionEvent]"
+    console: "list[ConsoleEvent]"
+    dom_mutations: "list[DOMUpdateEvent]"
+    events: "list[Event]"
     message: "LazyField[str]"
     ok: "LazyField[bool]"
     text_content: "LazyField[str]"
@@ -118,7 +120,10 @@ class LazyDocument(Lazy["Document"]):
     def attr(self, name: str, *, error: Any = ...) -> "LazyField[str]": ...
     def click(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ...) -> "LazyDocument": ...
     def evaluate(self, script: str) -> "LazyField[Any]": ...
-    def events_of(self, event_type: Any) -> "list[Any]": ...
+    @overload
+    def events_of(self, event_type: type[E]) -> "list[E]": ...
+    @overload
+    def events_of(self, event_type: str) -> "list[Event]": ...
     def is_empty(self) -> "LazyField[bool]": ...
     def is_ok(self) -> "LazyField[bool]": ...
     def metadata(self) -> "Lazy[Metadata]": ...
@@ -212,14 +217,14 @@ def _fn(name: str, expr: Any) -> Expr:
     return base._extend(Step(kind="fn", name=name))
 
 
-def is_empty(expr: Any) -> Any:
+def is_empty(expr: Any) -> "LazyField[bool]":
     """Free-function form of ``x.is_empty()`` (records an ``fn`` step)."""
-    return _fn("is_empty", expr)
+    return cast("LazyField[bool]", _fn("is_empty", expr))
 
 
-def is_ok(expr: Any) -> Any:
+def is_ok(expr: Any) -> "LazyField[bool]":
     """Free-function form of ``x.is_ok()`` (records an ``fn`` step)."""
-    return _fn("is_ok", expr)
+    return cast("LazyField[bool]", _fn("is_ok", expr))
 
 
 class _When:
@@ -251,9 +256,9 @@ def when(cond: Any) -> _When:
     return _When(cond)
 
 
-def filter(collection: Any, *predicates: Any) -> Any:
+def filter(collection: "LazyCollection[T]", *predicates: Any) -> "LazyCollection[T]":
     """Free-function form of the collection filter: ``filter(coll, pred)`` =
-    ``coll.filter(pred)``."""
+    ``coll.filter(pred)`` -- keeps the elements every predicate is truthy for."""
     return collection.filter(*predicates)
 
 

@@ -33,6 +33,8 @@ from webclient.core.client import WebClientCore  # noqa: E402
 from webclient.core.document import DocumentCore, Element  # noqa: E402
 from webclient.core.reference import ReferenceCore  # noqa: E402
 from webclient.core.session import WebSessionCore  # noqa: E402
+from webclient.events import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event  # noqa: E402
+from webclient.core.document.events import E as _EventTypeVar  # noqa: E402
 from webclient.summary import (
     Metadata,
     Runtime,
@@ -72,6 +74,11 @@ _NS = {
     "Runtime": Runtime,
     "Structure": Structure,
     "Summary": Summary,
+    "Event": Event,
+    "ActionEvent": ActionEvent,
+    "ConsoleEvent": ConsoleEvent,
+    "DOMUpdateEvent": DOMUpdateEvent,
+    "E": _EventTypeVar,
     "Any": Any,
 }
 _SCALAR = {str: "str", int: "int", float: "float", bytes: "bytes", bool: "bool"}

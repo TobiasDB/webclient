@@ -109,10 +109,10 @@ class LiveBacking(Backing):
         return core
 
     # -- captured event views ------------------------------------------------
-    def dom_mutations(self, core: Any) -> list[Any]:
+    def dom_mutations(self, core: Any) -> "list[DOMUpdateEvent]":
         return [e for e in core._events if isinstance(e, DOMUpdateEvent)]
 
-    def console(self, core: Any) -> list[Any]:
+    def console(self, core: Any) -> "list[ConsoleEvent]":
         return [e for e in core._events if isinstance(e, ConsoleEvent)]
 
     # -- interactions (sync; bridge onto the engine loop) --------------------

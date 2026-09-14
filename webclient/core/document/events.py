@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 from ..web_core import Backing
 
 if TYPE_CHECKING:
+    from ...events import ActionEvent, Event
     from . import DocumentCore
+
+#: an Event subtype, so ``events_of(NavigationEvent)`` narrows to that subtype.
+E = TypeVar("E", bound="Event")
 
 
 class EventBacking(Backing):
     """Events routed onto the document. ``events`` is everything captured;
-    ``events_of(cls)`` narrows by type; ``action_events`` is the interaction
-    subset (empty until a live/browser document)."""
+    ``events_of(cls)`` narrows by type (or by topic prefix ``str``);
+    ``action_events`` is the interaction subset (empty until a live document)."""
 
     provides = frozenset({"events_of"})
     props = frozenset({"events", "action_events"})
@@ -22,17 +26,21 @@ class EventBacking(Backing):
     def applies(self, core: "DocumentCore") -> bool:
         return True
 
-    def events(self, core: "DocumentCore") -> list[Any]:
+    def events(self, core: "DocumentCore") -> "list[Event]":
         return core._events  # the live store (appendable)
 
-    def events_of(self, core: "DocumentCore", event_type: Any) -> list[Any]:
+    @overload
+    def events_of(self, core: "DocumentCore", event_type: type[E]) -> "list[E]": ...
+    @overload
+    def events_of(self, core: "DocumentCore", event_type: str) -> "list[Event]": ...
+    def events_of(self, core: "DocumentCore", event_type: Any) -> "list[Any]":
         if isinstance(event_type, str):  # a topic prefix
             from ...events import _topic_matches
 
             return [e for e in core._events if _topic_matches(event_type, e.topic)]
         return [e for e in core._events if isinstance(e, event_type)]
 
-    def action_events(self, core: "DocumentCore") -> list[Any]:
+    def action_events(self, core: "DocumentCore") -> "list[ActionEvent]":
         from ...events import ActionEvent
 
         return [e for e in core._events if isinstance(e, ActionEvent)]
