@@ -17,7 +17,9 @@ from collections import OrderedDict
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 
+from .errors import WebException
 from .expr import from_plan
 from .surfaces import Document, Reference, WebClient
 
@@ -72,13 +74,18 @@ def create_app(
     token: str | None = None,
     max_docs: int = 1024,
     max_sessions: int = 256,
+    block_private_hosts: bool = False,
 ) -> FastAPI:
     """A FastAPI app exposing a WebClient over ``/execute`` (Bearer-token
     authorised when ``token`` is set). An existing client may be supplied;
-    ``max_docs`` caps the LRU document store and ``max_sessions`` bounds the
-    live-session store (expired/closed sessions are reclaimed first)."""
+    ``max_docs`` caps the LRU document store, ``max_sessions`` bounds the
+    live-session store (expired/closed sessions are reclaimed first), and
+    ``block_private_hosts`` turns on the SSRF guard for a hosted server (refuses
+    plans that resolve to loopback/private hosts)."""
     app = FastAPI()
-    app.state.wc = wc if wc is not None else WebClient()
+    app.state.wc = (
+        wc if wc is not None else WebClient(block_private_hosts=block_private_hosts)
+    )
     app.state.docs = _DocStore(max_docs)
     app.state.sessions = {}
 
@@ -94,10 +101,10 @@ def create_app(
             if s.status != "running" or expired:
                 app.state.sessions.pop(sid, None)
 
-    @app.post("/execute")
+    @app.post("/execute", response_model=None)
     def execute(
         body: dict[str, Any], authorization: str | None = Header(default=None)
-    ) -> dict[str, Any]:
+    ) -> "dict[str, Any] | JSONResponse":
         _auth(authorization)
         wc_: WebClient = app.state.wc
         try:
@@ -117,7 +124,21 @@ def create_app(
             context = wc_.ref(body["url"])
         else:
             context = None
-        result = wc_.execute(expr, context)
+        try:
+            result = wc_.execute(expr, context)
+        except WebException as exc:  # a fetch/resolve failure -> structured error
+            err = exc.error
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "error": {
+                        "type": err.type,
+                        "message": str(exc),
+                        "status_code": err.status_code,
+                        "retriable": err.retriable,
+                    }
+                },
+            )
         return {"rows": _serialize(result, app.state.docs)}
 
     @app.get("/document/{doc_id}")

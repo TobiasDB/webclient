@@ -229,3 +229,32 @@ def test_search_as_a_plan(httpserver):
 def test_crawl_is_not_implemented(client_and_server):
     api, _ = client_and_server
     assert api.post("/crawl", headers=AUTH).status_code == 501
+
+
+def test_execute_returns_structured_error_on_upstream_failure(client_and_server):
+    api, server = client_and_server
+    server.expect_request("/boom").respond_with_data("no", status=500)
+    r = api.post(
+        "/execute",
+        headers=AUTH,
+        json={"plan": ref.resolve()._plan.model_dump(), "url": server.url_for("/boom")},
+    )
+    assert r.status_code == 502
+    err = r.json()["error"]
+    assert err["type"] == "HTTPStatus"
+    assert err["status_code"] == 500 and err["retriable"] is True
+
+
+def test_execute_ssrf_guard_blocks_loopback():
+    app = create_app(token="secret", block_private_hosts=True)
+    with TestClient(app) as api:
+        r = api.post(
+            "/execute",
+            headers=AUTH,
+            json={
+                "plan": ref.resolve()._plan.model_dump(),
+                "url": "http://127.0.0.1:9/x",
+            },
+        )
+        assert r.status_code == 502 and r.json()["error"]["type"] == "BlockedHost"
+    app.state.wc.close()
