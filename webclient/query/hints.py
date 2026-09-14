@@ -190,4 +190,27 @@ def return_type(
     raise AttributeError(f"{core_cls.__name__} has no op, property or field {op!r}")
 
 
-__all__ = ["safe_type_check", "resolve_hints", "return_type"]
+#: ``attr_return_type`` sentinel: accessing this name yields a *callable* op whose
+#: return type is only known once the call args are seen (resolve with
+#: ``return_type`` on ``__call__``).
+CALL_OP: Any = object()
+
+
+def attr_return_type(core_cls: type, name: str) -> Any:
+    """What accessing ``core_cls.name`` yields, for a recorder's ``__getattr__``:
+    ``CALL_OP`` when ``name`` is a backing *call* op (its return depends on the
+    call args -- resolve later with :func:`return_type`), otherwise the resolved
+    value type of a property op / class ``@property`` / data field (or
+    ``AttributeError`` if ``name`` is none of these)."""
+    if any(name in b.provides for b in getattr(core_cls, "BACKINGS", ())):
+        return CALL_OP
+    return return_type(core_cls, name)
+
+
+__all__ = [
+    "safe_type_check",
+    "resolve_hints",
+    "return_type",
+    "attr_return_type",
+    "CALL_OP",
+]

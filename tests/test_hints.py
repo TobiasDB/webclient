@@ -9,7 +9,13 @@ import pytest
 from webclient.collection import Field
 from webclient.core.document import DocumentCore, Element
 from webclient.core.reference import ReferenceCore
-from webclient.query.hints import resolve_hints, return_type, safe_type_check
+from webclient.query.hints import (
+    CALL_OP,
+    attr_return_type,
+    resolve_hints,
+    return_type,
+    safe_type_check,
+)
 from webclient.summary import Summary, Transport
 
 
@@ -87,6 +93,19 @@ def test_class_property_members_resolve():
     assert return_type(DocumentCore, "ok") is bool
     assert return_type(ReferenceCore, "ok") is bool
     assert return_type(ReferenceCore, "url") is str
+
+
+def test_attr_return_type_splits_call_ops_from_value_attrs():
+    # call ops -> CALL_OP (return known only once args are seen)
+    assert attr_return_type(DocumentCore, "select") is CALL_OP
+    assert attr_return_type(DocumentCore, "attr") is CALL_OP
+    assert attr_return_type(DocumentCore, "render") is CALL_OP
+    # prop ops / class @property / data fields -> the value type
+    assert attr_return_type(DocumentCore, "text_content") == (str | None)
+    assert attr_return_type(DocumentCore, "ok") is bool
+    assert attr_return_type(DocumentCore, "status_code") is int
+    with pytest.raises(AttributeError):
+        attr_return_type(DocumentCore, "definitely_not_an_attr")
 
 
 def test_unknown_op_raises():
