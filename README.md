@@ -11,10 +11,8 @@ looking calls; a single async executor runs it; the sync / async / remote / lazy
 is **generated** from those backings (`scripts/gen_stubs.py`), so the types never
 drift from the runtime.
 
-> Status: a solid, well-typed engine kernel. See
-> [`docs/assessment.md`](docs/assessment.md) for a critical review and roadmap
-> (crawling, true streaming, and a task-verb/LLM layer are not built yet) and
-> [`docs/notes.md`](docs/notes.md) for deferred-work notes.
+> Status: a solid, well-typed engine kernel with a task-verb layer
+> (`webclient.tools`). Crawling and true incremental streaming are not built yet.
 
 ## Install
 

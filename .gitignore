@@ -3,3 +3,8 @@ __pycache__/
 .mypy_cache/
 *.pyc
 *.egg-info/
+
+# internal review artifacts / working notes (kept local, not shipped)
+docs/assessment.md
+docs/llm-usability.md
+docs/notes.md
