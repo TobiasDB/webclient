@@ -439,12 +439,29 @@ def _lazy_class(core: type) -> str:
     return head + "\n" + "\n".join("    " + line for line in body)
 
 
+def _lazy_client_class() -> str:
+    """LazyWebClient: the lazy recorder rooted at a client/session (``wc.lazy``).
+    An authoring root, not a collectable ``Lazy[Surface]`` -- so its verbs use the
+    ``client`` tier (a value return is a ``Lazy[T]`` handle you ``.collect()``).
+    Generated from ``WebClientCore``'s verbs, like every other tier."""
+    body = members(WebClientCore, "client", fields=False, class_props=False)
+    lines = [
+        "class LazyWebClient:",
+        '    """The lazy recorder rooted at a client/session (``wc.lazy``): its verbs',
+        "    record a ``WebClient``-rooted plan to batch/defer -- ``wc.lazy.fetch(url)",
+        "    .collect()`` records then runs on the client's engine.\"\"\"",
+        *("    " + line for line in body),
+    ]
+    return "\n".join(lines)
+
+
 def _lazy_tier() -> str:
     blocks = [
         _LAZY_FIELD,
         _lazy_class(ReferenceCore),
         _lazy_class(DocumentCore),
         _lazy_collection(),
+        _lazy_client_class(),
     ]
     return "# fmt: off\n" + "\n\n\n".join(blocks) + "\n# fmt: on"
 
