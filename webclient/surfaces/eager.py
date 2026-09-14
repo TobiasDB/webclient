@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
 
-from ..core.client import AsyncWebClientCore, WebClientCore
+from ..core.client import WebClientCore
+from ..core.client import async_client as _async_client
 from ..core.document import DocumentCore
 from ..core.reference import HttpMethod, ReferenceCore
 from ..core.reference import from_url as _core_from_url
@@ -134,11 +135,81 @@ if TYPE_CHECKING:  # the eager surfaces are pure typing stubs over their cores
         # fmt: on
         # >>> end generated <<<
 
+    class AsyncReference(ReferenceCore):
+        """The async view of a :class:`Reference`: ``resolve`` is awaitable
+        (``await ref.resolve()``); every other op is the same in-memory surface,
+        and Core-returning ops stay in the async tier. A pure typing stub: at
+        runtime ``AsyncReference is ReferenceCore`` -- the async-ness comes from the
+        bound client's dispatcher (``_async_mode``), not the type."""
+
+        @property
+        def lazy(self) -> "LazyReference": ...
+
+        # >>> generated: AsyncReference surface <<<
+        # fmt: off
+        url: "str"
+        def join(self, href: str) -> "AsyncReference": ...
+        def replace(self, **fields: Any) -> "AsyncReference": ...
+        async def resolve(self, *, browser: bool = ..., optional: bool = ..., error: Any = ...) -> "AsyncDocument": ...
+        def with_params(self, **params: str) -> "AsyncReference": ...
+        # fmt: on
+        # >>> end generated <<<
+
+    class AsyncDocument(DocumentCore):
+        """The async view of a :class:`Document`: in-memory ops are synchronous;
+        Core-returning ops stay in the async tier so a later IO op is awaitable
+        (``await doc.select('a').attr('href').resolve()``). A pure typing stub: at
+        runtime ``AsyncDocument is DocumentCore``."""
+
+        @property
+        def lazy(self) -> "LazyDocument": ...
+
+        # >>> generated: AsyncDocument surface <<<
+        # fmt: off
+        action_events: "list[Any]"
+        console: "list[Any]"
+        dom_mutations: "list[Any]"
+        events: "list[Any]"
+        message: "str"
+        text_content: "str"
+        title: "str"
+        @overload
+        def attr(self, name: Literal['href', 'src', 'action']) -> "AsyncReference": ...  # type: ignore[overload-overlap]
+        @overload
+        def attr(self, name: str, *, error: Any = ...) -> "Field[str]": ...
+        def click(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ...) -> "AsyncDocument": ...
+        def evaluate(self, script: str) -> "Any": ...
+        def events_of(self, event_type: Any) -> "list[Any]": ...
+        def is_empty(self) -> "Field[bool]": ...
+        def is_ok(self) -> "Field[bool]": ...
+        def metadata(self) -> "Metadata": ...
+        def ref(self) -> "AsyncReference": ...
+        def reload(self) -> "AsyncDocument": ...
+        @overload
+        def render(self, format: Literal['elements']) -> "list[Element]": ...
+        @overload
+        def render(self, format: Literal['links']) -> "Collection[AsyncReference]": ...
+        @overload
+        def render(self, format: str, **options: Any) -> "str": ...
+        def runtime(self) -> "Runtime": ...
+        def screenshot(self, selector: str | None = ...) -> "AsyncDocument": ...
+        def select(self, selector: str, *, index: int = ..., error: Any = ...) -> "AsyncDocument": ...
+        def select_all(self, selector: str, *, limit: int | None = ..., offset: int = ...) -> "Collection[AsyncDocument]": ...
+        def structure(self) -> "Structure": ...
+        def summary(self, *include: str, exclude: Any = ...) -> "Summary": ...
+        def transport(self) -> "Transport": ...
+        def wait_for(self, selector: str | None = ..., *, timeout: float | None = ...) -> "AsyncDocument": ...
+        def write(self, selector: str, text: str, *, timeout: float | None = ..., optional: bool = ...) -> "AsyncDocument": ...
+        # fmt: on
+        # >>> end generated <<<
+
 else:  # at runtime a surface IS its core
     Reference = ReferenceCore
     Document = DocumentCore
     WebClient = WebClientCore
     Session = WebSessionCore
+    AsyncReference = ReferenceCore
+    AsyncDocument = DocumentCore
 
 #: A live (browser-backed) document is a Document with the ``page`` capability.
 LiveDocument = Document
@@ -180,28 +251,27 @@ class Renderer:
 
 if TYPE_CHECKING:
 
-    class AsyncWebClient(AsyncWebClientCore):
-        """The async eager client -- the same surface as ``WebClient``, awaited at
-        the IO boundary: ``doc = await ac.fetch(url)`` / ``await ac.summary(url)``.
-        In-memory ops on the resolved document are synchronous; chain deeper IO
-        through ``ac.lazy`` plans (``await ac.lazy...acollect()`` /
-        ``.astream()``). ``ac.ref(url)`` is a (sync) request spec, handy as a lazy
-        plan's context. A pure typing stub: at runtime ``AsyncWebClient is
-        AsyncWebClientCore`` (its verbs return awaitables via ``bridge``)."""
+    class AsyncWebClient(WebClientCore):
+        """The async eager client -- the very same core with async dispatch (an
+        instance flag, not a subclass): ``doc = await ac.fetch(url)`` and
+        ``await ac.ref(url).resolve()`` chain async through the ``Async*`` surface
+        types; in-memory ops on a resolved document are synchronous. At runtime a
+        factory (``core.client.async_client``) flipping ``_async_mode``, so its IO
+        ops hand back an awaitable via ``bridge``."""
 
         @property
         def lazy(self) -> "LazyWebClient": ...
 
-        async def fetch(  # noqa: E704
-            self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any
-        ) -> "Document": ...
-        async def summary(  # noqa: E704
-            self, url: Any, *include: str, **kw: Any
-        ) -> "Summary": ...
-        def ref(self, url: Any, method: str = ..., **kw: Any) -> "Reference": ...
+        # >>> generated: AsyncWebClient surface <<<
+        # fmt: off
+        async def fetch(self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "AsyncDocument": ...
+        def ref(self, url: Any, method: str = ..., **kw: Any) -> "AsyncReference": ...
+        async def summary(self, url: Any, *include: str, **kw: Any) -> "Summary": ...
+        # fmt: on
+        # >>> end generated <<<
 
-else:  # at runtime the async client IS its async-dispatcher core
-    AsyncWebClient = AsyncWebClientCore
+else:  # at runtime the async client is the core in async-dispatcher mode
+    AsyncWebClient = _async_client
 
 
 def RemoteWebClient(url: str, token: str | None = None) -> "WebClient":
@@ -217,6 +287,8 @@ def RemoteWebClient(url: str, token: str | None = None) -> "WebClient":
 __all__ = [
     "Reference",
     "Document",
+    "AsyncReference",
+    "AsyncDocument",
     "LiveDocument",
     "Session",
     "WebClient",

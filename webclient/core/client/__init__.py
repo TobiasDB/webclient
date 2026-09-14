@@ -134,6 +134,11 @@ class WebClientCore(WebCore, BaseModel):
     _host_next: dict[str, float] = PrivateAttr(  # host -> earliest next request time
         default_factory=dict
     )
+    #: async dispatcher flag -- an instance switch, not a subclass. When set, this
+    #: client's IO ops hand back an awaitable (see ``bridge``); the async surface
+    #: is the same core, typed through the ``Async*`` stubs. ``AsyncWebClient()``
+    #: flips it on.
+    _async_mode: bool = PrivateAttr(default=False)
 
     @property
     def core(self) -> Self:
@@ -208,18 +213,22 @@ class WebClientCore(WebCore, BaseModel):
     #: the engine loop under its older name (drives async fan-out / sync bridge).
     _ensure_loop = loop
 
-    #: whether this client is an *async* dispatcher -- its IO ops hand back an
-    #: awaitable (bridged to the caller's loop) instead of blocking. The async
-    #: client core sets this True; see ``bridge``.
-    _async_mode: ClassVar[bool] = False
-
     def bridge(self, coro: Any) -> Any:
-        """Run an IO coroutine under this client's dispatcher: on the engine loop
-        (the executor) hand back the coroutine to await; for an async client hand
-        back a caller-loop awaitable (bridged off the engine loop); for a plain
-        sync caller block on the engine loop. This is the one place the sync /
-        async / on-loop distinction lives, so every IO backing (``resolve`` /
-        ``summary`` / live ops) is dispatcher-agnostic."""
+        """Run an IO coroutine under this client's dispatcher -- the one place the
+        sync / async / on-loop distinction lives, so every IO backing (``resolve``
+        / ``fetch`` / ``summary``) is dispatcher-agnostic:
+
+        - on the engine-loop thread (the executor is already awaiting there): hand
+          the coroutine straight back to ``await``;
+        - async client (``_async_mode``): the transport pool + browser pages live
+          on the engine-loop thread, so the coroutine must run there; hand back a
+          caller-loop awaitable over that cross-thread result;
+        - sync caller: block on the engine loop.
+
+        (The engine-loop hop is why an async client still submits rather than
+        awaiting the coroutine on the caller's loop directly -- the IO resources
+        are bound to that one loop. A fully loop-native async client, owning its
+        pool on the caller's loop, would be a larger change.)"""
         loop = self.loop()
         if loop.on_loop_thread():
             return coro
@@ -251,6 +260,19 @@ class WebClientCore(WebCore, BaseModel):
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+    # -- async context manager (``async with AsyncWebClient() ...``). The async
+    # client is the same core with ``_async_mode`` set; these just close cleanly.
+    async def aclose(self) -> None:
+        import asyncio
+
+        await asyncio.to_thread(self.close)
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
 
     async def _host_blocked(self, ref: ReferenceCore) -> bool:
         """Whether ``ref``'s host resolves to a loopback / private / link-local /
@@ -572,31 +594,19 @@ class WebClientCore(WebCore, BaseModel):
         doc._events.extend(events)
 
 
-class AsyncWebClientCore(WebClientCore):
-    """The async dispatcher: the very same eager surface as ``WebClientCore``, but
-    its IO verbs hand back an awaitable instead of blocking -- ``doc = await
-    ac.fetch(url)`` (bridged off the engine loop by ``bridge``). In-memory ops on
-    the resolved document stay synchronous (no IO to await); only the IO boundary
-    (``fetch`` / ``resolve`` / ``summary`` / live ops) is asynchronous. A context
-    manager: ``async with AsyncWebClient() as ac: ...``."""
-
-    _async_mode: ClassVar[bool] = True
-
-    async def aclose(self) -> None:
-        import asyncio
-
-        await asyncio.to_thread(self.close)
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *exc: object) -> None:
-        await self.aclose()
+def async_client(**policy: Any) -> WebClientCore:
+    """A ``WebClientCore`` in async-dispatcher mode: its IO verbs hand back an
+    awaitable (``doc = await ac.fetch(url)``). Not a subclass -- async is an
+    instance flag read by ``bridge``; the async surface is the same core typed
+    through the ``Async*`` stubs. Backs ``surfaces.AsyncWebClient``."""
+    core = WebClientCore(**policy)
+    core._async_mode = True
+    return core
 
 
 __all__ = [
     "WebClientCore",
-    "AsyncWebClientCore",
+    "async_client",
     "NameScope",
     "FetchBacking",
     "_materialize",

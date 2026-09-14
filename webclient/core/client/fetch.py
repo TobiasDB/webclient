@@ -26,6 +26,7 @@ class FetchBacking(Backing):
     loop, bridged otherwise -- like ``ReferenceCore.resolve``)."""
 
     provides = frozenset({"ref", "fetch", "summary"})
+    io = frozenset({"fetch", "summary"})  # resolve+project cross the IO bridge
     gate = "ok"
 
     def ref(

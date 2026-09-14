@@ -16,6 +16,8 @@ from typing import Any, assert_type
 from pydantic import BaseModel
 
 from webclient import (
+    AsyncDocument,
+    AsyncReference,
     AsyncWebClient,
     Collection,
     Document,
@@ -132,14 +134,20 @@ assert_type(_wc.lazy.fetch("https://e.com").text_content.collect(), Field[str])
 assert_type(_wc.lazy.ref("https://e.com").resolve().collect(), Document)
 
 _ac = AsyncWebClient()
-assert_type(_ac.ref("https://e.com"), Reference)  # a (sync) spec / plan context
+assert_type(_ac.ref("https://e.com"), AsyncReference)  # a (sync) spec; resolve() awaits
 
 
 async def _async_surface() -> None:
-    # await at the IO boundary -> the eager surface; deeper IO via .lazy plans
-    assert_type(await _ac.fetch("https://e.com"), Document)
+    # await at the IO boundary; IO ops on the async surface are awaitable, so a
+    # chain like ref -> resolve -> select -> attr -> resolve stays typed
+    assert_type(await _ac.fetch("https://e.com"), AsyncDocument)
     assert_type(await _ac.summary("https://e.com"), Summary)
-    assert_type((await _ac.fetch("https://e.com")).text_content, str)
+    assert_type(await _ac.ref("https://e.com").resolve(), AsyncDocument)
+    _adoc = await _ac.fetch("https://e.com")
+    assert_type(_adoc.text_content, str)  # in-memory ops stay sync
+    assert_type(_adoc.select(".t"), AsyncDocument)
+    assert_type(await _adoc.select("a").attr("href").resolve(), AsyncDocument)
+    # deeper batching still available via .lazy plans
     assert_type(await _ac.lazy.ref("https://e.com").resolve().acollect(), Document)
     assert_type(
         await _ac.lazy.fetch("https://e.com").text_content.acollect(), Field[str]

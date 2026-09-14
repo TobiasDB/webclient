@@ -15,6 +15,7 @@ class ResolveBacking(Backing):
     """Resolve the reference into a document via the bound client."""
 
     provides = frozenset({"resolve"})
+    io = frozenset({"resolve"})  # crosses the IO bridge -> awaitable when async
     gate = "ok"
 
     def resolve(

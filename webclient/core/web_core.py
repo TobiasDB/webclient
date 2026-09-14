@@ -36,6 +36,10 @@ class Backing:
 
     provides: ClassVar[frozenset[str]] = frozenset()  # call ops: obj.op(...)
     props: ClassVar[frozenset[str]] = frozenset()  # property ops: obj.op
+    #: the ops that cross the IO bridge (``resolve``/``fetch``/``summary``): under
+    #: an async dispatcher they hand back an awaitable, so the async surface stub
+    #: types them ``async def``. Everything else is in-memory (sync) either way.
+    io: ClassVar[frozenset[str]] = frozenset()
     gate: ClassVar[str] = "ok"
 
     def applies(self, core: Any) -> bool:  # Any: subclasses narrow to their core
@@ -152,6 +156,12 @@ class WebCore:
             for op in backing.props:
                 table.setdefault(op, backing)
         return table
+
+    @classmethod
+    def io_ops(cls) -> frozenset[str]:
+        """The call ops that cross the IO bridge (awaitable under an async
+        dispatcher) -- the union of the backings' ``io`` sets."""
+        return frozenset().union(*(b.io for b in cls.BACKINGS)) if cls.BACKINGS else frozenset()
 
 
 def _wrap_result(value: Any) -> Any:

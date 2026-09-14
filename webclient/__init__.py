@@ -31,6 +31,8 @@ from .query.expr import (
 )
 from .core.remote import RemoteWebClientCore
 from .surfaces import (
+    AsyncDocument,
+    AsyncReference,
     AsyncWebClient,
     Document,
     LiveDocument,
@@ -46,6 +48,8 @@ from .surfaces import (
 __all__ = [
     "WebClient",
     "AsyncWebClient",
+    "AsyncReference",
+    "AsyncDocument",
     "RemoteWebClient",
     "WebClientCore",
     "RemoteWebClientCore",

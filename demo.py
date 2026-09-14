@@ -368,9 +368,10 @@ def main() -> None:
             },
         )
 
-    # [async] The same facade helpers, awaited. AsyncWebClient builds the very
-    #      same plans as WebClient; only the execution differs -- it bridges the
-    #      engine loop to the caller's loop instead of blocking on it.
+    # [async] The same eager surface, awaited. AsyncWebClient is the very same
+    #      core with async dispatch (an instance flag, not a subclass): IO ops
+    #      hand back an awaitable, so `await ac.ref(url).resolve()` chains async
+    #      while in-memory ops stay synchronous. Deeper batching via `ac.lazy`.
     import asyncio
 
     from webclient import AsyncWebClient
@@ -378,6 +379,7 @@ def main() -> None:
     async def _async_demo() -> tuple:
         async with AsyncWebClient() as ac:
             document = await ac.fetch(f"{base}/")  # await at the IO boundary
+            first = (await ac.ref(f"{base}/").resolve()).select(".title").text_content
             rows = await (
                 wq.ref.resolve()
                 .select_all(".card")
@@ -385,10 +387,10 @@ def main() -> None:
                 .project()
                 .acollect(ac.ref(f"{base}/"))
             )
-            return document.title, [r["title"] for r in rows]
+            return document.title, first, [r["title"] for r in rows]
 
-    title, async_rows = asyncio.run(_async_demo())
-    print("async fetch:", title, "| async plan:", async_rows)
+    title, first_title, async_rows = asyncio.run(_async_demo())
+    print("async fetch:", title, "| first:", first_title, "| async plan:", async_rows)
 
     # [M7] The same WebClient behind an HTTP API -- browser as a service.
     #      Every operation is one Plan submitted to /execute; a Document comes

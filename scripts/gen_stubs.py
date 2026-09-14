@@ -50,9 +50,14 @@ MODELS = ROOT / "webclient" / "surfaces" / "lazy.py"
 CORES: tuple[type, ...] = (ReferenceCore, DocumentCore)
 SURFACE = {ReferenceCore: "Reference", DocumentCore: "Document"}
 LAZY = {ReferenceCore: "LazyReference", DocumentCore: "LazyDocument"}
+#: the async eager tier: a Core maps to its Async surface, and its IO ops are
+#: ``async def`` (see ``members``), so ``await ac.ref(url).resolve()`` types.
+SURFACE_ASYNC = {ReferenceCore: "AsyncReference", DocumentCore: "AsyncDocument"}
 #: bare core-surface names -- an overload returning one overlaps a later ``str``
 #: overload and needs the ``overload-overlap`` ignore.
-_CORE_SURFACES = set(SURFACE.values()) | set(LAZY.values())
+_CORE_SURFACES = (
+    set(SURFACE.values()) | set(LAZY.values()) | set(SURFACE_ASYNC.values())
+)
 
 #: names the resolved annotations may reference (TYPE_CHECKING-only in their own
 #: modules), merged into each fn's globals for ``get_type_hints``.
@@ -177,21 +182,23 @@ def _render(tp: Any, tier: str) -> str:
     not a chainable field/list."""
     inner = _unwrap_union(tp)
     cat = _classify(inner)
+    smap = {"eager": SURFACE, "async": SURFACE_ASYNC}.get(tier, LAZY)
+    sync = tier in ("eager", "async")  # a materialised value tier (vs the lazy box)
     if cat == "core":
-        return (SURFACE if tier == "eager" else LAZY)[inner]
+        return smap[inner]
     if cat == "iterable":
         el = _unwrap_union(_element_type(inner))
         if _classify(el) == "core":
-            sub = (SURFACE if tier == "eager" else LAZY)[el]
-            box = "Collection" if tier == "eager" else "LazyCollection"
+            sub = smap[el]
+            box = "Collection" if sync else "LazyCollection"
             return f"{box}[{sub}]"
         listed = f"list[{_name(el)}]"  # an iterable of non-cores stays a list
         return f"Lazy[{listed}]" if tier == "client" else listed
     if typing.get_origin(inner) is Field:  # a value leaf
         base = _name(_element_type(inner))
-        return f"Field[{base}]" if tier == "eager" else f"LazyField[{base}]"
+        return f"Field[{base}]" if sync else f"LazyField[{base}]"
     base = _name(inner)  # a plain scalar or a pydantic data model
-    if tier == "eager":
+    if sync:
         return base
     if tier == "client":
         return f"Lazy[{base}]"
@@ -318,9 +325,14 @@ def members(
             lines += ["@property", f"def {op}(self) -> {ret}: ..."]
         else:
             lines.append(f'{op}: "{ret}"')
-    # call ops
+    # call ops -- in the async tier the IO ops (resolve/fetch/summary) are
+    # ``async def`` (awaited -> the async surface); the rest stay synchronous.
+    io = core.io_ops() if tier == "async" else frozenset()
     for op in sorted(core.ops()):
-        lines += _method(op, _fn(_provider(core, op, "provides"), op), tier)
+        method = _method(op, _fn(_provider(core, op, "provides"), op), tier)
+        if op in io:
+            method = [ln.replace(f"def {op}(", f"async def {op}(") for ln in method]
+        lines += method
     return lines
 
 
@@ -459,6 +471,22 @@ def _body(region: str) -> str:
     if region == "Session eager surface":
         verbs = members(WebSessionCore, "eager", fields=False, class_props=False)
         return _indented(verbs, 8)
+    if region == "AsyncReference surface":
+        # the async view: IO ops (resolve) are ``async def``, Core returns map to
+        # the Async surfaces so ``await ac.ref(url).resolve()`` chains async.
+        return _indented(
+            members(ReferenceCore, "async", fields=False, class_props=False), 8
+        )
+    if region == "AsyncDocument surface":
+        return _indented(
+            members(DocumentCore, "async", fields=False, class_props=False), 8
+        )
+    if region == "AsyncWebClient surface":
+        # the async client's verbs: ``async def fetch/summary`` -> the async
+        # surface, sync ``ref`` -> AsyncReference.
+        return _indented(
+            members(WebClientCore, "async", fields=False, class_props=False), 8
+        )
     raise KeyError(region)
 
 
@@ -467,6 +495,9 @@ REGIONS = [
     (SURFACES, "Document eager surface"),
     (SURFACES, "WebClient eager surface"),
     (SURFACES, "Session eager surface"),
+    (SURFACES, "AsyncReference surface"),
+    (SURFACES, "AsyncDocument surface"),
+    (SURFACES, "AsyncWebClient surface"),
     (COLLECTION, "collection element-op lifting"),
     (MODELS, "lazy-tier"),
 ]

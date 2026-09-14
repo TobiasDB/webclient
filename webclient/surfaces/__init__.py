@@ -15,6 +15,8 @@ Re-exported here so ``from webclient.surfaces import X`` reaches every surface.
 
 from ._base import wrap
 from .eager import (
+    AsyncDocument,
+    AsyncReference,
     AsyncWebClient,
     Document,
     LiveDocument,
@@ -32,6 +34,8 @@ __all__ = [
     "wrap",
     "Reference",
     "Document",
+    "AsyncReference",
+    "AsyncDocument",
     "LiveDocument",
     "Renderer",
     "Session",

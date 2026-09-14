@@ -31,6 +31,11 @@ def test_async_fetch_execute_and_stream(httpserver):
             titles = document.select_all(".title")
             assert [t.text_content for t in titles] == ["Aeropress", "Grinder"]
 
+            # IO ops on the async surface are awaitable, so a chain stays async:
+            # ref -> resolve, and doc -> select -> resolve
+            page = await ac.ref(url).resolve()
+            assert page.select(".title").text_content == "Aeropress"
+
             # a deeper IO chain: a lazy plan, realised with acollect() (ac.ref(url)
             # is an eager Reference context)
             rows = await (
