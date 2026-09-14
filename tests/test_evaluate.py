@@ -16,7 +16,7 @@ from webclient import (
     reference,
     when,
 )
-from webclient.executor import fan_out
+from webclient.executor import fan_out, fan_out_stream
 
 CARDS = """
 <html><body>
@@ -299,6 +299,50 @@ def test_fan_out_is_bounded_and_ordered(wc):
 
     results = wc._ensure_loop().run(fan_out(list(range(20)), work, limit=3))
     assert results == [i * 2 for i in range(20)] and peak == 3
+
+
+def test_fan_out_stream_yields_as_completed_and_is_bounded(wc):
+    # True streaming: a slow element must not hold back a fast one, and no more
+    # than `limit` run concurrently. The first result arrives long before the
+    # slowest element finishes -- nothing is materialised up front.
+    in_flight, peak = 0, 0
+
+    async def work(i):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.02 * (i + 1))  # element 0 finishes first
+        in_flight -= 1
+        return i
+
+    async def drive():
+        out = []
+        async for r in fan_out_stream(list(range(5)), work, limit=2):
+            out.append(r)
+        return out
+
+    order = wc._ensure_loop().run(drive())
+    assert order == sorted(order)  # completion order (ascending sleeps)
+    assert peak == 2  # bounded by the limit
+
+
+def test_fan_out_stream_failure_cancels_siblings(wc):
+    finished = []
+
+    async def work(i):
+        if i == 1:
+            raise RuntimeError("element 1 blew up")
+        await asyncio.sleep(0.05)
+        finished.append(i)
+        return i
+
+    async def drive():
+        async for _ in fan_out_stream(list(range(6)), work, limit=6):
+            pass
+
+    with pytest.raises(RuntimeError, match="element 1"):
+        wc._ensure_loop().run(drive())
+    assert len(finished) < 5  # siblings cancelled, not drained
 
 
 def test_failing_row_cancels_siblings(wc):

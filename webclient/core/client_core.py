@@ -424,12 +424,19 @@ class WebClientCore(WebCore, BaseModel):
         self.bus.publish(PlanEvent(phase="done", detail={"rows": count}))
 
     async def astream(self, expr: Any, context: Any) -> Any:
-        """Async row stream (same rows as ``_stream``, awaited off-thread)."""
-        from ..collection import Collection, Field
+        """Async row stream (the same truly-incremental rows as ``_stream``,
+        bridged from the engine loop to the caller's loop as they complete)."""
+        from ..collection import Field
+        from ..events import PlanEvent
+        from ..executor import astream as _astream
 
-        result = await self.aexecute(expr, context)
-        for row in list(result) if isinstance(result, (list, Collection)) else [result]:
+        self.bus.publish(PlanEvent(phase="started"))
+        count = 0
+        async for row in self.loop().astream(_astream(expr, context, client=self)):
+            count += 1
+            self.bus.publish(PlanEvent(phase="row"))
             yield row.get() if isinstance(row, Field) else row
+        self.bus.publish(PlanEvent(phase="done", detail={"rows": count}))
 
     # -- sessions ------------------------------------------------------------
     def session(

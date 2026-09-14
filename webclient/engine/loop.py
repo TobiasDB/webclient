@@ -111,6 +111,63 @@ class EngineLoop:
                 except Exception:
                     pass
 
+    async def astream(
+        self, source: AsyncIterator[T], buffer: int = 8
+    ) -> AsyncIterator[T]:
+        """Bridge an engine-loop async iterator to a *caller-loop* async
+        iterator, delivering items as they arrive. The async twin of ``stream``:
+        the queue and pump live on the engine loop (where ``source`` runs its
+        I/O); the caller awaits each item via ``wrap_future`` without blocking
+        its own loop. Abandoning the iterator cancels the pump, unwinding
+        ``source`` at its await point (releasing leases, publishing done)."""
+        box: dict[str, Any] = {}
+
+        async def _setup() -> None:
+            q: asyncio.Queue[Any] = asyncio.Queue(maxsize=max(1, buffer))
+            box["q"] = q
+
+            async def _pump() -> None:
+                box["task"] = asyncio.current_task()
+                try:
+                    async for item in source:
+                        await q.put(item)
+                    await q.put(_SENTINEL)
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as exc:  # surfaced on the consuming side
+                    await q.put(exc)
+
+            asyncio.ensure_future(_pump())
+
+        await asyncio.wrap_future(self.submit(_setup()))
+        q = box["q"]
+        try:
+            while True:
+                if self.closed:
+                    break
+                item = await asyncio.wrap_future(self.submit(q.get()))
+                if item is _SENTINEL:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+
+            async def _shutdown() -> None:
+                task = box.get("task")
+                if task is not None and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except BaseException:
+                        pass
+
+            if not self.closed:
+                try:
+                    await asyncio.wrap_future(self.submit(_shutdown()))
+                except Exception:
+                    pass
+
     def stop(self) -> None:
         if not self.closed:
             # Cancel every outstanding task and let the loop settle them so

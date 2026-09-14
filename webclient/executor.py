@@ -5,9 +5,11 @@ The core is async (``aevaluate`` / ``astream``); it drives the eager surface by
 ``resolve`` -- hand back a coroutine when already on the engine loop). A
 Collection fans out per element through the bounded ``fan_out``. Sync callers
 use ``evaluate`` (a ``loop.run`` bridge); the async client awaits ``aevaluate``
-on the engine loop; ``astream`` evaluates the plan and then delivers its rows
-one at a time (delivery is incremental; computation is not yet -- see
-docs/notes.md "True streaming").
+on the engine loop. ``astream`` is *truly* incremental: it evaluates the plan up
+to the final fan-out, then runs that fan-out as elements complete (``fan_out_stream``)
+and yields each row/element the moment it is ready -- the whole result is never
+materialised first. A plan whose tail is not a per-element shape falls back to
+evaluate-then-yield.
 """
 
 from __future__ import annotations
@@ -20,6 +22,31 @@ from .expr import Expr
 from .plan import Arg, Step
 
 DEFAULT_FANOUT = 8
+
+#: sentinel: a streamed element dropped by a filter predicate
+_DROP = object()
+
+#: element ops that fan out per element (the generated Collection lift). A plan
+#: ending in one of these streams its per-element results.
+_ELEMENT_OPS = frozenset(
+    {
+        "attr",
+        "text",
+        "title",
+        "render",
+        "ref",
+        "select",
+        "select_all",
+        "is_ok",
+        "is_empty",
+        "message",
+        "click",
+        "write",
+        "reload",
+        "screenshot",
+        "wait_for",
+    }
+)
 
 _OPS = {
     "eq": operator.eq,
@@ -203,14 +230,128 @@ def _start(plan: Any, context: Any, client: Any) -> Any:
 async def astream(
     expr: Any, context: Any = None, *, client: Any = None
 ) -> AsyncIterator[Any]:
-    """Evaluate the plan, then yield its rows one at a time (a terminal
-    ``project`` list, or a single value). Delivery is incremental; computation is
-    not yet -- the whole result is produced first, then handed out row by row
-    (see docs/notes.md "True streaming")."""
-    result = await aevaluate(expr, context, client=client)
-    rows = result if isinstance(result, list) else [result]
-    for row in rows:
+    """Yield the plan's rows as they are produced -- truly incremental.
+
+    The plan is evaluated up to the base Collection of the final fan-out; that
+    fan-out then runs as-completed (``fan_out_stream``, bounded by the pool) and
+    each row/element is yielded the moment its element finishes -- nothing is
+    materialised first. Two tail shapes stream: a terminal ``project()`` (rows,
+    optionally preceded by ``extract``/``filter``) and a terminal element op
+    (e.g. ``.attr("text")``). Any other plan falls back to evaluate-then-yield.
+    """
+    from .collection import Collection
+
+    if not isinstance(expr, Expr):
+        for row in expr if isinstance(expr, list) else [expr]:
+            yield row
+        return
+    client = client or expr._client or getattr(context, "_client", None)
+    if isinstance(context, Expr):  # an Expr context (wc.ref(url)) runs first
+        context = await aevaluate(context, client=client)
+
+    steps = expr._plan.steps
+    tail = _stream_tail(steps)
+    if tail is None:  # not a streamable shape -- evaluate whole, then hand out
+        result = await aevaluate(expr, context, client=client)
+        for row in result if isinstance(result, list) else [result]:
+            yield row
+        return
+
+    head, shaping = steps[:tail], steps[tail:]
+    base = await _arun(_start(expr._plan, context, client), head, 0, context, client)
+    if not isinstance(base, Collection):  # head wasn't a collection -- finish eager
+        value = await _arun(base, shaping, 0, context, client)
+        for row in value if isinstance(value, list) else [value]:
+            yield row
+        return
+    async for row in _astream_collection(base, shaping, client):
         yield row
+
+
+def _stream_tail(steps: list[Step]) -> int | None:
+    """Index at which a streamable per-element tail begins, or ``None``. A
+    terminal ``project()`` (no model) preceded by ``extract``/``filter`` pairs
+    streams rows; a terminal element op streams its per-element results."""
+    n = len(steps)
+    if n < 2 or steps[-2].kind != "get" or steps[-1].kind != "call":
+        return None
+    name = steps[-2].name
+    if name == "project":
+        if steps[-1].args:  # project(model): eager only (model not serialisable)
+            return None
+        i = n - 2
+        while (
+            i - 2 >= 0
+            and steps[i - 2].kind == "get"
+            and steps[i - 1].kind == "call"
+            and steps[i - 2].name in ("extract", "filter")
+        ):
+            i -= 2
+        return i
+    if name in _ELEMENT_OPS:
+        return n - 2
+    return None
+
+
+def _parse_shaping(steps: list[Step], client: Any) -> list[tuple[str, Any]]:
+    """Parse a run of ``extract``/``filter`` get+call pairs into ops with their
+    sub-expressions reconstructed (extract -> {col: Expr}; filter -> [Expr])."""
+    ops: list[tuple[str, Any]] = []
+    i = 0
+    while i + 1 < len(steps):
+        get_step, call = steps[i], steps[i + 1]
+        if get_step.name == "extract":
+            ops.append(
+                ("extract", {k: _as_expr(v, client) for k, v in call.kwargs.items()})
+            )
+        else:  # filter
+            ops.append(("filter", [_as_expr(a, client) for a in call.args]))
+        i += 2
+    return ops
+
+
+async def _astream_collection(
+    base: Any, shaping: list[Step], client: Any
+) -> AsyncIterator[Any]:
+    """Stream the final fan-out of ``base`` under ``shaping`` as elements
+    complete. Rows (``...project()``) or per-element op results are yielded the
+    moment each element finishes; a filtered-out element yields nothing."""
+    from .collection import Field, _raw, _row_of
+    from .errors import RETURN, default_policy
+
+    items = list(base)
+    is_project = (
+        len(shaping) >= 2
+        and shaping[-2].kind == "get"
+        and shaping[-2].name == "project"
+    )
+    if is_project:
+        ops = _parse_shaping(shaping[:-2], client)
+
+        async def process(el: Any) -> Any:
+            with default_policy(RETURN):  # a missing field is None, not an abort
+                for kind, payload in ops:
+                    if kind == "extract":
+                        row = _row_of(el)
+                        if row is not None:
+                            for key, sub in payload.items():
+                                row[key] = _raw(await aevaluate(sub, el, client=client))
+                    else:  # filter: drop the element if any predicate is falsey
+                        for pred in payload:
+                            if not truthy(await aevaluate(pred, el, client=client)):
+                                return _DROP
+                shaped = _row_of(el, create=False)
+                return shaped if shaped is not None else el
+
+    else:  # a terminal element op: apply it to each element on its own
+
+        async def process(el: Any) -> Any:
+            value = await _arun(el, shaping, 0, el, client)
+            return value.get() if isinstance(value, Field) else value
+
+    async for result in fan_out_stream(items, process, limit=_fanout_limit(client)):
+        if result is not _DROP:
+            yield result
 
 
 # -- sync bridge -------------------------------------------------------------
@@ -255,4 +396,51 @@ async def fan_out(
     return results
 
 
-__all__ = ["aevaluate", "astream", "evaluate", "truthy", "fan_out"]
+async def fan_out_stream(
+    items: list[Any], fn: Callable[[Any], Awaitable[Any]], *, limit: int
+) -> AsyncIterator[Any]:
+    """Run ``fn`` over ``items`` with at most ``limit`` in flight, yielding each
+    result the moment it completes (order is completion order, not input order).
+    A failing task raises its error and cancels the rest; abandoning the iterator
+    (break/GC) cancels every outstanding task in the ``finally``."""
+    n = len(items)
+    if n == 0:
+        return
+    sem = asyncio.Semaphore(max(min(limit, n), 1))
+    queue: asyncio.Queue[tuple[bool, Any]] = asyncio.Queue()
+
+    async def run(item: Any) -> None:
+        async with sem:
+            try:
+                await queue.put((True, await fn(item)))
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:  # surfaced on the consuming side
+                await queue.put((False, exc))
+
+    tasks = [asyncio.create_task(run(item)) for item in items]
+    try:
+        for _ in range(n):
+            ok, value = await queue.get()
+            if not ok:
+                raise value
+            yield value
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except BaseException:
+                pass
+
+
+__all__ = [
+    "aevaluate",
+    "astream",
+    "evaluate",
+    "truthy",
+    "fan_out",
+    "fan_out_stream",
+]
