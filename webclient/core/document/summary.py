@@ -10,7 +10,7 @@ import json as _json
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlparse
 
-from ...events import DOMUpdateEvent, NetworkEvent
+from ...models import DOMUpdateEvent, NetworkEvent
 from ...summary import (
     FACETS,
     Form,

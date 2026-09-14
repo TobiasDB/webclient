@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypeVar, overload
+from typing import TYPE_CHECKING, Any, overload
 
+from ...models import E
 from ..web_core import Backing
 
 if TYPE_CHECKING:
-    from ...events import ActionEvent, Event
+    from ...models import ActionEvent, Event
     from . import DocumentCore
-
-#: an Event subtype, so ``events_of(NavigationEvent)`` narrows to that subtype.
-E = TypeVar("E", bound="Event")
 
 
 class EventBacking(Backing):
@@ -35,13 +33,13 @@ class EventBacking(Backing):
     def events_of(self, core: "DocumentCore", event_type: str) -> "list[Event]": ...
     def events_of(self, core: "DocumentCore", event_type: Any) -> "list[Any]":
         if isinstance(event_type, str):  # a topic prefix
-            from ...events import _topic_matches
+            from ...models import topic_matches
 
-            return [e for e in core._events if _topic_matches(event_type, e.topic)]
+            return [e for e in core._events if topic_matches(event_type, e.topic)]
         return [e for e in core._events if isinstance(e, event_type)]
 
     def action_events(self, core: "DocumentCore") -> "list[ActionEvent]":
-        from ...events import ActionEvent
+        from ...models import ActionEvent
 
         return [e for e in core._events if isinstance(e, ActionEvent)]
 

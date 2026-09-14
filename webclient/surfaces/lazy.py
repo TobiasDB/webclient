@@ -23,7 +23,7 @@ from ..query.plan import Plan, Step
 if TYPE_CHECKING:
     from ..collection import Collection, Field
     from ..core.document import Element
-    from ..events import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
+    from ..models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
     from ..summary import Metadata, Runtime, Structure, Summary, Transport
     from .eager import Document, Reference
 

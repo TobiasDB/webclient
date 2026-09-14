@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from ...events import ActionEvent, ConsoleEvent, DOMUpdateEvent, NetworkEvent
+from ...models import ActionEvent, ConsoleEvent, DOMUpdateEvent, NetworkEvent
 from ..web_core import Backing
 
 if TYPE_CHECKING:

@@ -16,7 +16,8 @@ from ..core.session import WebSessionCore
 if TYPE_CHECKING:
     from ..collection import Collection, Field
     from ..core.document import Element
-    from ..events import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event, EventBus
+    from ..events import EventBus
+    from ..models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
     from ..pool import ClientPool
     from ..summary import Metadata, Runtime, Structure, Summary, Transport
     from .lazy import LazyDocument, LazyReference, LazyWebClient

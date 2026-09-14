@@ -1,103 +1,37 @@
-"""Core event taxonomy, EventBus and EventRegistry.
+"""EventBus and EventRegistry -- the runtime machinery over the event taxonomy.
 
-Topics are dotted strings matched by prefix: subscribing to "network" also
-receives "network.xhr". Plugin events subclass one of these core events and
-may introduce namespaced topics ("rrweb.dom.update").
+The event *models* (``Event`` and its subclasses) live in
+:mod:`webclient.models` (the shared, dependency-light data models); this module
+holds the pub/sub bus and the topic->class registry, and re-exports the event
+classes so ``from webclient.events import NetworkEvent`` keeps working.
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Callable, Literal, TypeVar
+from typing import Any, Callable
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, PrivateAttr
 
-Topic = str
-
-
-class Event(BaseModel):
-    topic: Topic
-    source: str = "core"  # name of the emitting plugin
-    seq: int | None = None  # per-document counter, stamped by the bus
-    ts: float | None = None  # stamped by the bus
-    # correlation ids -- overwritten by Surface.emit (ISSUES #15)
-    session_id: str | None = None
-    document_id: str | None = None
-    plan_id: str | None = None
-    node_id: str | None = None  # stable node identity, stamped by the
-    # capture plugin (enables LiveNode
-    # event narrowing; ISSUES #9)
-
-
-E = TypeVar("E", bound=Event)
-
-
-# -- network ---------------------------------------------------------------- #
-
-
-class NetworkEvent(Event):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    topic: Topic = "network"
-    request: Any = None  # the ReferenceCore for this request
-    status_code: int | None = None
-    body: bytes | None = None
-    resource_type: str | None = None  # browser sub-request kind: xhr/fetch/document/...
-
-
-class NavigationEvent(NetworkEvent):
-    topic: Topic = "network.navigation"
-
-
-# -- dom -------------------------------------------------------------------- #
-
-
-class DOMEvent(Event):
-    topic: Topic = "dom"
-    selector: str | None = None
-    detail: dict[str, Any] = {}
-
-
-class DOMUpdateEvent(DOMEvent):
-    topic: Topic = "dom.update"
-    kind: Literal["added", "removed", "attribute", "text"] = "added"
-
-
-# -- interaction & console --------------------------------------------------- #
-
-
-class ActionEvent(Event):
-    topic: Topic = "action"
-    action: str  # "click", "write", "scroll", ...
-    args: dict[str, Any] = {}
-
-
-class ConsoleEvent(Event):
-    topic: Topic = "console"
-    level: Literal["log", "info", "warning", "error"]
-    text: str
-
-
-class PlanEvent(Event):
-    topic: Topic = "plan"
-    phase: str = "started"  # started / row / done
-    detail: dict[str, Any] = {}
-
-
-CORE_EVENTS: tuple[type[Event], ...] = (
-    NetworkEvent,
-    NavigationEvent,
-    DOMEvent,
-    DOMUpdateEvent,
+from .models import (
+    CORE_EVENTS,
     ActionEvent,
     ConsoleEvent,
+    DOMEvent,
+    DOMUpdateEvent,
+    E,
+    Event,
+    NavigationEvent,
+    NetworkEvent,
+    PlanEvent,
+    Topic,
+    topic_matches,
 )
 
-
-def _topic_matches(pattern: Topic, topic: Topic) -> bool:
-    return not pattern or topic == pattern or topic.startswith(pattern + ".")
+#: back-compat alias (the private name callers imported before the split).
+_topic_matches = topic_matches
 
 
 # --------------------------------------------------------------------------- #
@@ -139,7 +73,7 @@ class EventBus(BaseModel):
             event.ts = time.time()
             subs = list(self._subs.values())
         for pattern, filters, handler in subs:
-            if not _topic_matches(pattern, event.topic):
+            if not topic_matches(pattern, event.topic):
                 continue
             if any(
                 getattr(event, field) != value
@@ -209,3 +143,24 @@ class EventRegistry(BaseModel):
         if len(parts) > 1:
             return self.resolve(".".join(parts[1:]))
         return Event
+
+
+__all__ = [
+    # taxonomy (re-exported from webclient.models)
+    "Topic",
+    "Event",
+    "E",
+    "NetworkEvent",
+    "NavigationEvent",
+    "DOMEvent",
+    "DOMUpdateEvent",
+    "ActionEvent",
+    "ConsoleEvent",
+    "PlanEvent",
+    "CORE_EVENTS",
+    "topic_matches",
+    # machinery (defined here)
+    "EventBus",
+    "EventRegistry",
+    "Subscription",
+]

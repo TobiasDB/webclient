@@ -20,7 +20,8 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr
 from ...engine import http as engine_http
 from ...engine.loop import EngineLoop
 from ...errors import WebError, WebException, error_for
-from ...events import EventBus, NavigationEvent, NetworkEvent
+from ...events import EventBus
+from ...models import NavigationEvent, NetworkEvent
 from ..document import live as _live
 from ..document import DocumentCore
 from ..reference import HttpMethod, ReferenceCore, from_url
@@ -447,7 +448,7 @@ class WebClientCore(WebCore, BaseModel):
         """Bridge the async row stream to a sync iterator, publishing plan
         events (a ``_pump`` task feeds a bounded queue on the engine loop)."""
         from ...collection import Field
-        from ...events import PlanEvent
+        from ...models import PlanEvent
         from ...query.executor import astream
 
         self.bus.publish(PlanEvent(phase="started"))
@@ -463,7 +464,7 @@ class WebClientCore(WebCore, BaseModel):
         async client iterates loop-natively on the caller's loop; a sync client
         bridges from its engine loop as rows complete."""
         from ...collection import Field
-        from ...events import PlanEvent
+        from ...models import PlanEvent
         from ...query.executor import astream as _astream
 
         self.bus.publish(PlanEvent(phase="started"))
