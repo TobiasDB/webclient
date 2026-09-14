@@ -13,75 +13,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 from ...clients import PageScript
-from ...models import ActionEvent, ConsoleEvent, DOMUpdateEvent, NetworkEvent
+from ...models import ActionEvent, ConsoleEvent, DOMUpdateEvent
 from ..web_core import Backing
+from .capture import INIT_JS, console_event, drain, network_event  # noqa: F401
 
 if TYPE_CHECKING:
     from . import DocumentCore
-
-#: installed on every navigation (before page scripts) -- an id-path-tagging
-#: MutationObserver feeding ``window.__wc_mutations``.
-INIT_JS = """(() => {
-  if (window.__wc_installed) return;
-  window.__wc_installed = true;
-  window.__wc_mutations = [];
-  new MutationObserver((muts) => {
-    for (const m of muts) {
-      let ids = []; let n = m.target;
-      while (n && n.nodeType === 1) { if (n.id) ids.push(n.id); n = n.parentElement; }
-      window.__wc_mutations.push({type: m.type, ids: ids,
-        added: m.addedNodes.length, removed: m.removedNodes.length});
-    }
-  }).observe(document,
-             {childList: true, subtree: true, attributes: true, characterData: true});
-})()"""
-
-_DRAIN_JS = "() => { const m = window.__wc_mutations || []; window.__wc_mutations = []; return m; }"
-_LEVELS = {
-    "log": "log",
-    "info": "info",
-    "debug": "log",
-    "warning": "warning",
-    "error": "error",
-}
-
-
-def _kind(record: dict[str, Any]) -> str:
-    if record["type"] == "attributes":
-        return "attribute"
-    if record["type"] == "characterData":
-        return "text"
-    return "removed" if record["removed"] and not record["added"] else "added"
-
-
-async def drain(doc: Any) -> None:
-    """Move any pending DOM mutations off the page onto the document. A short
-    settle lets the observer's microtask deliver records from the last action."""
-    await doc._page.wait_for_timeout(30)
-    for r in await doc._page.evaluate(_DRAIN_JS):
-        doc._events.append(
-            DOMUpdateEvent(
-                kind=cast(Any, _kind(r)), detail={"ids": r["ids"]}, document_id=doc.name
-            )
-        )
-
-
-def console_event(level: str, text: str, doc: Any) -> ConsoleEvent:
-    return ConsoleEvent(
-        level=cast(Any, _LEVELS.get(level, "log")), text=text, document_id=doc.name
-    )
-
-
-def network_event(method: str, url: str, resource_type: str, doc: Any) -> NetworkEvent:
-    """A browser sub-request captured onto the document (an XHR/fetch the page
-    made) -- the raw material for the summary ``runtime`` facet's xhr_endpoints."""
-    from ..reference import from_url
-
-    return NetworkEvent(
-        request=from_url(url, cast(Any, method.lower())),
-        resource_type=resource_type,
-        document_id=doc.name,
-    )
 
 
 class LiveBacking(Backing):
