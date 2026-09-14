@@ -59,7 +59,9 @@ class RemoteWebClientCore(WebClientCore):
     def model_post_init(self, ctx: Any) -> None:
         super().model_post_init(ctx)
         self.url = self.url.rstrip("/")
-        self._http = httpx.Client()
+        # bound every round-trip by the client's timeout so a hung service can't
+        # block the caller forever.
+        self._http = httpx.Client(timeout=self.timeout)
 
     def _init_transport(self) -> None:
         """No local transport pool -- execution is a remote round-trip."""

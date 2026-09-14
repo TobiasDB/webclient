@@ -6,6 +6,7 @@ handles; value ops run through ``rc.execute`` (deferred/batched)."""
 import threading
 import time
 
+import httpx
 import pytest
 import uvicorn
 
@@ -188,3 +189,20 @@ def test_remote_needs_no_browser_or_lxml():
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_remote_client_times_out_on_a_hung_service(httpserver):
+    """The remote client bounds every round-trip by its timeout, so a hung
+    service raises instead of blocking the caller forever."""
+    from werkzeug.wrappers import Response
+
+    def slow(request):
+        time.sleep(0.5)
+        return Response("{}", content_type="application/json")
+
+    httpserver.expect_request("/execute").respond_with_handler(slow)
+    core = RemoteWebClientCore(url=httpserver.url_for(""), timeout=0.1)
+    rc = WebClient(core=core)
+    with pytest.raises(httpx.TimeoutException):
+        rc.fetch("https://example.com").collect()
+    rc.close()
