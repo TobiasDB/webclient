@@ -40,7 +40,7 @@ class FetchBacking(Backing):
         spec._client = core
         return spec
 
-    def fetch(
+    async def fetch(
         self,
         core: "WebClientCore",
         url: Any,
@@ -50,26 +50,23 @@ class FetchBacking(Backing):
         **kw: Any,
     ) -> "DocumentCore":
         """Resolve ``ref(url)`` into a document -- straight to the client's
-        transport (``afetch``, dispatcher-bridged), not bouncing back out through
-        the reference's ``resolve`` op (``fetch`` IS a resolve)."""
+        transport (``afetch``), not bouncing back out through the reference's
+        ``resolve`` op (``fetch`` IS a resolve). An IO op: the interface bridges
+        it (``dispatch``)."""
         from ...errors import RETURN
 
         ref = self.ref(core, url, **kw)
         lenient = optional or error is RETURN
-        return cast(DocumentCore, core.bridge(core.afetch(ref, optional=lenient)))
+        return await core.afetch(ref, optional=lenient)
 
-    def summary(
+    async def summary(
         self, core: "WebClientCore", url: Any, *include: str, **kw: Any
     ) -> "Summary":
-        """Resolve ``url`` and project it to a :class:`Summary` (async-aware).
-        ``include`` selects facets (default: all applicable)."""
+        """Resolve ``url`` and project it to a :class:`Summary`. ``include``
+        selects facets (default: all applicable)."""
         ref = self.ref(core, url, **kw)
-
-        async def run() -> "Summary":
-            doc = await core.afetch(ref)
-            return cast("Summary", doc.dispatch("summary", *include))
-
-        return cast("Summary", core.bridge(run()))
+        doc = await core.afetch(ref)
+        return doc.dispatch("summary", *include)  # Any -> Summary
 
 
 __all__ = ["FetchBacking"]

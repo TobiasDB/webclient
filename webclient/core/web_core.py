@@ -119,8 +119,33 @@ class WebCore:
         raise UnsupportedOp(op, self.capabilities())
 
     def dispatch(self, op: str, *args: Any, **kwargs: Any) -> Any:
-        """Run ``op`` on its backing, passing this core as the receiver."""
-        return getattr(self.backing(op), op)(self, *args, **kwargs)
+        """Run ``op`` on its backing, passing this core as the receiver. An IO op
+        (an ``async def`` on the backing -- see ``Backing.io``) returns a
+        coroutine that is bridged onto the right dispatcher here, so backings never
+        touch ``bridge`` themselves; every other op returns its value directly."""
+        result = getattr(self.backing(op), op)(self, *args, **kwargs)
+        if op in type(self).io_ops():
+            return self._bridge_io(result)
+        return result
+
+    def _bridge_io(self, coro: Any) -> Any:
+        """Bridge an IO op's coroutine on the right dispatcher: a session's, else
+        the bound client's, else a process-local default (bound onto this core so
+        the op's own body reaches for the same one). ``bridge`` then picks blocking
+        (sync) / awaitable (async) / on-loop (the executor)."""
+        client = getattr(self, "_session", None) or getattr(self, "_client", None)
+        if client is None:
+            if hasattr(self, "bridge"):  # a client core is its own engine
+                client = self
+            else:  # an unbound reference/document -- give it a default client
+                from .client import WebClientCore
+
+                client = WebClientCore()
+                try:
+                    self._client = client
+                except Exception:
+                    pass
+        return cast(Any, client).bridge(coro)
 
     def has_op(self, op: str) -> bool:
         """Whether any chosen backing provides ``op`` (call or prop)."""

@@ -62,6 +62,21 @@ disable_error_code = [
     "unused-ignore",  # the codegen'd/backing overlap ignores are moot under the above
 ]
 
+# IO backing ops (``async def``) declare their SURFACE return type -- what
+# ``gen_stubs`` renders -- but return the awaited value, which is ``Any`` because
+# the cores cross-reference through ``Any``-typed private attrs (``_client`` /
+# ``_page`` / ...). That is the intended pattern: the dispatch interface bridges
+# and the surface stubs re-assert the type, so backings do NOT ``cast``. Relax
+# only ``no-any-return`` here; every other strict check still applies.
+[[tool.mypy.overrides]]
+module = [
+    "webclient.core.reference.resolve",
+    "webclient.core.client.fetch",
+    "webclient.core.document.status",
+    "webclient.core.document.live",
+]
+disable_error_code = ["no-any-return"]
+
 [tool.pyright]
 # The project targets 3.12 (requires-python). Pin it so pyright does not fall
 # back to the system interpreter's version for stdlib typing (assert_type etc.).

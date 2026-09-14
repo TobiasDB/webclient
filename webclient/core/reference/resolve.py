@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from ..web_core import Backing
 
@@ -15,10 +15,10 @@ class ResolveBacking(Backing):
     """Resolve the reference into a document via the bound client."""
 
     provides = frozenset({"resolve"})
-    io = frozenset({"resolve"})  # crosses the IO bridge -> awaitable when async
+    io = frozenset({"resolve"})  # an IO op: the interface bridges it (dispatch)
     gate = "ok"
 
-    def resolve(
+    async def resolve(
         self,
         core: "ReferenceCore",
         *,
@@ -29,13 +29,5 @@ class ResolveBacking(Backing):
         from ...errors import RETURN
 
         lenient = optional or error is RETURN
-        target = core._session or core._client
-        if target is None:
-            from ..client import WebClientCore
-
-            target = WebClientCore()  # process-local default
-        coro = target.afetch(core, optional=lenient, browser=browser)
-        # ``bridge`` picks the dispatcher: a coroutine on the engine loop (the
-        # async executor), a caller-loop awaitable for an async client, or a
-        # blocking run for a sync caller.
-        return cast("DocumentCore", target.bridge(coro))
+        target = core._session or core._client  # bound (a default by _bridge_io)
+        return await target.afetch(core, optional=lenient, browser=browser)

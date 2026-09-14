@@ -107,12 +107,6 @@ class LiveBacking(Backing):
     def _loop(self, core: Any) -> Any:
         return core._client.loop()
 
-    async def _return_core(self, core: Any, coro: Any) -> Any:
-        """Await an interaction, then hand back the (mutated) document -- so the
-        bridged op returns the doc for chaining (blocks sync, awaitable async)."""
-        await coro
-        return core
-
     # -- captured event views ------------------------------------------------
     def dom_mutations(self, core: Any) -> "list[DOMUpdateEvent]":
         return [e for e in core._events if isinstance(e, DOMUpdateEvent)]
@@ -120,8 +114,8 @@ class LiveBacking(Backing):
     def console(self, core: Any) -> "list[ConsoleEvent]":
         return [e for e in core._events if isinstance(e, ConsoleEvent)]
 
-    # -- interactions (sync; bridge onto the engine loop) --------------------
-    def click(
+    # -- interactions (IO: async def; the interface bridges via dispatch) -----
+    async def click(
         self,
         core: Any,
         selector: str | None = None,
@@ -129,23 +123,12 @@ class LiveBacking(Backing):
         timeout: float | None = None,
         optional: bool = False,
     ) -> "DocumentCore":
-        return cast(
-            "DocumentCore",
-            core._client.bridge(
-                self._return_core(
-                    core,
-                    self._aact(
-                        core,
-                        "click",
-                        selector=selector,
-                        timeout=timeout,
-                        optional=optional,
-                    ),
-                )
-            ),
+        await self._aact(
+            core, "click", selector=selector, timeout=timeout, optional=optional
         )
+        return core
 
-    def write(
+    async def write(
         self,
         core: Any,
         selector: str,
@@ -154,33 +137,20 @@ class LiveBacking(Backing):
         timeout: float | None = None,
         optional: bool = False,
     ) -> "DocumentCore":
-        return cast(
-            "DocumentCore",
-            core._client.bridge(
-                self._return_core(
-                    core,
-                    self._aact(
-                        core,
-                        "write",
-                        selector=selector,
-                        text=text,
-                        timeout=timeout,
-                        optional=optional,
-                    ),
-                )
-            ),
+        await self._aact(
+            core, "write", selector=selector, text=text, timeout=timeout, optional=optional
         )
+        return core
 
-    def wait_for(
+    async def wait_for(
         self, core: Any, selector: str | None = None, *, timeout: float | None = None
     ) -> "DocumentCore":
-        return cast(
-            "DocumentCore",
-            core._client.bridge(
-                self._return_core(core, self._await_for(core, selector, timeout))
-            ),
-        )
+        await self._await_for(core, selector, timeout)
+        return core
 
+    # ``select`` / ``select_all`` are NOT ``io``: on a static document (the common
+    # case) they are in-memory (HtmlBacking). On a live page they bridge on the
+    # engine loop here (a live+async selection is an untested edge).
     def select(
         self, core: Any, selector: str, *, index: int = 0, error: Any = None
     ) -> "DocumentCore":
@@ -195,11 +165,11 @@ class LiveBacking(Backing):
             self._loop(core).run(self._aselect_all(core, selector)),
         )
 
-    def evaluate(self, core: Any, script: str) -> Any:
-        return core._client.bridge(core._page.evaluate(script))
+    async def evaluate(self, core: Any, script: str) -> Any:
+        return await core._page.evaluate(script)
 
-    def screenshot(self, core: Any, selector: str | None = None) -> "DocumentCore":
-        return cast("DocumentCore", core._client.bridge(self._ashot(core, selector)))
+    async def screenshot(self, core: Any, selector: str | None = None) -> "DocumentCore":
+        return await self._ashot(core, selector)
 
     # -- async bodies --------------------------------------------------------
     async def _aact(

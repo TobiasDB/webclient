@@ -28,13 +28,11 @@ class StatusBacking(Backing):
         """The reference that produced this document (for reload / recovery)."""
         return cast("ReferenceCore | None", core._ref)
 
-    def reload(self, core: "DocumentCore") -> "DocumentCore":
+    async def reload(self, core: "DocumentCore") -> "DocumentCore":
         """Re-resolve on a fresh page, replaying the recorded action chain --
-        available even after the page was released. IO -> dispatched through the
-        client's ``bridge`` (blocks for sync, awaitable for async)."""
-        return cast(
-            "DocumentCore", core._client.bridge(core._client._areload(core))
-        )
+        available even after the page was released. An IO op: the interface
+        bridges it (``dispatch``)."""
+        return await core._client._areload(core)
 
     def is_ok(self, core: "DocumentCore") -> "Field[bool]":
         return Field(core.ok)
