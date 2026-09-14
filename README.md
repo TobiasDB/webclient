@@ -4,12 +4,13 @@ A declarative web client: fetch pages, select and extract structured data,
 render to markdown, drive a real browser, and run the **same plan** synchronously,
 asynchronously, or against a remote "browser-as-a-service" backend.
 
-The whole library is one idea: you author a **lazy plan** by chaining ordinary-
-looking calls; a single async executor runs it; the sync / async / remote / lazy
-"flavours" are the same plan executed differently. Behaviour lives in small
-`Backing` classes attached to typed `Core` models, and the typed surface you call
-is **generated** from those backings (`scripts/gen_stubs.py`), so the types never
-drift from the runtime.
+The whole library is one idea: the surface you call **is** a typed `Core` model,
+and calling it dispatches an op that runs immediately -- `wc.fetch(url)` hands
+back a `Document`, no ceremony. Sync / async / remote are just different
+*dispatchers* on the same cores; `.lazy` on any surface records a **plan** you
+batch or defer instead. Behaviour lives in small `Backing` classes attached to
+the cores, and the typed surface is **generated** from those backings
+(`scripts/gen_stubs.py`), so the types never drift from the runtime.
 
 > Status: a solid, well-typed engine kernel with a task-verb layer
 > (`webclient.tools`) and truly incremental streaming. Crawling is not built yet.
@@ -28,16 +29,16 @@ pip install -e ".[service]"    # + FastAPI/uvicorn, for the HTTP service
 from webclient import WebClient
 
 with WebClient() as wc:
-    page = wc.fetch("https://example.com").collect()   # a Document
+    page = wc.fetch("https://example.com")   # eager -> a Document
     print(page.ok, page.title)
     print(page.render("markdown"))                      # page as markdown
     for link in page.render("links"):                   # a Collection[Reference]
         print(link.url)
 ```
 
-`wc.fetch(url)` records a lazy plan (statically a `LazyDocument`); `.collect()`
-runs it and hands back the materialised `Document`. `wc.fetch(...)` is just sugar
-for `wc.ref(url).resolve()`.
+`wc.fetch(url)` resolves immediately and returns a `Document` (sugar for
+`wc.ref(url).resolve()`). To batch or defer, use `wc.lazy` -- it records a plan
+run by `.collect()`: `wc.lazy.fetch(url).select(".t").text_content.collect()`.
 
 ### Select and extract
 
@@ -45,7 +46,7 @@ for `wc.ref(url).resolve()`.
 from webclient import WebClient, doc
 
 with WebClient() as wc:
-    page = wc.fetch("https://shop.example/").collect()
+    page = wc.fetch("https://shop.example/")
 
     # eager: walk a materialised Document
     for card in page.select_all(".card"):
@@ -53,7 +54,7 @@ with WebClient() as wc:
         href = card.select("a").attr("href")          # a Reference (link attrs narrow)
         print(title, href.url)
 
-    # lazy: one plan that fans out per element, then flattens to rows
+    # a Collection fans out per element, then flattens to rows
     rows = (
         wc.fetch("https://shop.example/")
         .select_all(".card")
@@ -61,7 +62,6 @@ with WebClient() as wc:
             title=doc.select(".title").text_content,
             link=doc.select("a").attr("href"),
         )
-        .collect()      # -> a Collection
         .project()      # -> list[dict]
     )
 ```
@@ -103,11 +103,12 @@ from webclient import AsyncWebClient, doc
 
 async def main():
     async with AsyncWebClient() as ac:
-        page = await ac.fetch("https://example.com").acollect()   # async collect
+        page = await ac.fetch("https://example.com")   # await at the IO boundary
         rows = await (
-            ac.fetch("https://shop.example/")
+            ac.lazy.fetch("https://shop.example/")
             .select_all(".card")
             .extract(title=doc.select(".title").text_content)
+            .project()
             .acollect()
         )
     return page.title, rows
@@ -115,11 +116,12 @@ async def main():
 asyncio.run(main())
 ```
 
-`.acollect()` is the async twin of `.collect()`. A *reusable* plan built from the
-`doc`/`ref` module roots is run against a supplied context by passing it to
-`.collect()`/`.acollect()`: `plan.acollect(ac.ref(url))` (sync:
-`plan.collect(wc.ref(url))`). `.collect()`/`.acollect()`/`.stream()`/`.astream()`
-are the *only* way to realize a plan -- there is no client `execute`.
+The async client is the same eager surface over an async dispatcher: `await
+ac.fetch(url)` resolves and returns a `Document`; in-memory ops on it are
+synchronous. Chain deeper IO through `ac.lazy` plans, realized with
+`.acollect()` / `.astream()` (the async twins of `.collect()` / `.stream()`). A
+*reusable* plan built from the `doc`/`ref` module roots is run against a supplied
+context: `plan.acollect(ac.ref(url))` (sync: `plan.collect(wc.ref(url))`).
 
 ## Sessions
 
@@ -128,8 +130,8 @@ It is a context manager, so it always closes.
 
 ```python
 with WebClient() as wc, wc.session(ttl=300, headers={"x-app": "demo"}) as s:
-    s.fetch("https://site/login").collect()      # sets cookies, kept on the session
-    me = s.fetch("https://site/whoami").collect()
+    s.fetch("https://site/login")      # sets cookies, kept on the session
+    me = s.fetch("https://site/whoami")
 ```
 
 ## Live browser pages
@@ -137,7 +139,7 @@ with WebClient() as wc, wc.session(ttl=300, headers={"x-app": "demo"}) as s:
 With the `browser` extra, resolve on a real page and interact with it:
 
 ```python
-live = wc.ref("https://app.example/").resolve(browser=True).collect()
+live = wc.ref("https://app.example/").resolve(browser=True)
 live.click("#load-more")
 print(live.select("#cart li").text_content)
 wc.release(live)   # return the page to the pool
@@ -146,14 +148,16 @@ wc.release(live)   # return the page to the pool
 ## Remote -- browser-as-a-service
 
 The remote client is *literally* a `WebClient` over a swapped core: the same
-surface, executed server-side over HTTP (no local browser or lxml needed).
+eager surface, executed server-side over HTTP (no local browser or lxml needed).
 
 ```python
 from webclient import RemoteWebClient
 
 with RemoteWebClient("http://host:8000", token="secret") as rc:
-    handle = rc.fetch("https://example.com").collect()   # a lightweight handle
-    markdown = handle.render("markdown").collect()       # one round trip per op
+    handle = rc.fetch("https://example.com")        # one round trip -> a handle
+    markdown = handle.render("markdown")            # each op round-trips eagerly
+    # batch a chain (or a fan-out) into ONE round trip via .lazy:
+    titles = handle.lazy.select_all(".title").text_content.collect()
 ```
 
 Serve it with `webclient.service.create_app(token=..., max_docs=..., max_sessions=...)`.
@@ -163,8 +167,8 @@ Serve it with `webclient.service.create_app(token=..., max_docs=..., max_session
 ```python
 from webclient import RETURN
 
-d = wc.fetch("https://might-fail/").collect()            # raises on non-2xx (loud by default)
-d = wc.fetch("https://might-fail/", optional=True).collect()  # or lenient: a not-ok Document
+d = wc.fetch("https://might-fail/")                      # raises on non-2xx (loud by default)
+d = wc.fetch("https://might-fail/", optional=True)       # or lenient: a not-ok Document
 if not d.ok:
     print(d.error.type, d.error.status_code, d.error.retriable)  # retriable: transport/429/5xx
 ```
