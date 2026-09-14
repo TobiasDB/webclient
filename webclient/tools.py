@@ -11,8 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .query.expr import doc
-from .surfaces import WebClient, default_client
+from .surfaces import WebClient, default_client, doc
 
 
 def _client(client: WebClient | None) -> WebClient:

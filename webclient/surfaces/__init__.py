@@ -28,7 +28,24 @@ from .eager import (
     default_client,
     from_url,
 )
-from .lazy import Lazy, LazyCollection, LazyDocument, LazyField, LazyReference
+from .lazy import (
+    Lazy,
+    LazyCollection,
+    LazyDocument,
+    LazyField,
+    LazyReference,
+    WebQuery,
+    doc,
+    field,
+    filter,
+    is_empty,
+    is_ok,
+    many,
+    ref,
+    reference,
+    when,
+    wq,
+)
 
 __all__ = [
     "wrap",
@@ -49,4 +66,15 @@ __all__ = [
     "LazyReference",
     "LazyDocument",
     "LazyCollection",
+    "WebQuery",
+    "wq",
+    "doc",
+    "ref",
+    "many",
+    "reference",
+    "field",
+    "when",
+    "filter",
+    "is_empty",
+    "is_ok",
 ]

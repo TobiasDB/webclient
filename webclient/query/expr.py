@@ -11,7 +11,7 @@ are cast to (see ``scripts.gen_stubs``); at runtime every value in a chain is an
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, NoReturn, TypeVar, cast
+from typing import Any, NoReturn, TypeVar, cast
 
 from .plan import Arg, Plan, Step
 
@@ -187,143 +187,10 @@ def from_plan(plan: Plan | dict[str, Any], client: Any = None) -> Expr:
     return Expr(plan, client)
 
 
-# --------------------------------------------------------------------------- #
-# Roots and free functions
-# --------------------------------------------------------------------------- #
-
-
-def reference(url: str, **kwargs: Any) -> "Reference":
-    """A lazy reference root starting from ``url``: an ``Expr`` recording a plan
-    rooted at that request spec (statically a ``Reference``)."""
-    from ..core.reference import from_url
-
-    spec = from_url(url, **kwargs).model_dump()
-    return cast("Reference", Expr(Plan(root="Reference", source=spec)))
-
-
-def field(name: str) -> Any:
-    """A value already extracted in the surrounding row/context."""
-    return cast(Any, doc).field(name)
-
-
-def _fn(name: str, expr: Any) -> Expr:
-    base = expr if isinstance(expr, Expr) else Expr(Plan())
-    return base._extend(Step(kind="fn", name=name))
-
-
-def is_empty(expr: Any) -> Any:
-    """Free-function form of ``x.is_empty()`` (records an ``fn`` step)."""
-    return _fn("is_empty", expr)
-
-
-def is_ok(expr: Any) -> Any:
-    """Free-function form of ``x.is_ok()`` (records an ``fn`` step)."""
-    return _fn("is_ok", expr)
-
-
-class _When:
-    """Polars-style branching builder: ``when(cond).then(a).otherwise(b)`` -- a
-    free construct recording a single ``when`` step whose parts are
-    sub-expressions evaluated against the surrounding context."""
-
-    __slots__ = ("_cond", "_then")
-
-    def __init__(self, cond: Any) -> None:
-        self._cond = cond
-        self._then: Any = _MISSING
-
-    def then(self, value: Any) -> "_When":
-        self._then = value
-        return self
-
-    def otherwise(self, value: Any) -> Any:
-        if self._then is _MISSING:
-            raise TypeError("when(...).then(...) before .otherwise(...)")
-        step = Step(
-            kind="when", args=[to_arg(self._cond), to_arg(self._then), to_arg(value)]
-        )
-        return Expr(Plan(steps=[step]))
-
-
-def when(cond: Any) -> _When:
-    """Start a Polars-style conditional: ``when(cond).then(a).otherwise(b)``."""
-    return _When(cond)
-
-
-def filter(collection: Any, *predicates: Any) -> Any:
-    """Free-function form of the collection filter: ``filter(coll, pred)`` =
-    ``coll.filter(pred)``."""
-    return collection.filter(*predicates)
-
-
-#: the lazy roots -- an ``Expr`` rooted at each surface (statically the surface
-#: it authors plans for; at runtime an ``Expr``).
-if TYPE_CHECKING:
-    from ..collection import Collection
-    from ..surfaces import Document, Reference
-
-    doc: "Document"
-    ref: "Reference"
-    many: "Collection[Document]"
-else:
-    doc = Expr(Plan(root="Document"))
-    ref = Expr(Plan(root="Reference"))
-    many = Expr(Plan(root="Collection"))
-
-
-class WebQuery:
-    """The lazy authoring namespace (``from webclient import wq``). ``wq.doc`` /
-    ``wq.ref`` / ``wq.many`` are the lazy roots -- an ``Expr`` recording a plan,
-    statically the *lazy* surface (``LazyDocument`` / ``LazyReference`` /
-    ``LazyCollection``) so ``.collect()`` / ``.stream()`` / ``._plan`` and the
-    recorder-only ``.field()`` / ``.reference()`` are all visible to the type
-    checker. ``wq.reference(url)`` roots a plan at a URL; ``wq.when`` /
-    ``wq.field`` / ``wq.filter`` are the free builders. Namespacing them under
-    ``wq`` keeps the roots from shadowing locals named ``doc`` / ``ref`` /
-    ``many``."""
-
-    if TYPE_CHECKING:
-        from ..surfaces import LazyCollection, LazyDocument, LazyField, LazyReference
-
-        doc: "LazyDocument"
-        ref: "LazyReference"
-        many: "LazyCollection[LazyDocument]"
-
-        def reference(self, url: str, **kwargs: Any) -> "LazyReference": ...
-        def field(self, name: str) -> "LazyField[Any]": ...
-
-    else:
-        doc = doc
-        ref = ref
-        many = many
-        reference = staticmethod(reference)
-        field = staticmethod(field)
-
-    when = staticmethod(when)
-    filter = staticmethod(filter)
-    is_ok = staticmethod(is_ok)
-    is_empty = staticmethod(is_empty)
-
-
-#: the singleton lazy-authoring namespace.
-wq = WebQuery()
-
-
 __all__ = [
     "Expr",
     "lazy",
     "lazy_root",
     "from_plan",
     "to_arg",
-    "reference",
-    "field",
-    "when",
-    "filter",
-    "is_empty",
-    "is_ok",
-    "doc",
-    "ref",
-    "many",
-    "wq",
-    "WebQuery",
 ]

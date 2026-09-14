@@ -16,19 +16,7 @@ from .events import (
     NetworkEvent,
     PlanEvent,
 )
-from .query.expr import (
-    doc,
-    field,
-    filter,
-    from_plan,
-    is_empty,
-    is_ok,
-    many,
-    ref,
-    reference,
-    when,
-    wq,
-)
+from .query.expr import from_plan
 from .core.remote import RemoteWebClientCore
 from .surfaces import (
     AsyncDocument,
@@ -42,7 +30,17 @@ from .surfaces import (
     Session,
     WebClient,
     default_client,
+    doc,
+    field,
+    filter,
     from_url,
+    is_empty,
+    is_ok,
+    many,
+    ref,
+    reference,
+    when,
+    wq,
 )
 
 __all__ = [
