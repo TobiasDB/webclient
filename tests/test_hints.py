@@ -81,6 +81,14 @@ def test_core_data_field_annotations():
     assert typing.get_origin(return_type(DocumentCore, "kind")) is typing.Literal
 
 
+def test_class_property_members_resolve():
+    # `ok`/`url` are class @property members on the core (not backing ops, not
+    # data fields) -- the resolver reads their fget return annotation.
+    assert return_type(DocumentCore, "ok") is bool
+    assert return_type(ReferenceCore, "ok") is bool
+    assert return_type(ReferenceCore, "url") is str
+
+
 def test_unknown_op_raises():
     with pytest.raises(AttributeError):
         return_type(DocumentCore, "definitely_not_an_op")

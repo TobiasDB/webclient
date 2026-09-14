@@ -177,13 +177,17 @@ def return_type(
     kwargs = {} if kwargs is None else kwargs
     self_type = self_type if self_type is not None else core_cls
     func = _op_method(core_cls, op)
-    if func is None:  # not a backing op -> maybe a pydantic data field
-        ann = _field_annotation(core_cls, op)
-        if ann is _MISSING:
-            raise AttributeError(f"{core_cls.__name__} has no op or field {op!r}")
+    if func is not None:  # a backing call/prop op -> its matching overload
+        annotation = resolve_hints(func, args, kwargs).get("return", Any)
+        return _resolve_self(annotation, self_type)
+    prop = inspect.getattr_static(core_cls, op, None)  # a class @property (ok/url)
+    if isinstance(prop, property) and prop.fget is not None:
+        annotation = _hints(prop.fget).get("return", Any)
+        return _resolve_self(annotation, self_type)
+    ann = _field_annotation(core_cls, op)  # a pydantic data field
+    if ann is not _MISSING:
         return _resolve_self(ann, self_type)
-    annotation = resolve_hints(func, args, kwargs).get("return", Any)
-    return _resolve_self(annotation, self_type)
+    raise AttributeError(f"{core_cls.__name__} has no op, property or field {op!r}")
 
 
 __all__ = ["safe_type_check", "resolve_hints", "return_type"]
