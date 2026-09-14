@@ -56,6 +56,7 @@ MODELS = ROOT / "webclient" / "surfaces" / "lazy.py"
 #: is emitted into the core's own module (which the core inherits).
 DOCINIT = ROOT / "webclient" / "core" / "document" / "models.py"
 REFINIT = ROOT / "webclient" / "core" / "reference" / "models.py"
+CLIENTMODELS = ROOT / "webclient" / "core" / "client" / "models.py"
 
 #: the cores that map to a surface class (a Core-typed result -> its surface).
 CORES: tuple[type, ...] = (ReferenceCore, DocumentCore)
@@ -72,7 +73,7 @@ SELF = {ReferenceCore: "ReferenceCore", DocumentCore: "DocumentCore"}
 #: the cores whose ops the core itself implements via a generated interface (so the
 #: async surface's IO ops override the inherited eager ones -> need an ``override``
 #: ignore). Grows as each core gets its interface.
-HAS_INTERFACE: set[type] = {DocumentCore, ReferenceCore}
+HAS_INTERFACE: set[type] = {DocumentCore, ReferenceCore, WebClientCore}
 #: bare core-surface names -- an overload returning one overlaps a later ``str``
 #: overload and needs the ``overload-overlap`` ignore.
 _CORE_SURFACES = (
@@ -512,14 +513,12 @@ def _body(region: str) -> str:
         )
     if region == "collection element-op lifting":
         return _indented(lift_members(), 8)
-    if region == "WebClient eager surface":
-        # the sync eager client: its verbs resolve immediately (fetch -> Document,
-        # ref -> Reference, summary -> Summary); no data model.
-        verbs = members(WebClientCore, "eager", fields=False, class_props=False)
-        return _indented(verbs, 8)
-    if region == "Session eager surface":
-        verbs = members(WebSessionCore, "eager", fields=False, class_props=False)
-        return _indented(verbs, 8)
+    if region == "WebClient interface":
+        # the eager verbs WebClientCore implements (its ``IWebClient`` interface,
+        # which the core -- and so WebSessionCore -- inherits).
+        return _indented(
+            members(WebClientCore, "surface", fields=False, class_props=False), 8
+        )
     if region == "AsyncReference surface":
         # the async view: IO ops (resolve) are ``async def``, Core returns map to
         # the Async surfaces so ``await ac.ref(url).resolve()`` chains async.
@@ -542,8 +541,7 @@ def _body(region: str) -> str:
 REGIONS = [
     (REFINIT, "Reference interface"),
     (DOCINIT, "Document interface"),
-    (SURFACES, "WebClient eager surface"),
-    (SURFACES, "Session eager surface"),
+    (CLIENTMODELS, "WebClient interface"),
     (SURFACES, "AsyncReference surface"),
     (SURFACES, "AsyncDocument surface"),
     (SURFACES, "AsyncWebClient surface"),

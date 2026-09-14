@@ -11,13 +11,18 @@ no backing class of its own (it is a subclassed core, not a new medium).
 from __future__ import annotations
 
 import time
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
 from pydantic import PrivateAttr
 
 from ..client import WebClientCore
 from ..reference import ReferenceCore
+
+if TYPE_CHECKING:
+    from ...clients import ClientPool
+    from ...events import EventBus
+    from ..client.loop import EngineLoop
 
 
 class WebSessionCore(WebClientCore):
@@ -52,16 +57,16 @@ class WebSessionCore(WebClientCore):
         return self
 
     # -- engine shared with the parent (loop / pool / bus / plugins) ---------
-    def loop(self) -> Any:
-        return self._parent.loop()
+    def loop(self) -> "EngineLoop":
+        return cast("EngineLoop", self._parent.loop())
 
     @property
-    def pool(self) -> Any:
-        return self._parent.pool
+    def pool(self) -> "ClientPool":
+        return cast("ClientPool", self._parent.pool)
 
     @property
-    def bus(self) -> Any:
-        return self._parent.bus
+    def bus(self) -> "EventBus":
+        return cast("EventBus", self._parent.bus)
 
     # -- lifecycle -----------------------------------------------------------
     def _guard(self) -> None:

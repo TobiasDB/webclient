@@ -123,7 +123,9 @@ class RemoteWebClientCore(WebClientCore):
         super().close()
 
     # -- server-side sessions ------------------------------------------------
-    def session(self, *, ttl: float | None = None, **kw: Any) -> "RemoteWebSessionCore":
+    def session(  # type: ignore[override]  # remote sessions are a distinct core
+        self, *, ttl: float | None = None, **kw: Any
+    ) -> "RemoteWebSessionCore":
         resp = self._http.post(
             f"{self.url}/sessions", json={"ttl": ttl}, headers=self._headers()
         )

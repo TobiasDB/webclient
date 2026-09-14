@@ -29,56 +29,14 @@ E = TypeVar("E", bound="Event")  # an event subtype, for events_of(cls) -> list[
 
 if TYPE_CHECKING:  # the eager surfaces are pure typing stubs over their cores
 
-    # The eager surface IS the core: each core implements its ops via the generated
-    # ``I<Core>`` interface it inherits (core/reference, core/document), so the
-    # surface is just an alias -- no phantom subclass, and backings see the ops too.
+    # The eager surface IS the core: each core implements its verbs+fields via the
+    # generated ``I<Core>`` interface it inherits (core/reference|document|client), and
+    # its typed accessors (``pool``/``bus``/``session``/``lazy``) live on the core too,
+    # so the surface is just an alias -- no phantom subclass.
     Reference = ReferenceCore
     Document = DocumentCore
-
-    class WebClient(WebClientCore):
-        """The synchronous eager client -- a ``WebClientCore`` itself, typed with
-        its authoring verbs. Eager: ``wc.fetch(url)`` resolves and returns a
-        ``Document`` (no ``.collect()``); ``wc.ref(url)`` a ``Reference``. Batch or
-        defer with ``wc.lazy`` (records a plan). A pure typing stub: at runtime
-        ``WebClient is WebClientCore``; the ``async``/remote clients are the same
-        surface over a different-dispatcher core."""
-
-        @property
-        def lazy(self) -> "LazyWebClient": ...  # record a plan to batch/defer
-        @property
-        def bus(self) -> "EventBus": ...  # subscribe to network/dom/console topics
-        @property
-        def pool(self) -> "ClientPool": ...  # transport-lease pool (``.stats()``)
-        def session(  # a scoped identity sharing this client's engine
-            self, *, ttl: float | None = ..., headers: dict[str, str] | None = ..., **kw: Any
-        ) -> "Session": ...
-
-        # >>> generated: WebClient eager surface <<<
-        # fmt: off
-        def fetch(self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "Document": ...
-        def ref(self, url: Any, method: str = ..., **kw: Any) -> "Reference": ...
-        def search(self, query: str, *, limit: int = ..., endpoint: str | None = ...) -> "list[SearchResult]": ...
-        def summary(self, url: Any, *include: str, **kw: Any) -> "Summary": ...
-        # fmt: on
-        # >>> end generated <<<
-
-    class Session(WebSessionCore):
-        """A session (eager) -- a scoped ``WebClientCore`` with its own identity
-        (cookies/headers/ttl). ``session.fetch(url)`` / ``session.ref(url)`` resolve
-        eagerly, threading the session identity. A pure typing stub: at runtime
-        ``Session is WebSessionCore``."""
-
-        @property
-        def lazy(self) -> "LazyWebClient": ...
-
-        # >>> generated: Session eager surface <<<
-        # fmt: off
-        def fetch(self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "Document": ...
-        def ref(self, url: Any, method: str = ..., **kw: Any) -> "Reference": ...
-        def search(self, query: str, *, limit: int = ..., endpoint: str | None = ...) -> "list[SearchResult]": ...
-        def summary(self, url: Any, *include: str, **kw: Any) -> "Summary": ...
-        # fmt: on
-        # >>> end generated <<<
+    WebClient = WebClientCore
+    Session = WebSessionCore
 
     class AsyncReference(ReferenceCore):
         """The async view of a :class:`Reference`: ``resolve`` is awaitable
@@ -187,7 +145,7 @@ def default_client() -> "WebClient":
     the one engine every unbound operation shares (see ``core.client``)."""
     from ..core.client import default_client as _default
 
-    return cast("WebClient", _default())
+    return _default()
 
 
 if TYPE_CHECKING:
@@ -212,10 +170,10 @@ if TYPE_CHECKING:
 
         # >>> generated: AsyncWebClient surface <<<
         # fmt: off
-        async def fetch(self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "AsyncDocument": ...
+        async def fetch(self, url: Any, *, optional: bool = ..., error: Any = ..., **kw: Any) -> "AsyncDocument": ...  # type: ignore[override]
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "AsyncReference": ...
-        async def search(self, query: str, *, limit: int = ..., endpoint: str | None = ...) -> "list[SearchResult]": ...
-        async def summary(self, url: Any, *include: str, **kw: Any) -> "Summary": ...
+        async def search(self, query: str, *, limit: int = ..., endpoint: str | None = ...) -> "list[SearchResult]": ...  # type: ignore[override]
+        async def summary(self, url: Any, *include: str, **kw: Any) -> "Summary": ...  # type: ignore[override]
         # fmt: on
         # >>> end generated <<<
 

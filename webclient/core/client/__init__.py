@@ -13,9 +13,9 @@ differs.
 from __future__ import annotations
 
 import threading
-from typing import Any, ClassVar, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import PrivateAttr
 
 from ...clients import BrowserFactory, ClientPool, HTTPXFactory, PageScript
 from ...collection import Field
@@ -28,7 +28,12 @@ from ..reference import ReferenceCore, from_url
 from ..web_core import Backing, WebCore
 from .fetch import FetchBacking
 from .loop import EngineLoop
+from .models import IWebClient
 from .search import SearchBacking
+
+if TYPE_CHECKING:
+    from ..session import WebSessionCore
+    from ...surfaces.lazy import LazyWebClient
 
 
 def _materialize(result: Any) -> Any:
@@ -106,22 +111,17 @@ class NameScope:
             return len(self._items)
 
 
-class WebClientCore(WebCore, BaseModel):
-    """The engine: Core Fields (policy) + machinery (loop, ClientPool, bus, name
-    scopes, transport + plan execution). Its user-facing features are backings
-    (``FetchBacking``); the surface (``WebClient`` / ``AsyncWebClient``) is a
-    thin sync/async/lazy interface over it, and a remote backend is just a
-    subclass that swaps ``execute``. Sessions are a scoped subclass."""
+class WebClientCore(WebCore, IWebClient):
+    """The engine: its Core Fields (policy) + eager verbs come from the
+    ``IWebClient`` model/interface it inherits (:mod:`.models`); this core adds the
+    machinery (loop, ClientPool, bus, name scopes, transport + plan execution). Its
+    user-facing verbs are backings (``FetchBacking`` / ``SearchBacking``); a remote
+    backend is just a subclass that swaps ``execute``, sessions a scoped subclass."""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    if TYPE_CHECKING:  # narrow WebCore.lazy (Any) to this core's lazy surface
 
-    timeout: float = 30.0
-    default_headers: dict[str, str] = {}
-    names_cap: int | None = None
-    block_private_hosts: bool = False  # opt-in SSRF guard (loopback/private/etc.)
-    retries: int = 0  # extra attempts on a retriable failure (transport/429/5xx)
-    retry_backoff: float = 0.2  # base seconds; doubled each attempt (exp backoff)
-    min_interval: float = 0.0  # per-host politeness: min seconds between requests
+        @property
+        def lazy(self) -> "LazyWebClient": ...
 
     _loop: Any = PrivateAttr(default=None)
     _pool: Any = PrivateAttr(default=None)  # ClientPool (lazy)
@@ -219,9 +219,9 @@ class WebClientCore(WebCore, BaseModel):
         return loop.run(coro)
 
     @property
-    def pool(self) -> Any:
+    def pool(self) -> ClientPool:
         """The transport-lease pool (http clients + browser pages)."""
-        return self._pool
+        return cast(ClientPool, self._pool)
 
     def close(self) -> None:
         if self._closed:
@@ -320,7 +320,8 @@ class WebClientCore(WebCore, BaseModel):
         resulting document to this core; never raises, never registers -- the
         caller (``afetch``) retries, then registers/raises the final doc."""
         async with await self.pool.lease("http") as lease:
-            doc, resp = await lease.client.fetch(
+            client = cast(Any, lease.client)  # the leased HTTPXClient (subclass)
+            doc, resp = await client.fetch(
                 ref, headers=headers, cookies=ref.cookies, timeout=self.timeout
             )
         doc._client = self
@@ -429,7 +430,7 @@ class WebClientCore(WebCore, BaseModel):
         ttl: float | None = None,
         headers: dict[str, str] | None = None,
         **kw: Any,
-    ) -> Any:
+    ) -> "WebSessionCore":
         """A new session sharing this engine (a scoped ``WebSessionCore``)."""
         from ..session import WebSessionCore
 
@@ -459,12 +460,13 @@ class WebClientCore(WebCore, BaseModel):
         self, ref: ReferenceCore, replay: list[dict[str, Any]] | None = None
     ) -> DocumentCore:
         lease = await self.pool.lease("page")
+        browser = cast(Any, lease.client)  # the leased BrowserClient (subclass)
         try:
             # the browser client drives the page and hands back the raw facts
             # (``PageResult``); the document's backings turn those into events
             # (``Backing.on_load`` -- ``LiveBacking`` owns the console/network
             # wrapping). The client never reaches into a backing to shape events.
-            result = await lease.client.open(
+            result = await browser.open(
                 ref.dispatch("url"),
                 scripts=self._browser_scripts(),
                 replay=replay or [],
@@ -477,7 +479,7 @@ class WebClientCore(WebCore, BaseModel):
                 status_code=200,
             )
             doc._client = self
-            doc._page = lease.client.page
+            doc._page = browser.page
             doc._lease = lease
             self._register(doc, ref)
             for backing in doc.choose():  # backings shape the load into events
