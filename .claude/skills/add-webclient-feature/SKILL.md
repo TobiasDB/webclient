@@ -7,13 +7,15 @@ description: How to add a feature (an op, a Backing, a value model) or a transpo
 
 ## The architecture in one breath
 
-Every core (`WebClientCore`, `DocumentCore`, `ReferenceCore`, `WebSessionCore`) is a
-`WebCore`: it holds **Backings**, CHOOSES which apply to its current state, and
-DISPATCHES an op to the first chosen backing that `provides` it. **The core IS the
-surface** — `Document is DocumentCore` at runtime; the typed `Document`/`Reference`/
-`WebClient`/`Lazy*`/`Async*` classes are *generated* from the backings' typed ops
-(`scripts/gen_stubs.py`), never hand-written. Sync/async/remote are **dispatch modes**
-(`_mode` on the client), not subclasses — one op definition lights up all of them.
+Every core (`WebClient`, `Document`, `Reference`, `Session`) is a `WebCore`: it holds
+**Backings**, CHOOSES which apply to its current state, and DISPATCHES an op to the
+first chosen backing that `provides` it. **The core IS the surface** — the class is
+literally named `Document`/`Reference`/`WebClient`/`Session` (no `Core` suffix). Each
+inherits a generated `I<Core>` interface (fields + typed ops) from its `models.py`, so
+its ops are statically visible on the core itself; the `Lazy*`/`Async*` views are
+generated too (`scripts/gen_stubs.py`), never hand-written. Sync/async/remote are
+**dispatch modes** (`_mode` on the client), not subclasses — one op definition lights
+up all of them.
 
 So a feature is almost always: **a Backing (ops) + optionally a value model. That's it.**
 You should touch **zero** dispatch/machinery code.
@@ -42,12 +44,12 @@ class MyBacking(Backing):
         ...   # `core` is the receiver; return a real core/value/list
 ```
 
-- **`io` ops are `async def`** and return the surface type (e.g. `-> "DocumentCore"`).
+- **`io` ops are `async def`** and return the surface type (e.g. `-> "Document"`).
   `dispatch` bridges the coroutine onto the right mode (sync blocks, async hands back
   the awaitable, remote round-trips). **Backings never call `bridge`/`cast` themselves.**
 - **Non-io ops are plain `def`**, in-memory, synchronous.
 - The op's typed signature (params + return annotation) is the single source of truth the
-  generator reads. Return `"DocumentCore"`/`"ReferenceCore"` (map to `Document`/`Reference`),
+  generator reads. Return `"Document"`/`"Reference"` (the core classes),
   a pydantic model (a terminal value), `list[...]` (→ `Collection`/`list`), or a scalar.
 
 ## Recipe: add an op to an existing surface
@@ -56,13 +58,12 @@ class MyBacking(Backing):
    surrounding style; annotate params and the return type — the generator needs them.
 2. If it does IO (fetch, network, browser), add its name to `io` and make it `async def`.
 3. If you added a *new* backing class, register it in that core's `BACKINGS` tuple
-   (e.g. `WebClientCore.BACKINGS = (FetchBacking(), SearchBacking(), MyBacking())`).
+   (e.g. `WebClient.BACKINGS = (FetchBacking(), SearchBacking(), MyBacking())`).
    `BACKINGS` is data; sessions inherit the client's.
-4. **A backing composing `Document`/`Reference` ops calls them directly and typed**
-   — `doc.select(...)`, `ref.url` — because those cores *implement* their eager ops
-   via a generated interface they inherit (`IDocument` / `IReference`, in the core's
-   own module; see `SearchBacking.search`). Only the client/session cores lack an
-   interface so far, so composing a *client* op still uses `core.dispatch("op", ...)`.
+4. **A backing composing another op calls it directly and typed** — `doc.select(...)`,
+   `ref.url` — because every core *implements* its ops via a generated interface it
+   inherits (`IDocument` / `IReference` / `IWebClient`, in the core's own `models.py`;
+   see `SearchBacking.search`). No `dispatch("...")` strings, no casts.
 5. Regenerate: `env/bin/python scripts/gen_stubs.py`. It emits the op onto eager/async/
    lazy tiers automatically.
 
@@ -85,7 +86,7 @@ class MyBacking(Backing):
 
 1. Add a `Client` + `ClientFactory` in `webclient/clients/` (see `http.py`, `browser.py`).
    The client owns its protocol end-to-end (request + response interpretation).
-2. Register its factory in `WebClientCore._init_transport`'s `ClientPool({...})`.
+2. Register its factory in `WebClient._init_transport`'s `ClientPool({...})`.
 3. A backing leases it: `async with await core.pool.lease("mykind") as lease: ... lease.client...`.
    Don't loop back out through another op to reach transport.
 
@@ -114,13 +115,13 @@ never hit the network. Async tests use an inner `async def main()` + `asyncio.ru
 - Value models live in a `models.py` (per-core-package for a core's own models; the
   top-level one for the cross-cutting event taxonomy) — pure data, no cycle risk. Each
   core's `models.py` also holds its `I<Core>` interface (fields + ops); see below.
-- **The core-implements-its-interface pattern** (`DocumentCore`/`ReferenceCore`): each such
-  core inherits a generated `I<Core>(BaseModel)` — populated with the eager ops under
-  `TYPE_CHECKING`, empty at runtime (so `__getattr__` still dispatches) — defined in the
-  core's own module. The eager surface is then just an alias (`Document = DocumentCore`).
-  The generator emits the interface via the `surface` tier + `HAS_INTERFACE` set (async IO
-  ops get an `[override]` ignore; `Collection` is covariant so async `Collection[...]`
-  returns override cleanly), and the core's module goes in the mypy stub-override list.
-  To give the client/session cores an interface, follow the same three touches.
+- **The core-implements-its-interface pattern** (all four cores): each core inherits a
+  generated `I<Core>(BaseModel)` in its `models.py` — the Core Fields + the eager ops
+  (ops typed under `TYPE_CHECKING`, so at runtime it's just the data model and
+  `__getattr__` still dispatches). The class is named for the surface (`Document`, not
+  `DocumentCore`). The generator emits the interface region into that `models.py` via the
+  `eager` tier + the `HAS_INTERFACE` set (async IO ops get an `[override]` ignore;
+  `Collection` is covariant so async `Collection[...]` returns override cleanly), and the
+  `models.py` module is in the mypy stub-override list.
 - Commit trailers for this repo: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
   and the `Claude-Session:` line. Never commit `docs/*.md` (gitignored).
