@@ -112,7 +112,7 @@ def test_custom_renderer_overrides_backing_builtin(caplog):
             wc.use(Upper())
         assert not any("shadows" in r.message for r in caplog.records)
         doc = make_doc()
-        doc._client = wc
+        doc._client = wc.core  # a core (the surface IS a core now; no unwrapping)
         assert doc.render("markdown") == "UPPER"
 
 
@@ -141,5 +141,5 @@ def test_second_custom_renderer_shadows_first_with_warning(caplog):
             wc.use(Lower())
         assert any("shadows" in r.message for r in caplog.records)
         doc = make_doc()
-        doc._client = wc
+        doc._client = wc.core  # a core (the surface IS a core now; no unwrapping)
         assert doc.render("markdown") == "lower"

@@ -131,5 +131,5 @@ def test_metadata_and_structure_absent_on_json(httpserver):
         doc = wc.fetch(httpserver.url_for("/j")).collect()
         assert doc.transport().kind == "json"  # transport applies to any kind
         # metadata/structure gate on an html/xml tree
-        assert not doc._core.has_op("metadata")
-        assert not doc._core.has_op("structure")
+        assert not doc.has_op("metadata")
+        assert not doc.has_op("structure")

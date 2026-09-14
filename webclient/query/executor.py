@@ -79,7 +79,9 @@ def _fanout_limit(client: Any) -> int:
 def _row_of(value: Any) -> dict[str, Any] | None:
     if isinstance(value, dict):
         return value
-    core = getattr(value, "_core", None)
+    from ..core.web_core import WebCore
+
+    core = value if isinstance(value, WebCore) else getattr(value, "_core", None)
     return getattr(core, "_row", None) if core is not None else None
 
 
@@ -113,6 +115,7 @@ async def _arun(
     value: Any, steps: list[Step], i: int, context: Any, client: Any
 ) -> Any:
     from ..collection import Collection
+    from ..core.web_core import WebCore
 
     while i < len(steps):
         step = steps[i]
@@ -125,7 +128,7 @@ async def _arun(
                 lambda el: _arun(el, rest, 0, el, client),
                 limit=_fanout_limit(client),
             )
-            if results and all(hasattr(r, "_core") for r in results):
+            if results and all(isinstance(r, WebCore) for r in results):
                 return Collection(results, client=client, root=value.root)
             return results
         value, i = await _aapply(value, steps, i, context, client)

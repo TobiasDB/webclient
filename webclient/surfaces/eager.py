@@ -11,7 +11,6 @@ from ..core.document import DocumentCore
 from ..core.reference import HttpMethod, ReferenceCore
 from ..core.reference import from_url as _core_from_url
 from ..core.web_core import WebCore
-from ._base import Eager
 
 if TYPE_CHECKING:
     from ..collection import Collection, Field
@@ -22,35 +21,16 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 
-class Reference(Eager[ReferenceCore]):
-    """A request spec (eager): ``url``/``with_params``/``replace``/``join``/
-    ``resolve``. Construct from a core (``Reference(core)``) or directly from spec
-    fields (``Reference(hostname=..., path=...)``). No hand-written body -- the
-    construction and serialisation proxies live on ``Eager``."""
+if TYPE_CHECKING:  # the eager surfaces are pure typing stubs over their cores
 
-    if TYPE_CHECKING:
+    class Reference(ReferenceCore):
+        """A request spec (eager) -- the ``ReferenceCore`` itself, typed with its
+        ops (``url``/``with_params``/``replace``/``join``/``resolve``). A pure
+        typing stub: at runtime ``Reference is ReferenceCore`` and the core
+        dispatches its own ops (``WebCore.__getattr__``)."""
+
         # >>> generated: Reference eager surface <<<
         # fmt: off
-        kind: str
-        name: str
-        root: str
-        hostname: str
-        method: str
-        scheme: str
-        port: int | None
-        path: str
-        fragment: str
-        params: Any
-        headers: Any
-        cookies: Any
-        body: bytes | None
-        json_body: Any
-        form: Any
-        follow_redirects: bool
-        timeout: float | None
-        actions: Any
-        @property
-        def ok(self) -> bool: ...
         @property
         def url(self) -> str: ...
         def join(self, href: str) -> "Reference": ...
@@ -60,31 +40,14 @@ class Reference(Eager[ReferenceCore]):
         # fmt: on
         # >>> end generated <<<
 
+    class Document(DocumentCore):
+        """A resolved document (eager) -- the ``DocumentCore`` itself, typed with
+        its ops (``select``/``attr``/``text_content``/``render``/events + the live
+        interaction set). A pure typing stub: at runtime ``Document is
+        DocumentCore``."""
 
-class Document(Eager[DocumentCore]):
-    """A resolved document (eager): ``select``/``select_all``/``attr``/
-    ``text_content``/``render``/events, plus the live interaction set when backed
-    by a page. Construct from a core (``Document(core)``) or from core-field
-    kwargs. No hand-written body -- construction lives on ``Eager``."""
-
-    if TYPE_CHECKING:
         # >>> generated: Document eager surface <<<
         # fmt: off
-        id: str
-        name: str
-        root: str
-        session_id: str
-        kind: str
-        url: str
-        final_url: str | None
-        content: bytes
-        status_code: int
-        response_headers: Any
-        encoding: str | None
-        elapsed: float | None
-        created: float
-        accessed: float
-        error: Any
         @property
         def action_events(self) -> list[Any]: ...
         @property
@@ -95,8 +58,6 @@ class Document(Eager[DocumentCore]):
         def events(self) -> list[Any]: ...
         @property
         def message(self) -> str: ...
-        @property
-        def ok(self) -> bool: ...
         @property
         def text_content(self) -> str: ...
         @property
@@ -131,9 +92,11 @@ class Document(Eager[DocumentCore]):
         # fmt: on
         # >>> end generated <<<
 
+else:  # at runtime a surface IS its core
+    Reference = ReferenceCore
+    Document = DocumentCore
 
-#: A live (browser-backed) document is a Document with the ``page`` capability;
-#: the generated tier calls it ``LiveDocument``.
+#: A live (browser-backed) document is a Document with the ``page`` capability.
 LiveDocument = Document
 
 
@@ -145,7 +108,7 @@ def from_url(
     cookies: dict[str, str] | None = None,
 ) -> Reference:
     """Build a :class:`Reference` from a URL string."""
-    return Reference(_core_from_url(url, method, params, headers, cookies))
+    return cast("Reference", _core_from_url(url, method, params, headers, cookies))
 
 
 _DEFAULT: "WebClient | None" = None
@@ -219,12 +182,6 @@ class Session:
     @property
     def cookies(self) -> dict[str, str]:
         return cast("dict[str, str]", self._core.cookies)
-
-
-class _ClientDispatch(Eager[WebClientCore]):
-    """The eager view the executor uses to run a ``WebClient``-rooted plan: it
-    dispatches the client's authoring backings (ref/fetch/summary) to real
-    cores. Users always hold the lazy ``WebClient``; this is internal."""
 
 
 class _ClientBase:
@@ -319,7 +276,7 @@ class _ClientBase:
 
     def release(self, doc: Document) -> None:
         """Return a live document's browser page to the pool."""
-        self._core.release(doc._core)
+        self._core.release(doc)
 
 
 class WebClient(_ClientBase):

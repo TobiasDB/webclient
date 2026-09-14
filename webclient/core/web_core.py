@@ -14,7 +14,7 @@ fields + its backings' ops (see ``scripts.gen_stubs``), never hand-written.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 
 class UnsupportedOp(TypeError):
@@ -81,32 +81,34 @@ class WebCore:
         return any(op in b.provides or op in b.props for b in self.choose())
 
     # -- a core IS its own eager surface -------------------------------------
-    def __getattr__(self, name: str) -> Any:
-        """A resolved core is directly usable as its eager surface: an op name
-        dispatches immediately (a prop op returns its value; a call op returns a
-        dispatcher), a list of cores comes back as a ``Collection``. Non-op names
-        delegate to the next ``__getattr__`` in the MRO -- pydantic's, for the
-        cores' private attrs (``_page``/``_client``/...). This is why no wrapper
-        (``Surface``) is needed: the typed ``Document``/``Reference`` are pure
-        stubs over the core."""
-        if not name.startswith("_"):
-            cls = type(self)
-            if name in cls.prop_ops():
-                return _wrap_result(self.dispatch(name))
-            if name in cls.ops():
+    if not TYPE_CHECKING:  # hidden from type checkers -- the eager surface stubs
+        # (``Document``/``Reference``) are the typed interface; a bare
+        # ``__getattr__`` here would make every attribute access ``Any``.
 
-                def _call(*args: Any, **kwargs: Any) -> Any:
-                    return _wrap_result(self.dispatch(name, *args, **kwargs))
+        def __getattr__(self, name: str) -> Any:
+            """A resolved core is directly usable as its eager surface: an op name
+            dispatches immediately (a prop op returns its value; a call op returns
+            a dispatcher), a list of cores comes back as a ``Collection``. Non-op
+            names delegate to the next ``__getattr__`` in the MRO -- pydantic's,
+            for the cores' private attrs (``_page``/``_client``/...)."""
+            if not name.startswith("_"):
+                cls = type(self)
+                if name in cls.prop_ops():
+                    return _wrap_result(self.dispatch(name))
+                if name in cls.ops():
 
-                return _call
-        from pydantic import BaseModel
+                    def _call(*args: Any, **kwargs: Any) -> Any:
+                        return _wrap_result(self.dispatch(name, *args, **kwargs))
 
-        # delegate to pydantic's __getattr__ (the cores' private attrs); it is a
-        # runtime method not in the type stubs, so fetch it dynamically.
-        pyd_getattr = getattr(BaseModel, "__getattr__", None)
-        if pyd_getattr is not None:
-            return pyd_getattr(self, name)
-        raise AttributeError(name)
+                    return _call
+            from pydantic import BaseModel
+
+            # delegate to pydantic's __getattr__ (private attrs); it is a runtime
+            # method not in the type stubs, so fetch it dynamically.
+            pyd_getattr = getattr(BaseModel, "__getattr__", None)
+            if pyd_getattr is not None:
+                return pyd_getattr(self, name)
+            raise AttributeError(name)
 
     # -- op surface (for generation) ----------------------------------------
     @classmethod

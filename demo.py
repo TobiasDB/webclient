@@ -150,6 +150,7 @@ def main() -> None:
         )
         # [P1] Error policy: a not-ok object carries a serializable WebError;
         #      `ok` is the truth, is_ok()/is_empty() run even when not ok.
+        assert missing.error is not None  # a not-ok document always carries one
         print(
             "not ok:     ",
             missing.error.type,

@@ -439,9 +439,15 @@ def _body(region: str) -> str:
     if region == "lazy-tier":
         return _lazy_tier()
     if region == "Reference eager surface":
-        return _indented(members(ReferenceCore, "eager"), 8)
+        # the eager surface IS the core (class Reference(ReferenceCore)), so data
+        # fields and class @properties are inherited -- emit only the backing ops.
+        return _indented(
+            members(ReferenceCore, "eager", fields=False, class_props=False), 8
+        )
     if region == "Document eager surface":
-        return _indented(members(DocumentCore, "eager"), 8)
+        return _indented(
+            members(DocumentCore, "eager", fields=False, class_props=False), 8
+        )
     if region == "collection element-op lifting":
         return _indented(lift_members(), 8)
     if region == "WebClient surface":

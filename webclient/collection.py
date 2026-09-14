@@ -71,7 +71,12 @@ def _row_of(element: Any, *, create: bool = True) -> dict[str, Any] | None:
     its own row). ``create`` seeds an empty row on first access."""
     if isinstance(element, dict):
         return element
-    core = getattr(element, "_core", None)
+    from .core.web_core import WebCore
+
+    # a surface IS its core now (_row is a PrivateAttr on the concrete cores).
+    core: Any = (
+        element if isinstance(element, WebCore) else getattr(element, "_core", None)
+    )
     if core is None:
         return None
     if core._row is None and create:
@@ -135,8 +140,10 @@ class Collection(Generic[T]):
                 raise AttributeError(name)
 
             def fan(*args: Any, **kwargs: Any) -> Any:
+                from .core.web_core import WebCore
+
                 results = [getattr(el, name)(*args, **kwargs) for el in self._items]
-                if results and all(hasattr(r, "_core") for r in results):
+                if results and all(isinstance(r, WebCore) for r in results):
                     return Collection(results, client=self._client, root=self.root)
                 return results
 
