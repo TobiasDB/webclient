@@ -5,7 +5,9 @@ The core is async (``aevaluate`` / ``astream``); it drives the eager surface by
 ``resolve`` -- hand back a coroutine when already on the engine loop). A
 Collection fans out per element through the bounded ``fan_out``. Sync callers
 use ``evaluate`` (a ``loop.run`` bridge); the async client awaits ``aevaluate``
-on the engine loop; streaming yields rows as they complete.
+on the engine loop; ``astream`` evaluates the plan and then delivers its rows
+one at a time (delivery is incremental; computation is not yet -- see
+docs/notes.md "True streaming").
 """
 
 from __future__ import annotations
@@ -201,8 +203,10 @@ def _start(plan: Any, context: Any, client: Any) -> Any:
 async def astream(
     expr: Any, context: Any = None, *, client: Any = None
 ) -> AsyncIterator[Any]:
-    """Yield the plan's rows as they complete (a terminal ``project`` list, or a
-    single value, streamed one at a time)."""
+    """Evaluate the plan, then yield its rows one at a time (a terminal
+    ``project`` list, or a single value). Delivery is incremental; computation is
+    not yet -- the whole result is produced first, then handed out row by row
+    (see docs/notes.md "True streaming")."""
     result = await aevaluate(expr, context, client=client)
     rows = result if isinstance(result, list) else [result]
     for row in rows:

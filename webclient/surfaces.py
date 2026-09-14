@@ -359,7 +359,7 @@ class WebClient(_ClientBase):
         self, expr: Any, context: Any = None, *, stream: bool = False, **kw: Any
     ) -> Any:
         """Run a recorded lazy plan on this client's core (``stream=True`` yields
-        rows as they complete). A remote core round-trips over HTTP -- same call."""
+        rows one at a time). A remote core round-trips over HTTP -- same call."""
         return self._core.execute(expr, context, stream=stream)
 
     def close(self) -> None:

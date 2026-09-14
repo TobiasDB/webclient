@@ -258,7 +258,7 @@ def main() -> None:
 
     # [P3] One evaluator: the plan runs through the same @op implementations
     #      the eager calls use; a Collection fans out per element (bounded by
-    #      the pool) and rows stream as they complete.
+    #      the pool) and rows are delivered one at a time via stream=True.
     with WebClient() as wc:
         for row in wc.execute(plan):
             print(f"  row:       {row['title']} {row['price']} -> {row['link'].path}")
