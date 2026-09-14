@@ -25,6 +25,7 @@ from ...models import NavigationEvent, NetworkEvent, PlanEvent
 from ...query.executor import aevaluate, astream, evaluate
 from ..document import Document
 from ..document.models import ProbeRecord
+from ...resiliency import Signals, classify
 from ..reference import Reference, from_url
 from ..web_core import Backing, WebCore
 from .fetch import FetchBacking
@@ -36,6 +37,21 @@ if TYPE_CHECKING:
     from ..crawl import Crawl
     from ..session import Session
     from ...surfaces.lazy import LazyWebClient
+
+
+def _probe_reason(s: Signals) -> str:
+    """A short label for the most salient detected signal (ProbeRecord.reason)."""
+    if s.anti_bot:
+        return s.anti_bot
+    if s.blocked:
+        return "blocked"
+    if s.paywall:
+        return "paywall"
+    if s.login_wall:
+        return "login_wall"
+    if s.js_required or s.empty:
+        return "js_required"
+    return ""
 
 
 def _seed_urls(seeds: Any) -> list[str]:
@@ -377,11 +393,34 @@ class WebClient(WebCore, IWebClient):
             attempt += 1
             doc, resp = await self._afetch_once(ref, headers)
         self._register(doc, ref)
+        self._observe(doc, resp)  # record what a resolver would escalate for (P1)
         if resp is not None:  # emit navigation/network events for the final doc
             self._capture(doc, ref, resp)
         if doc.error is not None and not optional:  # loud by default
             raise WebException(doc.error, document=doc)
         return doc
+
+    def _observe(self, doc: Document, resp: Any) -> None:
+        """Resiliency P1 (observe, no escalation): classify the static response and,
+        if anything notable is detected (anti-bot / JS-gated / paywall / login wall
+        / hard block), record it onto the document for the ``probe`` summary facet.
+        Pure detection (:mod:`webclient.resiliency.detect`), so a remote resolve
+        records the same thing."""
+        if resp is None:
+            return
+        signals = classify(doc.status_code, resp.headers, doc._set_cookies, doc.content)
+        if not signals.any:
+            return
+        doc._probe = ProbeRecord(
+            was_browser_required=False,
+            anti_bot=signals.anti_bot,
+            js_required=signals.js_required,
+            paywall=signals.paywall,
+            login_wall=signals.login_wall,
+            escalation=["static"],
+            reason=_probe_reason(signals),
+            final_tier="static",
+        )
 
     # -- plan execution (machinery): the surface's sync/async entry ----------
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
