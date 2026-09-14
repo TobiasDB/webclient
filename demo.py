@@ -1,7 +1,7 @@
 """demo.py -- one clean tour of every implemented webclient feature.
 
 Maintained with every milestone. Sections marked [M<n>]/[P<n>] appear as
-their milestone lands; the interface spec is /spec.py, the roadmap PLAN.md.
+their milestone lands.
 
 Runs fully offline: it serves its own demo site on localhost.
 

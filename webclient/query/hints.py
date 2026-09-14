@@ -6,8 +6,7 @@ at run time to know the return surface of each recorded op. So a value can be th
 *matching* real class -- ``attr("href") -> Reference``, ``attr("x") -> Field`` --
 with no separate table: ``resolve_hints`` picks the first overload whose params
 bind and type-check against the actual call args (exactly what a static checker
-does), and ``return_type`` reads its ``return`` annotation. This is the north-star
-mechanism sketched in ``example.py``.
+does), and ``return_type`` reads its ``return`` annotation.
 
 The result is a raw annotation (a ``Core`` type, ``Field[str]``, ``list[Core]``,
 a scalar, ``Self`` ...); mapping it to a tier's surface class is the recorder's
