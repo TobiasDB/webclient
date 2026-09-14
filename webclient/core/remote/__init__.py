@@ -13,17 +13,15 @@ handle type, no interface exceptions. Batch a chain/fan-out with ``.lazy``.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import httpx
 from pydantic import PrivateAttr
 
 from ...query.expr import Expr
-from ...query.plan import Plan
 from ..client import WebClientCore, _materialize
 from ..document import DocumentCore
-from ..reference import HttpMethod, ReferenceCore
-from ..reference import from_url as _core_from_url
+from ..reference import ReferenceCore
 
 
 def _url_of(source: dict[str, Any]) -> str:
@@ -123,53 +121,70 @@ class RemoteWebClientCore(WebClientCore):
         super().close()
 
     # -- server-side sessions ------------------------------------------------
-    def session(self, *, ttl: float | None = None, **kw: Any) -> "RemoteSession":
+    def session(self, *, ttl: float | None = None, **kw: Any) -> "RemoteWebSessionCore":
         resp = self._http.post(
             f"{self.url}/sessions", json={"ttl": ttl}, headers=self._headers()
         )
         resp.raise_for_status()
-        return RemoteSession(self, resp.json()["id"])
+        return RemoteWebSessionCore(url=self.url, token=self.token)._bind(
+            self, resp.json()["id"]
+        )
 
     def close_session(self, sid: str) -> None:
         self._http.delete(f"{self.url}/sessions/{sid}", headers=self._headers())
 
 
-class RemoteSession:
-    """A handle to a server-side session; its fetches thread the session id into
-    the plan so the server resolves them through that session. A context manager
-    (``with rc.session() as s:``) so the server-side session is always closed."""
+class RemoteWebSessionCore(RemoteWebClientCore):
+    """A server-side session as a real core -- no bespoke handle: it is a remote
+    client that threads its server session id into every plan (so the service
+    resolves through that session) and shares the parent client's http. So
+    ``session.ref(url)`` / ``session.fetch(url)`` dispatch exactly like the
+    client's, only scoped. A context manager: ``with rc.session() as s: ...``
+    deletes the server session on exit."""
 
-    def __init__(self, core: RemoteWebClientCore, sid: str) -> None:
-        self._core = core
-        self._id = sid
-        self._status = "running"
+    status: Literal["running", "closed"] = "running"
 
-    def ref(self, url: str, method: str = "get", **kw: Any) -> Any:
-        spec = _core_from_url(url, cast(HttpMethod, method), **kw).model_dump()
-        return Expr(
-            Plan(root="Reference", source=spec, session_id=self._id), self._core
+    _parent: Any = PrivateAttr(default=None)  # the RemoteWebClientCore
+    _sid: str = PrivateAttr(default="")  # the server session id
+
+    def model_post_init(self, ctx: Any) -> None:
+        # share the parent's http (set in ``_bind``) -- don't open our own; skip
+        # RemoteWebClientCore.model_post_init (which would) and just mark the mode.
+        WebClientCore.model_post_init(self, ctx)
+        self._mode = "remote"
+
+    def _bind(
+        self, parent: "RemoteWebClientCore", sid: str
+    ) -> "RemoteWebSessionCore":
+        self._parent = parent
+        self._sid = sid
+        self._http = parent._http  # share the connection
+        self.url, self.token = parent.url, parent.token
+        return self
+
+    @property
+    def id(self) -> str:
+        return self._sid
+
+    def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
+        # thread the server session id into the plan so the service resolves
+        # through this session; then POST via the remote client machinery.
+        scoped = Expr(
+            expr._plan.model_copy(update={"session_id": self._sid}), expr._client
         )
-
-    def fetch(self, url: str, **kw: Any) -> Any:
-        return self.ref(url, **kw).resolve()
+        return super().execute(scoped, context, stream=stream)
 
     def close(self) -> None:
-        self._core.close_session(self._id)
-        self._status = "closed"
+        if self.status == "closed":
+            return
+        self._parent.close_session(self._sid)
+        self.status = "closed"
 
-    def __enter__(self) -> "RemoteSession":
+    def __enter__(self) -> "RemoteWebSessionCore":
         return self
 
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    @property
-    def id(self) -> str:
-        return self._id
 
-    @property
-    def status(self) -> str:
-        return self._status
-
-
-__all__ = ["RemoteWebClientCore", "RemoteSession"]
+__all__ = ["RemoteWebClientCore", "RemoteWebSessionCore"]

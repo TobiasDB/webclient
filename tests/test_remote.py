@@ -172,8 +172,8 @@ def test_sessions(remote, httpserver):
     server.expect_request("/whoami").respond_with_handler(whoami)
     session = rc.session(ttl=60)
     assert session.status == "running"
-    session.fetch(server.url_for("/login")).collect()  # sets a cookie server-side
-    d = session.fetch(server.url_for("/whoami")).collect()
+    session.fetch(server.url_for("/login"))  # eager -> sets a cookie server-side
+    d = session.fetch(server.url_for("/whoami"))  # resolved through the session
     assert d.render("text").strip() == "t=1"
     session.close()
     assert session.status == "closed"

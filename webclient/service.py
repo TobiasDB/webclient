@@ -144,6 +144,9 @@ def create_app(
                 "dispatch",
             )
         sid = expr._plan.session_id
+        # a session-scoped plan runs on the server-side session (its identity /
+        # cookies), else on the shared client.
+        engine = app.state.sessions[sid] if sid in app.state.sessions else wc_
         if "document_id" in body:
             if body["document_id"] not in app.state.docs:
                 return _error(
@@ -161,14 +164,12 @@ def create_app(
                 return _error(
                     422, "InvalidPlan", str(exc), hint="the context_plan is malformed"
                 )
-        elif sid and sid in app.state.sessions:  # resolve through the session
-            context = app.state.sessions[sid]
         elif "url" in body:
-            context = wc_.ref(body["url"])
+            context = engine.ref(body["url"])
         else:
             context = None
         try:
-            result = wc_.execute(expr, context)  # the realization machinery
+            result = engine.execute(expr, context)  # the realization machinery
         except WebException as exc:  # a fetch/resolve failure -> structured error
             err = exc.error
             return _error(
