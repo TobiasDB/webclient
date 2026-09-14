@@ -64,3 +64,23 @@ def test_summary_returns_title_and_markdown(httpserver, wc):
 
 def test_core_is_the_async_surface(wc):
     assert isinstance(wc.core, WebClientCore)
+
+
+def test_project_into_a_pydantic_model(httpserver, wc):
+    """project(model) validates each extracted row into a typed model."""
+    from pydantic import BaseModel
+
+    class Hit(BaseModel):
+        title: str
+
+    httpserver.expect_request("/s").respond_with_data(RESULTS, content_type="text/html")
+    hits = (
+        wc.ref(httpserver.url_for("/s"))
+        .resolve()
+        .select_all(".result")
+        .extract(title=doc.select(".result__a").attr("text"))
+        .collect()
+        .project(Hit)
+    )
+    assert all(isinstance(h, Hit) for h in hits)
+    assert [h.title for h in hits] == ["First", "Second", "Third"]

@@ -10,9 +10,10 @@ is the value leaf (``get`` + ``is_ok``/``is_empty`` + comparisons + truthiness).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, Iterator, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Iterator, TypeVar, cast, overload
 
 T = TypeVar("T")
+M = TypeVar("M")  # a row model (e.g. a pydantic BaseModel) for project(model)
 
 if TYPE_CHECKING:
     from .surfaces import Document, Reference
@@ -208,14 +209,25 @@ class Collection(Generic[T]):
         """Keep at most the first ``n`` elements."""
         return self._derive(self._items[:n])
 
-    def project(self) -> list[dict[str, Any]]:
+    @overload
+    def project(self) -> list[dict[str, Any]]: ...
+    @overload
+    def project(self, model: type[M]) -> list[M]: ...
+
+    def project(self, model: type[M] | None = None) -> list[Any]:
         """Materialise as a plain list: each element's extracted row if it has
-        one, else the element itself."""
+        one, else the element itself. Pass ``model`` (e.g. a pydantic model) to
+        validate each row into it -- a schema-guided, typed result. Eager only:
+        a model class is not part of the serialisable plan, so call it on a
+        materialised Collection (``...extract(...).collect().project(Model)``)."""
         out: list[Any] = []
         for el in self._items:
             row = _row_of(el, create=False)
             out.append(row if row is not None else el)
-        return out
+        if model is None:
+            return out
+        validate = getattr(model, "model_validate", None)
+        return [validate(r) if validate is not None else model(**r) for r in out]
 
     def _derive(self, items: list[Any]) -> "Collection[T]":
         out: Collection[T] = Collection(items, client=self._client, root=self.root)

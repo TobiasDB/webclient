@@ -21,7 +21,14 @@ from webclient import (
     ref,
     reference,
 )
+from pydantic import BaseModel
+
 from webclient.models import LazyDocument, LazyField, LazyReference
+
+
+class _Row(BaseModel):
+    title: str
+
 
 # -- lazy authoring roots ---------------------------------------------------
 assert_type(doc, Document)
@@ -46,6 +53,7 @@ assert_type(many.attr("text"), Collection[Field[str]])
 assert_type(many.filter(title == "x"), Collection[Document])
 assert_type(many.extract(name=title), Collection[Document])
 assert_type(many.project(), list[dict[str, Any]])
+assert_type(many.project(_Row), list[_Row])  # schema-guided -> typed rows
 
 # reference("url") is a lazy root, typed as Reference
 assert_type(reference("https://e.com"), Reference)
