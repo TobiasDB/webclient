@@ -27,7 +27,7 @@ def stranded_streams(wc):
             and not t.done()
         )
 
-    return wc._ensure_loop().run(scan())
+    return wc.loop().run(scan())
 
 
 def plan():

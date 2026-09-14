@@ -297,7 +297,7 @@ def test_fan_out_is_bounded_and_ordered(wc):
         in_flight -= 1
         return i * 2
 
-    results = wc._ensure_loop().run(fan_out(list(range(20)), work, limit=3))
+    results = wc.loop().run(fan_out(list(range(20)), work, limit=3))
     assert results == [i * 2 for i in range(20)] and peak == 3
 
 
@@ -321,7 +321,7 @@ def test_fan_out_stream_yields_as_completed_and_is_bounded(wc):
             out.append(r)
         return out
 
-    order = wc._ensure_loop().run(drive())
+    order = wc.loop().run(drive())
     assert order == sorted(order)  # completion order (ascending sleeps)
     assert peak == 2  # bounded by the limit
 
@@ -341,7 +341,7 @@ def test_fan_out_stream_failure_cancels_siblings(wc):
             pass
 
     with pytest.raises(RuntimeError, match="element 1"):
-        wc._ensure_loop().run(drive())
+        wc.loop().run(drive())
     assert len(finished) < 5  # siblings cancelled, not drained
 
 
@@ -356,7 +356,7 @@ def test_failing_row_cancels_siblings(wc):
         return i
 
     with pytest.raises(RuntimeError, match="row 2"):
-        wc._ensure_loop().run(fan_out(list(range(6)), work, limit=6))
+        wc.loop().run(fan_out(list(range(6)), work, limit=6))
     assert len(finished) < 5  # siblings were cancelled, not drained
 
 
@@ -382,7 +382,7 @@ def test_fan_out_surfaces_sibling_failures_in_a_note(wc):
         await fan_out(list(range(6)), work, limit=6)
 
     with pytest.raises(ValueError) as excinfo:
-        wc._ensure_loop().run(drive())
+        wc.loop().run(drive())
     notes = getattr(excinfo.value, "__notes__", []) or []
     assert notes, "sibling failures should be surfaced in a note"
     joined = " ".join(notes)

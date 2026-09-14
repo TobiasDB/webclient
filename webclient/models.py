@@ -114,10 +114,6 @@ def topic_matches(pattern: Topic, topic: Topic) -> bool:
     return not pattern or topic == pattern or topic.startswith(pattern + ".")
 
 
-#: back-compat alias (the private name the bus/backings imported).
-_topic_matches = topic_matches
-
-
 # A core's own data models now live with that core (its ``models.py``): the
 # document's ``Element`` + ``Summary`` facets in :mod:`webclient.core.document.models`
 # (re-exported by :mod:`webclient.summary`), the client's ``SearchResult`` in

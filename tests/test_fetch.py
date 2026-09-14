@@ -221,7 +221,7 @@ def test_default_client_recreated_after_close():
 
 
 def test_engine_loop_reentrancy_guard(wc):
-    loop = wc._ensure_loop()
+    loop = wc.loop()
 
     async def inner():
         return 1

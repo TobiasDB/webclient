@@ -30,9 +30,6 @@ from .models import (
     topic_matches,
 )
 
-#: back-compat alias (the private name callers imported before the split).
-_topic_matches = topic_matches
-
 
 # --------------------------------------------------------------------------- #
 # EventBus

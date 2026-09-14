@@ -196,9 +196,6 @@ class WebClientCore(WebCore, BaseModel):
             self._loop = EngineLoop()
         return cast(EngineLoop, self._loop)
 
-    #: the engine loop under its older name (drives async fan-out / sync bridge).
-    _ensure_loop = loop
-
     def bridge(self, coro: Any) -> Any:
         """Run an IO coroutine under this client's dispatch mode -- the one place
         the sync / async / on-loop distinction lives, so every IO backing
