@@ -45,3 +45,11 @@ def test_whole_package_is_pyright_clean():
 def test_collection_stub_is_generated_from_the_registry():
     """Decision 2: the Collection[T] twin is generated, never hand-edited."""
     _run([sys.executable, str(ROOT / "scripts" / "gen_stubs.py"), "--check"])
+
+
+def test_package_ships_py_typed_marker():
+    """PEP 561: downstream type checkers use our inline types only if the
+    py.typed marker is shipped inside the package."""
+    import webclient
+
+    assert (Path(webclient.__file__).parent / "py.typed").exists()
