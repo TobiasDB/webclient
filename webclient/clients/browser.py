@@ -16,13 +16,15 @@ from typing import Any, Literal
 
 from .base import Client, ClientFactory
 
-Phase = Literal["init", "load"]
+Phase = Literal["init", "load", "drain"]
 
 
 @dataclass(frozen=True)
 class PageScript:
     """Script to install on a browser page. ``init`` runs before each navigation
-    (``add_init_script``); ``load`` is evaluated once after navigation."""
+    (``add_init_script``); ``load`` is evaluated once after navigation; ``drain``
+    is evaluated after any replay (to clear a buffer, e.g. discard load-time DOM
+    mutations) and its result is ignored."""
 
     source: str
     phase: Phase = "init"
@@ -57,13 +59,11 @@ class BrowserClient(Client):
         *,
         scripts: "tuple[PageScript, ...] | list[PageScript]" = (),
         replay: "list[dict[str, Any]]" = [],
-        drain_js: str | None = None,
     ) -> PageResult:
-        """Navigate to ``url``, installing ``scripts`` (init before nav, load
-        after), capturing console + network requests, replaying any recorded
-        actions, and (optionally) evaluating ``drain_js`` to discard load
-        mutations. Returns the raw page facts; the domain (document + events) is
-        built by the caller."""
+        """Navigate to ``url``, installing ``scripts`` by phase (``init`` before
+        nav, ``load`` once after, ``drain`` after any replay), capturing console +
+        network requests, and replaying any recorded actions. Returns the raw page
+        facts; the domain (document + events) is built by the caller."""
         page = self.page
         for s in scripts:  # init scripts must be installed before navigation
             if s.phase == "init":
@@ -88,8 +88,9 @@ class BrowserClient(Client):
                 await loc.click()
             elif step["op"] == "write":
                 await loc.fill(args.get("text", "") or "")
-        if drain_js:
-            await page.evaluate(drain_js)
+        for s in scripts:  # drain scripts clear buffers after replay (result ignored)
+            if s.phase == "drain":
+                await page.evaluate(s.source)
         return result
 
     async def aclose(self) -> None:

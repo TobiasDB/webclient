@@ -59,6 +59,13 @@ class Backing:
     def applies(self, core: Any) -> bool:  # Any: subclasses narrow to their core
         return True
 
+    def on_load(self, core: Any, result: Any) -> None:
+        """Hook: a live browser page finished loading. The client produces the raw
+        page (``clients.PageResult``) and fires this on each chosen backing; a
+        backing that instruments live pages (``LiveBacking``) turns the raw
+        console/network signals into events here. Default: nothing. So the client
+        never needs to know how a backing shapes events."""
+
 
 class WebCore:
     """Capabilities + Dispatch + Backing + Choose.

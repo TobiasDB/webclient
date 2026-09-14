@@ -19,16 +19,15 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from ...clients import BrowserFactory, ClientPool, HTTPXFactory, PageScript
 from ...collection import Field
-from ...engine.loop import EngineLoop
 from ...errors import WebError, WebException
 from ...events import EventBus
 from ...models import NavigationEvent, NetworkEvent, PlanEvent
 from ...query.executor import aevaluate, astream, evaluate
-from ..document import capture as _capture
 from ..document import DocumentCore
 from ..reference import ReferenceCore, from_url
 from ..web_core import Backing, WebCore
 from .fetch import FetchBacking
+from .loop import EngineLoop
 
 
 def _materialize(result: Any) -> Any:
@@ -463,12 +462,14 @@ class WebClientCore(WebCore, BaseModel):
     ) -> DocumentCore:
         lease = await self.pool.lease("page")
         try:
-            # the browser client drives the page; we build the document + events.
+            # the browser client drives the page and hands back the raw facts
+            # (``PageResult``); the document's backings turn those into events
+            # (``Backing.on_load`` -- ``LiveBacking`` owns the console/network
+            # wrapping). The client never reaches into a backing to shape events.
             result = await lease.client.open(
                 ref.dispatch("url"),
                 scripts=self._browser_scripts(),
                 replay=replay or [],
-                drain_js=_capture.DRAIN_JS,
             )
             doc = DocumentCore(
                 url=ref.dispatch("url"),
@@ -481,11 +482,8 @@ class WebClientCore(WebCore, BaseModel):
             doc._page = lease.client.page
             doc._lease = lease
             self._register(doc, ref)
-            for level, text in result.console:
-                doc._events.append(_capture.console_event(level, text, doc))
-            for method, req_url, rtype in result.network:  # XHR/fetch the page issued
-                if rtype in ("xhr", "fetch"):
-                    doc._events.append(_capture.network_event(method, req_url, rtype, doc))
+            for backing in doc.choose():  # backings shape the load into events
+                backing.on_load(doc, result)
             return doc
         except BaseException:
             await self.pool.release(lease)  # never leak the page lease on failure

@@ -6,6 +6,12 @@ the interaction set (``click`` / ``write`` / ``wait_for``), live selection, and
 bridges back synchronously, so the eager surface stays sync. Console messages
 and DOM mutations are captured onto the document as events (so ``console`` /
 ``dom_mutations`` / ``events_of`` and per-element narrowing work).
+
+This backing owns the *whole* browser-capture concern: the injected JS
+(``INIT_JS`` / ``DRAIN_JS``, declared as its ``page_scripts``), and the helpers
+that turn raw page signals into events -- ``drain`` (DOM mutations), plus
+``on_load`` wrapping the load-time console/network the client hands back. The
+client just leases a page and fires ``on_load``; it never shapes events itself.
 """
 
 from __future__ import annotations
@@ -13,12 +19,77 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 from ...clients import PageScript
-from ...models import ActionEvent, ConsoleEvent, DOMUpdateEvent
+from ...models import ActionEvent, ConsoleEvent, DOMUpdateEvent, NetworkEvent
 from ..web_core import Backing
-from .capture import INIT_JS, console_event, drain, network_event  # noqa: F401
 
 if TYPE_CHECKING:
     from . import DocumentCore
+
+#: installed on every navigation -- an id-path-tagging MutationObserver feeding
+#: ``window.__wc_mutations`` (see ``LiveBacking.page_scripts``).
+INIT_JS = """(() => {
+  if (window.__wc_installed) return;
+  window.__wc_installed = true;
+  window.__wc_mutations = [];
+  new MutationObserver((muts) => {
+    for (const m of muts) {
+      let ids = []; let n = m.target;
+      while (n && n.nodeType === 1) { if (n.id) ids.push(n.id); n = n.parentElement; }
+      window.__wc_mutations.push({type: m.type, ids: ids,
+        added: m.addedNodes.length, removed: m.removedNodes.length});
+    }
+  }).observe(document,
+             {childList: true, subtree: true, attributes: true, characterData: true});
+})()"""
+
+#: read + clear the mutation buffer (run after replay to discard load noise).
+DRAIN_JS = "() => { const m = window.__wc_mutations || []; window.__wc_mutations = []; return m; }"
+
+_LEVELS = {
+    "log": "log",
+    "info": "info",
+    "debug": "log",
+    "warning": "warning",
+    "error": "error",
+}
+
+
+def _kind(record: dict[str, Any]) -> str:
+    if record["type"] == "attributes":
+        return "attribute"
+    if record["type"] == "characterData":
+        return "text"
+    return "removed" if record["removed"] and not record["added"] else "added"
+
+
+async def drain(doc: Any) -> None:
+    """Move any pending DOM mutations off the page onto the document. A short
+    settle lets the observer's microtask deliver records from the last action."""
+    await doc._page.wait_for_timeout(30)
+    for r in await doc._page.evaluate(DRAIN_JS):
+        doc._events.append(
+            DOMUpdateEvent(
+                kind=cast(Any, _kind(r)), detail={"ids": r["ids"]}, document_id=doc.name
+            )
+        )
+
+
+def console_event(level: str, text: str, doc: Any) -> ConsoleEvent:
+    return ConsoleEvent(
+        level=cast(Any, _LEVELS.get(level, "log")), text=text, document_id=doc.name
+    )
+
+
+def network_event(method: str, url: str, resource_type: str, doc: Any) -> NetworkEvent:
+    """A browser sub-request captured onto the document (an XHR/fetch the page
+    made) -- the raw material for the summary ``runtime`` facet's xhr_endpoints."""
+    from ..reference import from_url
+
+    return NetworkEvent(
+        request=from_url(url, cast(Any, method.lower())),
+        resource_type=resource_type,
+        document_id=doc.name,
+    )
 
 
 class LiveBacking(Backing):
@@ -32,14 +103,25 @@ class LiveBacking(Backing):
     #: ``select_all`` are omitted: on a *static* document (the common case) they
     #: are in-memory (HtmlBacking), so the surface types them synchronously.
     io = frozenset({"click", "write", "wait_for", "evaluate", "screenshot"})
-    #: the mutation-observer install -- this backing's ``dom_mutations`` reads what
-    #: it records (``drain``), so the backing owns the script; the client installs
-    #: it on every live page.
-    page_scripts = (PageScript(INIT_JS, "init"),)
+    #: the browser scripts this backing owns: the mutation observer (``init``,
+    #: read by ``dom_mutations`` via ``drain``) and the buffer drain (``drain``
+    #: phase, run after replay to discard load-time mutations). The client gathers
+    #: and installs them; the backing owns the *what*.
+    page_scripts = (PageScript(INIT_JS, "init"), PageScript(DRAIN_JS, "drain"))
     gate = "page"
 
     def applies(self, core: Any) -> bool:
         return core._page is not None
+
+    def on_load(self, core: Any, result: Any) -> None:
+        """Wrap the load-time console/network the client captured (a
+        ``clients.PageResult``) into events on the document -- the client hands
+        back raw facts and fires this; the backing owns the shaping."""
+        for level, text in result.console:
+            core._events.append(console_event(level, text, core))
+        for method, url, rtype in result.network:  # XHR/fetch the page issued
+            if rtype in ("xhr", "fetch"):
+                core._events.append(network_event(method, url, rtype, core))
 
     def _loop(self, core: Any) -> Any:
         return core._client.loop()
@@ -226,4 +308,11 @@ class LiveBacking(Backing):
         return out
 
 
-__all__ = ["LiveBacking", "INIT_JS", "drain", "console_event", "network_event"]
+__all__ = [
+    "LiveBacking",
+    "INIT_JS",
+    "DRAIN_JS",
+    "drain",
+    "console_event",
+    "network_event",
+]
