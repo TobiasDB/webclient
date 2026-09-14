@@ -200,7 +200,41 @@ def test_execute_returns_structured_error_on_missing_document(client_and_server)
 
 def test_missing_document_404(client_and_server):
     api, _ = client_and_server
-    assert api.get("/document/nope", headers=AUTH).status_code == 404
+    resp = api.get("/document/nope", headers=AUTH)
+    assert resp.status_code == 404
+    err = resp.json()["error"]
+    assert err["type"] == "NoSuchDocument" and err["hint"]
+
+
+def test_session_endpoints_return_structured_404(client_and_server):
+    api, _ = client_and_server
+    for resp in (
+        api.get("/sessions/gone", headers=AUTH),
+        api.delete("/sessions/gone", headers=AUTH),
+    ):
+        assert resp.status_code == 404
+        err = resp.json()["error"]
+        assert err["type"] == "NoSuchSession" and err["hint"]
+
+
+def test_session_cap_returns_structured_error():
+    wc = WebClient()
+    app = create_app(wc, token="secret", max_sessions=1)
+    with TestClient(app) as api:
+        assert api.post("/sessions", headers=AUTH, json={}).status_code == 200
+        resp = api.post("/sessions", headers=AUTH, json={})
+        assert resp.status_code == 429
+        err = resp.json()["error"]
+        assert err["type"] == "TooManySessions" and err["retriable"] is True
+    wc.close()
+
+
+def test_crawl_returns_structured_error(client_and_server):
+    api, _ = client_and_server
+    resp = api.post("/crawl", headers=AUTH)
+    assert resp.status_code == 501
+    err = resp.json()["error"]
+    assert err["type"] == "NotImplemented" and err["hint"]
 
 
 def test_events_websocket_streams_and_resumes(client_and_server):
