@@ -506,10 +506,13 @@ class WebClientCore(WebCore, BaseModel):
             await self.pool.release(lease)  # never leak the page lease on failure
             raise
 
-    async def _areload(self, core: DocumentCore) -> DocumentCore:
-        if core._page is not None or (core._ref is not None and core._ref.actions):
-            return await self._alive(core._ref, replay=list(core._ref.actions))
-        return await self.afetch(cast(ReferenceCore, core._ref))  # plain HTTP refetch
+    async def areload(self, core: DocumentCore) -> DocumentCore:
+        ref = core._ref
+        if ref is None:
+            raise ValueError("cannot reload a document with no source reference")
+        if core._page is not None or ref.actions:  # live page / recorded actions
+            return await self._alive(ref, replay=list(ref.actions))
+        return await self.afetch(ref)  # plain HTTP refetch
 
     def release(self, doc: DocumentCore) -> None:
         """Return a live document's page lease to the pool."""

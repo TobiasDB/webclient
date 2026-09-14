@@ -62,17 +62,17 @@ disable_error_code = [
     "unused-ignore",  # the codegen'd/backing overlap ignores are moot under the above
 ]
 
-# IO backing ops (``async def``) declare their SURFACE return type -- what
-# ``gen_stubs`` renders -- but return the awaited value, which is ``Any`` because
-# the cores cross-reference through ``Any``-typed private attrs (``_client`` /
-# ``_page`` / ...). That is the intended pattern: the dispatch interface bridges
-# and the surface stubs re-assert the type, so backings do NOT ``cast``. Relax
-# only ``no-any-return`` here; every other strict check still applies.
+# A backing op declares its SURFACE return type (what ``gen_stubs`` renders) but
+# returns a value that is ``Any`` because the cores cross-reference through some
+# ``Any``-typed private attrs (``_page`` is a playwright Page, ``dispatch`` is
+# generic). That is the intended pattern -- the surface stubs re-assert the type,
+# so backings do NOT ``cast``. Relax only ``no-any-return`` on the two backing
+# modules that still hit it (live: ``return core`` on the Any page; the client's
+# ``summary``: ``doc.dispatch(...)``); every other strict check still applies, and
+# the client/reference seam is now typed (``_client`` / ``_ref``), not ``Any``.
 [[tool.mypy.overrides]]
 module = [
-    "webclient.core.reference.resolve",
     "webclient.core.client.fetch",
-    "webclient.core.document.status",
     "webclient.core.document.live",
 ]
 disable_error_code = ["no-any-return"]

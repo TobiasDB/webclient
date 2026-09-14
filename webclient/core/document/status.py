@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from ...collection import Field
 from ..web_core import Backing
@@ -26,13 +26,13 @@ class StatusBacking(Backing):
 
     def ref(self, core: "DocumentCore") -> "ReferenceCore | None":
         """The reference that produced this document (for reload / recovery)."""
-        return cast("ReferenceCore | None", core._ref)
+        return core._ref
 
     async def reload(self, core: "DocumentCore") -> "DocumentCore":
         """Re-resolve on a fresh page, replaying the recorded action chain --
         available even after the page was released. An IO op: the interface
         bridges it (``dispatch``)."""
-        return await core._client._areload(core)
+        return await core._client.areload(core)
 
     def is_ok(self, core: "DocumentCore") -> "Field[bool]":
         return Field(core.ok)

@@ -7,7 +7,7 @@ the client -- :mod:`.resolve`). Pure data + dispatch, like every core.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, PrivateAttr
@@ -16,6 +16,10 @@ from ..web_core import Backing, WebCore
 from ._shared import DEFAULT_PORTS, HttpMethod, _derive  # noqa: F401  (re-exported)
 from .derive import DeriveBacking
 from .resolve import ResolveBacking
+
+if TYPE_CHECKING:
+    from ..client import WebClientCore
+    from ..session import WebSessionCore
 
 
 class ReferenceCore(WebCore, BaseModel):
@@ -42,8 +46,11 @@ class ReferenceCore(WebCore, BaseModel):
     timeout: float | None = None
     actions: list[dict[str, Any]] = []  # recorded live-interaction chain (reload)
 
-    _client: Any = PrivateAttr(default=None)
-    _session: Any = PrivateAttr(default=None)
+    # typed non-optional: a core is bound to its client before any op runs (an
+    # unbound resolve gets a default via ``WebCore._bridge_io``). ``_session`` is
+    # genuinely optional (only session-scoped references have one).
+    _client: "WebClientCore" = PrivateAttr(default=None)  # type: ignore[assignment]
+    _session: "WebSessionCore | None" = PrivateAttr(default=None)
     _surface: Any = PrivateAttr(default=None)  # the core's single eager surface
 
     @property

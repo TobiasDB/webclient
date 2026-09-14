@@ -32,6 +32,10 @@ from .summary import (
 )
 
 if TYPE_CHECKING:
+    from ..client import WebClientCore
+    from ..reference import ReferenceCore
+
+if TYPE_CHECKING:
     from ..client import WebClientCore  # noqa: F401
 
 
@@ -55,8 +59,9 @@ class DocumentCore(WebCore, BaseModel):
     accessed: float = 0.0
     error: WebError | None = None
 
-    _client: Any = PrivateAttr(default=None)  # owning WebClientCore
-    _ref: Any = PrivateAttr(default=None)  # the ReferenceCore that produced it
+    # non-optional: a document is client-bound before any op (see ReferenceCore).
+    _client: "WebClientCore" = PrivateAttr(default=None)  # type: ignore[assignment]
+    _ref: "ReferenceCore | None" = PrivateAttr(default=None)  # producing reference
     _element: Any = PrivateAttr(default=None)  # lxml element / json sub-value
     _tree: Any = PrivateAttr(default=None)  # cached lxml parse
     _data: Any = PrivateAttr(default=None)  # cached json
