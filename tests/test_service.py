@@ -1,3 +1,5 @@
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -54,6 +56,31 @@ def test_doc_store_is_lru_bounded():
     _ = s["b"]  # touch -> "c" is now the LRU
     s["d"] = object()
     assert list(s) == ["b", "d"]
+
+
+def test_session_store_is_capped():
+    """New sessions beyond the cap are rejected (429) rather than leaked."""
+    wc = WebClient()
+    app = create_app(wc, token="secret", max_sessions=1)
+    with TestClient(app) as api:
+        assert api.post("/sessions", headers=AUTH, json={}).status_code == 200
+        assert api.post("/sessions", headers=AUTH, json={}).status_code == 429
+    wc.close()
+
+
+def test_expired_sessions_are_reclaimed():
+    """A past-ttl session is swept on the next create, freeing cap room."""
+    wc = WebClient()
+    app = create_app(wc, token="secret", max_sessions=1)
+    with TestClient(app) as api:
+        assert (
+            api.post("/sessions", headers=AUTH, json={"ttl": 0.01}).status_code == 200
+        )
+        time.sleep(0.05)
+        assert (
+            api.post("/sessions", headers=AUTH, json={"ttl": 0.01}).status_code == 200
+        )
+    wc.close()
 
 
 def test_auth_required(client_and_server):

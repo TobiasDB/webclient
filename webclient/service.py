@@ -12,6 +12,7 @@ client records, validated (``from_plan``) before it runs.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import OrderedDict
 from typing import Any
 
@@ -67,11 +68,15 @@ def _serialize(value: Any, store: dict[str, Any]) -> Any:
 
 
 def create_app(
-    wc: WebClient | None = None, token: str | None = None, max_docs: int = 1024
+    wc: WebClient | None = None,
+    token: str | None = None,
+    max_docs: int = 1024,
+    max_sessions: int = 256,
 ) -> FastAPI:
     """A FastAPI app exposing a WebClient over ``/execute`` (Bearer-token
     authorised when ``token`` is set). An existing client may be supplied;
-    ``max_docs`` caps the LRU document store."""
+    ``max_docs`` caps the LRU document store and ``max_sessions`` bounds the
+    live-session store (expired/closed sessions are reclaimed first)."""
     app = FastAPI()
     app.state.wc = wc if wc is not None else WebClient()
     app.state.docs = _DocStore(max_docs)
@@ -80,6 +85,14 @@ def create_app(
     def _auth(authorization: str | None) -> None:
         if token is not None and authorization != f"Bearer {token}":
             raise HTTPException(status_code=401, detail="bad token")
+
+    def _sweep_sessions() -> None:
+        """Drop closed or past-ttl sessions so the store does not leak them."""
+        now = time.time()
+        for sid, s in list(app.state.sessions.items()):
+            expired = s.expires_at is not None and now > s.expires_at
+            if s.status != "running" or expired:
+                app.state.sessions.pop(sid, None)
 
     @app.post("/execute")
     def execute(
@@ -123,6 +136,9 @@ def create_app(
         body: dict[str, Any], authorization: str | None = Header(default=None)
     ) -> dict[str, Any]:
         _auth(authorization)
+        _sweep_sessions()  # reclaim expired/closed before enforcing the cap
+        if len(app.state.sessions) >= max_sessions:
+            raise HTTPException(status_code=429, detail="too many sessions")
         session = app.state.wc.session(ttl=body.get("ttl"))
         app.state.sessions[session.id] = session
         return {"id": session.id, "status": session.status}
