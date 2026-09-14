@@ -39,6 +39,8 @@ class RemoteWebClientCore(WebClientCore):
 
     _http: Any = PrivateAttr(default=None)
     _mode: str = PrivateAttr(default="remote")
+    _remote_hops: int = PrivateAttr(default=0)  # per-op round-trips (chattiness)
+    _nagged: bool = PrivateAttr(default=False)  # warned about .lazy once
 
     def model_post_init(self, ctx: Any) -> None:
         super().model_post_init(ctx)

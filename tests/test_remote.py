@@ -108,6 +108,18 @@ def test_eager_doc_ops_round_trip(remote):
     # it through .lazy (one plan, one round-trip); see the test below.
 
 
+def test_greedy_eager_ops_warn_recommending_lazy(remote, caplog):
+    """Per-op round-trips on a remote document handle are chatty; after a few the
+    client nudges (once) toward the .lazy batching interface."""
+    rc, server = remote
+    d = rc.fetch(server.url_for("/cards"))  # entry fetch -- not counted
+    with caplog.at_level("WARNING", logger="webclient"):
+        for fmt in ("markdown", "text", "html", "markdown"):  # per-op round-trips
+            d.render(fmt)
+    nags = [r for r in caplog.records if ".lazy" in r.message]
+    assert len(nags) == 1  # warned once, and it points at .lazy
+
+
 def test_lazy_batches_doc_ops_into_one_call(remote):
     rc, server = remote
     d = rc.fetch(server.url_for("/cards"))

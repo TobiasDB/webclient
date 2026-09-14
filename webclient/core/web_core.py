@@ -16,6 +16,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
+#: per-op remote round-trips (on server-side handles) before nudging toward .lazy.
+_CHATTY_ROUND_TRIPS = 4
+
 
 class UnsupportedOp(TypeError):
     """An op no chosen backing provides (the receiver lacks the capability)."""
@@ -174,13 +177,42 @@ class WebCore:
         the SAME interface as the local dispatcher."""
         root = self._remote_root()
         if is_prop:
-            return _unwrap_remote(getattr(root, op).collect())
+            value = _unwrap_remote(getattr(root, op).collect())
+            self._note_remote_hop()
+            return value
 
         def _call(*args: Any, **kwargs: Any) -> Any:
             kwargs.pop("_collect", None)
-            return _unwrap_remote(getattr(root, op)(*args, **kwargs).collect())
+            value = _unwrap_remote(getattr(root, op)(*args, **kwargs).collect())
+            self._note_remote_hop()
+            return value
 
         return _call
+
+    def _note_remote_hop(self) -> None:
+        """Count a per-op remote round-trip made on a server-side handle (the
+        chatty, batchable pattern -- a client verb like ``rc.fetch`` is one entry
+        round-trip and does not count), and nudge toward ``.lazy`` once a chain of
+        them adds up. Batching a chain/fan-out with ``.lazy`` runs it in a single
+        round-trip."""
+        if not getattr(self, "_remote_handle", False):
+            return  # not a derived handle -- no chain to batch
+        client = cast(Any, getattr(self, "_client", None) or self)
+        hops = getattr(client, "_remote_hops", 0) + 1
+        try:
+            client._remote_hops = hops
+        except Exception:
+            return
+        if hops == _CHATTY_ROUND_TRIPS and not getattr(client, "_nagged", False):
+            client._nagged = True
+            import logging
+
+            logging.getLogger("webclient").warning(
+                "remote client made %d per-op round-trips; batch a chain or "
+                "fan-out with .lazy -- e.g. doc.lazy.select(...).text_content"
+                ".collect() -- to run it in one round-trip",
+                hops,
+            )
 
     # -- a core IS its own eager surface -------------------------------------
     if not TYPE_CHECKING:  # hidden from type checkers -- the eager surface stubs

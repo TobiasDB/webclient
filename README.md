@@ -145,10 +145,27 @@ print(live.select("#cart li").text_content)
 wc.release(live)   # return the page to the pool
 ```
 
+## Dispatch modes -- sync, async, remote
+
+The surface **is** the core; how an op actually runs is the core's *dispatch
+mode* -- one concept, three modes, same interface:
+
+- **sync** (`WebClient`) -- IO blocks on a background engine loop.
+- **async** (`AsyncWebClient`) -- loop-native: IO runs on your loop, `await`ed.
+  Only the sync client uses the engine loop.
+- **remote** (`RemoteWebClient`) -- every op that needs the server becomes a
+  one-request POST to a `webclient.service` app.
+
+`.lazy` on any surface records a **plan** instead of running op-by-op, so a whole
+chain or fan-out realises in a single pass (`.collect()` / `await .acollect()`).
+
 ## Remote -- browser-as-a-service
 
-The remote client is *literally* a `WebClient` over a swapped core: the same
-eager surface, executed server-side over HTTP (no local browser or lxml needed).
+The remote client is *literally* a `WebClient` in remote mode: the same eager
+surface, executed server-side over HTTP (no local browser or lxml needed). A
+fetched document comes back as a real `Document` handle (metadata inline); its
+content ops run **eagerly, one round trip each**, and a reference comes back as a
+real `Reference`.
 
 ```python
 from webclient import RemoteWebClient
@@ -159,6 +176,12 @@ with RemoteWebClient("http://host:8000", token="secret") as rc:
     # batch a chain (or a fan-out) into ONE round trip via .lazy:
     titles = handle.lazy.select_all(".title").text_content.collect()
 ```
+
+**Chattiness**: because remote content ops are eager, a long op-by-op chain is a
+round trip per op. Reach for `.lazy` (above) to batch a chain/fan-out into one
+request -- the client logs a one-time nudge toward it once a chain gets greedy.
+Sessions are the same surface, scoped: `with rc.session() as s: s.fetch(url)`
+resolves through a server-side session (its cookies/identity).
 
 Serve it with `webclient.service.create_app(token=..., max_docs=..., max_sessions=...)`.
 
