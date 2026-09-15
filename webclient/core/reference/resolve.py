@@ -22,7 +22,7 @@ class ResolveBacking(Backing):
         self,
         core: "Reference",
         *,
-        browser: "bool | Literal['never', 'auto', 'always']" = False,
+        browser: "bool | Literal['never', 'auto', 'always', 'probe']" = False,
         optional: bool = False,
         error: Any = None,
     ) -> "Document":

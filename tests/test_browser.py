@@ -119,6 +119,53 @@ def test_reload_reproduces_state(httpserver, wc):
         wc.release(fresh)
 
 
+INJECTED = """
+<html><head><title>Injected</title></head><body>
+  <div id="app"></div>
+  <script>
+    document.getElementById("app").innerHTML =
+      "<p>" + Array(80).fill("injected content word").join(" ") + "</p>";
+  </script>
+</body></html>
+"""
+PLAIN = (
+    "<html><body><main>"
+    + "real static content here " * 80
+    + "</main></body></html>"
+)
+
+
+def test_probe_mode_flags_js_injected_content(httpserver, wc):
+    """``browser="probe"`` resolves both tiers and compares: a page whose content
+    is injected by JS is flagged was_browser_required with a positive render_gain,
+    and the returned document is the fuller (browser-rendered) one."""
+    httpserver.expect_request("/inj").respond_with_data(INJECTED, content_type="text/html")
+    doc = wc.fetch(httpserver.url_for("/inj"), browser="probe")
+    try:
+        assert "injected content word" in doc.text_content  # browser recovered it
+        p = doc._probe
+        assert p is not None and p.was_browser_required is True
+        assert p.js_required is True and p.render_gain and p.render_gain > 0
+        assert p.reason == "js_injected_content" and p.escalation == ["static", "browser"]
+        facet = doc.summary().probe
+        assert facet is not None and facet.was_browser_required and facet.render_gain > 0
+    finally:
+        wc.release(doc)
+
+
+def test_probe_mode_reports_static_is_sufficient(httpserver, wc):
+    """A page whose content is already in the static HTML: probe returns it with
+    was_browser_required False and render_gain 0 -- 'you don't need a browser'."""
+    httpserver.expect_request("/plain").respond_with_data(PLAIN, content_type="text/html")
+    doc = wc.fetch(httpserver.url_for("/plain"), browser="probe")
+    try:
+        p = doc._probe
+        assert p is not None and p.was_browser_required is False
+        assert p.render_gain == 0 and p.reason == "static_sufficient"
+    finally:
+        wc.release(doc)
+
+
 def test_release_returns_page_to_pool(httpserver, wc):
     httpserver.expect_request("/p").respond_with_data(
         "<html><body>p</body></html>", content_type="text/html"

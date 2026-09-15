@@ -25,7 +25,7 @@ from ...models import NavigationEvent, NetworkEvent, PlanEvent
 from ...query.executor import aevaluate, astream, evaluate
 from ..document import Document
 from ..document.models import ProbeRecord
-from ...resiliency import Signals, classify, policy_headers
+from ...resiliency import Signals, classify, policy_headers, visible_word_count
 from ..reference import Reference, from_url
 from ..web_core import Backing, WebCore
 from .fetch import FetchBacking
@@ -40,19 +40,23 @@ if TYPE_CHECKING:
     from ...surfaces.lazy import LazyWebClient
 
 
+_MODES = ("never", "auto", "always", "probe")
+
+
 def _browser_mode(browser: Any) -> str:
     """Normalise the ``browser`` kwarg to a tier: ``"never"`` (static only),
-    ``"auto"`` (static, escalate if JS-gated) or ``"always"`` (straight to browser).
-    Accepts a bool, a ``"never"``/``"auto"``/``"always"`` string, ``AUTO``, or a
-    ``BrowserPolicy`` (its ``when``)."""
+    ``"auto"`` (static, escalate if JS-gated), ``"always"`` (straight to browser),
+    or ``"probe"`` (resolve both tiers and compare -- the explicit diagnostic).
+    Accepts a bool, one of those strings, ``AUTO``, or a ``BrowserPolicy`` (its
+    ``when``)."""
     if browser is True:
         return "always"
     if not browser:  # False / None
         return "never"
     if isinstance(browser, str):
-        return browser if browser in ("never", "auto", "always") else "never"
+        return browser if browser in _MODES else "never"
     when = getattr(browser, "when", None)  # a BrowserPolicy
-    return when if when in ("never", "auto", "always") else "auto"
+    return when if when in _MODES else "auto"
 
 
 def _probe_reason(s: Signals) -> str:
@@ -400,6 +404,8 @@ class WebClient(WebCore, IWebClient):
             return doc
         if mode == "always":
             return await self._alive(ref)
+        if mode == "probe":
+            return await self._probe_compare(ref)
         # declare the resolve policy (rate/retry/proxy) to a downstream proxy
         # service as X-WebClient-* headers; explicit headers still win over them.
         headers = {
@@ -473,6 +479,51 @@ class WebClient(WebCore, IWebClient):
             final_tier="browser",
         )
         return doc
+
+    async def _probe_compare(self, ref: Reference) -> Document:
+        """``browser="probe"``: resolve *both* tiers and compare, then return the
+        fuller (browser) document carrying an accurate ``probe`` facet -- the
+        explicit "can I scrape this / what do I need" diagnostic. It measures how
+        much visible content the browser render recovers over the static response
+        (``render_gain``) and reports ``was_browser_required`` definitively (rather
+        than the conservative ``auto`` heuristic), so a full, content-complete
+        summary can be built with an accurate account of what the page needed."""
+        static = await self.afetch(ref, browser=False, optional=True)
+        try:
+            browser = await self._alive(ref)
+        except Exception:  # browser tier unavailable -> the static doc is all we have
+            if static._probe is not None:
+                static._probe.reason = "browser_unavailable"
+            return static
+        static_words = visible_word_count(static.content) if static.ok else 0
+        browser_words = visible_word_count(browser.content)
+        gain = max(0, browser_words - static_words)
+        # content the browser recovered: the static page was empty/near-empty, or the
+        # render grew the visible text by a clear margin (guards tiny/noise deltas).
+        content_gated = static.ok and (
+            static_words < 40
+            or (static_words == 0 and browser_words > 0)
+            or (browser_words >= static_words * 1.25 and gain >= 20)
+        )
+        sp = static._probe  # what the static tier detected (anti-bot / js / walls)
+        required = bool(content_gated or not static.ok)
+        browser._probe = ProbeRecord(
+            was_browser_required=required,
+            js_required=bool(content_gated),
+            anti_bot=sp.anti_bot if sp else None,
+            paywall=sp.paywall if sp else False,
+            login_wall=sp.login_wall if sp else False,
+            render_gain=gain,
+            escalation=["static", "browser"],
+            reason=(
+                "js_injected_content" if content_gated
+                else "static_blocked" if not static.ok
+                else "static_sufficient"
+            ),
+            attempts=2,
+            final_tier="browser",
+        )
+        return browser
 
     # -- plan execution (machinery): the surface's sync/async entry ----------
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:

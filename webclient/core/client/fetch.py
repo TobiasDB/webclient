@@ -45,7 +45,7 @@ class FetchBacking(Backing):
         core: "WebClient",
         url: Any,
         *,
-        browser: "bool | Literal['never', 'auto', 'always']" = False,
+        browser: "bool | Literal['never', 'auto', 'always', 'probe']" = False,
         optional: bool = False,
         error: Any = None,
         **kw: Any,
@@ -53,8 +53,9 @@ class FetchBacking(Backing):
         """Resolve ``ref(url)`` into a document -- straight to the client's
         transport (``afetch``), not bouncing back out through the reference's
         ``resolve`` op (``fetch`` IS a resolve). ``browser`` picks the tier
-        (``False`` static / ``"auto"`` escalate-if-JS-gated / ``True`` always). An
-        IO op: the interface bridges it (``dispatch``)."""
+        (``False`` static / ``"auto"`` escalate-if-JS-gated / ``True`` always /
+        ``"probe"`` resolve both and compare -- the explicit "do I need a browser"
+        diagnostic). An IO op: the interface bridges it (``dispatch``)."""
         from ...errors import lenient
 
         ref = self.ref(core, url, **kw)

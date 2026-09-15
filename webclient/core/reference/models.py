@@ -54,7 +54,7 @@ class IReference(BaseModel):
         def url(self) -> str: ...
         def join(self, href: str) -> "Reference": ...
         def replace(self, **fields: Any) -> "Reference": ...
-        def resolve(self, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ...) -> "Document": ...
+        def resolve(self, *, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., optional: bool = ..., error: Any = ...) -> "Document": ...
         def with_params(self, **params: str) -> "Reference": ...
         # fmt: on
         # >>> end generated <<<
@@ -136,7 +136,12 @@ class BrowserPolicy(BaseModel, frozen=True):
     engine: str = "chromium"
     stealth: bool = False
     wait_for: str | None = None
-    when: Literal["never", "auto", "always"] = "never"
+    #: ``never`` static-only, ``always`` straight to a browser, ``auto`` static then
+    #: browser only if the static page looks JS-gated (empty/SPA shell), ``probe``
+    #: (diagnostic, explicit-only) resolve *both* tiers and compare to report
+    #: definitively whether a browser is needed -- the "can I scrape this / what do
+    #: I need" mode; returns the fuller (browser) document with an accurate probe.
+    when: Literal["never", "auto", "always", "probe"] = "never"
 
     @classmethod
     def auto(cls) -> "BrowserPolicy":

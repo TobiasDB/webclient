@@ -8,12 +8,16 @@ What it shows:
   * static fetch -> 0 quotes (the DOM the server sent is a shell);
   * browser render -> 10 quotes, plus the navigation/console/DOM events the page
     produced, exposed on ``doc.events``;
-  * a note on ``browser="auto"``: escalation is deliberately *conservative* -- it
-    fires on an empty / SPA-shell page, but this page ships a non-empty shell, so
-    ``auto`` does not escalate it. Force it with ``browser="always"`` when you
-    know a page needs JS.
+  * ``browser="auto"``: escalation is deliberately *conservative* -- it fires on an
+    empty / SPA-shell page, but this page ships a non-empty shell, so ``auto`` does
+    not escalate it (returns 0 quotes);
+  * ``browser="probe"``: the explicit "can I scrape this / what do I need"
+    diagnostic -- it resolves *both* tiers and compares, so it catches exactly this
+    injected-content case (was_browser_required + how many words the browser
+    recovered), and returns the fuller browser document.
 
-Features: live browser render, events / events_of, summary().runtime.
+Features: live browser render, events / events_of, summary().runtime,
+browser="probe".
 Needs a Playwright chromium (``playwright install chromium``).
 Run:  env/bin/python examples/live_browser_events.py
 """
@@ -37,6 +41,14 @@ def main() -> None:
         auto = wc.fetch(JS_PAGE, browser="auto")
         print(f"browser='auto': {len(auto.select_all('.quote'))} quotes "
               f"(auto stayed static -- page shell is non-empty)")
+
+        # 'probe': resolve both tiers and compare -> a definitive answer.
+        probed = wc.fetch(JS_PAGE, browser="probe")
+        p = probed.summary().probe
+        print(f"browser='probe': {len(probed.select_all('.quote'))} quotes; "
+              f"browser_required={p.was_browser_required} "
+              f"render_gain={p.render_gain} words (JS injects the content)")
+        wc.release(probed)
 
         live = wc.fetch(JS_PAGE, browser="always")  # force the browser tier
         print(f"browser='always': {len(live.select_all('.quote'))} quotes rendered")

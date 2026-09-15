@@ -138,6 +138,10 @@ class Probe(BaseModel):
     paywall: bool | None = None
     login_wall: bool | None = None
     render_blocked: bool | None = None
+    #: extra visible words a browser render recovered over the static response
+    #: (only set by ``browser="probe"``): >0 means JS injects content worth a
+    #: browser; 0 means the static HTML already carried it.
+    render_gain: int | None = None
 
 
 class ProbeRecord(BaseModel):
@@ -153,6 +157,7 @@ class ProbeRecord(BaseModel):
     paywall: bool = False
     login_wall: bool = False
     render_blocked: bool = False
+    render_gain: int | None = None  # probe: extra visible words the browser recovered
     escalation: list[str] = []  # tiers taken, e.g. ["static", "browser"]
     reason: str = ""  # the final trigger, e.g. "datadome-403"
     attempts: int = 1

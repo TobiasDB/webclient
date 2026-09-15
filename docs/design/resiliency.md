@@ -1,7 +1,29 @@
 # Resiliency-as-policy — design
 
-*Status: design (research-driven). Build base for the resiliency feature. Planning
-only — no code yet. Composes with the Summary `probe` facet (its read-side).*
+*Status: SHIPPED (P0–P2) + probe mode. Composes with the Summary `probe` facet (its
+read-side).*
+
+## Update (2026-09-15) — what shipped
+
+- **Policy models** (`core/reference/models.py`): `RetryPolicy` / `RatePolicy` /
+  `ProxyPolicy` / `AntiBotPolicy` / `BrowserPolicy` + the `Resolve` bundle, each
+  `Policy | "auto" | None`, `AUTO` sentinel. A client-default `resolve: Resolve`.
+- **Pure detection** (`resiliency/detect.py`): `classify()` reads a raw response into
+  `Signals` (anti-bot vendor / js-gated / empty / blocked / paywall / login-wall);
+  a bare block **status** (403/429/503) is itself a generic `"challenge"`.
+- **Browser tiers** (`WebClient.afetch`): `never` / `auto` (escalate on JS-gate) /
+  `always` / **`probe`** (explicit: resolve *both* tiers and compare -> the fuller
+  document + an accurate `probe` facet with `render_gain`, the "can I scrape this /
+  what do I need" diagnostic).
+- **Policy-as-headers** (`resiliency/headers.py`): a `Resolve`'s rate/retry/proxy is
+  declared to a downstream proxy service as `X-WebClient-*` request headers (the
+  service is assumed to exist; local politeness/retry still apply on top).
+- **Not built** (need external backends): a real proxy pool, stealth/CAPTCHA
+  handling (`AntiBotPolicy` beyond detection). Declared, not enforced locally.
+
+---
+
+*Original design below (research-driven planning).*
 
 ## Update (2026-09-14) — confirmed decisions & current architecture
 

@@ -306,6 +306,7 @@ class ProbeBacking(Backing):
             paywall=r.paywall or None,
             login_wall=r.login_wall or None,
             render_blocked=r.render_blocked or None,
+            render_gain=r.render_gain,
         )
 
 

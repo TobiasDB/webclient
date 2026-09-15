@@ -13,7 +13,11 @@ the cores, and the typed surface is **generated** from those backings
 (`scripts/gen_stubs.py`), so the types never drift from the runtime.
 
 > Status: a solid, well-typed engine kernel with a task-verb layer
-> (`webclient.tools`) and truly incremental streaming. Crawling is not built yet.
+> (`webclient.tools`), truly incremental streaming, a stateful **crawl** +
+> **sitemap.xml** discovery, token-lean **summary** facets, a resiliency policy
+> layer (adaptive/probe browser modes + proxy/rate/retry headers), serialisable
+> lazy-expression **blobs**, and an **MCP** adapter. Runnable case studies live in
+> [`examples/`](examples/).
 
 ## Install
 
@@ -145,6 +149,87 @@ print(live.select("#cart li").text_content)
 wc.release(live)   # return the page to the pool
 ```
 
+## Summary -- a page's token-lean view (for LLMs)
+
+`summary()` projects a page into a small, uniform structure -- transport facts,
+head/schema metadata, body shape -- keys and counts, not raw HTML. It is what an
+LLM reads *instead of* the page:
+
+```python
+s = wc.summary("https://example.com/")
+s.metadata.title        # "Example Domain"
+s.structure.word_count  # 19
+s.structure.toc         # [TocEntry(level=1, text=...), ...]
+
+wc.summary(url, "transport", "metadata")   # pick facets; a crawl carries a lean default
+```
+
+Facets: `transport`, `metadata`, `structure`, `runtime` (browser-only signals),
+`probe` (what resolution needed -- see below). Naming an arbitrary backing op (e.g.
+`summary(url, "title")`) adds it under `summary().extra`.
+
+## Crawl & sitemap
+
+A crawl is a stateful, client-held context manager -- a steerable frontier you
+drive turn by turn, or let auto-drive best-first by keyword:
+
+```python
+with wc.crawl("https://books.example/", auto=True, max_pages=20,
+              keywords=["pricing"]) as crawl:
+    crawl.run()                     # or crawl.step(select=...) to steer each round
+for page in crawl.pages:            # each a lean .summary()
+    print(page.transport.final_url, page.metadata.title)
+```
+
+Each page carries a lean default summary (`transport` + `metadata`); pass
+`facets=[...]` to widen or narrow it. `wc.sitemaps(url)` discovers a site's real
+`sitemap.xml` URLs (robots `Sitemap:` directives, the well-known path, one level of
+`<sitemapindex>`); `wc.sitemap(url)` maps a site, seeding from that discovery.
+
+## Resiliency -- browser tiers & policies
+
+`browser=` picks the transport tier, escalation is opt-in:
+
+- `False` (default) -- static only.
+- `"auto"` -- static, escalate to a browser only if the page looks JS-gated
+  (empty / SPA shell). Conservative, to avoid paying for a browser needlessly.
+- `True` / `"always"` -- straight to a browser.
+- `"probe"` -- **explicit diagnostic**: resolve *both* tiers and compare, returning
+  the fuller document with an accurate `probe` facet (`was_browser_required`,
+  `render_gain` = how many visible words the browser recovered). The "can I scrape
+  this / what do I need" mode -- use it to build a content-complete summary.
+
+```python
+d = wc.fetch(url, browser="probe")
+p = d.summary().probe        # was_browser_required=True, render_gain=242 -> JS-gated
+```
+
+A `Resolve` policy bundle (`retry` / `rate` / `proxy`) can be set on the client; its
+rate/retry/proxy concerns are declared to a downstream proxy service as
+`X-WebClient-*` request headers (`WebClient(resolve=Resolve(proxy=ProxyPolicy(...)))`).
+
+## Lazy plans as portable blobs
+
+A recorded plan serialises to a short, url-safe **blob** an agent can store, log or
+send over the wire, then rebuild + validate + pretty-print before running:
+
+```python
+from webclient import from_blob, wq
+
+plan = wq.ref.resolve().select_all(".quote").extract(
+    text=wq.doc.select(".text").text_content).project()
+blob = plan.to_blob()                       # "p1:..." (a few dozen chars)
+rows = from_blob(blob, wc).collect(wc.ref(url))   # rebuilt + name-validated, then run
+```
+
+## MCP & task-verb endpoints
+
+`webclient.mcp` exposes the verbs (fetch/markdown/links/summary/search/crawl/
+sitemaps) plus plan authoring as Model Context Protocol tools -- the way agents
+consume this category. The registry (`build_tools` / `dispatch`) works with no MCP
+SDK installed; `serve()` runs an stdio server. The HTTP service mirrors them as
+task-verb endpoints (`POST /markdown`, `/summary`, `/crawl`, `/plan`, ...).
+
 ## Dispatch modes -- sync, async, remote
 
 The surface **is** the core; how an op actually runs is the core's *dispatch
@@ -210,16 +295,20 @@ if not d.ok:
   eager surface IS the core (`WebCore.__getattr__` dispatches); sync/async/remote
   are just dispatchers on it.
 - `core/<kind>/` -- one package per core (`reference` / `document` / `client` /
-  `session` / `remote`), each with the core (a pydantic model) and one backing
-  per module.
+  `session` / `crawl` / `remote`), each with the core (a pydantic model) and one
+  backing per module.
 - `query/` -- the recorder engine: `expr.py` (the `Expr` recorder), `plan.py`
-  (the serialisable `Plan` IR -- the wire form for the service/remote), and
-  `executor.py` (one async walk over a `Plan`).
+  (the serialisable `Plan` IR + `to_blob`/`from_blob` -- the wire form for the
+  service/remote), and `executor.py` (one async walk over a `Plan`).
+- `resiliency/` -- pure response classification (`detect.py`, so a local and a
+  remote resolve agree on what to escalate) + the `X-WebClient-*` policy headers.
 - `surfaces/eager.py` / `surfaces/lazy.py` / `collection.py` -- the typed eager
   and lazy surfaces (generated by `scripts/gen_stubs.py` from the backing
   signatures); `surfaces/lazy.py` also holds the `wq` authoring roots.
-- `service.py` + `pool.py` + `engine/` -- the HTTP service, transport pool and
-  engine loop.
+- `service.py` + `mcp.py` + `clients/` -- the HTTP service (task verbs + `/execute`
+  + `/plan`), the MCP adapter, and the transport pool (http/browser leases).
+- `examples/` -- runnable live case studies (news scraper, catalogue crawler,
+  lazy-expression extractor, sitemap mapper, browser events, error handling).
 
 ## Development
 

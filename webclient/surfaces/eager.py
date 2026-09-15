@@ -50,7 +50,7 @@ if TYPE_CHECKING:
         def url(self) -> str: ...
         def join(self, href: str) -> "AsyncReference": ...
         def replace(self, **fields: Any) -> "AsyncReference": ...
-        async def resolve(self, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ...) -> "AsyncDocument": ...  # type: ignore[override]
+        async def resolve(self, *, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., optional: bool = ..., error: Any = ...) -> "AsyncDocument": ...  # type: ignore[override]
         def with_params(self, **params: str) -> "AsyncReference": ...
         # fmt: on
         # >>> end generated <<<
@@ -163,7 +163,7 @@ if TYPE_CHECKING:
 
         # >>> generated: AsyncWebClient surface <<<
         # fmt: off
-        async def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ..., **kw: Any) -> "AsyncDocument": ...  # type: ignore[override]
+        async def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., optional: bool = ..., error: Any = ..., **kw: Any) -> "AsyncDocument": ...  # type: ignore[override]
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "AsyncReference": ...
         async def search(self, query: str, *, limit: int = ..., endpoint: str | None = ...) -> "list[SearchResult]": ...  # type: ignore[override]
         async def sitemaps(self, url: Any, *, limit: int = ...) -> "Collection[AsyncReference]": ...  # type: ignore[override]

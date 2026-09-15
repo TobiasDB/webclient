@@ -41,6 +41,17 @@ PAGE = b"""
 </body></html>
 """
 ITEM = b'{"id": %d, "name": "%s", "stock": {"count": 7}}'
+# a JS-gated page: the server sends an empty shell; a script injects the content,
+# so a static fetch sees nothing and a browser render sees the paragraph.
+SPA = b"""
+<html><head><title>SPA</title></head><body>
+  <div id="app"></div>
+  <script>
+    document.getElementById("app").innerHTML =
+      "<p>" + Array(60).fill("client-rendered content").join(" ") + "</p>";
+  </script>
+</body></html>
+"""
 APP = b"""
 <html><head><title>Live App</title></head><body>
   <h1>Cart</h1>
@@ -107,6 +118,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         elif self.path.startswith("/search"):  # a search-engine results page
             body, ctype = SEARCH, "text/html; charset=utf-8"
+        elif self.path == "/spa":  # a JS-gated page (content injected by script)
+            body, ctype = SPA, "text/html"
         elif self.path == "/app":  # a JS-driven live page
             body, ctype = APP, "text/html"
         elif self.path == "/old":  # a redirect hop
@@ -274,6 +287,19 @@ def main() -> None:
         #      (reload) reproduces the mutated state on a fresh page.
         print("chain:      ", [a["op"] for a in live.ref().actions])
         wc.release(live)  # page back to the pool
+
+        # [probe] browser="probe": resolve BOTH tiers and compare -- the explicit
+        #      "can I scrape this / what do I need" diagnostic. The /spa page injects
+        #      its content via JS, so probe reports was_browser_required with the
+        #      count of extra words the browser recovered.
+        probed = wc.fetch(f"{base}/spa", browser="probe")
+        pr = probed.summary().probe
+        assert pr is not None  # probe mode always records the comparison
+        print(
+            "probe:      ",
+            {"browser_required": pr.was_browser_required, "render_gain": pr.render_gain},
+        )
+        wc.release(probed)
         reloaded = live.reload()
         print("reloaded:   ", reloaded.select("#cart li", error=RETURN).ok)
         wc.release(reloaded)
