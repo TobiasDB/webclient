@@ -478,3 +478,57 @@ def test_browser_policy_wait_for_is_honoured(httpserver, wc):
         wc.release(doc)
 
 
+# -- Ask 3: DOM x network correlation quality (browser feeds the signals) -------
+
+XHR_SPA = """
+<html><body><main id="app"></main>
+<script>
+  fetch('/api/data').then(function (r) { return r.json(); }).then(function (d) {
+    document.getElementById('app').innerHTML =
+      '<ul class="list">' +
+      d.rows.map(function (x) { return '<li>' + x + '</li>'; }).join('') +
+      '</ul>';
+  });
+</script></body></html>
+"""
+
+
+def test_browser_feeds_dom_x_network_correlation_signals(httpserver, wc):
+    """A real SPA fetch: the browser driver captures the DOM-mutation phase / inMain
+    / added detail AND the network resource_type the ``signals`` facet correlates,
+    so xhr_composed / body_injected fire with the right data (Ask 3)."""
+    from webclient.models import NetworkEvent
+
+    httpserver.expect_request("/xhrspa").respond_with_data(
+        XHR_SPA, content_type="text/html"
+    )
+    httpserver.expect_request("/api/data").respond_with_json(
+        {"rows": ["a long injected row of content words " * 3,
+                  "another long injected row of content words " * 3]}
+    )
+    doc = wc.fetch(httpserver.url_for("/xhrspa"), browser=True)
+    try:
+        muts = [e for e in doc.events if isinstance(e, DOMUpdateEvent)]
+        load_added = [
+            e for e in muts
+            if e.detail.get("phase") == "load" and e.kind == "added"
+        ]
+        assert load_added, "no load-phase 'added' DOM mutation captured"
+        assert any(e.detail.get("inMain") for e in load_added)  # ancestor detail
+        assert all("added" in e.detail for e in load_added)  # size detail
+
+        xhr = [
+            e for e in doc.events
+            if isinstance(e, NetworkEvent) and e.resource_type in ("xhr", "fetch")
+        ]
+        assert any(
+            "/api/data" in (n.request.dispatch("url") if n.request else "")
+            for n in xhr
+        )  # resource_type captured as fetch/xhr
+
+        # the correlation the driver's data feeds:
+        assert doc.xhr_composed().present
+        assert doc.body_injected().present
+        assert any("/api/data" in c.url for c in doc.xhr_endpoints())
+    finally:
+        wc.release(doc)
