@@ -49,6 +49,12 @@ class ICrawl(BaseModel):
     width: int = 10  # auto: how many frontier edges to expand per round
     max_depth: int = 3
     max_pages: int = 50
+    #: hard cap on the number of unresolved edges kept in ``frontier`` (the
+    #: best-scored survive; the rest are dropped after each expansion). A crawl
+    #: fetches at most ``max_pages`` pages, but every fetched page can discover
+    #: hundreds of in-scope links, so an uncapped frontier grows without bound
+    #: (memory) even though the fetch budget is small -- this bounds it.
+    max_frontier: int = 10000
     same_origin: bool = True
     obey_robots: bool = True
     #: render each page in a browser (so JS/lazy-loaded links & content are seen,

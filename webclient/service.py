@@ -290,6 +290,7 @@ def create_app(
             width=int(body.get("width", 10)),
             depth=int(body.get("depth", 3)),
             max_pages=int(body.get("max_pages", 20)),
+            max_frontier=int(body.get("max_frontier", 10000)),
             same_origin=bool(body.get("same_origin", True)),
             obey_robots=bool(body.get("obey_robots", True)),
             browser=bool(body.get("browser", False)),

@@ -620,6 +620,7 @@ class WebClient(WebCore, IWebClient):
         width: int = 10,
         depth: int = 3,
         max_pages: int = 50,
+        max_frontier: int = 10000,
         same_origin: bool = True,
         obey_robots: bool = True,
         browser: bool = True,
@@ -645,6 +646,10 @@ class WebClient(WebCore, IWebClient):
           links. Needs Playwright; pass ``browser=False`` for a pure-static crawl
           (much faster, no render) when you know the site is server-rendered.
 
+        ``max_frontier`` hard-caps the number of unresolved edges kept (best-scored
+        survive) -- a crawl fetches at most ``max_pages`` pages, but each page can
+        discover hundreds of in-scope links, so this bounds the frontier's growth.
+
         ``resolve`` (a :class:`Resolve` bundle) sets the resiliency policy the crawl
         fetches under -- retry / rate / proxy / anti-bot (e.g. ``Resolve.auto()`` or
         a proxy pool); ``None`` inherits this client's own ``resolve``."""
@@ -657,6 +662,7 @@ class WebClient(WebCore, IWebClient):
             width=width,
             max_depth=depth,
             max_pages=max_pages,
+            max_frontier=max_frontier,
             same_origin=same_origin,
             obey_robots=obey_robots,
             browser=browser,

@@ -8,6 +8,25 @@ import pytest
 
 from webclient import Crawl, Edge, WebClient
 
+
+# a link-heavy site: the home links to many pages and each page links to many
+# further NEW unique pages -- so the frontier balloons far past the small page
+# budget unless it is bounded (the sub-links only need to be *discovered* to grow
+# the frontier; they are never fetched at these budgets, so they aren't served).
+@pytest.fixture
+def linkfarm(httpserver):
+    n, fanout = 120, 30
+    for i in range(n):
+        links = "".join(f'<a href="/p{i}_{j}">l{j}</a>' for j in range(fanout))
+        httpserver.expect_request(f"/p{i}").respond_with_data(
+            f"<html><body>{links}</body></html>", content_type="text/html"
+        )
+    home = "".join(f'<a href="/p{i}">P{i}</a>' for i in range(n))
+    httpserver.expect_request("/").respond_with_data(
+        f"<html><body>{home}</body></html>", content_type="text/html"
+    )
+    return httpserver
+
 # a little site: home links to /a, /docs (keyword) and an external host; /a links
 # to /b and /private (robots-disallowed); /docs links to /docs/pricing.
 PAGES = {
@@ -407,6 +426,30 @@ def _path_of(url: str) -> str:
     from urllib.parse import urlparse
 
     return urlparse(url).path
+
+
+def test_frontier_is_bounded_on_a_link_heavy_crawl(wc, linkfarm):
+    # unbounded-growth guard: a crawl fetches at most `max_pages` pages, but each
+    # fetched page can discover dozens of in-scope links -- so an uncapped frontier
+    # grows without bound (memory) even on a tiny page budget. `max_frontier` caps
+    # it, keeping the best-scored edges.
+    with wc.crawl(
+        linkfarm.url_for("/"),
+        auto=True,
+        max_pages=20,
+        max_frontier=150,
+        browser=False,
+        obey_robots=False,
+        width=10,
+        depth=5,
+    ) as crawl:
+        crawl.run()
+    assert len(crawl.pages) == 20  # the page budget still stops the crawl
+    # without the cap this frontier would be many hundreds of edges
+    assert len(crawl.frontier) <= 150
+    # the cap keeps the frontier sorted best-first (it drops the low-scored tail)
+    scores = [e.score for e in crawl.frontier]
+    assert scores == sorted(scores, reverse=True)
 
 
 def test_optional_browser_render_failure_is_swallowed(wc, monkeypatch):

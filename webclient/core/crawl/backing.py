@@ -213,8 +213,14 @@ class CrawlBacking(Backing):
 
     def _sort_frontier(self, core: "Crawl") -> None:
         """Keep the frontier sorted by importance (score desc, then shallowest) so
-        the links surfaced to the caller/LLM lead with the useful ones."""
+        the links surfaced to the caller/LLM lead with the useful ones -- and hard-
+        capped at ``max_frontier``, dropping the lowest-scored tail. A crawl fetches
+        at most ``max_pages`` pages but each page can discover hundreds of in-scope
+        links, so without this the frontier grows unbounded (memory) even on a small
+        page budget; the cap keeps the best edges and bounds the rest."""
         core.frontier.sort(key=lambda e: (-e.score, e.depth))
+        if len(core.frontier) > core.max_frontier:
+            del core.frontier[core.max_frontier :]
 
     def _expand_xhr(self, core: "Crawl", doc: Any, depth: int) -> None:
         """Add the data-API endpoints a browser render observed (the page's XHR /
