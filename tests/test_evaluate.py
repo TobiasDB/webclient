@@ -184,7 +184,8 @@ def test_follow_links_via_reference_and_param(site, wc):
         "Grinder": "detail-2",
         "Kettle": "detail-3",
     }
-    assert all(isinstance(r["link"], Reference) for r in rows)
+    # project turns a Reference column into its URL string (JSON/DataFrame-ready)
+    assert all(isinstance(r["link"], str) and "/i/" in r["link"] for r in rows)
 
 
 def test_missing_field_is_not_ok_under_the_plan_default(site, wc):

@@ -50,7 +50,7 @@ def test_search_is_just_an_expression(httpserver, wc):
         .project()
     )
     assert [r["title"] for r in rows] == ["First", "Second"]
-    assert rows[0]["url"].path == "/go/1"
+    assert rows[0]["url"].endswith("/go/1")  # project renders a Reference as its URL
 
 
 def test_summary_projects_a_page_overview(httpserver, wc):

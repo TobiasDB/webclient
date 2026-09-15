@@ -39,6 +39,33 @@ OPERATORS = frozenset({"eq", "ne", "lt", "le", "gt", "ge", "and", "or", "not"})
 #: free functions recordable as ``fn`` steps
 FUNCTIONS = frozenset({"is_empty", "is_ok"})
 
+#: op name -> its Python symbol (so ``describe`` is a parseable expression, and
+#: ``from_explain`` reads it back). ``not`` is the unary ``~`` prefix.
+_OP_SYM = {
+    "eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">=",
+    "and": "&", "or": "|", "not": "~",
+}
+#: the token for the empty (evaluation-context) root in ``describe`` output.
+_CTX = "_"
+
+
+def _url_from_source(source: dict[str, Any]) -> str:
+    """Reconstruct the seed URL from a ``reference(url)`` root's source spec, so
+    ``describe`` can render (and ``from_explain`` re-read) it as ``reference("url")``.
+    Pure string work -- the plan stays core-agnostic."""
+    from urllib.parse import urlencode, urlunsplit
+
+    host = source.get("hostname") or ""
+    port = source.get("port")
+    netloc = f"{host}:{port}" if port else host
+    params = source.get("params") or {}
+    query = urlencode(params, doseq=True) if params else ""
+    url: str = urlunsplit(
+        (source.get("scheme") or "https", netloc, source.get("path") or "",
+         query, source.get("fragment") or "")
+    )
+    return url
+
 
 class Plan(BaseModel):
     """A recorded chain: an optional ``root`` type name, an optional ``source``
@@ -94,23 +121,30 @@ class Plan(BaseModel):
         return self
 
     def describe(self) -> str:
-        """A readable rendering of the chain (for logs / the demo)."""
-        out = (
-            f"{self.root or 'reference'}({self.source.get('hostname', '')})"
-            if self.source
-            else (self.root or "·")
-        )
+        """A clean, canonical rendering of the chain as a Python-like expression --
+        readable for logs/the demo, and **round-trippable**: ``from_explain`` parses
+        this back into the same plan. Roots render as ``reference("url")`` (sourced)
+        or the type name (``Document``/``Reference``/…), operators as their symbols
+        (``==`` / ``&`` / ``~`` …), so the whole thing reads as the ``wq`` chain that
+        recorded it."""
+        if self.source is not None:
+            out = f"reference({_url_from_source(self.source)!r})"
+        else:
+            out = self.root or _CTX
         for s in self.steps:
             args = ", ".join(
                 [*map(_show, s.args), *(f"{k}={_show(v)}" for k, v in s.kwargs.items())]
             )
-            out = {
-                "get": f"{out}.{s.name}",
-                "call": f"{out}({args})",
-                "op": f"({out} {s.name} {args})",
-                "fn": f"{s.name}({out}{', ' + args if args else ''})",
-                "when": f"when({args})",
-            }[s.kind]
+            if s.kind == "get":
+                out = f"{out}.{s.name}"
+            elif s.kind == "call":
+                out = f"{out}({args})"
+            elif s.kind == "op":
+                out = f"~{out}" if s.name == "not" else f"({out} {_OP_SYM[s.name]} {args})"
+            elif s.kind == "fn":
+                out = f"{s.name}({out}{', ' + args if args else ''})"
+            else:  # when
+                out = f"when({args})"
         return out
 
 

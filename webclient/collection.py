@@ -71,6 +71,28 @@ def _raw(value: Any) -> Any:
     return value.get() if isinstance(value, Field) else value
 
 
+def _project_value(value: Any) -> Any:
+    """Clean one projected row value to plain data: a ``Reference`` -> its URL
+    string, a ``Field`` -> its value, a list -> its cleaned items (a
+    ``Document``/element is left as-is -- an un-extracted element is not row data)."""
+    from .core.reference import Reference
+
+    if isinstance(value, Field):
+        return _project_value(value.get())
+    if isinstance(value, Reference):
+        return value.dispatch("url")  # the URL string (pure derive, no IO)
+    if isinstance(value, list):
+        return [_project_value(v) for v in value]
+    return value
+
+
+def _project_row(row: dict[str, Any]) -> dict[str, Any]:
+    """A copy of ``row`` with each value cleaned to plain data (see
+    :func:`_project_value`). A copy, so the element's stored ``_row`` (which a
+    later ``reference(col).resolve()`` may still read) is untouched."""
+    return {k: _project_value(v) for k, v in row.items()}
+
+
 def _row_of(element: Any, *, create: bool = True) -> dict[str, Any] | None:
     """The extracted-columns dict on an element's core (a plain dict element is
     its own row). ``create`` seeds an empty row on first access."""
@@ -258,14 +280,17 @@ class Collection(Generic[T]):
 
     def project(self, model: type[M] | None = None) -> list[Any]:
         """Materialise as a plain list: each element's extracted row if it has
-        one, else the element itself. Pass ``model`` (e.g. a pydantic model) to
-        validate each row into it -- a schema-guided, typed result. Eager only:
-        a model class is not part of the serialisable plan, so call it on a
-        materialised Collection (``...extract(...).collect().project(Model)``)."""
+        one, else the element itself. Row values are cleaned to plain data -- a
+        ``Reference`` column (e.g. from ``attr("href")``) becomes its **URL string**,
+        and a ``Field`` its value -- so rows are JSON/DataFrame-ready. Pass ``model``
+        (e.g. a pydantic model) to validate each row into it -- a schema-guided,
+        typed result. Eager only: a model class is not part of the serialisable plan,
+        so call it on a materialised Collection
+        (``...extract(...).collect().project(Model)``)."""
         out: list[Any] = []
         for el in self._items:
             row = _row_of(el, create=False)
-            out.append(row if row is not None else el)
+            out.append(_project_row(row) if row is not None else el)
         if model is None:
             return out
         validate = getattr(model, "model_validate", None)

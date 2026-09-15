@@ -95,7 +95,36 @@ def test_private_names_are_refused_at_record_and_on_the_wire():
 
 def test_describe_is_human_readable():
     text = reference("https://e.com/").resolve().select_all(".c")._plan.describe()
-    assert text == "Reference(e.com).resolve().select_all('.c')"
+    assert text == "reference('https://e.com/').resolve().select_all('.c')"
+
+
+def test_explain_round_trips_through_from_explain():
+    # explain()/describe() is the inverse of from_explain: an expression rebuilds
+    # from its human-readable form, not only from to_blob.
+    from webclient import from_explain, wq
+
+    for expr in [
+        reference("https://e.com/x?q=1").resolve().select_all(".c"),
+        ref.resolve()
+        .select_all(".card")
+        .extract(title=doc.select(".title").text_content, url=doc.select("a").attr("href"))
+        .project(),
+        ref.resolve()
+        .select_all(".item")
+        .filter(~wq.doc.select(".sold-out", optional=True).is_ok())
+        .project(),
+        doc.select(".status").text_content == "In stock",
+    ]:
+        back = from_explain(expr.explain())
+        assert back._plan == expr._plan  # exact rebuild from the readable form
+        assert back.explain() == expr.explain()  # stable
+
+
+def test_from_explain_rejects_a_private_name():
+    from webclient import from_explain
+
+    with pytest.raises(ValueError, match="private name"):
+        from_explain("Document.__class__")
 
 
 def test_blob_roundtrips_and_rebuilds_the_expression():
