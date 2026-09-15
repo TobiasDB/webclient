@@ -116,6 +116,49 @@ def test_static_fetch_of_normal_page_has_no_probe(httpserver, wc):
     assert doc.summary().probe is None  # nothing to escalate -> facet absent
 
 
+# -- P3/P4: resolve policy declared to a proxy service as request headers -------
+
+
+def test_resolve_policy_is_sent_as_proxy_headers(httpserver):
+    from werkzeug.wrappers import Response
+
+    from webclient.core.reference.models import ProxyPolicy, RatePolicy, Resolve
+
+    seen: dict[str, str] = {}
+
+    def handler(request):
+        seen.update({k.lower(): v for k, v in request.headers.items()})
+        return Response("<html><body>ok content here</body></html>", content_type="text/html")
+
+    httpserver.expect_request("/p").respond_with_handler(handler)
+    resolve = Resolve(
+        proxy=ProxyPolicy(pool="residential", geo="us"),
+        rate=RatePolicy(rps=2.0, concurrency=4),
+    )
+    with WebClient(resolve=resolve) as wc:
+        wc.fetch(httpserver.url_for("/p"))
+    assert seen.get("x-webclient-proxy") == "on"
+    assert seen.get("x-webclient-proxy-pool") == "residential"
+    assert seen.get("x-webclient-proxy-geo") == "us"
+    assert seen.get("x-webclient-rate-rps") == "2.0"
+    assert seen.get("x-webclient-retry-max") == "2"  # retry always declared
+
+
+def test_no_resolve_sends_no_policy_headers(httpserver):
+    from werkzeug.wrappers import Response
+
+    seen: dict[str, str] = {}
+
+    def handler(request):
+        seen.update({k.lower(): v for k, v in request.headers.items()})
+        return Response("<html><body>ok content here</body></html>", content_type="text/html")
+
+    httpserver.expect_request("/q").respond_with_handler(handler)
+    with WebClient() as wc:  # no resolve bundle
+        wc.fetch(httpserver.url_for("/q"))
+    assert not any(k.startswith("x-webclient-") for k in seen)
+
+
 # -- P2: the browser="auto" adaptive ladder (needs a real browser) -------------
 
 _SPA = (

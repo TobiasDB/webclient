@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from ..reference.models import Resolve
+
 if TYPE_CHECKING:
     from ...collection import Collection  # noqa: F401  (sitemaps -> Collection)
     from ..document import Document  # noqa: F401  (fetch -> Document)
@@ -47,6 +49,10 @@ class IWebClient(BaseModel):
     retries: int = 0  # extra attempts on a retriable failure (transport/429/5xx)
     retry_backoff: float = 0.2  # base seconds; doubled each attempt (exp backoff)
     min_interval: float = 0.0  # per-host politeness: min seconds between requests
+    # the resiliency policy bundle: when set, its rate/retry/proxy concerns are
+    # declared to a downstream proxy service as X-WebClient-* request headers
+    # (the service is assumed to exist and enforce the network-level parts).
+    resolve: Resolve | None = None
 
     if TYPE_CHECKING:
         # >>> generated: WebClient interface <<<

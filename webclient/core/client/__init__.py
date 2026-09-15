@@ -25,7 +25,7 @@ from ...models import NavigationEvent, NetworkEvent, PlanEvent
 from ...query.executor import aevaluate, astream, evaluate
 from ..document import Document
 from ..document.models import ProbeRecord
-from ...resiliency import Signals, classify
+from ...resiliency import Signals, classify, policy_headers
 from ..reference import Reference, from_url
 from ..web_core import Backing, WebCore
 from .fetch import FetchBacking
@@ -400,7 +400,13 @@ class WebClient(WebCore, IWebClient):
             return doc
         if mode == "always":
             return await self._alive(ref)
-        headers = {**self.default_headers, **ref.headers}
+        # declare the resolve policy (rate/retry/proxy) to a downstream proxy
+        # service as X-WebClient-* headers; explicit headers still win over them.
+        headers = {
+            **policy_headers(self.resolve),
+            **self.default_headers,
+            **ref.headers,
+        }
         if self.min_interval > 0.0:
             await self._pace(ref.hostname)
         doc, resp = await self._afetch_once(ref, headers)
