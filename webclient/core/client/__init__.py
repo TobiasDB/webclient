@@ -351,15 +351,25 @@ class WebClient(WebCore, IWebClient):
     # -- transport (machinery): resolve a Reference -> Document ------
     async def _pace(self, host: str) -> None:
         """Politeness: keep at least ``min_interval`` seconds between requests to
-        ``host`` (best-effort; concurrent same-host fetches may still bunch -- a
-        per-host token bucket would be the strict form)."""
+        ``host``. The schedule lives on the shared ENGINE (a session paces against
+        its parent), so N sessions on one engine honour ONE per-host rate limit
+        rather than each keeping an independent schedule. Best-effort; concurrent
+        same-host fetches may still bunch."""
         import asyncio
         import time
 
-        wait = self._host_next.get(host, 0.0) - time.monotonic()
+        engine: WebClient = getattr(self, "_parent", None) or self
+        interval = engine.min_interval
+        if interval <= 0.0:
+            return
+        schedule = engine._host_next
+        wait = schedule.get(host, 0.0) - time.monotonic()
         if wait > 0:
             await asyncio.sleep(wait)
-        self._host_next[host] = time.monotonic() + self.min_interval
+        now = time.monotonic()
+        schedule[host] = now + interval
+        if len(schedule) > 4096:  # bound the map: drop hosts whose window has passed
+            engine._host_next = {h: t for h, t in schedule.items() if t > now}
 
     async def _afetch_once(
         self, ref: Reference, headers: dict[str, str]
@@ -413,8 +423,7 @@ class WebClient(WebCore, IWebClient):
             **self.default_headers,
             **ref.headers,
         }
-        if self.min_interval > 0.0:
-            await self._pace(ref.hostname)
+        await self._pace(ref.hostname)  # self-guards on the shared engine's interval
         doc, resp = await self._afetch_once(ref, headers)
         attempt = 0
         while doc.error is not None and doc.error.retriable and attempt < self.retries:
@@ -435,7 +444,9 @@ class WebClient(WebCore, IWebClient):
             and signals is not None
             and signals.needs_browser
         ):
-            return await self._escalate_to_browser(ref, signals)
+            if resp is not None:  # keep the static hop's navigation/network events
+                self._capture(doc, ref, resp)
+            return await self._escalate_to_browser(ref, signals, list(doc._events))
         if resp is not None:  # emit navigation/network events for the final doc
             self._capture(doc, ref, resp)
         if doc.error is not None and not optional:  # loud by default
@@ -465,10 +476,16 @@ class WebClient(WebCore, IWebClient):
         )
         return signals
 
-    async def _escalate_to_browser(self, ref: Reference, signals: "Signals") -> Document:
+    async def _escalate_to_browser(
+        self, ref: Reference, signals: "Signals", static_events: "list[Any] | None" = None
+    ) -> Document:
         """The static tier said this page is JS-gated; render it in a browser and
-        record the two-tier trail on the resulting document (the ``probe`` facet)."""
+        record the two-tier trail on the resulting document (the ``probe`` facet).
+        The static hop's events are carried onto the browser doc so ``doc.events``
+        keeps the full trail (both tiers)."""
         doc = await self._alive(ref)
+        if static_events:
+            doc._events = [*static_events, *doc._events]
         doc._probe = ProbeRecord(
             was_browser_required=True,
             js_required=True,

@@ -99,10 +99,14 @@ class CrawlBacking(Backing):
         fetched page is summarised into ``pages`` and its links added to
         ``frontier``. Returns the crawl (so ``crawl.step()`` chains/reads)."""
         chosen = self._select(core, select)
-        taken = {e.url for e in chosen}
+        # only take (and remove from the frontier) what the page budget allows, so a
+        # nearly-full budget doesn't silently discard the un-fetched chosen edges --
+        # they stay in the frontier for the next step.
+        room = max(0, core.max_pages - len(core.pages))
+        to_fetch = chosen[:room]
+        taken = {e.url for e in to_fetch}
         core.frontier = [e for e in core.frontier if e.url not in taken]
-        room = core.max_pages - len(core.pages)
-        for edge in chosen[: max(0, room)]:
+        for edge in to_fetch:
             if core.obey_robots and not await self._allowed(core, edge.url):
                 continue
             doc = await core._client.afetch(

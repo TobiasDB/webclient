@@ -111,11 +111,17 @@ class RemoteError(Exception):
         self.error = error
 
 
+#: statuses worth a retry -- MIRRORS ``RetryPolicy.on_statuses`` (the declared
+#: policy), so the local retry loop and the policy don't disagree (501/505/507 are
+#: not retriable). Transport failures (status 0) are always retriable.
+_RETRIABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
 def error_for(status_code: int, message: str = "") -> WebError:
     """Classify an HTTP status into a ``WebError`` (incl. whether it is worth a
-    retry: transport failures, 429, and 5xx are retriable)."""
+    retry: transport failures + the ``_RETRIABLE_STATUSES`` set)."""
     kind = "TransportError" if status_code == 0 else "HTTPStatus"
-    retriable = status_code == 0 or status_code == 429 or 500 <= status_code < 600
+    retriable = status_code == 0 or status_code in _RETRIABLE_STATUSES
     return WebError(
         type=kind,
         status_code=status_code,

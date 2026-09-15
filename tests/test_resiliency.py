@@ -80,6 +80,23 @@ def test_login_wall_password_field():
     assert classify(200, HTML, {}, body).login_wall
 
 
+def test_401_with_vendor_cookie_is_login_wall_not_anti_bot():
+    # R-M6/L6: a 401 is an auth wall, not an anti-bot challenge -- a vendor cookie
+    # on it must not double-label it as anti-bot.
+    s = classify(401, {**HTML, "cf-ray": "1"}, ["__cf_bm"], b"unauthorized")
+    assert s.anti_bot is None and s.login_wall
+
+
+def test_retriable_statuses_match_the_policy():
+    # L2: local retriability aligns with RetryPolicy.on_statuses (501/505 not retriable)
+    from webclient.errors import error_for
+
+    assert error_for(503).retriable and error_for(500).retriable
+    assert error_for(429).retriable and error_for(0).retriable  # transport
+    assert not error_for(501).retriable and not error_for(505).retriable
+    assert not error_for(404).retriable
+
+
 def test_login_form_in_header_is_not_a_login_wall():
     # a content page whose header has a sign-in form must NOT be flagged (R-M8):
     body = (

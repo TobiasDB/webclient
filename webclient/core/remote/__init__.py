@@ -218,6 +218,11 @@ class RemoteWebClientCore(WebClient):
         exclude: str | None = None,
         facets: list[str] | None = None,
     ) -> "Crawl":
+        """A remote crawl runs to completion server-side (one round-trip) and
+        returns a finished :class:`Crawl`. ``auto`` (always on server-side) and
+        ``scope`` (derived from the seed host) are accepted for signature parity
+        with the local client but not sent -- use a local client for turn-based
+        steering."""
         urls = _seed_urls(seeds)
         return self._remote_crawl(
             "/crawl",

@@ -117,7 +117,9 @@ def detect_anti_bot(
     h = _lower_map(headers)
     header_blob = " ".join(h.keys()) + " " + " ".join(h.values())
     cookie_blob = " ".join(str(c).lower() for c in cookie_names)
-    blocking = status in _CHALLENGE_STATUS or status == 401
+    # a 401 is a login/auth wall, NOT an anti-bot challenge, so a vendor cookie on a
+    # 401 must not double-label it as anti-bot -- only 403/429/503 count as a block.
+    blocking = status in _CHALLENGE_STATUS
     for vendor, weak_hdrs, weak_cooks, strong_body in _ANTIBOT:
         if any(m in body_low for m in strong_body):
             return vendor  # a challenge / interstitial page -> definite

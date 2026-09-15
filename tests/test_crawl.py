@@ -180,6 +180,16 @@ def test_sitemaps_on_a_site_without_one_is_empty(wc, site):
     assert list(wc.discover_sitemaps(site.url_for("/"))) == []
 
 
+def test_step_keeps_unfetched_edges_when_budget_is_nearly_full(wc, site):
+    # L4: a step must not discard chosen edges it had no budget to fetch -- they
+    # stay in the frontier for a later step.
+    with wc.crawl(site.url_for("/"), auto=True, max_pages=2) as crawl:
+        crawl.step()                 # fetch the seed -> pages=1, discovers /a, /docs
+        assert len(crawl.pages) == 1 and len(crawl.frontier) >= 2
+        crawl.step()                 # room for only 1 more; the other edge survives
+        assert len(crawl.pages) == 2 and len(crawl.frontier) >= 1
+
+
 def test_context_manager_closes_the_crawl(wc, site):
     with wc.crawl(site.url_for("/")) as crawl:
         assert crawl.status == "running"
