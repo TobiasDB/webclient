@@ -51,8 +51,10 @@ def tree(core: "Document") -> Any:
         else:
             # decode with the right charset, then hand lxml a str -- so a Python codec
             # name (``latin-1``/``windows-1251``/``shift_jis``) that libxml2's own
-            # parser would reject still works.
-            core._tree = _lh.fromstring(_html_text(core, raw) or "<html></html>")
+            # parser would reject still works. A blank/whitespace-only body would make
+            # lxml raise "Document is empty", so fall back to an empty document.
+            text = _html_text(core, raw)
+            core._tree = _lh.fromstring(text if text.strip() else "<html></html>")
     return core._tree
 
 
@@ -183,63 +185,188 @@ def _md_blocks(el: Any, out: list[str]) -> None:
 
 
 #: tags with no selector value that only add tokens -- dropped from the skeleton.
-_SKELETON_SKIP = {
+_SKELETON_SKIP = frozenset({
     "script", "style", "noscript", "template", "svg", "path", "head", "meta",
-    "link", "br", "hr", "source", "track",
-}
+    "link", "br", "hr", "source", "track", "wbr", "picture", "canvas", "defs",
+})
+#: selector-relevant attributes to surface (in this order): form/input targets,
+#: accessibility + SPA test hooks -- the ones an LLM actually writes selectors on.
+#: ``value`` is deliberately excluded (may be sensitive); ``href``/``src`` show as
+#: presence flags below. Values are collapsed + clipped to stay token-lean.
+_SKELETON_ATTRS = (
+    "role", "type", "name", "placeholder", "for", "aria-label", "alt", "title",
+    "data-testid", "data-test", "data-cy", "data-id", "data-qa", "contenteditable",
+)
+_MAX_CLASSES = 8  # cap utility-class soup (tailwind &c.) so a node stays token-lean
+
+
+def _kept_children(el: Any) -> "list[Any]":
+    """Child *elements* worth showing: real tags (not comments/PIs) that aren't
+    structural noise."""
+    return [
+        c for c in el if isinstance(c.tag, str) and _tag(c) not in _SKELETON_SKIP
+    ]
 
 
 def _selector_sig(el: Any) -> str:
-    """A CSS-selector-style signature for one element: ``tag#id.class.class`` plus a
-    few selector-relevant attributes (``role``/``type``/``name``, ``[href]`` on a
-    link). Exactly what an LLM needs to target the element."""
-    tag = _tag(el)
+    """A CSS-selector-style signature for ONE element: ``tag#id.class.class`` plus a
+    few selector-relevant attributes (``role``/``type``/``name``/``data-testid`` …,
+    ``[href]`` on a link). Classes are capped so utility-class soup can't blow up a
+    line. Exactly what an LLM needs to target the element."""
+    tag = _tag(el) or "?"
     parts = [tag]
     eid = el.get("id")
     if eid:
-        parts.append(f"#{eid}")
-    for cls in (el.get("class") or "").split():
+        parts.append(f"#{_norm(eid)}")
+    classes = (el.get("class") or "").split()
+    for cls in classes[:_MAX_CLASSES]:
         parts.append(f".{cls}")
-    for attr in ("role", "type", "name"):
+    if len(classes) > _MAX_CLASSES:
+        parts.append(f".…+{len(classes) - _MAX_CLASSES}")
+    for attr in _SKELETON_ATTRS:
         val = el.get(attr)
-        if val:
-            parts.append(f"[{attr}={val}]")
-    if tag == "a" and el.get("href") is not None:
+        if val is not None and val != "":
+            parts.append(f"[{attr}={_norm(val)[:24]}]")
+    if el.get("href") is not None:  # a link/area target (presence, not the url)
         parts.append("[href]")
+    if el.get("src") is not None:  # img/media/iframe source (presence)
+        parts.append("[src]")
     return "".join(parts)
 
 
-def _skeleton(root: Any, *, max_lines: int = 400, text_chars: int = 40) -> str:
+_SKELETON_LEGEND = (
+    "# skeleton: tag#id.class[attr=val]  ×N=N identical siblings  \"…\"=sample text"
+)
+
+
+def _struct_sig(el: Any, memo: "dict[int, str]", budget: int = 6) -> str:
+    """A RECURSIVE structural signature (this element + its kept children, bounded
+    depth). Two siblings merge only when their structure is identical, so a
+    collapsed ``… ×N`` never hides a differently-shaped sibling (e.g. an item with
+    an extra badge) -- the safe, lossless form of list merging. Cached per element."""
+    if budget <= 0:
+        return _selector_sig(el) + "(…)"
+    key = id(el)
+    cached = memo.get(key)
+    if cached is not None:
+        return cached
+    inner = ",".join(_struct_sig(k, memo, budget - 1) for k in _kept_children(el))
+    sig = f"{_selector_sig(el)}({inner})"
+    if budget == 6:  # only cache the full-depth signature (the one merge compares)
+        memo[key] = sig
+    return sig
+
+
+def _xhr_endpoints(core: "Document") -> "list[str]":
+    """The data-API URLs the page fetched (XHR/fetch), deduped in order -- read from
+    the captured network events (only present on a browser-rendered document)."""
+    from ...models import NetworkEvent
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for e in core._events:
+        if isinstance(e, NetworkEvent) and getattr(e, "resource_type", None) in ("xhr", "fetch"):
+            req = getattr(e, "request", None)
+            url = str(req.dispatch("url")) if req is not None else ""
+            if url and url not in seen:
+                seen.add(url)
+                out.append(url)
+    return out
+
+
+def _static_sig_set(static_html: "bytes | None") -> "frozenset[str] | None":
+    """The set of ``_selector_sig`` values present in the STATIC (pre-JS) HTML, used
+    to mark rendered nodes as initial vs injected. ``None`` if there is no static
+    baseline (a plain ``browser="always"`` fetch, or a static-only fetch)."""
+    if not static_html:
+        return None
+    from lxml import html as _lh
+
+    try:
+        root = _lh.fromstring(static_html)
+    except Exception:  # unparseable shell -> treat everything as dynamic
+        return frozenset()
+    return frozenset(
+        _selector_sig(el) for el in root.iter() if isinstance(el.tag, str)
+    )
+
+
+def _skeleton(
+    root: Any,
+    *,
+    max_lines: int = 400,
+    text_chars: int = 40,
+    max_depth: int = 30,
+    max_siblings: int = 200,
+    legend: bool = True,
+    static_html: "bytes | None" = None,
+    xhr_endpoints: "list[str] | None" = None,
+) -> str:
     """A token-lean DOM skeleton: an indented outline of ``tag#id.class`` signatures
-    (script/style/svg/meta and other no-selector-value noise removed), with
-    consecutive same-signature siblings collapsed to ``… ×N`` and a short text hint
-    on leaf nodes. Keeps every class path and id so an LLM can write CSS selectors
-    for the page without wading through full HTML. Bounded to ``max_lines``."""
+    with structural noise (script/style/svg/meta/comments/…) removed, a short text
+    hint on leaf nodes, and consecutive *structurally-identical* siblings collapsed
+    to ``… ×N`` -- so a uniform list of 50 cards is one line, but a sibling with a
+    different shape is shown in full (never silently merged away). Keeps every id
+    and class path so an LLM can write CSS selectors without the raw HTML.
+
+    When ``static_html`` (the pre-JS response) is supplied, a node whose signature
+    is NOT in that baseline is marked ``[xhr]`` (if the page issued XHR/fetch
+    requests) or ``[js]`` -- so the LLM sees which content is server-initial vs
+    client-loaded. Bounded by ``max_lines`` / ``max_depth`` / ``max_siblings``."""
     lines: list[str] = []
+    memo: dict[int, str] = {}
+    static_sigs = _static_sig_set(static_html)
+    inject_tag = " [xhr]" if xhr_endpoints else " [js]"
+
+    def origin(el: Any) -> str:
+        # only annotated when there's a static baseline to diff against.
+        if static_sigs is None:
+            return ""
+        return "" if _selector_sig(el) in static_sigs else inject_tag
 
     def walk(el: Any, depth: int) -> None:
-        children = [c for c in el if isinstance(c.tag, str) and _tag(c) not in _SKELETON_SKIP]
+        if depth > max_depth:
+            lines.append("  " * depth + "…")
+            return
+        children = _kept_children(el)
         i = 0
+        shown = 0
         while i < len(children):
             if len(lines) >= max_lines:
-                lines.append("  " * depth + "…")
+                lines.append("  " * depth + "… (truncated)")
+                return
+            if shown >= max_siblings:
+                lines.append("  " * depth + f"… ({len(children) - i} more)")
                 return
             child = children[i]
-            sig = _selector_sig(child)
-            j = i + 1  # collapse a run of same-signature siblings
-            while j < len(children) and _selector_sig(children[j]) == sig:
+            ssig = _struct_sig(child, memo)  # merge on STRUCTURE, not just the sig
+            j = i + 1
+            while j < len(children) and _struct_sig(children[j], memo) == ssig:
                 j += 1
             count = j - i
-            kept = [c for c in child if isinstance(c.tag, str) and _tag(c) not in _SKELETON_SKIP]
-            text = _norm("".join(child.itertext())) if not kept else ""
-            hint = f'  "{text[:text_chars]}…"' if len(text) > text_chars else (f'  "{text}"' if text else "")
+            kids = _kept_children(child)
+            text = _norm("".join(child.itertext())) if not kids else ""
+            hint = f'  "{text[:text_chars]}…"' if len(text) > text_chars else (
+                f'  "{text}"' if text else ""
+            )
             suffix = f" ×{count}" if count > 1 else ""
-            lines.append("  " * depth + sig + suffix + hint)
-            walk(child, depth + 1)  # structure of the first representative
+            lines.append("  " * depth + _selector_sig(child) + origin(child) + suffix + hint)
+            walk(child, depth + 1)  # the representative's structure (all N share it)
             i = j
+            shown += 1
 
     walk(root, 0)
-    return "\n".join(lines)
+    header: list[str] = []
+    if legend:
+        leg = _SKELETON_LEGEND
+        if static_sigs is not None:
+            leg += "  [xhr]/[js]=client-injected (unmarked=server-initial)"
+        header.append(leg)
+    if xhr_endpoints:
+        shown_ep = xhr_endpoints[:8]
+        more = f" (+{len(xhr_endpoints) - 8} more)" if len(xhr_endpoints) > 8 else ""
+        header.append("# XHR/fetch data APIs: " + ", ".join(shown_ep) + more)
+    return "\n".join([*header, *lines])
 
 
 def _main_container(root: Any) -> Any:
@@ -355,13 +482,40 @@ class HtmlBacking(Backing):
         """The page as a flat list of typed content blocks."""
         return self.render(core, "elements")
 
-    def skeleton(self, core: "Document", *, max_lines: int = 400, text_chars: int = 40) -> str:
-        """A token-lean DOM skeleton -- an indented ``tag#id.class`` outline with the
-        bloat (scripts/styles/svg/…) removed, repeated siblings collapsed, and leaf
-        text hinted. Keeps every id and class path so an LLM can write CSS selectors
-        for the page cheaply (feed this instead of the raw HTML, then use the
-        selectors with ``select``/``select_all``/``extract``)."""
-        return _skeleton(self._tree(core), max_lines=max_lines, text_chars=text_chars)
+    def skeleton(
+        self,
+        core: "Document",
+        *,
+        max_lines: int = 400,
+        text_chars: int = 40,
+        max_depth: int = 30,
+        max_siblings: int = 200,
+        legend: bool = True,
+        annotate_origin: bool = True,
+    ) -> str:
+        """A token-lean DOM skeleton -- an indented ``tag#id.class[attr=val]`` outline
+        with the bloat (scripts/styles/svg/…) removed, structurally-identical siblings
+        collapsed to ``×N`` (a differently-shaped sibling is never merged away), and
+        leaf text hinted. Keeps every id and class path so an LLM can write CSS
+        selectors for the page cheaply (feed this instead of raw HTML, then use the
+        selectors with ``select``/``select_all``/``extract``).
+
+        On a browser-rendered document (``browser="probe"``/``"auto"``) with a static
+        baseline, nodes that were NOT in the server's initial HTML are marked
+        ``[xhr]`` (if the page issued XHR/fetch calls) or ``[js]``, and observed data
+        APIs are listed -- so the LLM sees what is server-initial vs client-loaded."""
+        static_html = core._static_html if annotate_origin else None
+        xhr = _xhr_endpoints(core) if annotate_origin else None
+        return _skeleton(
+            self._tree(core),
+            max_lines=max_lines,
+            text_chars=text_chars,
+            max_depth=max_depth,
+            max_siblings=max_siblings,
+            legend=legend,
+            static_html=static_html,
+            xhr_endpoints=xhr,
+        )
 
     def applies(self, core: "Document") -> bool:
         return core.kind in ("html", "xml")
@@ -412,7 +566,7 @@ class HtmlBacking(Backing):
         if format == "elements":
             return _html_elements(root)
         if format == "skeleton":
-            return _skeleton(root, **options)
+            return self.skeleton(core, **options)
         from ...errors import render_error
 
         raise render_error(f"no html render format {format!r}")

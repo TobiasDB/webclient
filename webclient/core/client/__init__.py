@@ -446,7 +446,9 @@ class WebClient(WebCore, IWebClient):
         ):
             if resp is not None:  # keep the static hop's navigation/network events
                 self._capture(doc, ref, resp)
-            return await self._escalate_to_browser(ref, signals, list(doc._events))
+            return await self._escalate_to_browser(
+                ref, signals, list(doc._events), doc.content
+            )
         if resp is not None:  # emit navigation/network events for the final doc
             self._capture(doc, ref, resp)
         if doc.error is not None and not optional:  # loud by default
@@ -477,13 +479,19 @@ class WebClient(WebCore, IWebClient):
         return signals
 
     async def _escalate_to_browser(
-        self, ref: Reference, signals: "Signals", static_events: "list[Any] | None" = None
+        self,
+        ref: Reference,
+        signals: "Signals",
+        static_events: "list[Any] | None" = None,
+        static_html: "bytes | None" = None,
     ) -> Document:
         """The static tier said this page is JS-gated; render it in a browser and
         record the two-tier trail on the resulting document (the ``probe`` facet).
         The static hop's events are carried onto the browser doc so ``doc.events``
-        keeps the full trail (both tiers)."""
+        keeps the full trail (both tiers); the static HTML is kept so ``skeleton()``
+        can mark server-initial vs client-injected nodes."""
         doc = await self._alive(ref)
+        doc._static_html = static_html
         if static_events:
             doc._events = [*static_events, *doc._events]
         doc._probe = ProbeRecord(
@@ -513,6 +521,7 @@ class WebClient(WebCore, IWebClient):
             if static._probe is not None:
                 static._probe.reason = "browser_unavailable"
             return static
+        browser._static_html = static.content  # for skeleton() origin annotation
         static_words = visible_word_count(static.content) if static.ok else 0
         browser_words = visible_word_count(browser.content)
         gain = max(0, browser_words - static_words)

@@ -64,6 +64,9 @@ class Document(WebCore, IDocument):
     _set_cookies: dict[str, str] = PrivateAttr(  # transport-parsed Set-Cookie
         default_factory=dict
     )
+    #: the pre-JS (static) HTML for a browser-rendered document (probe / auto
+    #: escalation), so ``skeleton()`` can mark nodes server-initial vs client-injected.
+    _static_html: "bytes | None" = PrivateAttr(default=None)
     #: a server-side handle (remote dispatcher): it holds no local content, so its
     #: content ops round-trip. Set by ``RemoteWebClientCore`` on deserialize.
     _remote_handle: bool = PrivateAttr(default=False)

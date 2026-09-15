@@ -62,15 +62,19 @@ class SearchBacking(Backing):
         error: Any = None,
     ) -> "list[SearchResult]":
         """Search ``query`` and return up to ``limit`` structured hits (title / url
-        / description). ``optional=True`` (or ``error=RETURN``) returns ``[]`` if the
-        results page itself fails to fetch (instead of raising). An IO op -- the
+        / description). LOUD by default: a results page that fails to fetch raises a
+        ``WebException`` (never a silent ``[]``). ``optional=True`` (or
+        ``error=RETURN``) instead returns ``[]`` on such a failure. An IO op -- the
         interface bridges it (``dispatch``)."""
-        from ...errors import lenient
+        from ...errors import WebException, error_for, lenient
 
+        lenient_ = lenient(optional, error)
         ref = from_url(endpoint or self.ENDPOINT, "get", params={"q": query})
         ref._client = core
-        doc = await core.afetch(ref, optional=lenient(optional, error))
-        if not doc.ok:  # lenient: the results page failed -> no hits
+        doc = await core.afetch(ref, optional=lenient_)
+        if not doc.ok:  # a failed results page: raise (loud) unless the caller opted lenient
+            if not lenient_:
+                raise WebException(doc.error or error_for(doc.status_code), document=doc)
             return []
         results: list[SearchResult] = []
         # the core implements its ops (via its generated interface), so a backing

@@ -213,6 +213,31 @@ def test_crawl_browser_captures_xhr_endpoints_into_frontier(httpserver, wc):
     assert any("/api/items" in e.url and e.text == "[xhr]" for e in crawl.frontier)
 
 
+def test_skeleton_marks_xhr_injected_content_on_a_real_spa(httpserver, wc):
+    # a JS page that issues a fetch and injects a list: browser="probe" renders it,
+    # and skeleton() marks the injected nodes [xhr] and lists the data API, while
+    # the server-initial shell stays unmarked. (Feature A on a real SPA.)
+    page = (
+        "<html><body><div id='app'></div>"
+        "<script>fetch('/api/items');"
+        "document.getElementById('app').innerHTML ="
+        "  '<ul class=\"list\">' + '<li class=\"item\">x</li>'.repeat(3) + '</ul>';"
+        "</script></body></html>"
+    )
+    httpserver.expect_request("/spa").respond_with_data(page, content_type="text/html")
+    httpserver.expect_request("/api/items").respond_with_json({"items": [1, 2, 3]})
+    doc = wc.fetch(httpserver.url_for("/spa"), browser="probe")
+    try:
+        sk = doc.skeleton()
+        assert "/api/items" in sk                       # observed data API listed
+        assert "div#app" in sk                          # the shell node: server-initial
+        item_line = next(l for l in sk.splitlines() if "li.item" in l)
+        assert "[xhr]" in item_line                     # injected -> marked xhr
+        assert "li.item [xhr] ×3" in sk                 # and the 3 identical items merged
+    finally:
+        wc.release(doc)
+
+
 def test_release_returns_page_to_pool(httpserver, wc):
     httpserver.expect_request("/p").respond_with_data(
         "<html><body>p</body></html>", content_type="text/html"

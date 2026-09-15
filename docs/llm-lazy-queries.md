@@ -27,6 +27,7 @@ with WebClient() as wc:
 A skeleton looks like:
 
 ```
+# skeleton: tag#id.class[attr=val]  ×N=N identical siblings  "…"=sample text
 main#main.container
   ul#results.list
     li.item ×20
@@ -34,11 +35,36 @@ main#main.container
       a.link[href]  "view"
       span.price  "$39"
   form
-    input[type=text][name=q]
+    input[type=text][name=q][placeholder=Search]
 ```
 
-From that you can see the selectors immediately: `.item`, `.item .title`,
-`.item .price`, `.item a`, `input[name=q]`.
+**Reading it** (each line is one element, indentation = nesting):
+- `tag#id.class.class` is a ready CSS selector — e.g. `ul#results.list`, `.item`,
+  `.item .price`. Key attributes are shown as `[type=…]` / `[name=…]` /
+  `[placeholder=…]` / `[role=…]` / `[data-testid=…]`, and `[href]` / `[src]` mark a
+  link/media target.
+- `×20` means 20 **structurally-identical** siblings (a uniform list) — collapsed to
+  one line; a differently-shaped sibling is *never* merged away, so what you see is
+  the true shape.
+- `"…"` is a short text sample from a leaf, so you can tell content nodes apart.
+
+From that you write selectors immediately: `.item`, `.item .title`, `.item .price`,
+`.item a`, `input[name=q]`.
+
+**SPA / dynamic pages.** Fetch with `browser="probe"` (renders JS *and* compares to
+the static HTML). The skeleton then marks nodes that were **not** in the server's
+initial HTML as `[xhr]` (if the page fetched data) or `[js]`, and lists the data
+APIs it called — so you know what is server-initial vs client-loaded, and which
+JSON endpoints to hit directly:
+
+```python
+d = wc.fetch(url, browser="probe")
+print(d.skeleton())
+# # XHR/fetch data APIs: https://site/api/items
+# div#app
+#   ul.list [xhr]
+#     li.item [xhr] ×20  "Aeropress"     <- injected client-side from the API above
+```
 
 ## The roots (`wq`)
 

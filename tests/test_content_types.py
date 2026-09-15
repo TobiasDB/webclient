@@ -217,6 +217,18 @@ def test_mislabelled_json_does_not_crash(httpserver, wc):
     assert not doc.select("anything", optional=True).ok
 
 
+def test_search_raises_on_a_failed_results_page(httpserver, wc):
+    # search is loud by default: a not-ok results page raises, never a silent [] .
+    from webclient import RETURN, WebException
+
+    httpserver.expect_request("/s").respond_with_data("err", status=503)
+    url = httpserver.url_for("/s")
+    with pytest.raises(WebException):
+        wc.search("q", endpoint=url)
+    assert wc.search("q", endpoint=url, optional=True) == []   # opt-in lenient -> []
+    assert wc.search("q", endpoint=url, error=RETURN) == []
+
+
 def test_not_operator_evaluates(httpserver, wc):
     # `~expr` records op "not"; regression: it used to KeyError (500) at execution.
     page = b'<html><body><div class="item">a</div>' \
