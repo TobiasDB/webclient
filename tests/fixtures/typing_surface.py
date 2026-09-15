@@ -66,6 +66,9 @@ assert_type(
 assert_type(wq.many.select("a"), LazyCollection[LazyDocument])
 assert_type(wq.many.text_content, LazyCollection[LazyField[str]])
 assert_type(wq.doc.select_all(".t").attr("name"), LazyCollection[LazyField[str]])
+# a lone lazy document extracts a row too (single-element form of the collection op)
+assert_type(wq.doc.extract(t=wq.doc.text_content), LazyDocument)
+assert_type(wq.doc.extract(t=wq.doc.text_content).project(), Lazy[dict[str, Any]])
 assert_type(wq.many.filter(wq.doc.field("x")), LazyCollection[LazyDocument])
 assert_type(wq.many.extract(name=wq.doc.text_content), LazyCollection[LazyDocument])
 
@@ -88,6 +91,11 @@ assert_type(_page.attr("href"), Reference)
 assert_type(_page.render("markdown"), str)
 assert_type(_page.render("elements"), list[Element])
 assert_type(_page.render("links"), Collection[Reference])
+
+# a lone Document is a "collection of one": extract stages a row, project renders it
+assert_type(_page.extract(t=wq.doc.text_content), Document)
+assert_type(_page.extract(t=wq.doc.text_content).project(), dict[str, Any])
+assert_type(_page.extract(t=wq.doc.text_content).project(_Row), _Row)
 
 _cards = _page.select_all(".card")
 assert_type(_cards, Collection[Document])

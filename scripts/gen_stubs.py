@@ -458,6 +458,10 @@ def _lazy_class(core: type) -> str:
     extras: list[str] = []
     if core is Document:
         extras += [
+            # row-shaping on a lone document (the single-element form of the
+            # Collection ops); hand-written like the eager Document.extract/project.
+            'def extract(self, **exprs: Any) -> "LazyDocument": ...',
+            'def project(self) -> "Lazy[dict[str, Any]]": ...',
             'def field(self, name: str) -> "LazyField[Any]": ...',
             'def reference(self, name: str) -> "LazyReference": ...',
         ]

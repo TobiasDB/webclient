@@ -46,3 +46,23 @@ def test_eager_ref_is_a_reference_core(site):
         assert ref.resolve().ok  # resolve dispatches eagerly to a Document
 
 
+def test_document_extract_is_the_single_element_form(site):
+    # extract evaluates >1 expression against ONE document (a "collection of one");
+    # it returns the document (so extracts chain) and project renders a single row.
+    from webclient import wq
+
+    with WebClient() as c:
+        doc = c.fetch(site.url_for("/"))
+        staged = doc.extract(
+            heading=wq.doc.select("h1").text_content,
+            first=wq.doc.select(".t").text_content,
+        )
+        assert staged is doc  # extract returns the document itself
+        row = staged.project()
+        assert row == {"heading": "Hi", "first": "Aeropress"}  # one dict, not a list
+        # chained extracts accumulate onto the same row
+        assert doc.extract(link=wq.doc.select("a").attr("href")).project()["link"].endswith(
+            "/i/1"
+        )  # a Reference column projects to its URL string
+
+

@@ -12,7 +12,7 @@ the sub-core wiring), and the ``Element`` value type lives in :mod:`...models`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, overload
 
 from pydantic import PrivateAttr
 
@@ -33,6 +33,8 @@ if TYPE_CHECKING:
     from ...surfaces.lazy import LazyDocument
     from ..client import WebClient  # noqa: F401
     from ..reference import Reference
+
+M = TypeVar("M")  # a row model (a pydantic BaseModel) for project(model)
 
 
 class Document(WebCore, IDocument):
@@ -122,6 +124,45 @@ class Document(WebCore, IDocument):
         sub._missing = node is None
         sub._events = self._events  # a static element shares the store
         return sub
+
+    # -- row shaping: a document is a single element (a "collection of one") -----
+    # extract evaluates several named expressions against THIS document and stages
+    # them as its row; project renders that row. These mirror the Collection ops
+    # (which are just this primitive fanned out) so a lone Document is usable the
+    # same way -- ``doc.extract(run=doc.runtime()).project()``. Hand-written (like
+    # Collection/Field), not backings, so they are not lifted or fanned out.
+    async def aextract(self, **exprs: Any) -> "Document":
+        """Evaluate each named expression against this document and stage the
+        results as its ``_row`` (in order, so a later column can read an earlier
+        one via ``field``; chained extracts accumulate). Loud by default -- a
+        column whose select/attr misses raises; mark it ``error=RETURN`` for a
+        ``None``. THE single-element extraction (``Collection.aextract`` fans it
+        out); returns the document so extracts chain."""
+        from ...collection import apply_extract
+
+        await apply_extract(self, exprs, self._client)
+        return self
+
+    def extract(self, **exprs: Any) -> "Document":
+        """Eager form of :meth:`aextract` (bridged onto the engine loop)."""
+        return self._client.loop().run(self.aextract(**exprs))
+
+    @overload
+    def project(self) -> dict[str, Any]: ...
+    @overload
+    def project(self, model: type[M]) -> M: ...
+    def project(self, model: "type[M] | None" = None) -> "dict[str, Any] | M":
+        """This document's extracted row as plain data: a ``Reference`` column
+        (e.g. from ``attr('href')``) becomes its URL string and a ``Field`` its
+        value, so the row is JSON-ready. One ``dict`` (not a list) -- a document
+        is one row. Pass ``model`` to validate the row into it (eager only)."""
+        from ...collection import _project_row, _row_of
+
+        data = _project_row(_row_of(self, create=False) or {})
+        if model is None:
+            return data
+        validate = getattr(model, "model_validate", None)
+        return validate(data) if validate is not None else model(**data)
 
 
 __all__ = ["Document", "Element", "HtmlBacking", "JsonBacking"]

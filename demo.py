@@ -409,6 +409,15 @@ def main() -> None:
         )
         print("eager:      ", cards.name, "->", [r["title"] for r in cards.project()])
 
+        # [P3] extract is the single-doc primitive (>1 expression against ONE
+        #      document); a Collection just fans it out. On a lone Document it
+        #      returns the document and project() renders one row (a dict).
+        overview = page.extract(
+            title=wq.doc.select(".title").text_content,
+            link=wq.doc.select(".card a").attr("href"),
+        ).project()
+        print("doc row:    ", overview)
+
         # [P6] Search is not a verb or a config type -- it is just an expression:
         #      resolve the query URL, pick the result nodes, extract a row each.
         hits = (
