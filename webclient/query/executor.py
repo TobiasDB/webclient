@@ -95,6 +95,19 @@ def truthy(value: Any) -> bool:
 # -- async core --------------------------------------------------------------
 
 
+async def _release_pages(live: "list[Any]") -> None:
+    """Return each plan-owned browser page in ``live`` to the pool. ``_arelease`` is
+    idempotent (a page already released -- e.g. an auto-escalated one -- is a no-op),
+    so this is safe to call for every collected page."""
+    for doc in live:
+        client_ = getattr(doc, "_client", None)
+        if client_ is not None:
+            try:
+                await client_._arelease(doc)
+            except Exception:
+                pass
+
+
 @asynccontextmanager
 async def _plan_scope() -> "AsyncIterator[None]":
     """Scope a plan run's browser-page collection: the outermost entry (``aevaluate``
@@ -110,13 +123,34 @@ async def _plan_scope() -> "AsyncIterator[None]":
         if outer and token is not None:
             live = _PLAN_LIVE.get() or []
             _PLAN_LIVE.reset(token)
-            for doc in live:  # return each plan-owned browser page to the pool
-                client_ = getattr(doc, "_client", None)
-                if client_ is not None:
-                    try:
-                        await client_._arelease(doc)
-                    except Exception:
-                        pass
+            await _release_pages(live)
+
+
+def _per_element(
+    fn: "Callable[[Any], Awaitable[Any]]",
+) -> "Callable[[Any], Awaitable[Any]]":
+    """Wrap a fan-out unit of work so the browser pages IT resolves (without
+    ``keep_alive``) are released the moment that element finishes -- not deferred to
+    the end of the whole plan. Without this, every page a fan-out resolves is held
+    until the plan completes, so a plan (or stream) that resolves more pages than the
+    page-pool cap deadlocks: the cap-th lease is taken, the next blocks, and nothing
+    is released until the fan-out (which is waiting on that lease) returns. A released
+    page keeps its captured content, so downstream in-memory ops are unaffected (this
+    is exactly what the plan-end release already did, only sooner)."""
+
+    async def wrapped(el: Any) -> Any:
+        parent = _PLAN_LIVE.get()
+        if parent is None:  # not inside a plan scope: nothing to bound
+            return await fn(el)
+        token = _PLAN_LIVE.set([])
+        try:
+            return await fn(el)
+        finally:
+            mine = _PLAN_LIVE.get() or []
+            _PLAN_LIVE.reset(token)
+            await _release_pages(mine)
+
+    return wrapped
 
 
 async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> Any:
@@ -147,7 +181,7 @@ async def _arun(
             rest = steps[i:]
             results = await fan_out(
                 list(value),
-                lambda el: _arun(el, rest, 0, el, client),
+                _per_element(lambda el: _arun(el, rest, 0, el, client)),
                 limit=_fanout_limit(client),
             )
             if results and all(isinstance(r, WebCore) for r in results):
@@ -390,7 +424,9 @@ async def _astream_collection(
             value = await _arun(el, shaping, 0, el, client)
             return value.get() if isinstance(value, Field) else value
 
-    async for result in fan_out_stream(items, process, limit=_fanout_limit(client)):
+    async for result in fan_out_stream(
+        items, _per_element(process), limit=_fanout_limit(client)
+    ):
         if result is not _DROP:
             yield result
 
