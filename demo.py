@@ -303,6 +303,20 @@ def main() -> None:
                 "tiers": probed.transport().escalation,
             },
         )
+        # [browser transport] a browser render now carries the REAL Playwright
+        #      main-response status + headers (not a fabricated 200 / empty), so
+        #      transport() and the access signals are accurate on a rendered page.
+        rendered = wc.fetch(f"{base}/app", browser=True)
+        print(
+            "browser xport:",
+            {
+                "status": rendered.transport().status_code,
+                "header_keys": len(rendered.transport().header_keys),
+                "final_url": (rendered.final_url or "").endswith("/app"),
+            },
+        )
+        wc.release(rendered)
+
         # [wait] a controllable wait strategy: WaitEvent names the milestone and
         #      WaitConfig the timeout + on-timeout policy (RAISE loud by default,
         #      RETURN hands back the partial DOM). Here: wait for a selector.

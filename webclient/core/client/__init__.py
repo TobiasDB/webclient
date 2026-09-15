@@ -26,7 +26,7 @@ from ...clients import (
     WaitEvent,
 )
 from ...collection import Field
-from ...errors import WebError, WebException
+from ...errors import WebError, WebException, error_for
 from ...events import EventBus
 from ...models import NavigationEvent, NetworkEvent, PlanEvent
 from ...query.executor import aevaluate, astream, evaluate
@@ -739,13 +739,22 @@ class WebClient(WebCore, IWebClient):
                 replay=replay or [],
                 wait=wait,
             )
+            # the REAL transport facts Playwright reported for the main navigation --
+            # true status + response headers, not a fabricated 200/empty (so
+            # ``doc.transport()`` and the ``signals`` access facet are accurate on a
+            # browser-rendered page). ``status_code`` 0 (no main response) -> keep the
+            # old 200 default so ``doc.ok`` still holds for such a render.
+            status = result.status_code or 200
             doc = Document(
                 url=ref.dispatch("url"),
                 final_url=result.final_url,
                 kind="html",
                 content=result.content,
-                status_code=200,
+                status_code=status,
+                response_headers=dict(result.headers),
             )
+            if not (200 <= status < 300):  # parity with the http path's not-ok doc
+                doc.error = error_for(status)
             doc._client = self
             doc._page = browser.page
             doc._lease = lease

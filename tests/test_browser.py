@@ -347,6 +347,48 @@ def test_plan_interact_then_select_sees_post_interaction_dom(httpserver, wc):
     assert len(rows) == 1  # the click's node is visible to the subsequent select
 
 
+# -- Ask 1: real Playwright response info (status / headers / final URL) --------
+
+def test_browser_captures_real_status_and_headers(httpserver, wc):
+    """A browser render now carries the REAL main-navigation status + response
+    headers Playwright reported -- not a fabricated 200 / empty headers -- so
+    ``doc.transport()`` is accurate on a browser-rendered page (Ask 1)."""
+    httpserver.expect_request("/nf").respond_with_data(
+        "<html><body>nope</body></html>",
+        status=404,
+        content_type="text/html",
+        headers={"X-Custom-Thing": "yes"},
+    )
+    doc = wc.fetch(httpserver.url_for("/nf"), browser=True)
+    try:
+        assert doc.status_code == 404  # the true status, not 200
+        assert doc.ok is False  # non-2xx -> not ok, error populated (http parity)
+        t = doc.transport()
+        assert t.status_code == 404
+        assert "x-custom-thing" in t.header_keys  # real response headers threaded
+        assert t.final_tier == "browser"
+        assert doc.final_url.endswith("/nf")
+    finally:
+        wc.release(doc)
+
+
+def test_browser_fetch_of_blocked_page_fires_signals(httpserver, wc):
+    """Because the real status + headers now reach the browser Document, the
+    ``signals`` access facet (which reads status/headers) fires on a browser fetch
+    of a blocked page -- impossible when the status was hard-coded 200 (Ask 1)."""
+    httpserver.expect_request("/forbidden").respond_with_data(
+        "<html><body>Forbidden</body></html>", status=403, content_type="text/html"
+    )
+    doc = wc.fetch(httpserver.url_for("/forbidden"), browser=True)
+    try:
+        assert doc.status_code == 403
+        assert doc.transport().status_code == 403
+        assert doc.blocked().present  # a hard block (403)
+        assert doc.anti_bot().present  # a bare-status challenge
+    finally:
+        wc.release(doc)
+
+
 # -- Ask 2: controllable wait-for-stable-DOM (enum + timeout + policy) ----------
 
 DELAYED = """

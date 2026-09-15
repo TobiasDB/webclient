@@ -108,6 +108,13 @@ class PageResult:
 
     final_url: str
     content: bytes
+    #: the REAL transport facts of the main navigation, read from Playwright's
+    #: main-document ``Response`` (``page.goto`` return) -- so a browser-rendered
+    #: document carries its true HTTP status + response headers, not a fabricated
+    #: ``200`` / empty headers. ``status_code`` is ``0`` when Playwright reported no
+    #: main response (e.g. ``about:blank`` or a same-document navigation).
+    status_code: int = 200
+    headers: dict[str, str] = field(default_factory=dict)
     console: list[tuple[str, str]] = field(default_factory=list)  # (level, text)
     network: list[tuple[str, str, str]] = field(  # (method, url, resource_type)
         default_factory=list
@@ -208,7 +215,8 @@ class BrowserClient(Client):
         wait: "WaitConfig | None" = None,
     ) -> PageResult:
         """Navigate to ``url``, installing ``scripts`` by phase (``init`` before
-        nav, ``load`` once after, ``drain`` after any replay), capturing console +
+        nav, ``load`` once after, ``drain`` after any replay), capturing the REAL
+        main-response transport facts (status + headers + final URL), console +
         network requests, and replaying any recorded actions. Returns the raw page
         facts; the domain (document + events) is built by the caller.
 
@@ -225,13 +233,28 @@ class BrowserClient(Client):
         page.on("console", lambda m: console.append((m.type, m.text)))
         network: list[tuple[str, str, str]] = []
         page.on("request", lambda r: network.append((r.method, r.url, r.resource_type)))
-        await page.goto(url, wait_until="domcontentloaded")
+        # the main-document Response -- the REAL status/headers of the navigation
+        # (Playwright hands it back from ``goto``). ``None`` for a non-HTTP nav.
+        response = await page.goto(url, wait_until="domcontentloaded")
         await self._do_wait(page, wait)  # let JS/lazy content load before snapshotting
+        status: int = 0
+        headers: dict[str, str] = {}
+        if response is not None:
+            status = response.status
+            try:  # all_headers() merges multi-value / continued headers
+                headers = dict(await response.all_headers())
+            except Exception:  # pragma: no cover - fall back to the sync view
+                headers = dict(response.headers)
         # snapshot the settled console/network + the DOM mutations the page made
         # during load/settle (drained now, before any replay, so ``mutations`` is
         # the load-time rewrite -- how the page composed its own DOM).
         result = PageResult(
-            page.url, (await page.content()).encode(), list(console), list(network)
+            page.url,
+            (await page.content()).encode(),
+            status_code=status,
+            headers=headers,
+            console=list(console),
+            network=list(network),
         )
         for s in scripts:  # drain the load-time observer buffer -> result.mutations
             if s.phase == "drain":
