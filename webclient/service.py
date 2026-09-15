@@ -274,6 +274,7 @@ def create_app(
             max_pages=int(body.get("max_pages", 20)),
             same_origin=bool(body.get("same_origin", True)),
             obey_robots=bool(body.get("obey_robots", True)),
+            browser=bool(body.get("browser", False)),
             keywords=body.get("keywords"),
             include=body.get("include"),
             exclude=body.get("exclude"),

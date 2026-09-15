@@ -35,17 +35,18 @@ class Crawl(WebCore, ICrawl):
     its ops (``step`` / ``run`` / ``done``) are the ``CrawlBacking``."""
 
     _client: "WebClient" = PrivateAttr(default=None)  # type: ignore[assignment]
-    _seen: set[str] = PrivateAttr(default_factory=set)  # dedup ledger
-    _robots: Any = PrivateAttr(default=None)  # cached RobotFileParser
-    _robots_loaded: bool = PrivateAttr(default=False)
+    _seen: set[str] = PrivateAttr(default_factory=set)  # dedup ledger (canonical urls)
+    _robots: dict[str, Any] = PrivateAttr(default_factory=dict)  # per-host RobotFileParser
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (CrawlBacking(),)
 
     def bind(self, client: "WebClient") -> "Crawl":
         """Share ``client``'s engine (its ``afetch``/pool drive the crawl) and seed
-        the dedup ledger from the initial frontier."""
+        the dedup ledger (canonicalised) from the initial frontier."""
+        from .backing import _canon
+
         self._client = client
-        self._seen = {e.url for e in self.frontier}
+        self._seen = {_canon(e.url) for e in self.frontier}
         return self
 
 

@@ -52,6 +52,8 @@ class ICrawl(BaseModel):
     max_pages: int = 50
     same_origin: bool = True
     obey_robots: bool = True
+    browser: bool = False  # render each page in a browser (captures XHR/data-API
+    #                        calls, which are then added to the frontier and crawled)
     keywords: list[str] = []  # best-first relevance signal (auto mode)
     include: str | None = None  # only follow links whose path contains this
     exclude: str | None = None  # skip links whose path contains this

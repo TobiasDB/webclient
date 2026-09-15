@@ -111,6 +111,24 @@ def test_crawl_chooses_which_facets_each_page_carries(wc, site):
     assert all(p.structure is None and p.metadata is None for p in crawl.pages)
 
 
+def test_crawl_canonicalises_urls_for_dedup(wc, httpserver):
+    # /page, /page/, and /page?utm_source=x are the same target -> fetched once.
+    body = (
+        '<a href="/page">a</a> <a href="/page/">b</a> '
+        '<a href="/page?utm_source=nl">c</a> <a href="/page#frag">d</a>'
+    )
+    httpserver.expect_request("/").respond_with_data(
+        f"<html><body>{body}</body></html>", content_type="text/html"
+    )
+    httpserver.expect_request("/page").respond_with_data(
+        "<html><body>page</body></html>", content_type="text/html"
+    )
+    with wc.crawl(httpserver.url_for("/"), auto=True, max_pages=10, obey_robots=False) as crawl:
+        crawl.run()
+    page_hits = [u for u in _urls(crawl) if u.rstrip("/").endswith("/page")]
+    assert len(page_hits) == 1  # the four variants collapsed to one fetch
+
+
 def test_default_crawl_carries_only_the_lean_facets(wc, site):
     # no `facets` -> the lean DEFAULT_FACETS (transport + metadata), not every
     # facet, so a large crawl does not run structure/runtime/probe per page.

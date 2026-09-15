@@ -168,6 +168,16 @@ def test_probe_sparse_static_page_is_not_browser_required(httpserver, wc):
         wc.release(doc)
 
 
+def test_probe_and_browser_crawl_do_not_leak_the_page(httpserver, wc):
+    # F10: a content-only browser path (probe) returns its page to the pool
+    # automatically -- no explicit release needed, no lease leak.
+    httpserver.expect_request("/plain").respond_with_data(PLAIN, content_type="text/html")
+    before = wc.pool.stats().pages_free
+    doc = wc.fetch(httpserver.url_for("/plain"), browser="probe")
+    assert wc.pool.stats().pages_free == before  # page already returned
+    assert "real static content" in doc.text_content  # content survives release
+
+
 def test_probe_mode_reports_static_is_sufficient(httpserver, wc):
     """A page whose content is already in the static HTML: probe returns it with
     was_browser_required False and render_gain 0 -- 'you don't need a browser'."""
@@ -179,6 +189,28 @@ def test_probe_mode_reports_static_is_sufficient(httpserver, wc):
         assert p.render_gain == 0 and p.reason == "static_sufficient"
     finally:
         wc.release(doc)
+
+
+def test_crawl_browser_captures_xhr_endpoints_into_frontier(httpserver, wc):
+    # a browser crawl observes the page's data-API (fetch/XHR) calls and adds them
+    # to the frontier so the crawl covers them too.
+    page = (
+        "<html><body><h1>App</h1>"
+        "<script>fetch('/api/items').then(r => r.json());</script>"
+        "</body></html>"
+    )
+    httpserver.expect_request("/app").respond_with_data(page, content_type="text/html")
+    httpserver.expect_request("/api/items").respond_with_json({"items": [1, 2, 3]})
+    with wc.crawl(
+        httpserver.url_for("/app"),
+        auto=True,
+        browser=True,
+        max_pages=1,  # fetch only /app, then inspect the frontier
+        depth=2,
+        obey_robots=False,
+    ) as crawl:
+        crawl.step()
+    assert any("/api/items" in e.url and e.text == "[xhr]" for e in crawl.frontier)
 
 
 def test_release_returns_page_to_pool(httpserver, wc):

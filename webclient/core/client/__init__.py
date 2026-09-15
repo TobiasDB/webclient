@@ -478,6 +478,7 @@ class WebClient(WebCore, IWebClient):
             attempts=2,
             final_tier="browser",
         )
+        await self._arelease(doc)  # content captured; don't hold the page
         return doc
 
     async def _probe_compare(self, ref: Reference) -> Document:
@@ -523,6 +524,7 @@ class WebClient(WebCore, IWebClient):
             attempts=2,
             final_tier="browser",
         )
+        await self._arelease(browser)  # diagnostic done; release the compared page
         return browser
 
     # -- plan execution (machinery): the surface's sync/async entry ----------
@@ -601,6 +603,7 @@ class WebClient(WebCore, IWebClient):
         max_pages: int = 50,
         same_origin: bool = True,
         obey_robots: bool = True,
+        browser: bool = False,
         keywords: list[str] | None = None,
         include: str | None = None,
         exclude: str | None = None,
@@ -625,6 +628,7 @@ class WebClient(WebCore, IWebClient):
             max_pages=max_pages,
             same_origin=same_origin,
             obey_robots=obey_robots,
+            browser=browser,
             keywords=[k.lower() for k in (keywords or [])],
             include=include,
             exclude=exclude,
@@ -738,6 +742,18 @@ class WebClient(WebCore, IWebClient):
         """Return a live document's page lease to the pool."""
         if doc._lease is not None:
             self.loop().run(self.pool.release(doc._lease))
+            doc._lease = None
+            doc._page = None
+
+    async def _arelease(self, doc: Document) -> None:
+        """Release a browser render's page lease from *within* the engine loop (an
+        async twin of ``release``): once a content-only path -- probe, auto-escalate,
+        a browser crawl -- has captured the rendered HTML, the live page is no longer
+        needed, so return it to the pool (freeing the lease) and drop ``_page`` so
+        later ``select``/``text_content`` run in-memory on the captured content
+        rather than routing to the (loop-bridging) live backing."""
+        if doc._lease is not None:
+            await self.pool.release(doc._lease)
             doc._lease = None
             doc._page = None
 
