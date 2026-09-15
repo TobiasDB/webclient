@@ -336,7 +336,7 @@ def main() -> None:
     #      the pool) and rows are delivered one at a time via stream=True.
     with WebClient() as wc:
         for row in plan.collect():
-            print(f"  row:       {row['title']} {row['price']} -> {row['link'].path}")
+            print(f"  row:       {row['title']} {row['price']} -> {row['link']}")
 
         # [§8] Full-lazy trigger: .collect() runs a recorded plan directly, and
         #      wc.lazy is a lazy recorder bound to THIS client (companion to
@@ -429,7 +429,7 @@ def main() -> None:
             )
             .project()
         )
-        print("search:     ", [(h["title"], h["url"].path) for h in hits])
+        print("search:     ", [(h["title"], h["url"]) for h in hits])
         # summary(): a token-lean, deterministic overview -- facet sections
         # (transport / metadata / structure), keys-not-values.
         overview = wc.summary(f"{base}/")

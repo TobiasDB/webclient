@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import operator
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any, AsyncIterator, Awaitable, Callable, cast
 
@@ -103,21 +104,17 @@ def truthy(value: Any) -> bool:
 # -- async core --------------------------------------------------------------
 
 
-async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> Any:
-    """Evaluate ``expr`` against ``context`` (async). A non-Expr value is itself.
-    The outermost call scopes live-page collection: any browser page a plan step
-    resolves (without ``keep_alive``) is released when the plan finishes, so a plan
-    -- which has no ``release(doc)`` handle -- can't leak page leases."""
-    if not isinstance(expr, Expr):
-        return expr
+@asynccontextmanager
+async def _plan_scope() -> "AsyncIterator[None]":
+    """Scope a plan run's browser-page collection: the outermost entry (``aevaluate``
+    / ``astream``) owns a list into which every browser page a step resolves (without
+    ``keep_alive``) is gathered, and releases them all when the plan finishes -- a
+    plan has no ``release(doc)`` handle, so a live page would otherwise leak its pool
+    lease. The list is shared with fan-out child tasks via the copied context."""
     outer = _PLAN_LIVE.get() is None
     token = _PLAN_LIVE.set([]) if outer else None
     try:
-        client = client or expr._client or getattr(context, "_client", None)
-        if isinstance(context, Expr):  # an Expr context (wc.ref(url)) runs first
-            context = await aevaluate(context, client=client)
-        value = _start(expr._plan, context, client)
-        return await _arun(value, expr._plan.steps, 0, context, client)
+        yield
     finally:
         if outer and token is not None:
             live = _PLAN_LIVE.get() or []
@@ -129,6 +126,20 @@ async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> An
                         await client_._arelease(doc)
                     except Exception:
                         pass
+
+
+async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> Any:
+    """Evaluate ``expr`` against ``context`` (async). A non-Expr value is itself.
+    The outermost call releases any browser page a plan step resolves (see
+    :func:`_plan_scope`)."""
+    if not isinstance(expr, Expr):
+        return expr
+    async with _plan_scope():
+        client = client or expr._client or getattr(context, "_client", None)
+        if isinstance(context, Expr):  # an Expr context (wc.ref(url)) runs first
+            context = await aevaluate(context, client=client)
+        value = _start(expr._plan, context, client)
+        return await _arun(value, expr._plan.steps, 0, context, client)
 
 
 async def _arun(
@@ -279,27 +290,28 @@ async def astream(
         for row in expr if isinstance(expr, list) else [expr]:
             yield row
         return
-    client = client or expr._client or getattr(context, "_client", None)
-    if isinstance(context, Expr):  # an Expr context (wc.ref(url)) runs first
-        context = await aevaluate(context, client=client)
+    async with _plan_scope():  # release any browser page the stream resolves
+        client = client or expr._client or getattr(context, "_client", None)
+        if isinstance(context, Expr):  # an Expr context (wc.ref(url)) runs first
+            context = await aevaluate(context, client=client)
 
-    steps = expr._plan.steps
-    tail = _stream_tail(steps)
-    if tail is None:  # not a streamable shape -- evaluate whole, then hand out
-        result = await aevaluate(expr, context, client=client)
-        for row in result if isinstance(result, list) else [result]:
-            yield row
-        return
+        steps = expr._plan.steps
+        tail = _stream_tail(steps)
+        if tail is None:  # not a streamable shape -- evaluate whole, then hand out
+            result = await aevaluate(expr, context, client=client)
+            for row in result if isinstance(result, list) else [result]:
+                yield row
+            return
 
-    head, shaping = steps[:tail], steps[tail:]
-    base = await _arun(_start(expr._plan, context, client), head, 0, context, client)
-    if not isinstance(base, Collection):  # head wasn't a collection -- finish eager
-        value = await _arun(base, shaping, 0, context, client)
-        for row in value if isinstance(value, list) else [value]:
+        head, shaping = steps[:tail], steps[tail:]
+        base = await _arun(_start(expr._plan, context, client), head, 0, context, client)
+        if not isinstance(base, Collection):  # head wasn't a collection -- finish eager
+            value = await _arun(base, shaping, 0, context, client)
+            for row in value if isinstance(value, list) else [value]:
+                yield row
+            return
+        async for row in _astream_collection(base, shaping, client):
             yield row
-        return
-    async for row in _astream_collection(base, shaping, client):
-        yield row
 
 
 def _stream_tail(steps: list[Step]) -> int | None:
@@ -350,7 +362,13 @@ async def _astream_collection(
     """Stream the final fan-out of ``base`` under ``shaping`` as elements
     complete. Rows (``...project()``) or per-element op results are yielded the
     moment each element finishes; a filtered-out element yields nothing."""
-    from ..collection import Field, _row_of, apply_extract, survives_filters
+    from ..collection import (
+        Field,
+        _project_row,
+        _row_of,
+        apply_extract,
+        survives_filters,
+    )
 
     items = list(base)
     is_project = (
@@ -363,14 +381,15 @@ async def _astream_collection(
 
         async def process(el: Any) -> Any:
             # the SAME shaping primitives the eager Collection uses, so a streamed
-            # row and a collected row of the same plan are identical.
+            # row and a collected row of the same plan are identical (incl. the
+            # Reference->URL / Field->value row cleaning).
             for kind, payload in ops:
                 if kind == "extract":
                     await apply_extract(el, payload, client)
                 elif not await survives_filters(el, payload, client):
                     return _DROP
             shaped = _row_of(el, create=False)
-            return shaped if shaped is not None else el
+            return _project_row(shaped) if shaped is not None else el
 
     else:  # a terminal element op: apply it to each element on its own
 
