@@ -302,11 +302,15 @@ def create_app(
 
     def _crawl_response(crawl: Any) -> "dict[str, Any]":
         """The LLM-efficient crawl result: a summary per page + the unresolved
-        frontier edges (and the flat URL list, for a site map)."""
+        frontier edges (and the flat URL list, for a site map). The frontier is
+        sorted best-first and capped to ``width`` so a large (esp. browser) crawl
+        doesn't flood the client with low-value edges (``frontier_total`` is the
+        true count)."""
         return {
             "pages": [p.model_dump() for p in crawl.pages],
             "urls": [p.transport.final_url for p in crawl.pages if p.transport],
-            "frontier": [e.model_dump() for e in crawl.frontier],
+            "frontier": [e.model_dump() for e in crawl.frontier[: crawl.width]],
+            "frontier_total": len(crawl.frontier),
             "done": crawl.done,
         }
 

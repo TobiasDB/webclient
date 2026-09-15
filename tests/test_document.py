@@ -174,6 +174,25 @@ def test_element_select_is_scoped_to_element():
     assert card.status_code == 200 and card.url == "https://example.com/list"
 
 
+def test_href_whitespace_is_cleaned_into_a_valid_url():
+    # a template's newlines, padding, or a text-like href (`<a href="Read More">`)
+    # must not build an un-fetchable URL with raw whitespace -- browsers strip
+    # surrounding whitespace, drop internal tab/newline, and %20-encode spaces.
+    page = (
+        "<html><body>"
+        '<a id="txt" href="Read More">t</a>'
+        '<a id="pad" href="  /path ">p</a>'
+        '<a id="nl" href="\n  /news\n">n</a>'
+        "</body></html>"
+    )
+    doc = make_doc(content=page.encode())
+    assert doc.select("#txt").attr("href").url.endswith("/Read%20More")
+    assert doc.select("#pad").attr("href").url.endswith("/path")  # padding stripped
+    assert doc.select("#nl").attr("href").url.endswith("/news")   # newlines dropped
+    for r in doc.links():  # the links() render is cleaned the same way
+        assert " " not in r.url and "\n" not in r.url
+
+
 def test_region_reports_the_landmark_an_element_sits_in():
     page = (
         "<html><body>"

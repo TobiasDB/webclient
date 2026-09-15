@@ -26,6 +26,18 @@ def _norm(text: str) -> str:
     return " ".join(text.split())
 
 
+def _clean_href(value: "str | None") -> str:
+    """Normalise an href/src/action value the way a browser does before resolving
+    it: strip leading/trailing ASCII whitespace, drop internal tab/newline/CR, and
+    percent-encode any remaining raw spaces (a space is never valid unescaped in a
+    URL). Without this, a template's newlines or a text-like href such as
+    ``<a href="Read More">`` builds an un-fetchable URL (``.../Read More``)."""
+    if not value:
+        return ""
+    value = value.strip().translate({0x09: None, 0x0A: None, 0x0D: None})
+    return value.replace(" ", "%20")
+
+
 def tree(core: "Document") -> Any:
     """The parsed lxml root for a document (an element sub-core is its own
     element; otherwise parse ``content`` once and cache it on the core). Shared
@@ -600,10 +612,11 @@ class HtmlBacking(Backing):
             return _html_text(core, core.content or b"")  # graceful on a bogus charset
         root = self._tree(core)
         if format == "links":
+            base = core.final_url or core.url
             return [
-                from_url(urljoin(core.final_url or core.url, el.get("href")))
+                from_url(urljoin(base, href))
                 for el in root.cssselect("a[href]")
-                if el.get("href")
+                if (href := _clean_href(el.get("href")))
             ]
         if format == "markdown":
             target = _main_container(root) if options.get("main_content_only") else root
@@ -697,7 +710,7 @@ class HtmlBacking(Backing):
         el = core._element
         value = el.get(name) if el is not None else None
         if name in ("href", "src", "action"):
-            ref = from_url(urljoin(core.final_url or core.url, value or ""))
+            ref = from_url(urljoin(core.final_url or core.url, _clean_href(value)))
             ref._client = core._client  # inherit the client so it resolves
             return ref
         if value is None:  # absent attribute

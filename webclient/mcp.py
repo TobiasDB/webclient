@@ -47,7 +47,10 @@ def _crawl_result(crawl: Any) -> dict[str, Any]:
     return {
         "pages": [p.model_dump() for p in crawl.pages],
         "urls": [p.transport.final_url for p in crawl.pages if p.transport],
-        "frontier": [e.model_dump() for e in crawl.frontier],
+        # the frontier is sorted best-first; return only the top `width` so a big
+        # (esp. browser) crawl doesn't flood the client with low-value edges.
+        "frontier": [e.model_dump() for e in crawl.frontier[: crawl.width]],
+        "frontier_total": len(crawl.frontier),
         "done": crawl.done,
     }
 

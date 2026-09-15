@@ -298,6 +298,20 @@ def test_crawl_returns_page_summaries(client_and_server):
     assert data["done"] is True
 
 
+def test_crawl_frontier_is_capped_to_width(client_and_server):
+    # a large crawl must not flood the client: the returned frontier is capped to
+    # `width` (best-first), with the true size in `frontier_total`.
+    api, server = client_and_server
+    resp = api.post(
+        "/crawl",
+        headers=AUTH,
+        json={"url": server.url_for("/cards"), "max_pages": 1, "width": 1},
+    )
+    data = resp.json()
+    assert len(data["frontier"]) <= 1  # capped to width
+    assert data["frontier_total"] >= len(data["frontier"])  # true count reported
+
+
 def test_sitemap_maps_a_domain(client_and_server):
     api, server = client_and_server
     resp = api.post(

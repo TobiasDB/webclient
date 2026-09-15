@@ -275,6 +275,23 @@ def scored_site(httpserver):
     return httpserver
 
 
+def test_frontier_never_contains_whitespace_urls(wc, httpserver):
+    # a text-like or newline-padded href must not enter the frontier as an invalid
+    # URL with raw whitespace (regression: `<a href="Read More">` -> `.../Read More`).
+    body = (
+        '<a href="Read More">a</a>'
+        '<a href="  /padded  ">b</a>'
+        '<a href="\n/news\n">c</a>'
+    )
+    httpserver.expect_request("/").respond_with_data(
+        f"<html><body>{body}</body></html>", content_type="text/html"
+    )
+    with wc.crawl(httpserver.url_for("/"), browser=False) as crawl:
+        crawl.step()
+    for e in crawl.frontier:
+        assert " " not in e.url and "\n" not in e.url and "\t" not in e.url
+
+
 def test_frontier_drops_resource_links(wc, scored_site):
     # links to assets (a .png, a .css) are not crawlable pages -> filtered out.
     with wc.crawl(scored_site.url_for("/"), browser=False) as crawl:
