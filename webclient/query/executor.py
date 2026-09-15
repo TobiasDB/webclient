@@ -80,15 +80,6 @@ def _fanout_limit(client: Any) -> int:
     return cast(int, (limits or {}).get("http", DEFAULT_FANOUT))
 
 
-def _row_of(value: Any) -> dict[str, Any] | None:
-    if isinstance(value, dict):
-        return value
-    from ..core.web_core import WebCore
-
-    core = value if isinstance(value, WebCore) else getattr(value, "_core", None)
-    return getattr(core, "_row", None) if core is not None else None
-
-
 def truthy(value: Any) -> bool:
     """Whether an evaluated value counts as true (a not-ok surface/field is
     false; otherwise normal truthiness)."""
@@ -198,7 +189,9 @@ async def _aapply(
 async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -> Any:
     # field(k) / reference(k) read an extracted column off the element's _row
     if name in ("field", "reference"):
-        row = _row_of(value)
+        from ..collection import _row_of
+
+        row = _row_of(value, create=False)
         if row is not None:
             column = row.get(await _aarg(call.args[0], context, client))
             if name == "field":

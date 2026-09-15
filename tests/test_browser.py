@@ -338,3 +338,21 @@ def test_keep_alive_page_is_caller_owned(httpserver, wc):
     assert ttl_doc._page is not None
     time.sleep(1.0)
     assert ttl_doc._page is None  # TTL released it
+
+
+def test_plan_interact_then_select_sees_post_interaction_dom(httpserver, wc):
+    # a plan runs on the engine loop, so select takes the in-memory fallback; drain
+    # refreshes the doc's content after each interaction, so the fallback sees the
+    # post-click DOM (regression: it used to select the ORIGINAL render -> 0 matches).
+    from webclient import wq
+
+    app = (
+        '<html><body><button id="b" onclick="document.body.insertAdjacentHTML'
+        "('beforeend','<div class=added>NEW</div>')\">go</button></body></html>"
+    )
+    httpserver.expect_request("/i").respond_with_data(app, content_type="text/html")
+    rows = wc.execute(
+        wq.ref.resolve(browser="always").click("#b").select_all(".added").project(),
+        wc.ref(httpserver.url_for("/i")),
+    )
+    assert len(rows) == 1  # the click's node is visible to the subsequent select

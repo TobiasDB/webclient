@@ -90,6 +90,12 @@ def _kind(record: dict[str, Any]) -> str:
     return "removed" if record["removed"] and not record["added"] else "added"
 
 
+def _is_timeout(exc: BaseException) -> bool:
+    """Whether ``exc`` is a Playwright timeout (its many timeout classes all end in
+    ``TimeoutError``) -- the one place the stringly-typed heuristic lives."""
+    return "Timeout" in type(exc).__name__
+
+
 def _mutation_event(r: dict[str, Any], doc: Any, *, phase: str | None = None) -> DOMUpdateEvent:
     """Wrap one raw mutation record into a DOMUpdateEvent, carrying the position /
     size detail the runtime facet reads (``inMain`` / ``added`` / ``addedText``)."""
@@ -104,13 +110,18 @@ def _mutation_event(r: dict[str, Any], doc: Any, *, phase: str | None = None) ->
 
 
 async def drain(doc: Any) -> None:
-    """Move any pending DOM mutations off the page onto the document. A short
-    settle lets the observer's microtask deliver records from the last action."""
+    """After an interaction: move any pending DOM mutations onto the document AND
+    refresh its captured ``content`` from the (now-changed) live page, so a later
+    ``select`` / ``text_content`` / ``skeleton`` -- including the in-memory fallback
+    the plan evaluator takes on the engine loop -- sees the post-interaction DOM, not
+    the original render. A short settle lets the observer deliver the last records."""
     await doc._page.wait_for_timeout(30)
     result = await doc._page.evaluate(DRAIN_JS)
     muts = result.get("muts", []) if isinstance(result, dict) else result
     for r in muts:
         doc._events.append(_mutation_event(r, doc))
+    doc.content = (await doc._page.content()).encode()  # keep content current
+    doc._tree = None  # invalidate the cached lxml parse of the old content
 
 
 def console_event(level: str, text: str, doc: Any) -> ConsoleEvent:
@@ -237,9 +248,9 @@ class LiveBacking(Backing):
         try:
             await self._await_for(core, selector, timeout)
         except Exception as exc:  # a Playwright timeout -> structured miss (or lenient)
-            if optional and "Timeout" in type(exc).__name__:
-                return core
-            if "Timeout" in type(exc).__name__:
+            if _is_timeout(exc):
+                if optional:
+                    return core
                 raise select_error(f"wait_for: no {selector!r} within timeout") from exc
             raise
         return core
@@ -326,9 +337,9 @@ class LiveBacking(Backing):
             elif action == "write":
                 await loc.fill(text or "", timeout=ms)
         except Exception as exc:
-            if optional and "Timeout" in type(exc).__name__:
-                return
-            if "Timeout" in type(exc).__name__:
+            if _is_timeout(exc):
+                if optional:
+                    return
                 from ...errors import select_error
 
                 raise select_error(f"{action}: no target for {selector!r}") from exc

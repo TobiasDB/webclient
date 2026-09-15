@@ -828,11 +828,10 @@ class WebClient(WebCore, IWebClient):
         return await self.afetch(ref)  # plain HTTP refetch
 
     def release(self, doc: Document) -> None:
-        """Return a live document's page lease to the pool."""
+        """Return a live document's page lease to the pool (sync front door for
+        :meth:`_arelease`)."""
         if doc._lease is not None:
-            self.loop().run(self.pool.release(doc._lease))
-            doc._lease = None
-            doc._page = None
+            self.loop().run(self._arelease(doc))
 
     async def _arelease(self, doc: Document) -> None:
         """Release a browser render's page lease from *within* the engine loop (an
