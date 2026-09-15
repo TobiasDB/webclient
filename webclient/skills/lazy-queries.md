@@ -39,9 +39,13 @@ ops below. (`x == "In stock"` records a comparison; `if x == "In stock"` tries t
   collection). `limit=` / `offset=` bound it.
 
 **Values** (on an element):
-- `.attr("href" | "src" | "action")` → a link (resolvable); `.attr("other")` → a
-  field. Add `optional=True` for a missing attribute.
-- `.text_content` → the element's text. **A property — no parentheses.**
+- `.text_content` → the element's **text** (a property — no parentheses). This is
+  the *only* way to read text. There is no `text` attribute, so **never**
+  `.attr("text")`.
+- `.attr(name)` → reads the **HTML attribute** literally named `name` (`href`,
+  `src`, `class`, `data-id`, …), not text. `attr("href" | "src" | "action")` → a
+  link (resolvable); any other name → a field whose `.value` is the attribute
+  string. Add `optional=True` for an attribute that may be absent.
 - `.markdown()` / `.text()` / `.links()` / `.elements()` → rendered forms.
 
 **Navigation:**
@@ -77,8 +81,12 @@ parenthesise each side: `(a) & (b)`.
   targets the title *within that row*, not the whole page.
 - **Properties vs calls.** `text_content` / `title` are properties — no `()`.
   `attr(...)`, `select(...)`, `markdown()`, `project()` are calls.
+- **Text is `text_content`, never `attr("text")`.** `.text_content` returns the
+  element's text; `.attr(name)` returns the HTML attribute `name` (there is no
+  `text` attribute — `attr("text")` raises / yields nothing).
 - **`attr` return type.** `attr("href" | "src" | "action")` is a link (has
-  `.resolve()` / `.url`); any other attribute is a field (its text is its value).
+  `.resolve()` / `.url`); any other name is a field — its `.value` is the
+  attribute's string.
 - **`extract` is per-element.** Each column expr is evaluated on the current element
   (`wq.doc`), once per element in the collection.
 - **`project(Model)` is eager-only.** A model class is not part of a portable blob;
