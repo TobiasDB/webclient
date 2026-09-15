@@ -65,7 +65,9 @@ class JsonBacking(Backing):
 
     def render(self, core: "Document", format: str, **options: Any) -> Any:
         if format != "elements":
-            raise LookupError(f"no json render format {format!r}")
+            from ...errors import render_error
+
+            raise render_error(f"no json render format {format!r}")
         return _json_elements(self._data(core))
 
     def _data(self, core: "Document") -> Any:

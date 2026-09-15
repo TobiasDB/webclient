@@ -235,8 +235,11 @@ def main() -> None:
         # gives elements. Good cross-kind smoke test.
         page = shop
         print("title:      ", page.title)
-        print("markdown:   ", page.render("markdown").splitlines()[0])
-        print("text:       ", page.render("text", main_content_only=True)[:40])
+        print("markdown:   ", page.markdown().splitlines()[0])
+        print("text:       ", page.text(main_content_only=True)[:40])
+        # skeleton(): a token-lean tag#id.class DOM outline -- an LLM reads this to
+        # write CSS selectors for the page (see docs/llm-lazy-queries.md).
+        print("skeleton:   ", page.skeleton(max_lines=3).replace("\n", " | "))
         print("elements:   ", [(e.type, e.text) for e in page.render("elements")][:3])
         print("links:      ", [r.path for r in page.render("links")])
         print("html:       ", page.render("html").strip()[:40])

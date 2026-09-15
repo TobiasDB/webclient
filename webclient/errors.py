@@ -98,6 +98,16 @@ def select_error(message: str, *, selector: str | None = None) -> SelectError:
     )
 
 
+class RenderError(WebException, LookupError):
+    """An unknown / unavailable render format (e.g. ``render("pdf")``). A
+    ``WebException`` (so ``except WebException`` catches it) and a ``LookupError``
+    (back-compat)."""
+
+
+def render_error(message: str) -> RenderError:
+    return RenderError(WebError(type="RenderError", message=message, retriable=False))
+
+
 class RemoteError(Exception):
     """A remote ``/execute`` call returned a non-2xx response. ``error`` carries
     the server's structured ``WebError`` when it sent one (so ``.error.retriable``
@@ -137,6 +147,8 @@ __all__ = [
     "WebException",
     "SelectError",
     "select_error",
+    "RenderError",
+    "render_error",
     "FetchError",
     "RemoteError",
     "error_for",

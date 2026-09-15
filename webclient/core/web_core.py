@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 from pydantic import BaseModel
 
 from ..collection import Collection, Field
+from ..errors import WebError, WebException
 from ..query.expr import Expr, lazy_root
 from ..query.plan import Plan
 
@@ -26,13 +27,19 @@ from ..query.plan import Plan
 _CHATTY_ROUND_TRIPS = 4
 
 
-class UnsupportedOp(TypeError):
-    """An op no chosen backing provides (the receiver lacks the capability)."""
+class UnsupportedOp(WebException, TypeError):
+    """An op no chosen backing provides (the receiver lacks the capability, e.g.
+    ``markdown()``/``title`` on a json document). Both a ``WebException`` -- so one
+    ``except WebException`` catches it alongside fetch/select failures, with a
+    structured ``.error`` -- and a ``TypeError`` (back-compat)."""
 
     def __init__(self, op: str, have: frozenset[str]) -> None:
-        super().__init__(
+        msg = (
             f"{op!r} is not available here; this core has "
             f"{sorted(have) or 'no capabilities'}"
+        )
+        WebException.__init__(
+            self, WebError(type="UnsupportedOp", message=msg, retriable=False)
         )
         self.op, self.have = op, have
 

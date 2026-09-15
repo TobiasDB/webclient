@@ -79,6 +79,25 @@ def test_markdown_renders_nested_lists_with_indentation():
     assert "twonested" not in md
 
 
+def test_skeleton_is_a_selector_outline():
+    html = (
+        b"<html><head><script>x()</script><style>y</style></head><body>"
+        b'<main id="main" class="container"><ul class="list" id="results">'
+        b'<li class="item"><span class="title">One</span></li>'
+        b'<li class="item"><span class="title">Two</span></li>'
+        b'</ul><input type="text" name="q"></main></body></html>'
+    )
+    sk = Document(content=html, status_code=200).skeleton()
+    assert "main#main.container" in sk
+    assert "ul#results.list" in sk
+    assert "li.item ×2" in sk  # repeated siblings collapsed
+    assert "span.title" in sk
+    assert "input[type=text][name=q]" in sk
+    assert "script" not in sk and "style" not in sk  # bloat removed
+    # render("skeleton") is the same
+    assert Document(content=html, status_code=200).render("skeleton") == sk
+
+
 def test_text_renderer_is_readable():
     text = make_doc().render("text")
     assert "Big News" in text and "First bold paragraph" in text

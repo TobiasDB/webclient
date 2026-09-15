@@ -182,6 +182,66 @@ def _md_blocks(el: Any, out: list[str]) -> None:
             _md_blocks(child, out)
 
 
+#: tags with no selector value that only add tokens -- dropped from the skeleton.
+_SKELETON_SKIP = {
+    "script", "style", "noscript", "template", "svg", "path", "head", "meta",
+    "link", "br", "hr", "source", "track",
+}
+
+
+def _selector_sig(el: Any) -> str:
+    """A CSS-selector-style signature for one element: ``tag#id.class.class`` plus a
+    few selector-relevant attributes (``role``/``type``/``name``, ``[href]`` on a
+    link). Exactly what an LLM needs to target the element."""
+    tag = _tag(el)
+    parts = [tag]
+    eid = el.get("id")
+    if eid:
+        parts.append(f"#{eid}")
+    for cls in (el.get("class") or "").split():
+        parts.append(f".{cls}")
+    for attr in ("role", "type", "name"):
+        val = el.get(attr)
+        if val:
+            parts.append(f"[{attr}={val}]")
+    if tag == "a" and el.get("href") is not None:
+        parts.append("[href]")
+    return "".join(parts)
+
+
+def _skeleton(root: Any, *, max_lines: int = 400, text_chars: int = 40) -> str:
+    """A token-lean DOM skeleton: an indented outline of ``tag#id.class`` signatures
+    (script/style/svg/meta and other no-selector-value noise removed), with
+    consecutive same-signature siblings collapsed to ``… ×N`` and a short text hint
+    on leaf nodes. Keeps every class path and id so an LLM can write CSS selectors
+    for the page without wading through full HTML. Bounded to ``max_lines``."""
+    lines: list[str] = []
+
+    def walk(el: Any, depth: int) -> None:
+        children = [c for c in el if isinstance(c.tag, str) and _tag(c) not in _SKELETON_SKIP]
+        i = 0
+        while i < len(children):
+            if len(lines) >= max_lines:
+                lines.append("  " * depth + "…")
+                return
+            child = children[i]
+            sig = _selector_sig(child)
+            j = i + 1  # collapse a run of same-signature siblings
+            while j < len(children) and _selector_sig(children[j]) == sig:
+                j += 1
+            count = j - i
+            kept = [c for c in child if isinstance(c.tag, str) and _tag(c) not in _SKELETON_SKIP]
+            text = _norm("".join(child.itertext())) if not kept else ""
+            hint = f'  "{text[:text_chars]}…"' if len(text) > text_chars else (f'  "{text}"' if text else "")
+            suffix = f" ×{count}" if count > 1 else ""
+            lines.append("  " * depth + sig + suffix + hint)
+            walk(child, depth + 1)  # structure of the first representative
+            i = j
+
+    walk(root, 0)
+    return "\n".join(lines)
+
+
 def _main_container(root: Any) -> Any:
     found = root.cssselect(_MAIN)
     return found[0] if found else root
@@ -267,7 +327,7 @@ class HtmlBacking(Backing):
 
     provides = frozenset(
         {"select", "select_all", "attr", "render",
-         "markdown", "text", "html", "links", "elements"}
+         "markdown", "text", "html", "links", "elements", "skeleton"}
     )
     collections = frozenset({"select_all", "links"})  # return a Collection of cores
     props = frozenset({"text_content", "title"})
@@ -294,6 +354,14 @@ class HtmlBacking(Backing):
     def elements(self, core: "Document") -> "list[Element]":
         """The page as a flat list of typed content blocks."""
         return self.render(core, "elements")
+
+    def skeleton(self, core: "Document", *, max_lines: int = 400, text_chars: int = 40) -> str:
+        """A token-lean DOM skeleton -- an indented ``tag#id.class`` outline with the
+        bloat (scripts/styles/svg/…) removed, repeated siblings collapsed, and leaf
+        text hinted. Keeps every id and class path so an LLM can write CSS selectors
+        for the page cheaply (feed this instead of the raw HTML, then use the
+        selectors with ``select``/``select_all``/``extract``)."""
+        return _skeleton(self._tree(core), max_lines=max_lines, text_chars=text_chars)
 
     def applies(self, core: "Document") -> bool:
         return core.kind in ("html", "xml")
@@ -343,7 +411,11 @@ class HtmlBacking(Backing):
             )
         if format == "elements":
             return _html_elements(root)
-        raise LookupError(f"no html render format {format!r}")
+        if format == "skeleton":
+            return _skeleton(root, **options)
+        from ...errors import render_error
+
+        raise render_error(f"no html render format {format!r}")
 
     def _tree(self, core: "Document") -> Any:
         return tree(core)
