@@ -262,6 +262,26 @@ def test_stream_yields_rows_and_publishes_plan_events(site, wc):
     assert phases.count("row") == 3
 
 
+def test_stream_and_collect_agree(site, wc):
+    # F6: the streaming and eager paths share ONE shaping implementation, so a
+    # collected result and a streamed result of the same plan are identical --
+    # including a mixed extract + filter chain.
+    plan = (
+        ref.resolve()
+        .select_all(".card")
+        .extract(
+            title=doc.select(".title").text_content,
+            active=doc.select(".status").text_content == "Active",
+        )
+        .filter(doc.field("active"))
+        .project()
+    )
+    ctx = wc.ref(site.url_for("/cards"))
+    collected = plan.collect(ctx)
+    streamed = list(plan.stream(ctx))
+    assert collected == streamed and len(collected) >= 1
+
+
 def test_eager_and_lazy_agree(site, wc):
     page = wc.ref(site.url_for("/cards")).resolve().collect()
     cards = page.select_all(".card")

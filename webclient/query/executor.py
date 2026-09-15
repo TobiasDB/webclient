@@ -321,8 +321,7 @@ async def _astream_collection(
     """Stream the final fan-out of ``base`` under ``shaping`` as elements
     complete. Rows (``...project()``) or per-element op results are yielded the
     moment each element finishes; a filtered-out element yields nothing."""
-    from ..collection import Field, _raw, _row_of
-    from ..errors import RETURN, default_policy
+    from ..collection import Field, _row_of, apply_extract, survives_filters
 
     items = list(base)
     is_project = (
@@ -334,19 +333,15 @@ async def _astream_collection(
         ops = _parse_shaping(shaping[:-2], client)
 
         async def process(el: Any) -> Any:
-            with default_policy(RETURN):  # a missing field is None, not an abort
-                for kind, payload in ops:
-                    if kind == "extract":
-                        row = _row_of(el)
-                        if row is not None:
-                            for key, sub in payload.items():
-                                row[key] = _raw(await aevaluate(sub, el, client=client))
-                    else:  # filter: drop the element if any predicate is falsey
-                        for pred in payload:
-                            if not truthy(await aevaluate(pred, el, client=client)):
-                                return _DROP
-                shaped = _row_of(el, create=False)
-                return shaped if shaped is not None else el
+            # the SAME shaping primitives the eager Collection uses, so a streamed
+            # row and a collected row of the same plan are identical.
+            for kind, payload in ops:
+                if kind == "extract":
+                    await apply_extract(el, payload, client)
+                elif not await survives_filters(el, payload, client):
+                    return _DROP
+            shaped = _row_of(el, create=False)
+            return shaped if shaped is not None else el
 
     else:  # a terminal element op: apply it to each element on its own
 

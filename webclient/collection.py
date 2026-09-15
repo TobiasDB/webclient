@@ -89,6 +89,36 @@ def _row_of(element: Any, *, create: bool = True) -> dict[str, Any] | None:
     return cast("dict[str, Any] | None", core._row)
 
 
+async def apply_extract(element: Any, columns: dict[str, Any], client: Any) -> None:
+    """Annotate ``element``'s row with the evaluated columns (unwrapped, stored in
+    order so a later column can reference an earlier one). A missing field is
+    ``None`` under RETURN, never an abort. THE one row-extraction implementation --
+    shared by the eager (:meth:`Collection.aextract`) and streaming
+    (``executor._astream_collection``) paths so they cannot diverge."""
+    from .errors import RETURN, default_policy
+    from .query.executor import aevaluate
+
+    row = _row_of(element)
+    if row is None:
+        return
+    with default_policy(RETURN):
+        for key, expr in columns.items():
+            row[key] = _raw(await aevaluate(expr, element, client=client))
+
+
+async def survives_filters(element: Any, predicates: Any, client: Any) -> bool:
+    """Whether ``element`` passes every predicate (each evaluated leniently). The
+    one filter implementation, shared by eager and streaming paths."""
+    from .errors import RETURN, default_policy
+    from .query.executor import aevaluate, truthy
+
+    with default_policy(RETURN):
+        for pred in predicates:
+            if not truthy(await aevaluate(pred, element, client=client)):
+                return False
+    return True
+
+
 class Collection(Generic[T]):
     """A set of results (elements or rows). Iterable/indexable; the row-shaping
     ops evaluate sub-expressions per element, and element ops fan out."""
@@ -172,33 +202,22 @@ class Collection(Generic[T]):
         are evaluated in order against the element (a later column can reference
         an earlier one via ``field``; chained extracts accumulate); elements are
         evaluated concurrently, bounded by the pool. Fields store unwrapped."""
-        from .errors import RETURN, default_policy
-        from .query.executor import aevaluate, fan_out
+        from .query.executor import fan_out
 
         async def one(el: Any) -> None:
-            row = _row_of(el)
-            if row is None:
-                return
-            for key, expr in exprs.items():
-                row[key] = _raw(await aevaluate(expr, el, client=self._client))
+            await apply_extract(el, exprs, self._client)
 
-        with default_policy(RETURN):  # a missing field is None, not an abort
-            await fan_out(list(self._items), one, limit=self._limit())
+        await fan_out(list(self._items), one, limit=self._limit())
         return self._derive(self._items)
 
     async def afilter(self, *predicates: Any) -> "Collection[T]":
         """Keep the elements for which every predicate is truthy."""
-        from .errors import RETURN, default_policy
-        from .query.executor import aevaluate, fan_out, truthy
+        from .query.executor import fan_out
 
         async def keep(el: Any) -> bool:
-            for p in predicates:
-                if not truthy(await aevaluate(p, el, client=self._client)):
-                    return False
-            return True
+            return await survives_filters(el, predicates, self._client)
 
-        with default_policy(RETURN):
-            flags = await fan_out(list(self._items), keep, limit=self._limit())
+        flags = await fan_out(list(self._items), keep, limit=self._limit())
         kept = [el for el, ok in zip(self._items, flags) if ok]
         return self._derive(kept)
 
