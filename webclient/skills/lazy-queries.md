@@ -1,109 +1,119 @@
 ---
 name: lazy-web-queries
 description: >-
-  Write lazy extraction queries (plans) that pull structured data out of a web
-  page. Covers the whole query DSL — the `wq` roots, select/select_all/attr/
-  text_content, extract/filter/project, the operators, and portable blobs. This is
-  the query syntax only: you do not need to know how the page is fetched, rendered,
-  or which client runs the plan.
+  Spec and examples for authoring lazy extraction queries — plans that pull
+  structured data out of a web page. Covers the whole query DSL: the `wq` roots,
+  select/select_all/attr/text_content, extract/filter/project, the operators, and
+  portable blobs. Query syntax only — nothing about fetching, rendering, or running.
 ---
 
-# Writing lazy web queries
+# Lazy web queries — spec & examples
 
-A **lazy query** records a *plan* — a chain of steps. Nothing runs while you build
-it; the plan executes only when something collects it (against a page as context).
-The same plan you write here runs locally, async, or over the wire, and serialises
-to a short blob. Your job is to write the plan; how and where it runs is not your
-concern.
+A **query** is a *plan*: a recorded chain of steps. Building it runs nothing; the
+plan executes only when a runner collects it against a page. You are given one
+namespace, `wq`, to build from. That is the entire surface you need.
 
-## The one rule that matters
+## The one rule
 
-**A lazy value records, it does not run.** So never use Python's control words on
-one — no `and` / `or` / `not`, no `bool()`, `len()`, `if`, or `for`. Use the
-operators and the row-shaping ops below instead. (`text_content == "In stock"`
-records a comparison step; `if text_content == ...` would try to run it and fail.)
+**A lazy value records, it does not run.** Never use Python control words on one —
+no `and` / `or` / `not`, no `bool()`, `len()`, `if`, or `for`. Use the operators and
+ops below. (`x == "In stock"` records a comparison; `if x == "In stock"` tries to
+*run* the recording and fails.)
 
-## Roots — start every plan from `wq`
+## Roots
 
-```python
-from webclient import wq
-```
+| root | is |
+|---|---|
+| `wq.ref` | the page/context the plan is run against |
+| `wq.doc` | the current element — used inside `extract` / `filter` |
+| `wq.field("col")` | the value of a column already extracted |
+| `wq.reference("col")` | a column that holds a link (to follow with `.resolve()`) |
 
-| root | is | use it for |
-|---|---|---|
-| `wq.ref` | the page/reference the plan is run against | a whole "resolve → extract" plan |
-| `wq.doc` | the current element (inside `extract` / `filter`) | per-row / per-element sub-queries |
-| `wq.field("col")` | an already-extracted column value | referencing an earlier column |
-| `wq.reference("col")` | a column that holds a link (`Reference`) | following a link you extracted |
+## Steps (the grammar)
 
-`wq.ref.resolve()` turns the run context into the page; from there you select and
-shape. `wq.doc` is how you reach *into* each row while shaping it.
+**Selection** (on a page or element; selection nests):
+- `.select("css | xpath")` → the first match, as an element. A miss raises; pass
+  `optional=True` (or `error=RETURN`) for a not-ok element instead. `index=` picks
+  the n-th match.
+- `.select_all("css")` → a collection of every match (an empty match is still a
+  collection). `limit=` / `offset=` bound it.
 
-## Building blocks
-
-Chain these; each returns a new lazy node.
-
-- `.select("css or xpath")` → the first match, as a sub-element (selection nests).
-  A miss raises — pass `optional=True` (or `error=RETURN`) to get a not-ok node instead.
-- `.select_all("css")` → a collection of every match (an empty match is still a collection).
-- `.attr("href" | "src" | "action")` → a link `Reference` (resolvable); any other
-  attribute → a `Field` (its value is `.value`, or use it directly in a comparison).
+**Values** (on an element):
+- `.attr("href" | "src" | "action")` → a link (resolvable); `.attr("other")` → a
+  field. Add `optional=True` for a missing attribute.
 - `.text_content` → the element's text. **A property — no parentheses.**
-- `.markdown()` / `.text()` / `.links()` / `.elements()` → rendered forms of an element.
-- `.extract(col=expr, …)` → attach columns to each element in a collection; each
-  `expr` is a `wq.doc…` sub-query evaluated on that element.
-- `.filter(pred, …)` → keep the elements where every predicate is truthy.
-- `.project()` → materialise to `list[dict]`. `.project(Model)` → `list[Model]`
-  (a pydantic model; eager-only — see gotchas).
-- `.is_ok()` / `.is_empty()` → lazy booleans (use with `filter`).
+- `.markdown()` / `.text()` / `.links()` / `.elements()` → rendered forms.
 
-## Operators (not keywords)
+**Navigation:**
+- `.resolve()` turns a link (or `wq.ref`) into its page, so you can select into it.
 
-Comparisons and logic on lazy values use symbols:
+**Shaping** (on a collection):
+- `.extract(col=expr, …)` → attach columns to each element; each `expr` is a
+  `wq.doc…` sub-query evaluated on that element.
+- `.filter(pred, …)` → keep elements where every predicate is truthy.
+- `.project()` → materialise to a list of dict rows. `.project(Model)` → a list of
+  a model class you pass.
+- `.is_ok()` / `.is_empty()` → lazy booleans, for use in `filter`.
 
-`==` `!=` `<` `<=` `>` `>=` for comparison; `&` (and) `|` (or) `~` (not) to combine.
-Wrap each side of `&`/`|` in parentheses: `(a) & (b)`.
+**Portability** (on a plan):
+- `.to_blob()` → the plan as a short JSON string (store or hand off).
+- `.explain()` → a readable one-line rendering of the recorded chain.
+
+## Operators (symbols, never keywords)
+
+Comparison: `==` `!=` `<` `<=` `>` `>=`. Logic: `&` (and) `|` (or) `~` (not) —
+parenthesise each side: `(a) & (b)`.
+
+## Behaviour
+
+- **Records, never runs.** A step returns a new lazy node; nothing evaluates until
+  the plan is collected. So the operators above — not `and`/`or`/`not`/`bool()` —
+  and no `if`/`for`/`len()` on a lazy value.
+- **Loud by default.** Every op that can miss (`select`, `attr`, …) raises on a
+  miss. Pass `optional=True` (or `error=RETURN`) for a not-ok result you branch on
+  with `.is_ok()` / `.is_empty()`.
+- **Selection nests and scopes.** A selected element is itself selectable, and a
+  sub-query scopes to it: after `.select_all(".item")`, `wq.doc.select(".title")`
+  targets the title *within that row*, not the whole page.
+- **Properties vs calls.** `text_content` / `title` are properties — no `()`.
+  `attr(...)`, `select(...)`, `markdown()`, `project()` are calls.
+- **`attr` return type.** `attr("href" | "src" | "action")` is a link (has
+  `.resolve()` / `.url`); any other attribute is a field (its text is its value).
+- **`extract` is per-element.** Each column expr is evaluated on the current element
+  (`wq.doc`), once per element in the collection.
+- **`project(Model)` is eager-only.** A model class is not part of a portable blob;
+  project to dict rows in a blob and validate into a model after the plan runs.
 
 ## Examples
 
-### Rows → list of dicts
+Rows → list of dicts:
 ```python
-from webclient import wq
-
-plan = (
+(
     wq.ref.resolve()
-    .select_all(".item")                                  # one node per row
+    .select_all(".item")
     .extract(
         title=wq.doc.select(".title").text_content,
         price=wq.doc.select(".price").text_content,
-        url=wq.doc.select("a").attr("href"),              # a Reference
+        url=wq.doc.select("a").attr("href"),
     )
-    .project()                                            # -> list[dict]
+    .project()
 )
 ```
 
-### Rows → a typed model
+Rows → a typed model (pass any model class to `project`):
 ```python
-from pydantic import BaseModel
-from webclient import wq
-
-class Product(BaseModel):
-    title: str = ""
-    price: str = ""
-
-plan = (
+(
     wq.ref.resolve()
     .select_all(".item")
     .extract(title=wq.doc.select(".title").text_content,
              price=wq.doc.select(".price").text_content)
-    .project(Product)                                     # -> list[Product]
+    .project(Product)
 )
 ```
 
-### Filter rows
+Filter — keep in-stock rows (reference an extracted column with `wq.field`):
 ```python
-# keep in-stock rows (reference a column you extracted with wq.field)
-plan = (
+(
     wq.ref.resolve()
     .select_all(".item")
     .extract(title=wq.doc.select(".title").text_content,
@@ -111,9 +121,11 @@ plan = (
     .filter(wq.field("in_stock"))
     .project()
 )
+```
 
-# keep rows WITHOUT a `.sold-out` badge (optional select + ~ + is_ok)
-plan = (
+Filter — keep rows WITHOUT a `.sold-out` badge (optional select + `~` + `is_ok`):
+```python
+(
     wq.ref.resolve()
     .select_all(".item")
     .filter(~wq.doc.select(".sold-out", optional=True).is_ok())
@@ -121,10 +133,9 @@ plan = (
 )
 ```
 
-### Follow a link you extracted
-`attr("href")` yields a `Reference`; `wq.reference("col")` follows a column holding one.
+Follow a link you extracted (`wq.reference` follows a column holding a link):
 ```python
-plan = (
+(
     wq.ref.resolve()
     .select_all(".item")
     .extract(link=wq.doc.select("a").attr("href"))
@@ -133,26 +144,8 @@ plan = (
 )
 ```
 
-### Hand a plan off as a blob
-A plan serialises to a short JSON blob; it can be rebuilt, name-validated, and
-pretty-printed before it runs.
+Serialise / inspect a plan:
 ```python
-from webclient import from_blob
-
-blob = plan.to_blob()          # a compact JSON string — safe to store or send
-plan.explain()                 # readable: Reference.resolve().select_all('.item')…
-from_blob(blob)                # rebuild it elsewhere, then run against a page
+plan.to_blob()    # -> a compact JSON string, portable and safe to store or send
+plan.explain()    # -> "Reference.resolve().select_all('.item').extract(...)"
 ```
-
-## Gotchas
-
-- `text_content` / `title` are **properties** — no `()`. `attr(...)`, `select(...)`,
-  `markdown()`, `project()` are calls.
-- Every op that can miss (`select`, `attr`, `click`, `write`, `wait_for`) is loud by
-  default. Pass `optional=True` (or `error=RETURN`) for a not-ok node you can branch
-  on with `.is_ok()`; otherwise a miss raises.
-- `select` scopes to the current element, so `.select_all(".item")` then
-  `wq.doc.select(".title")` targets the title *within that row*.
-- `.project(Model)` is eager-only — a model class is not part of the serialisable
-  plan. Project to plain dicts in a portable plan, or validate the dicts into a
-  model after the plan runs.
