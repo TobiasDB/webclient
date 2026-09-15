@@ -206,13 +206,14 @@ class RemoteWebClientCore(WebClient):
         seeds: Any,
         *,
         scope: str | None = None,
-        auto: bool = False,
+        auto: bool = True,
         width: int = 10,
         depth: int = 3,
         max_pages: int = 50,
         same_origin: bool = True,
         obey_robots: bool = True,
-        browser: bool = False,
+        browser: bool = True,
+        resolve: Any = None,
         keywords: list[str] | None = None,
         include: str | None = None,
         exclude: str | None = None,
@@ -222,7 +223,8 @@ class RemoteWebClientCore(WebClient):
         returns a finished :class:`Crawl`. ``auto`` (always on server-side) and
         ``scope`` (derived from the seed host) are accepted for signature parity
         with the local client but not sent -- use a local client for turn-based
-        steering."""
+        steering. ``browser`` (default on, as locally) and ``resolve`` (a policy
+        bundle) are sent so the server renders / fetches under the same policy."""
         urls = _seed_urls(seeds)
         return self._remote_crawl(
             "/crawl",
@@ -234,6 +236,7 @@ class RemoteWebClientCore(WebClient):
                 "same_origin": same_origin,
                 "obey_robots": obey_robots,
                 "browser": browser,
+                "resolve": resolve.model_dump() if resolve is not None else None,
                 "keywords": keywords,
                 "include": include,
                 "exclude": exclude,
@@ -249,10 +252,17 @@ class RemoteWebClientCore(WebClient):
         width: int = 20,
         max_pages: int = 1000,
         use_sitemap_xml: bool = True,
+        browser: bool = False,
+        resolve: Any = None,
     ) -> "Crawl":
         target = url if isinstance(url, str) else str(getattr(url, "url", url))
         return self._remote_crawl(
-            "/sitemap", {"url": target, "depth": depth, "width": width, "max_pages": max_pages}
+            "/sitemap",
+            {
+                "url": target, "depth": depth, "width": width, "max_pages": max_pages,
+                "browser": browser,
+                "resolve": resolve.model_dump() if resolve is not None else None,
+            },
         )
 
     def release(self, doc: Document) -> None:

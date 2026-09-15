@@ -83,7 +83,12 @@ class Session(WebClient):
 
     # -- fetch: the parent's pipeline + this session's identity --------------
     async def afetch(
-        self, ref: Reference, *, optional: bool = False, browser: Any = False
+        self,
+        ref: Reference,
+        *,
+        optional: bool = False,
+        browser: Any = False,
+        resolve: Any = None,
     ) -> Any:
         self._guard()
         scoped = ref.model_copy(
@@ -94,7 +99,9 @@ class Session(WebClient):
         )
         scoped._client = self
         scoped._session = self
-        doc = await super().afetch(scoped, optional=optional, browser=browser)
+        doc = await super().afetch(
+            scoped, optional=optional, browser=browser, resolve=resolve
+        )
         doc.session_id = self.id
         for event in doc._events:
             event.session_id = self.id

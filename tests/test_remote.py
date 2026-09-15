@@ -80,7 +80,7 @@ def test_remote_crawl_runs_server_side(remote):
     from webclient import Crawl
 
     rc, server = remote
-    crawl = rc.crawl(server.url_for("/cards"), auto=True, max_pages=3, obey_robots=False)
+    crawl = rc.crawl(server.url_for("/cards"), auto=True, max_pages=3, obey_robots=False, browser=False)
     assert isinstance(crawl, Crawl) and crawl.done
     urls = [p.transport.final_url for p in crawl.pages if p.transport]
     assert any(u.endswith("/cards") for u in urls)
@@ -112,7 +112,7 @@ def test_remote_crawl_step_fails_cleanly(remote):
     # F5-b: a remote crawl runs to completion; calling step() on it raises a clear
     # error instead of shipping a malformed plan (500).
     rc, server = remote
-    crawl = rc.crawl(server.url_for("/cards"), auto=True, max_pages=2, obey_robots=False)
+    crawl = rc.crawl(server.url_for("/cards"), auto=True, max_pages=2, obey_robots=False, browser=False)
     with pytest.raises(NotImplementedError, match="remote"):
         crawl.step()
 

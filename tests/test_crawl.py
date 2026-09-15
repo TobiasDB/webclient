@@ -44,7 +44,7 @@ def _urls(crawl: Crawl) -> list[str]:
 
 
 def test_auto_crawl_stays_same_origin(wc, site):
-    with wc.crawl(site.url_for("/"), auto=True, max_pages=10) as crawl:
+    with wc.crawl(site.url_for("/"), auto=True, max_pages=10, browser=False) as crawl:
         crawl.run()
     urls = _urls(crawl)
     assert any(u.endswith("/a") for u in urls)  # followed same-origin links
@@ -53,19 +53,19 @@ def test_auto_crawl_stays_same_origin(wc, site):
 
 
 def test_robots_disallow_is_honoured(wc, site):
-    with wc.crawl(site.url_for("/"), auto=True, max_pages=20) as crawl:
+    with wc.crawl(site.url_for("/"), auto=True, max_pages=20, browser=False) as crawl:
         crawl.run()
     assert not any(u.endswith("/private") for u in _urls(crawl))
 
 
 def test_robots_can_be_ignored(wc, site):
-    with wc.crawl(site.url_for("/"), auto=True, max_pages=20, obey_robots=False) as crawl:
+    with wc.crawl(site.url_for("/"), auto=True, max_pages=20, obey_robots=False, browser=False) as crawl:
         crawl.run()
     assert any(u.endswith("/private") for u in _urls(crawl))
 
 
 def test_turn_based_frontier_is_caller_driven(wc, site):
-    with wc.crawl(site.url_for("/")) as crawl:
+    with wc.crawl(site.url_for("/"), browser=False) as crawl:
         crawl.step()  # fetch the seed only
         assert len(crawl.pages) == 1
         edges = {e.url for e in crawl.frontier}
@@ -80,14 +80,14 @@ def test_turn_based_frontier_is_caller_driven(wc, site):
 def test_keywords_drive_best_first(wc, site):
     # width=1 forces a choice each round; "pricing" should steer toward /docs.
     with wc.crawl(
-        site.url_for("/"), auto=True, keywords=["pricing"], width=1, max_pages=3
+        site.url_for("/"), auto=True, keywords=["pricing"], width=1, max_pages=3, browser=False
     ) as crawl:
         crawl.run()
     assert any("pricing" in u.lower() for u in _urls(crawl))
 
 
 def test_edges_carry_anchor_text(wc, site):
-    with wc.crawl(site.url_for("/")) as crawl:
+    with wc.crawl(site.url_for("/"), browser=False) as crawl:
         crawl.step()
         docs = next(e for e in crawl.frontier if e.url.endswith("/docs"))
     assert "Pricing" in docs.text  # anchor text kept (the keyword signal)
@@ -103,7 +103,7 @@ def test_sitemap_is_an_eager_single_domain_crawl(wc, site):
 def test_crawl_chooses_which_facets_each_page_carries(wc, site):
     # ``facets`` restricts each page's summary to the named backings.
     with wc.crawl(
-        site.url_for("/"), auto=True, max_pages=5, facets=["transport"]
+        site.url_for("/"), auto=True, max_pages=5, facets=["transport"], browser=False
     ) as crawl:
         crawl.run()
     assert crawl.pages  # crawled something
@@ -115,7 +115,7 @@ def test_crawl_dedups_seed_variants(wc, site):
     # two seeds that canonicalise to the same target collapse to one edge.
     with wc.crawl(
         [site.url_for("/a"), site.url_for("/a/"), site.url_for("/a?utm_source=x")],
-        max_pages=10,
+        max_pages=10, browser=False,
     ) as crawl:
         assert len(crawl.frontier) == 1  # deduped at seed time
 
@@ -132,23 +132,51 @@ def test_crawl_canonicalises_urls_for_dedup(wc, httpserver):
     httpserver.expect_request("/page").respond_with_data(
         "<html><body>page</body></html>", content_type="text/html"
     )
-    with wc.crawl(httpserver.url_for("/"), auto=True, max_pages=10, obey_robots=False) as crawl:
+    with wc.crawl(httpserver.url_for("/"), auto=True, max_pages=10, obey_robots=False, browser=False) as crawl:
         crawl.run()
     page_hits = [u for u in _urls(crawl) if u.rstrip("/").endswith("/page")]
     assert len(page_hits) == 1  # the four variants collapsed to one fetch
 
 
 def test_facets_default_lives_on_the_model(wc, site):
-    # the lean default is declared on the model field (not applied deep in step):
-    # a crawl built with no `facets` already carries DEFAULT_FACETS.
-    from webclient.core.crawl.models import DEFAULT_FACETS
+    # the default facets are declared on the model (not applied deep in step): a
+    # static crawl carries DEFAULT_FACETS; a browser crawl also gets `runtime`
+    # (the model validator adds it) -- and that holds whether built bare or via
+    # the client verb.
+    from webclient.core.crawl.models import DEFAULT_FACETS, default_facets
 
-    assert Crawl().facets == list(DEFAULT_FACETS)  # bare model
-    assert wc.crawl(site.url_for("/")).facets == list(DEFAULT_FACETS)  # via client
+    assert Crawl(browser=False).facets == list(DEFAULT_FACETS)
+    assert Crawl(browser=True).facets == default_facets(browser=True)  # + runtime
+    assert "runtime" in Crawl(browser=True).facets
+    assert wc.crawl(site.url_for("/"), browser=False).facets == list(DEFAULT_FACETS)
+    assert wc.crawl(site.url_for("/")).facets == default_facets(browser=True)
+
+
+def test_crawl_defaults_to_auto_and_browser(wc, site):
+    # the common case is "map this site": self-driving (auto) with a browser render
+    # so JS links load. Both are on by default.
+    crawl = wc.crawl(site.url_for("/"))
+    assert crawl.auto is True and crawl.browser is True
+    # opt-outs are honoured.
+    static = wc.crawl(site.url_for("/"), auto=False, browser=False)
+    assert static.auto is False and static.browser is False
+
+
+def test_crawl_accepts_a_resolve_policy(wc, site):
+    # a crawl can carry its own resiliency policy (retry/rate/proxy/anti-bot); it
+    # is threaded into every fetch the crawl makes.
+    from webclient import Resolve
+
+    pol = Resolve.auto()
+    crawl = wc.crawl(site.url_for("/"), browser=False, resolve=pol)
+    assert crawl.resolve == pol
+    with crawl:  # and a static crawl under a policy still runs offline
+        crawl.step()
+    assert crawl.pages
 
 
 def test_crawl_prints_a_readable_digest(wc, site):
-    with wc.crawl(site.url_for("/")) as crawl:
+    with wc.crawl(site.url_for("/"), browser=False) as crawl:
         crawl.step()
         text = str(crawl)  # inspect mid-crawl (still running)
     assert "crawl [running]" in text and "page(s)" in text
@@ -165,7 +193,7 @@ def test_default_crawl_carries_the_decision_facets_not_browser_ones(wc, site):
     from webclient.core.crawl.models import DEFAULT_FACETS
 
     assert DEFAULT_FACETS == ("transport", "metadata", "structure")
-    with wc.crawl(site.url_for("/"), auto=True, max_pages=5) as crawl:
+    with wc.crawl(site.url_for("/"), auto=True, max_pages=5, browser=False) as crawl:
         crawl.run()
     assert crawl.pages
     assert all(p.transport is not None for p in crawl.pages)
@@ -205,7 +233,7 @@ def test_sitemaps_on_a_site_without_one_is_empty(wc, site):
 def test_step_keeps_unfetched_edges_when_budget_is_nearly_full(wc, site):
     # L4: a step must not discard chosen edges it had no budget to fetch -- they
     # stay in the frontier for a later step.
-    with wc.crawl(site.url_for("/"), auto=True, max_pages=2) as crawl:
+    with wc.crawl(site.url_for("/"), auto=True, max_pages=2, browser=False) as crawl:
         crawl.step()                 # fetch the seed -> pages=1, discovers /a, /docs
         assert len(crawl.pages) == 1 and len(crawl.frontier) >= 2
         crawl.step()                 # room for only 1 more; the other edge survives
@@ -213,7 +241,7 @@ def test_step_keeps_unfetched_edges_when_budget_is_nearly_full(wc, site):
 
 
 def test_context_manager_closes_the_crawl(wc, site):
-    with wc.crawl(site.url_for("/")) as crawl:
+    with wc.crawl(site.url_for("/"), browser=False) as crawl:
         assert crawl.status == "running"
     assert crawl.status == "closed"  # aexit fired via the backing lifecycle
 
@@ -249,7 +277,7 @@ def scored_site(httpserver):
 
 def test_frontier_drops_resource_links(wc, scored_site):
     # links to assets (a .png, a .css) are not crawlable pages -> filtered out.
-    with wc.crawl(scored_site.url_for("/")) as crawl:
+    with wc.crawl(scored_site.url_for("/"), browser=False) as crawl:
         crawl.step()
     paths = [_path_of(e.url) for e in crawl.frontier]
     assert "/logo.png" not in paths and "/style.css" not in paths
@@ -259,7 +287,7 @@ def test_frontier_drops_resource_links(wc, scored_site):
 def test_frontier_scores_and_sorts_useful_links_first(wc, scored_site):
     # the important links (article "read more", nav) must outrank the footer's
     # legal + social links, and the frontier is sorted by that score by default.
-    with wc.crawl(scored_site.url_for("/")) as crawl:
+    with wc.crawl(scored_site.url_for("/"), browser=False) as crawl:
         crawl.step()
     by_path = {_path_of(e.url): e for e in crawl.frontier}
     read_more = by_path["/news/2026/09/big-announcement-today"]
@@ -282,7 +310,7 @@ def test_keyword_match_dominates_importance_score(wc, scored_site):
     from webclient.core.crawl.backing import CrawlBacking
 
     b = CrawlBacking()
-    with wc.crawl(scored_site.url_for("/"), keywords=["privacy"]) as crawl:
+    with wc.crawl(scored_site.url_for("/"), keywords=["privacy"], browser=False) as crawl:
         crawl.step()
         by_path = {_path_of(e.url): e for e in crawl.frontier}
         privacy = by_path["/privacy"]  # keyword match, footer (low importance)

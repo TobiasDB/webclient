@@ -218,7 +218,10 @@ class CrawlBacking(Backing):
             if core.obey_robots and not await self._allowed(core, edge.url):
                 continue
             doc = await core._client.afetch(
-                core._client.ref(edge.url), optional=True, browser=core.browser
+                core._client.ref(edge.url),
+                optional=True,
+                browser=core.browser,
+                resolve=core.resolve,
             )
             if not doc.ok:
                 continue
@@ -370,7 +373,9 @@ class CrawlBacking(Backing):
 
         p = urlparse(sample_url)
         doc = await core._client.afetch(
-            core._client.ref(f"{p.scheme}://{p.netloc}/robots.txt"), optional=True
+            core._client.ref(f"{p.scheme}://{p.netloc}/robots.txt"),
+            optional=True,
+            resolve=core.resolve,
         )
         if not doc.ok or not doc.content:
             return None

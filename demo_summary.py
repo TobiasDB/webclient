@@ -239,7 +239,7 @@ def main() -> None:
             "7. CRAWL -- a scored, sorted frontier",
             "map a site; the useful links (nav / 'read more') surface first.",
         )
-        with wc.crawl(f"{base}/", max_pages=4) as crawl:
+        with wc.crawl(f"{base}/", max_pages=4, browser=False) as crawl:
             crawl.step()
             call("crawl.step(); print(crawl)")
             out(crawl)

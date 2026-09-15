@@ -387,16 +387,26 @@ class WebClient(WebCore, IWebClient):
         return doc, resp
 
     async def afetch(
-        self, ref: Reference, *, optional: bool = False, browser: Any = False
+        self,
+        ref: Reference,
+        *,
+        optional: bool = False,
+        browser: Any = False,
+        resolve: Any = None,
     ) -> Document:
         """Resolve ``ref`` into a document over a leased transport (http) or a
         browser page. ``browser`` picks the tier: ``False``/``"never"`` = static
         only, ``True``/``"always"`` = straight to a browser, ``"auto"`` (or a
         ``BrowserPolicy(when="auto")``) = static first, escalating to a browser
         render only when the page is JS-gated (the Crawlee adaptive rule). A
-        retriable failure is retried up to ``retries`` times with exp backoff."""
+        retriable failure is retried up to ``retries`` times with exp backoff.
+        ``resolve`` (a :class:`Resolve` bundle) overrides the client's own policy
+        for this fetch -- its rate/retry/proxy concerns are declared to a downstream
+        proxy service, and its ``retry.max`` bounds the local retry loop."""
         import asyncio
 
+        pol = resolve if resolve is not None else self.resolve
+        max_retries = pol.retry.max if pol is not None else self.retries
         mode = _browser_mode(browser)
         if self.block_private_hosts and await self._host_blocked(ref):
             doc = Document(
@@ -419,14 +429,14 @@ class WebClient(WebCore, IWebClient):
         # declare the resolve policy (rate/retry/proxy) to a downstream proxy
         # service as X-WebClient-* headers; explicit headers still win over them.
         headers = {
-            **policy_headers(self.resolve),
+            **policy_headers(pol),
             **self.default_headers,
             **ref.headers,
         }
         await self._pace(ref.hostname)  # self-guards on the shared engine's interval
         doc, resp = await self._afetch_once(ref, headers)
         attempt = 0
-        while doc.error is not None and doc.error.retriable and attempt < self.retries:
+        while doc.error is not None and doc.error.retriable and attempt < max_retries:
             delay = self.retry_backoff * (2**attempt)
             if resp is not None:  # honour a server-sent Retry-After (429/503)
                 after = _retry_after_seconds(resp.headers.get("retry-after"))
@@ -623,31 +633,45 @@ class WebClient(WebCore, IWebClient):
         seeds: Any,
         *,
         scope: str | None = None,
-        auto: bool = False,
+        auto: bool = True,
         width: int = 10,
         depth: int = 3,
         max_pages: int = 50,
         same_origin: bool = True,
         obey_robots: bool = True,
-        browser: bool = False,
+        browser: bool = True,
+        resolve: Any = None,
         keywords: list[str] | None = None,
         include: str | None = None,
         exclude: str | None = None,
         facets: list[str] | None = None,
     ) -> "Crawl":
         """A scoped site traversal sharing this engine (a :class:`Crawl` core). The
-        client manages the frontier (dedup, scope, fetching); the caller steers each
-        round (``crawl.step(select)``) or lets it self-drive (``auto=True`` -> the
-        top-``width`` edges best-first by ``keywords``). Use as a context manager.
-        ``facets`` picks which summary backings each fetched page carries (``None``
-        / empty -> the lean ``crawl.DEFAULT_FACETS``, not every facet -- a full
-        summary per page is wasteful at crawl scale; pass ``facets=list(FACETS)``
-        for the full summary)."""
+        client manages the frontier (dedup, scope, fetching); use it as a context
+        manager and read ``.pages`` / ``.frontier``.
+
+        Defaults are tuned for the common "map this site" case:
+
+        * ``auto=True`` -- self-drive: each ``step`` / ``run`` expands the top-``width``
+          frontier edges best-first (by ``keywords`` when given, else by the
+          importance score). Pass ``auto=False`` to hand-step the frontier yourself.
+        * ``browser=True`` -- render every page, so JS/lazy-loaded links and content
+          are seen and the page's XHR/data-API calls are captured into the frontier.
+          Most sites today are JS-heavy, and a static crawl silently misses their
+          links. Needs Playwright; pass ``browser=False`` for a pure-static crawl
+          (much faster, no render) when you know the site is server-rendered.
+
+        ``resolve`` (a :class:`Resolve` bundle) sets the resiliency policy the crawl
+        fetches under -- retry / rate / proxy / anti-bot (e.g. ``Resolve.auto()`` or
+        a proxy pool); ``None`` inherits this client's own ``resolve``. ``facets``
+        picks which summary backings each page carries -- default
+        ``crawl.DEFAULT_FACETS`` (transport/metadata/structure), plus ``runtime`` on
+        a browser crawl; pass ``facets=list(FACETS)`` for everything or a subset to
+        narrow it."""
         from ..crawl import Crawl, Edge
-        from ..crawl.models import DEFAULT_FACETS
 
         urls = _seed_urls(seeds)
-        core = Crawl(
+        kwargs: dict[str, Any] = dict(
             scope=scope or (from_url(urls[0]).hostname if urls else ""),
             auto=auto,
             width=width,
@@ -656,13 +680,15 @@ class WebClient(WebCore, IWebClient):
             same_origin=same_origin,
             obey_robots=obey_robots,
             browser=browser,
+            resolve=resolve,
             keywords=[k.lower() for k in (keywords or [])],
             include=include,
             exclude=exclude,
-            facets=list(facets or DEFAULT_FACETS),
             frontier=[Edge(url=u, depth=0) for u in urls],
         )
-        return core.bind(self)
+        if facets:  # else the model's default (+ runtime on a browser crawl) applies
+            kwargs["facets"] = list(facets)
+        return Crawl(**kwargs).bind(self)
 
     def sitemap(
         self,
@@ -672,6 +698,8 @@ class WebClient(WebCore, IWebClient):
         width: int = 20,
         max_pages: int = 1000,
         use_sitemap_xml: bool = True,
+        browser: bool = False,
+        resolve: Any = None,
     ) -> "Crawl":
         """Map a site: an eager, single-domain :meth:`crawl` in auto mode, run to
         completion -- HEAVY (fetches up to ``max_pages`` pages). Returns the finished
@@ -680,13 +708,19 @@ class WebClient(WebCore, IWebClient):
         :meth:`discover_sitemaps` instead -- ``sitemap`` runs a crawl.) ``use_sitemap_xml``
         (default on) first discovers the site's real ``sitemap.xml`` URLs
         (:meth:`discover_sitemaps`) and seeds the frontier with them, so a declared sitemap
-        is honoured; it still link-crawls to fill in whatever the sitemap omits."""
+        is honoured; it still link-crawls to fill in whatever the sitemap omits.
+
+        Unlike :meth:`crawl`, ``browser`` defaults **off** here: mapping up to
+        ``max_pages`` pages with a render each is prohibitively slow, and URL
+        discovery rarely needs JS. Pass ``browser=True`` to render anyway;
+        ``resolve`` sets the fetch policy as in :meth:`crawl`."""
         seeds: list[Any] = [url]
         if use_sitemap_xml:
             discovered = self.dispatch("discover_sitemaps", url)
             seeds += [r.url for r in discovered]
         return self.crawl(
-            seeds, auto=True, depth=depth, width=width, max_pages=max_pages
+            seeds, auto=True, depth=depth, width=width, max_pages=max_pages,
+            browser=browser, resolve=resolve,
         ).run()
 
     # -- live / browser ------------------------------------------------------

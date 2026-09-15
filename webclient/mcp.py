@@ -85,6 +85,7 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
         c = wc().crawl(
             a["url"], auto=True,
             max_pages=int(a.get("max_pages", 20)),
+            browser=a.get("browser", True),
             keywords=a.get("keywords"),
             include=a.get("include"), exclude=a.get("exclude"),
             facets=a.get("facets"),
@@ -124,12 +125,15 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
         Tool("discover_sitemaps", "Discover a site's real sitemap.xml page URLs.",
              _schema(url={**_URL, "_required": True}), discover_sitemaps),
         Tool("crawl", "Bounded, same-origin crawl from a seed URL; a summary per page "
-             "plus the unresolved frontier. Resource links (images/scripts/media) are "
-             "dropped and each edge carries an importance 'score' (nav/'read more'/"
-             "article high, footer/legal/social low); the frontier is sorted by it, so "
-             "the useful links lead. Steer with 'keywords'/'include'/'exclude'.",
+             "plus the unresolved frontier. Renders each page in a browser by default "
+             "(browser=true) so JS/lazy links load -- set browser=false for a faster "
+             "static crawl of a server-rendered site. Resource links (images/scripts/"
+             "media) are dropped and each edge carries an importance 'score' (nav/'read "
+             "more'/article high, footer/legal/social low); the frontier is sorted by "
+             "it, so the useful links lead. Steer with 'keywords'/'include'/'exclude'.",
              _schema(url={**_URL, "_required": True},
                      max_pages={"type": "integer"},
+                     browser={"type": "boolean"},
                      keywords={"type": "array", "items": {"type": "string"}},
                      include={"type": "string"}, exclude={"type": "string"},
                      facets={"type": "array", "items": {"type": "string"}}), crawl),

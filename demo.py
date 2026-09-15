@@ -185,7 +185,7 @@ def main() -> None:
         #      LLM-efficient .summary() per page + the unresolved frontier edges --
         #      resource links dropped, and scored + sorted by importance (nav /
         #      "read more" / article links high, footer / legal / social low).
-        with wc.crawl(f"{base}/feed", auto=True, max_pages=4) as crawl:
+        with wc.crawl(f"{base}/feed", auto=True, max_pages=4, browser=False) as crawl:
             crawl.step()  # one turn: fetch the seed, discover its edges
             print("frontier:   ", [(round(e.score, 2), e.url.replace(base, ""))
                                     for e in crawl.frontier])

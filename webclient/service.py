@@ -249,6 +249,15 @@ def create_app(
         return {"id": sid, "status": "closed"}
 
     # -- crawl / sitemap -----------------------------------------------------
+    def _resolve_of(value: Any) -> "Any":
+        """Rebuild a :class:`Resolve` policy bundle from a request body's ``resolve``
+        (a dict from the remote client's ``model_dump``); ``None`` when absent."""
+        if not value:
+            return None
+        from .core.reference.models import Resolve
+
+        return Resolve.model_validate(value)
+
     def _crawl_engine(body: dict[str, Any]) -> "Any":
         """The engine a crawl runs on: a named ``session`` (so it fetches with that
         session's identity / cookies -- e.g. crawling behind a login) or, by
@@ -265,12 +274,15 @@ def create_app(
         """Build and run a crawl on ``engine`` (a client or session); the caller
         turns the finished crawl into a response. Raises WebException on a failure."""
         url = body["url"]
+        resolve = _resolve_of(body.get("resolve"))
         if sitemap:
             return engine.sitemap(
                 url,
                 depth=int(body.get("depth", 2)),
                 width=int(body.get("width", 20)),
                 max_pages=int(body.get("max_pages", 1000)),
+                browser=bool(body.get("browser", False)),
+                resolve=resolve,
             )
         return engine.crawl(
             url,
@@ -281,6 +293,7 @@ def create_app(
             same_origin=bool(body.get("same_origin", True)),
             obey_robots=bool(body.get("obey_robots", True)),
             browser=bool(body.get("browser", False)),
+            resolve=resolve,
             keywords=body.get("keywords"),
             include=body.get("include"),
             exclude=body.get("exclude"),
