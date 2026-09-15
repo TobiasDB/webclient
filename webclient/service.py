@@ -297,18 +297,25 @@ def create_app(
             keywords=body.get("keywords"),
             include=body.get("include"),
             exclude=body.get("exclude"),
-            facets=body.get("facets"),
         ).run()
 
     def _crawl_response(crawl: Any) -> "dict[str, Any]":
-        """The LLM-efficient crawl result: a summary per page + the unresolved
-        frontier edges (and the flat URL list, for a site map). The frontier is
-        sorted best-first and capped to ``width`` so a large (esp. browser) crawl
-        doesn't flood the client with low-value edges (``frontier_total`` is the
-        true count)."""
+        """The crawl result over the wire: a lean per-page record (url / status /
+        kind / title -- a Document can't cross HTTP, so its content stays server-
+        side) plus the unresolved frontier edges. The frontier is capped to ``width``
+        (best-first) so a large crawl doesn't flood the client (``frontier_total`` is
+        the true count)."""
+        def page(doc: Any) -> dict[str, Any]:
+            return {
+                "url": doc.final_url or doc.url,
+                "status": doc.status_code,
+                "kind": doc.kind,
+                "title": doc.title if doc.has_op("title") else None,
+            }
+
         return {
-            "pages": [p.model_dump() for p in crawl.pages],
-            "urls": [p.transport.final_url for p in crawl.pages if p.transport],
+            "pages": [page(p) for p in crawl.pages],
+            "urls": [p.final_url or p.url for p in crawl.pages],
             "frontier": [e.model_dump() for e in crawl.frontier[: crawl.width]],
             "frontier_total": len(crawl.frontier),
             "done": crawl.done,
@@ -318,7 +325,7 @@ def create_app(
     def crawl(
         body: dict[str, Any], authorization: str | None = Header(default=None)
     ) -> "dict[str, Any] | JSONResponse":
-        """Bounded, same-origin crawl from ``url`` -> a ``.summary()`` per page plus
+        """Bounded, same-origin crawl from ``url`` -> a lean handle per page plus
         the unresolved frontier. Steer it with ``keywords`` (best-first),
         ``include``/``exclude``, ``max_pages``/``depth``/``width``."""
         _auth(authorization)
@@ -448,23 +455,6 @@ def create_app(
         wc_: WebClient = app.state.wc
         browser = body.get("browser", False)
         return _run_verb(lambda: wc_.fetch(url, browser=browser).skeleton())
-
-    @app.post("/summary", response_model=None)
-    def summary(
-        body: dict[str, Any], authorization: str | None = Header(default=None)
-    ) -> "dict[str, Any] | JSONResponse":
-        """Fetch ``url`` and return its :class:`Summary` (``facets`` picks which
-        backing sections; ``browser`` picks the transport tier)."""
-        _auth(authorization)
-        url = _verb_url(body)
-        if isinstance(url, JSONResponse):
-            return url
-        wc_: WebClient = app.state.wc
-        facets = body.get("facets") or []
-        browser = body.get("browser", False)
-        return _run_verb(
-            lambda: wc_.fetch(url, browser=browser).summary(*facets).model_dump()
-        )
 
     @app.post("/discover_sitemaps", response_model=None)
     def discover_sitemaps(

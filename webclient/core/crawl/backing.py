@@ -89,17 +89,16 @@ class CrawlBacking(Backing):
             )
             if not doc.ok:
                 continue
-            if core.browser:  # captured the render + its XHR events; free the page
-                await core._client._arelease(doc)  # (also lets select run in-memory)
-            # the crawl decides which backings populate each page's summary;
-            # ``core.facets`` already carries the (lean-by-default) selection.
-            core.pages.append(doc.summary(*core.facets))
+            # expand the frontier BEFORE releasing the page (needs the DOM), then
+            # free the browser page -- its content is retained on the Document, so
+            # the crawl keeps the whole doc (extract facets/content from it later).
             if edge.depth < core.max_depth and doc.kind in ("html", "xml"):
                 self._expand(core, doc, edge.depth + 1)
             if core.browser and edge.depth < core.max_depth:
-                # a browser render observed the page's XHR/fetch calls -- add those
-                # data-API endpoints to the frontier so the crawl covers them too.
                 self._expand_xhr(core, doc, edge.depth + 1)
+            if core.browser:  # captured the render + its XHR events; free the page
+                await core._client._arelease(doc)  # (content kept; select in-memory)
+            core.pages.append(doc)
         return core
 
     async def run(self, core: "Crawl") -> "Crawl":

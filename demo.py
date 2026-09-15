@@ -175,17 +175,17 @@ def main() -> None:
 
         # [M2] Crawl: a client-held, scoped traversal used as a context manager.
         #      The client manages the frontier (dedup/scope); the caller steers a
-        #      round (crawl.step(select)) or lets it self-drive (auto). Output is an
-        #      LLM-efficient .summary() per page + the unresolved frontier edges --
-        #      resource links dropped, and scored + sorted by importance (nav /
-        #      "read more" / article links high, footer / legal / social low).
+        #      round (crawl.step(select)) or lets it self-drive (auto). It retains
+        #      the resolved Documents (extract/facet off them) + the unresolved
+        #      frontier edges -- resource links dropped, and scored + sorted by
+        #      importance (nav / "read more" / article links high, footer low).
         with wc.crawl(f"{base}/feed", auto=True, max_pages=4, browser=False) as crawl:
             crawl.step()  # one turn: fetch the seed, discover its edges
             print("frontier:   ", [(round(e.score, 2), e.url.replace(base, ""))
                                     for e in crawl.frontier])
             crawl.run()   # then let it self-drive the rest
-            print("crawled:    ", [p.transport.final_url.replace(base, "")
-                                    for p in crawl.pages if p.transport])
+            print("crawled:    ", [(p.final_url or p.url).replace(base, "")
+                                    for p in crawl.pages])
         # sitemap: an eager, single-domain crawl -> pages + edges (site map)
         smap = wc.sitemap(f"{base}/", depth=1, width=10)
         print("sitemap:    ", len(smap.pages), "pages,", len(smap.frontier), "edges")
@@ -293,7 +293,7 @@ def main() -> None:
         #      its content via JS, so probe reports was_browser_required with the
         #      count of extra words the browser recovered.
         probed = wc.fetch(f"{base}/spa", browser="probe")
-        pr = probed.summary().probe
+        pr = probed.probe()
         assert pr is not None  # probe mode always records the comparison
         print(
             "probe:      ",
@@ -411,7 +411,6 @@ def main() -> None:
 
         # [P6] Search is not a verb or a config type -- it is just an expression:
         #      resolve the query URL, pick the result nodes, extract a row each.
-        #      summary() (a genuine digest) resolves a page to title + markdown.
         hits = (
             wc.ref(f"{base}/?q=coffee")
             .resolve()
@@ -424,23 +423,19 @@ def main() -> None:
             .project()
         )
         print("search:     ", [(h["title"], h["url"]) for h in hits])
-        # summary(): a token-lean, deterministic overview -- facet sections
-        # (transport / metadata / structure), keys-not-values.
-        overview = wc.summary(f"{base}/")
-        assert overview.transport and overview.metadata and overview.structure
+        # A page overview is no longer a Summary aggregator -- it is just the facet
+        # ops (transport / metadata / structure) composed by the caller, each a
+        # token-lean, deterministic section keyed not valued.
+        page = wc.fetch(f"{base}/")
         print(
-            "summary:    ",
+            "facets:     ",
             {
-                "ok": overview.transport.ok,
-                "title": overview.metadata.title,
-                "headings": len(overview.structure.toc),
-                "cdn": overview.transport.cdn,
+                "ok": page.transport().ok,
+                "title": page.metadata().title,
+                "headings": len(page.structure().toc),
+                "cdn": page.transport().cdn,
             },
         )
-        # summary() also takes arbitrary backing methods by name (-> .extra),
-        # so a crawl can decide exactly which backings populate each page.
-        rich = wc.summary(f"{base}/", "transport", "title")
-        print("summary+meth:", {"title": rich.extra.get("title")})
 
         # [D] Serialisable expressions: an LLM writes a lazy plan, encodes it to a
         #     short blob, and rebuilds + validates + pretty-prints it before running.

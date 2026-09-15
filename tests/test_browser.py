@@ -147,7 +147,7 @@ def test_probe_mode_flags_js_injected_content(httpserver, wc):
         assert p is not None and p.was_browser_required is True
         assert p.js_required is True and p.render_gain and p.render_gain > 0
         assert p.reason == "js_injected_content" and p.escalation == ["static", "browser"]
-        facet = doc.summary().probe
+        facet = doc.probe()
         assert facet is not None and facet.was_browser_required and facet.render_gain > 0
     finally:
         wc.release(doc)

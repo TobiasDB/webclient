@@ -176,11 +176,11 @@ def test_namespaced_xml_is_parsed_as_xml(httpserver, wc):
 
 
 def test_binary_transport_facet_still_works(httpserver, wc):
-    # summary's transport facet applies to any kind (metadata/structure do not).
+    # the transport facet applies to any kind; metadata/structure gate on a tree.
     httpserver.expect_request("/bin").respond_with_data(b"\x00\x01\x02", content_type="application/octet-stream")
-    s = wc.fetch(httpserver.url_for("/bin")).summary()
-    assert s.transport is not None and s.transport.kind == "binary"
-    assert s.metadata is None and s.structure is None
+    doc = wc.fetch(httpserver.url_for("/bin"))
+    assert doc.transport().kind == "binary"
+    assert not doc.has_op("metadata") and not doc.has_op("structure")
 
 
 # -- the Reference.expect hint end to end --------------------------------------

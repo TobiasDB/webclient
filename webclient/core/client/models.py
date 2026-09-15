@@ -20,7 +20,6 @@ from ..reference.models import Resolve
 if TYPE_CHECKING:
     from ...collection import Collection  # noqa: F401  (sitemaps -> Collection)
     from ..document import Document  # noqa: F401  (fetch -> Document)
-    from ..document.models import Summary  # noqa: F401  (summary -> Summary)
     from ..reference import Reference  # noqa: F401  (ref/sitemaps -> Reference)
 
 
@@ -50,7 +49,6 @@ class IWebClient(BaseModel):
         def discover_sitemaps(self, url: Any, *, limit: int = ...) -> "Collection[Reference]": ...
         def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ..., **kw: Any) -> "Document": ...
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "Reference": ...
-        def summary(self, url: Any, *include: str, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., resolve: Any = ..., optional: bool = ..., error: Any = ..., exclude: Any = ..., **kw: Any) -> "Summary": ...
         # fmt: on
         # >>> end generated <<<
         pass

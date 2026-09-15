@@ -1,10 +1,11 @@
-"""Summary facet backings: transport / metadata / structure -- deterministic
-projections of a resolved Document (keys-not-values, no escalation)."""
+"""Facet ops: transport / metadata / structure / runtime -- deterministic
+projections of a resolved Document (keys-not-values, no escalation), each a
+first-class Document op (there is no aggregating summary())."""
 
 import pytest
 
 from webclient import WebClient
-from webclient.summary import Metadata, Structure, Summary, Transport
+from webclient.core.document.models import Metadata, Runtime, Structure, Transport
 
 PAGE = """
 <html lang="en">
@@ -79,47 +80,12 @@ def test_structure_facet_maps_body_shape(page):
     assert s.word_count and s.reading_time_min == 1
 
 
-def test_summary_unifier_assembles_and_selects_facets(page):
-    full = page.summary()  # default: every applicable facet
-    assert isinstance(full, Summary)
-    assert full.transport and full.metadata and full.structure
-    assert (
-        full.runtime is None and full.probe is None
-    )  # not applicable to a static fetch
-    assert full.metadata.title == "Widgets"
-
-    only = page.summary("transport", "metadata")
-    assert only.transport and only.metadata and only.structure is None
-
-    less = page.summary(exclude="structure")
-    assert less.transport and less.metadata and less.structure is None
-
-
-def test_summary_includes_arbitrary_backing_methods_as_extra(page):
-    # a name that is not a facet but is a backing op (``title``) is called and
-    # placed under ``extra`` -- the open mechanism a crawl uses to pick backings.
-    s = page.summary("transport", "title")
-    assert s.transport and s.metadata is None  # only the named facet
-    assert s.extra == {"title": "Widgets"}
-    # default (no include) carries no extra section.
-    assert page.summary().extra == {}
-
-
-def test_summary_rejects_an_unknown_facet_name(page):
-    # a typo is an error, not a silently-dropped section (E-M3).
-    import pytest
-
-    with pytest.raises(LookupError, match="structrue"):
-        page.summary("transport", "structrue")
-
-
 def test_runtime_facet_reads_captured_browser_events():
     # runtime reads DOM/network events a browser render captured -- no browser
     # needed for the projection itself, so we seed the events directly.
     from webclient.core.document import Document
     from webclient.core.document.live import network_event
     from webclient.events import DOMUpdateEvent
-    from webclient.summary import Runtime
 
     doc = Document(
         kind="html",
@@ -139,8 +105,6 @@ def test_runtime_facet_reads_captured_browser_events():
     assert {c.method for c in r.xhr_endpoints} == {"GET", "POST"}
     assert any("api/items" in c.url for c in r.xhr_endpoints)
     assert r.dynamic_elements == ["added:#cart"]
-    # the unifier now includes the runtime section (it applies -- events captured)
-    assert doc.dispatch("summary").runtime is not None
 
 
 def _load_mut(*, in_main=True):
@@ -196,7 +160,6 @@ def test_content_from_xhr_needs_main_injection_plus_own_origin_data():
     ]
     r = doc.dispatch("runtime")
     assert r.content_from_xhr is True and r.injected_in_main is True and r.is_spa is True
-    assert "content from XHR" in str(doc.dispatch("summary"))
 
     # same injection but only THIRD-party data -> not content_from_xhr
     doc2 = Document(kind="html", url="https://blog.acme.com/",
@@ -237,27 +200,3 @@ def test_metadata_and_structure_absent_on_json(httpserver):
         # metadata/structure gate on an html/xml tree
         assert not doc.has_op("metadata")
         assert not doc.has_op("structure")
-
-
-def test_summary_prints_readable_llm_text(page):
-    # print(summary) yields a compact digest of the present facets, not a pydantic
-    # repr -- the form an LLM reads directly.
-    text = str(page.summary())
-    assert "[200 ok]" in text
-    assert "title: Widgets" in text
-    assert "description: The finest widgets." in text
-    assert "lang=en" in text
-    assert "headings: Widgets > Blue > Red" in text
-    assert "form(s)" in text and "post" in text
-    # an empty summary is labelled, not blank.
-    from webclient.summary import Summary
-
-    assert str(Summary()) == "(empty summary)"
-
-
-def test_summary_skeleton_field_is_opt_in(page):
-    # skeleton is a typed field, populated only when requested by name (kept out of
-    # the default lean summary).
-    assert page.summary().skeleton is None
-    s = page.summary("skeleton")
-    assert s.skeleton is not None and "form" in s.skeleton

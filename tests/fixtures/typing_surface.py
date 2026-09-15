@@ -35,7 +35,7 @@ from webclient.surfaces import (
     LazyReference,
 )
 from webclient.query.plan import Plan
-from webclient.summary import Summary, Transport
+from webclient.core.document.models import Transport
 
 
 class _Row(BaseModel):
@@ -106,8 +106,6 @@ for _card in _page.select_all(".card"):  # iterating a Collection yields the ele
 # -- eager client surface: every verb resolves immediately (no collect()) ----
 assert_type(_wc.ref("https://e.com"), Reference)
 assert_type(_wc.fetch("https://e.com"), Document)
-assert_type(_wc.summary("https://e.com"), Summary)
-assert_type(_wc.fetch("https://e.com").summary(), Summary)
 assert_type(_wc.fetch("https://e.com").transport(), Transport)
 assert_type(
     _wc.fetch("https://e.com")
@@ -128,7 +126,6 @@ assert_type(
 # -- .lazy: the batching/deferring recorder on the same client ---------------
 assert_type(_wc.lazy.ref("https://e.com"), LazyReference)
 assert_type(_wc.lazy.fetch("https://e.com"), LazyDocument)
-assert_type(_wc.lazy.summary("https://e.com").collect(), Summary)
 assert_type(_wc.lazy.fetch("https://e.com").select(".t"), LazyDocument)
 assert_type(_wc.lazy.fetch("https://e.com").text_content.collect(), Field[str])
 assert_type(_wc.lazy.ref("https://e.com").resolve().collect(), Document)
@@ -141,7 +138,6 @@ async def _async_surface() -> None:
     # await at the IO boundary; IO ops on the async surface are awaitable, so a
     # chain like ref -> resolve -> select -> attr -> resolve stays typed
     assert_type(await _ac.fetch("https://e.com"), AsyncDocument)
-    assert_type(await _ac.summary("https://e.com"), Summary)
     assert_type(await _ac.ref("https://e.com").resolve(), AsyncDocument)
     _adoc = await _ac.fetch("https://e.com")
     assert_type(_adoc.text_content, str | None)  # in-memory ops stay sync

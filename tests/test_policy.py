@@ -1,4 +1,4 @@
-"""Resolve policies (data) + the ``probe`` summary facet (their read-side). P0:
+"""Resolve policies (data) + the ``probe`` facet op (their read-side). P0:
 the models exist and the facet projects a recorded ProbeRecord; the escalation
 ladder that would write richer records lands in later phases.
 """
@@ -48,13 +48,13 @@ def _doc(**kw):
 
 def test_probe_facet_absent_without_a_record():
     doc = _doc(content=b"<html><title>T</title></html>")
-    assert doc.summary().probe is None  # a plain fetch records nothing
+    assert not doc.has_op("probe")  # a plain fetch records nothing to probe
 
 
 def test_probe_facet_projects_the_record():
     doc = _doc(content=b"<html></html>")
     doc._probe = ProbeRecord(was_browser_required=True, final_tier="browser")
-    probe = doc.summary().probe
+    probe = doc.probe()
     assert probe is not None and probe.was_browser_required is True
     assert probe.paywall is None  # lean: false flags project to None
 
@@ -62,6 +62,6 @@ def test_probe_facet_projects_the_record():
 def test_probe_facet_reports_anti_bot():
     doc = _doc(content=b"<html></html>")
     doc._probe = ProbeRecord(anti_bot="cloudflare", was_proxy_required=True)
-    s = doc.summary("probe")  # facet selectable by name
-    assert s.probe is not None
-    assert s.probe.anti_bot == "cloudflare" and s.probe.was_proxy_required is True
+    probe = doc.probe()  # the probe facet is its own op
+    assert probe is not None
+    assert probe.anti_bot == "cloudflare" and probe.was_proxy_required is True

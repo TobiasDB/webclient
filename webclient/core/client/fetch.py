@@ -1,8 +1,8 @@
-"""FetchBacking: the client's authoring verbs (``ref``/``lazy``/``fetch``/
-``summary``) -- eager and real like every backing op, returning real cores/values.
-It is the *surface* that is lazy: the client records these calls into a plan and
-the executor dispatches them here at run time (the IO ops hand back a coroutine
-when already on the engine loop, bridged otherwise -- like ``Reference.resolve``)."""
+"""FetchBacking: the client's authoring verbs (``ref``/``fetch``) -- eager and real
+like every backing op, returning real cores/values. It is the *surface* that is
+lazy: the client records these calls into a plan and the executor dispatches them
+here at run time (the IO ops hand back a coroutine when already on the engine loop,
+bridged otherwise -- like ``Reference.resolve``)."""
 
 from __future__ import annotations
 
@@ -13,20 +13,18 @@ from ..reference import HttpMethod, Reference, from_url
 from ..web_core import Backing
 
 if TYPE_CHECKING:
-    from ...summary import Summary
     from . import WebClient
 
 
 class FetchBacking(Backing):
     """The client's authoring verbs -- eager and real like every backing op,
-    returning real cores/values (``ref -> Reference``, ``fetch ->
-    Document``, ``summary -> dict``). It is the *surface* that is lazy: the
-    client records these calls into a plan and the executor dispatches them here
-    at run time (the IO ops hand back a coroutine when already on the engine
-    loop, bridged otherwise -- like ``Reference.resolve``)."""
+    returning real cores/values (``ref -> Reference``, ``fetch -> Document``). It is
+    the *surface* that is lazy: the client records these calls into a plan and the
+    executor dispatches them here at run time (the IO ops hand back a coroutine when
+    already on the engine loop, bridged otherwise -- like ``Reference.resolve``)."""
 
-    provides = frozenset({"ref", "fetch", "summary"})
-    io = frozenset({"fetch", "summary"})  # resolve+project cross the IO bridge
+    provides = frozenset({"ref", "fetch"})
+    io = frozenset({"fetch"})  # resolve crosses the IO bridge
     gate = "ok"
 
     def ref(
@@ -65,32 +63,6 @@ class FetchBacking(Backing):
         return await core.afetch(
             ref, optional=lenient(optional, error), browser=browser, keep_alive=keep_alive
         )
-
-    async def summary(
-        self,
-        core: "WebClient",
-        url: Any,
-        *include: str,
-        browser: "bool | Literal['never', 'auto', 'always', 'probe']" = False,
-        resolve: Any = None,
-        optional: bool = False,
-        error: Any = None,
-        exclude: Any = (),
-        **kw: Any,
-    ) -> "Summary":
-        """Resolve ``url`` and project it to a :class:`Summary`. ``include`` selects
-        facets (default: all applicable), ``exclude`` drops some. The resolve knobs
-        mirror :meth:`fetch`: ``browser`` picks the transport tier (``"auto"`` /
-        ``True`` / ``"probe"``), ``resolve`` sets the resiliency policy, and
-        ``optional`` / ``error`` make a miss lenient. Remaining ``**kw`` builds the
-        reference (``method`` / ``params`` / ``headers`` / ``expect`` …)."""
-        from ...errors import lenient
-
-        ref = self.ref(core, url, **kw)
-        doc = await core.afetch(
-            ref, optional=lenient(optional, error), browser=browser, resolve=resolve
-        )
-        return doc.summary(*include, exclude=exclude)  # typed: Document implements its ops
 
 
 __all__ = ["FetchBacking"]

@@ -40,7 +40,7 @@ def site(httpserver):
 
 
 def _urls(crawl: Crawl) -> list[str]:
-    return [p.transport.final_url for p in crawl.pages if p.transport]
+    return [p.final_url or p.url for p in crawl.pages]  # pages are Documents now
 
 
 def test_auto_crawl_stays_same_origin(wc, site):
@@ -100,15 +100,17 @@ def test_sitemap_is_an_eager_single_domain_crawl(wc, site):
     assert all("external.example" not in u for u in _urls(sm))
 
 
-def test_crawl_chooses_which_facets_each_page_carries(wc, site):
-    # ``facets`` restricts each page's summary to the named backings.
-    with wc.crawl(
-        site.url_for("/"), auto=True, max_pages=5, facets=["transport"], browser=False
-    ) as crawl:
+def test_crawl_pages_are_documents_you_extract_from(wc, site):
+    # a crawl keeps the resolved Documents (not a projected summary): extract any
+    # facet / content per page as an expression.
+    from webclient import Document
+
+    with wc.crawl(site.url_for("/"), auto=True, max_pages=5, browser=False) as crawl:
         crawl.run()
-    assert crawl.pages  # crawled something
-    assert all(p.transport is not None for p in crawl.pages)
-    assert all(p.structure is None and p.metadata is None for p in crawl.pages)
+    assert crawl.pages and all(isinstance(p, Document) for p in crawl.pages)
+    seed = crawl.pages[0]
+    assert seed.transport().kind == "html"  # facet ops still work on the doc
+    assert isinstance(seed.markdown(), str)  # and content is retained
 
 
 def test_crawl_dedups_seed_variants(wc, site):
@@ -136,20 +138,6 @@ def test_crawl_canonicalises_urls_for_dedup(wc, httpserver):
         crawl.run()
     page_hits = [u for u in _urls(crawl) if u.rstrip("/").endswith("/page")]
     assert len(page_hits) == 1  # the four variants collapsed to one fetch
-
-
-def test_facets_default_lives_on_the_model(wc, site):
-    # the default facets are declared on the model (not applied deep in step): a
-    # static crawl carries DEFAULT_FACETS; a browser crawl also gets `runtime`
-    # (the model validator adds it) -- and that holds whether built bare or via
-    # the client verb.
-    from webclient.core.crawl.models import DEFAULT_FACETS, default_facets
-
-    assert Crawl(browser=False).facets == list(DEFAULT_FACETS)
-    assert Crawl(browser=True).facets == default_facets(browser=True)  # + runtime
-    assert "runtime" in Crawl(browser=True).facets
-    assert wc.crawl(site.url_for("/"), browser=False).facets == list(DEFAULT_FACETS)
-    assert wc.crawl(site.url_for("/")).facets == default_facets(browser=True)
 
 
 def test_crawl_defaults_to_auto_and_browser(wc, site):
@@ -182,23 +170,6 @@ def test_crawl_prints_a_readable_digest(wc, site):
     assert "crawl [running]" in text and "page(s)" in text
     assert "pages:" in text and "[200]" in text
     assert "frontier (best first):" in text
-
-
-def test_default_crawl_carries_the_decision_facets_not_browser_ones(wc, site):
-    # no `facets` -> DEFAULT_FACETS: transport + metadata + structure (the "is it
-    # ok / what is it / what's on it" facets an LLM maps a site with -- structure
-    # is free since the crawl already parses each page to expand links). The
-    # browser-only facets (runtime/probe) stay out -- they only apply after a
-    # render, so on a static crawl they are empty anyway.
-    from webclient.core.crawl.models import DEFAULT_FACETS
-
-    assert DEFAULT_FACETS == ("transport", "metadata", "structure")
-    with wc.crawl(site.url_for("/"), auto=True, max_pages=5, browser=False) as crawl:
-        crawl.run()
-    assert crawl.pages
-    assert all(p.transport is not None for p in crawl.pages)
-    assert any(p.structure is not None for p in crawl.pages)  # structure carried
-    assert all(p.runtime is None and p.probe is None for p in crawl.pages)
 
 
 def test_sitemaps_discovers_urls_from_robots_and_sitemap_xml(wc, httpserver):

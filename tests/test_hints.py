@@ -16,7 +16,7 @@ from webclient.query.hints import (
     return_type,
     safe_type_check,
 )
-from webclient.summary import Summary, Transport
+from webclient.core.document.models import Runtime, Transport
 
 
 # -- safe_type_check (typeguard) --------------------------------------------
@@ -70,9 +70,9 @@ def test_text_content_prop_is_str():
     assert return_type(Document, "text_content") == (str | None)
 
 
-def test_summary_and_transport_facets_resolve_models():
-    assert return_type(Document, "summary") is Summary
+def test_facet_ops_resolve_their_models():
     assert return_type(Document, "transport") is Transport
+    assert return_type(Document, "runtime") is Runtime
 
 
 def test_reference_resolve_returns_document_core():

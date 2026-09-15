@@ -45,8 +45,13 @@ def _schema(**props: Any) -> dict[str, Any]:
 
 def _crawl_result(crawl: Any) -> dict[str, Any]:
     return {
-        "pages": [p.model_dump() for p in crawl.pages],
-        "urls": [p.transport.final_url for p in crawl.pages if p.transport],
+        # a lean per-page record (the crawl holds Documents; a tool returns JSON)
+        "pages": [
+            {"url": p.final_url or p.url, "status": p.status_code, "kind": p.kind,
+             "title": p.title if p.has_op("title") else None}
+            for p in crawl.pages
+        ],
+        "urls": [p.final_url or p.url for p in crawl.pages],
         # the frontier is sorted best-first; return only the top `width` so a big
         # (esp. browser) crawl doesn't flood the client with low-value edges.
         "frontier": [e.model_dump() for e in crawl.frontier[: crawl.width]],
@@ -74,10 +79,6 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
     def skeleton(a: dict[str, Any]) -> str:
         return wc().fetch(a["url"], browser=a.get("browser", False)).skeleton()
 
-    def summary(a: dict[str, Any]) -> dict[str, Any]:
-        facets = a.get("facets") or []
-        return wc().fetch(a["url"], browser=a.get("browser", False)).summary(*facets).model_dump()
-
     def discover_sitemaps(a: dict[str, Any]) -> list[str]:
         return [r.url for r in wc().discover_sitemaps(a["url"])]
 
@@ -88,7 +89,6 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
             browser=a.get("browser", True),
             keywords=a.get("keywords"),
             include=a.get("include"), exclude=a.get("exclude"),
-            facets=a.get("facets"),
         ).run()
         return _crawl_result(c)
 
@@ -119,26 +119,21 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
              "(an HTML-tag outline) to write CSS selectors from. Set browser='probe' "
              "for a JS/SPA page: injected nodes are marked [xhr]/[js] and data APIs listed.",
              _schema(url={**_URL, "_required": True}, browser={"type": "string"}), skeleton),
-        Tool("summary", "Fetch a URL and return a token-lean structured summary. "
-             "'facets' picks which sections (transport/metadata/structure/runtime/probe).",
-             _schema(url={**_URL, "_required": True},
-                     facets={"type": "array", "items": {"type": "string"}},
-                     browser={"type": "boolean"}), summary),
         Tool("discover_sitemaps", "Discover a site's real sitemap.xml page URLs.",
              _schema(url={**_URL, "_required": True}), discover_sitemaps),
-        Tool("crawl", "Bounded, same-origin crawl from a seed URL; a summary per page "
-             "plus the unresolved frontier. Renders each page in a browser by default "
-             "(browser=true) so JS/lazy links load -- set browser=false for a faster "
-             "static crawl of a server-rendered site. Resource links (images/scripts/"
-             "media) are dropped and each edge carries an importance 'score' (nav/'read "
-             "more'/article high, footer/legal/social low); the frontier is sorted by "
-             "it, so the useful links lead. Steer with 'keywords'/'include'/'exclude'.",
+        Tool("crawl", "Bounded, same-origin crawl from a seed URL; a lean record per "
+             "page (url/status/kind/title) plus the unresolved frontier. Renders each "
+             "page in a browser by default (browser=true) so JS/lazy links load -- set "
+             "browser=false for a faster static crawl of a server-rendered site. "
+             "Resource links (images/scripts/media) are dropped and each edge carries "
+             "an importance 'score' (nav/'read more'/article high, footer/legal/social "
+             "low); the frontier is sorted by it. Steer with 'keywords'/'include'/"
+             "'exclude'.",
              _schema(url={**_URL, "_required": True},
                      max_pages={"type": "integer"},
                      browser={"type": "boolean"},
                      keywords={"type": "array", "items": {"type": "string"}},
-                     include={"type": "string"}, exclude={"type": "string"},
-                     facets={"type": "array", "items": {"type": "string"}}), crawl),
+                     include={"type": "string"}, exclude={"type": "string"}), crawl),
         Tool("validate_plan", "Validate a lazy-expression plan (object) or blob (string) "
              "and return its human-readable description + a compact blob -- author a "
              "plan and check it before running.",

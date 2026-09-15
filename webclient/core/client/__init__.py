@@ -661,11 +661,12 @@ class WebClient(WebCore, IWebClient):
         keywords: list[str] | None = None,
         include: str | None = None,
         exclude: str | None = None,
-        facets: list[str] | None = None,
     ) -> "Crawl":
         """A scoped site traversal sharing this engine (a :class:`Crawl` core). The
         client manages the frontier (dedup, scope, fetching); use it as a context
-        manager and read ``.pages`` / ``.frontier``.
+        manager and read ``.pages`` (the resolved Documents -- extract whatever you
+        want per page: ``doc.title`` / ``doc.runtime()`` / ``doc.extract(...)``) and
+        ``.frontier`` (the scored :class:`Edge` links).
 
         Defaults are tuned for the common "map this site" case:
 
@@ -680,15 +681,11 @@ class WebClient(WebCore, IWebClient):
 
         ``resolve`` (a :class:`Resolve` bundle) sets the resiliency policy the crawl
         fetches under -- retry / rate / proxy / anti-bot (e.g. ``Resolve.auto()`` or
-        a proxy pool); ``None`` inherits this client's own ``resolve``. ``facets``
-        picks which summary backings each page carries -- default
-        ``crawl.DEFAULT_FACETS`` (transport/metadata/structure), plus ``runtime`` on
-        a browser crawl; pass ``facets=list(FACETS)`` for everything or a subset to
-        narrow it."""
+        a proxy pool); ``None`` inherits this client's own ``resolve``."""
         from ..crawl import Crawl, Edge
 
         urls = _seed_urls(seeds)
-        kwargs: dict[str, Any] = dict(
+        return Crawl(
             scope=scope or (from_url(urls[0]).hostname if urls else ""),
             auto=auto,
             width=width,
@@ -702,10 +699,7 @@ class WebClient(WebCore, IWebClient):
             include=include,
             exclude=exclude,
             frontier=[Edge(url=u, depth=0) for u in urls],
-        )
-        if facets:  # else the model's default (+ runtime on a browser crawl) applies
-            kwargs["facets"] = list(facets)
-        return Crawl(**kwargs).bind(self)
+        ).bind(self)
 
     def sitemap(
         self,
@@ -720,7 +714,7 @@ class WebClient(WebCore, IWebClient):
     ) -> "Crawl":
         """Map a site: an eager, single-domain :meth:`crawl` in auto mode, run to
         completion -- HEAVY (fetches up to ``max_pages`` pages). Returns the finished
-        crawl -- a ``.summary()`` per page in ``.pages`` plus the unresolved
+        crawl -- the retained ``Document`` per page in ``.pages`` plus the unresolved
         ``.frontier`` edges. (For just the list of sitemap URLs, use the cheap
         :meth:`discover_sitemaps` instead -- ``sitemap`` runs a crawl.) ``use_sitemap_xml``
         (default on) first discovers the site's real ``sitemap.xml`` URLs

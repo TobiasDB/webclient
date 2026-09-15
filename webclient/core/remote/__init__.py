@@ -36,8 +36,8 @@ _WIRE_MODELS_CACHE: "dict[str, type[Any]] | None" = None
 
 def _wire_models() -> "dict[str, type[Any]]":
     """Name -> class for the value models an op can return over the wire (built
-    once), so ``_deserialize`` rebuilds a real ``Summary``/``SearchResult``/… from a
-    tagged ``{"__model__": ...}`` payload."""
+    once), so ``_deserialize`` rebuilds a real ``Transport``/``Metadata``/… facet
+    model from a tagged ``{"__model__": ...}`` payload."""
     global _WIRE_MODELS_CACHE
     if _WIRE_MODELS_CACHE is None:
         from ...models import (
@@ -56,12 +56,11 @@ def _wire_models() -> "dict[str, type[Any]]":
             Probe,
             Runtime,
             Structure,
-            Summary,
             Transport,
         )
 
         models: list[type[Any]] = [
-            Summary, Transport, Metadata, Structure, Runtime, Probe, Element,
+            Transport, Metadata, Structure, Runtime, Probe, Element,
             Edge, Event, NavigationEvent, NetworkEvent, ConsoleEvent,
             DOMUpdateEvent, ActionEvent, PlanEvent,
         ]
@@ -172,7 +171,6 @@ class RemoteWebClientCore(WebClient):
     # (turn-based ``step()`` steering is a local-client feature).
     def _remote_crawl(self, path: str, body: dict[str, Any]) -> "Crawl":
         from ..crawl import Crawl, Edge
-        from ..document.models import Summary
 
         sid = getattr(self, "_sid", "")
         if sid:  # a session-scoped crawl runs with the server session's identity
@@ -193,9 +191,11 @@ class RemoteWebClientCore(WebClient):
                 pass
             raise RemoteError(resp.status_code, resp.text[:200], error=err)
         data = resp.json()
+        # a remote crawl's Documents stay server-side; the wire carries a lean
+        # per-page record (url/status/kind/title), kept as ``.pages`` plain dicts.
         core = Crawl(
             status="closed",  # the server ran it to completion
-            pages=[Summary(**p) for p in data.get("pages", [])],
+            pages=list(data.get("pages", [])),
             frontier=[Edge(**e) for e in data.get("frontier", [])],
         )
         return core.bind(self)
@@ -216,7 +216,6 @@ class RemoteWebClientCore(WebClient):
         keywords: list[str] | None = None,
         include: str | None = None,
         exclude: str | None = None,
-        facets: list[str] | None = None,
     ) -> "Crawl":
         """A remote crawl runs to completion server-side (one round-trip) and
         returns a finished :class:`Crawl`. ``auto`` (always on server-side) and
@@ -239,7 +238,6 @@ class RemoteWebClientCore(WebClient):
                 "keywords": keywords,
                 "include": include,
                 "exclude": exclude,
-                "facets": facets,
             },
         )
 

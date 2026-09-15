@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from ..events import EventBus
     from ..models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
     from ..clients import ClientPool
-    from ..summary import Metadata, Probe, Runtime, Structure, Summary, Transport
+    from ..core.document.models import Metadata, Probe, Runtime, Structure, Transport
     from .lazy import LazyDocument, LazyReference, LazyWebClient
 
 T = TypeVar("T")
@@ -113,7 +113,6 @@ if TYPE_CHECKING:
         def select_all(self, selector: str, *, limit: int | None = ..., offset: int = ...) -> "Collection[AsyncDocument]": ...
         def skeleton(self, *, max_lines: int = ..., text_chars: int = ..., max_depth: int = ..., max_siblings: int = ..., legend: bool = ..., collapse: bool = ..., annotate_origin: bool = ...) -> "str": ...
         def structure(self) -> "Structure": ...
-        def summary(self, *include: str, exclude: Any = ...) -> "Summary": ...
         def text(self, *, main_content_only: bool = ...) -> "str": ...
         def transport(self) -> "Transport": ...
         async def wait_for(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ..., error: Any = ...) -> "AsyncDocument": ...  # type: ignore[override]
@@ -173,7 +172,6 @@ if TYPE_CHECKING:
         async def discover_sitemaps(self, url: Any, *, limit: int = ...) -> "Collection[AsyncReference]": ...  # type: ignore[override]
         async def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ..., **kw: Any) -> "AsyncDocument": ...  # type: ignore[override]
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "AsyncReference": ...
-        async def summary(self, url: Any, *include: str, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., resolve: Any = ..., optional: bool = ..., error: Any = ..., exclude: Any = ..., **kw: Any) -> "Summary": ...  # type: ignore[override]
         # fmt: on
         # >>> end generated <<<
 

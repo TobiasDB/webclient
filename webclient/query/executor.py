@@ -274,7 +274,7 @@ async def astream(
     each row/element is yielded the moment its element finishes -- nothing is
     materialised first. Two tail shapes stream: a terminal ``project()`` (rows,
     optionally preceded by ``extract``/``filter``) and a terminal element CALL op
-    (e.g. ``.summary()``/``.attr(...)``). Any other plan falls back to
+    (e.g. ``.transport()``/``.attr(...)``). Any other plan falls back to
     evaluate-then-yield.
     """
     from ..collection import Collection

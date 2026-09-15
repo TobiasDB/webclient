@@ -38,7 +38,6 @@ from webclient.core.document.models import (  # noqa: E402
     Metadata,
     Runtime,
     Structure,
-    Summary,
     Transport,
 )
 from webclient.models import (  # noqa: E402
@@ -90,7 +89,6 @@ _NS = {
     "Metadata": Metadata,
     "Runtime": Runtime,
     "Structure": Structure,
-    "Summary": Summary,
     "Event": Event,
     "ActionEvent": ActionEvent,
     "ConsoleEvent": ConsoleEvent,

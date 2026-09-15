@@ -82,7 +82,8 @@ def test_remote_crawl_runs_server_side(remote):
     rc, server = remote
     crawl = rc.crawl(server.url_for("/cards"), auto=True, max_pages=3, obey_robots=False, browser=False)
     assert isinstance(crawl, Crawl) and crawl.done
-    urls = [p.transport.final_url for p in crawl.pages if p.transport]
+    # over the wire each crawled page is a lean handle dict {url, status, kind, title}
+    urls = [p["url"] for p in crawl.pages]
     assert any(u.endswith("/cards") for u in urls)
 
 
@@ -92,20 +93,6 @@ def test_remote_sitemap_and_sitemaps(remote):
     assert sm.done and len(sm.pages) >= 1
     # sitemaps() discovery also works remotely (an io op that round-trips)
     assert isinstance(rc.discover_sitemaps(server.url_for("/cards")), list)
-
-
-def test_remote_summary_is_a_real_model(remote):
-    # F5-a: remote summary() returns a Summary model (not a bare dict), matching
-    # local -- so s.metadata.title works the same over the wire.
-    from webclient.summary import Summary
-
-    rc, server = remote
-    s = rc.summary(server.url_for("/cards"))
-    assert isinstance(s, Summary)
-    assert s.metadata is not None and s.metadata.title == "Shop"
-    # and a document handle's own summary() too
-    d = rc.fetch(server.url_for("/cards"))
-    assert isinstance(d.summary(), Summary)
 
 
 def test_remote_crawl_step_fails_cleanly(remote):

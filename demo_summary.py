@@ -166,13 +166,15 @@ def main() -> None:
 
         # 1 -------------------------------------------------------------------
         panel(
-            "1. SUMMARY -- the LLM's primary view of a page",
+            "1. FACETS -- the LLM's primary view of a page",
             "orient on any URL in a few tokens before deciding how to extract.",
         )
-        call('doc.summary("transport", "metadata", "structure")')
-        out(doc.summary("transport", "metadata", "structure"))
+        call("doc.transport()  /  doc.metadata()  /  doc.structure()")
+        out(doc.transport())
+        out(doc.metadata())
+        out(doc.structure())
         print()
-        print("    # this is the default a crawl carries per page; print() is the digest.")
+        print("    # each facet is an independent op; compose the ones you need per page.")
 
         # 2 -------------------------------------------------------------------
         panel(

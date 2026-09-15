@@ -1,4 +1,4 @@
-"""P5/P6: the final-URL join fix, WebClient, and search/summary."""
+"""P5/P6: the final-URL join fix, WebClient, and search-as-an-expression."""
 
 import pytest
 
@@ -53,18 +53,17 @@ def test_search_is_just_an_expression(httpserver, wc):
     assert rows[0]["url"].endswith("/go/1")  # project renders a Reference as its URL
 
 
-def test_summary_projects_a_page_overview(httpserver, wc):
+def test_facets_compose_a_page_overview(httpserver, wc):
+    # summary is no longer a base backing: a page overview is just the facet ops
+    # composed by the caller from the ordinary surface.
     httpserver.expect_request("/p").respond_with_data(
         "<html><head><title>Hi</title></head><body><h1>Big</h1></body></html>",
         content_type="text/html",
     )
-    out = wc.summary(httpserver.url_for("/p"))  # eager -> a Summary
-    assert out.transport is not None and out.transport.ok
-    assert out.metadata is not None and out.metadata.title == "Hi"
-    assert out.structure is not None and out.structure.toc[0].text == "Big"
-    # facet selection: only the requested section is populated
-    lean = wc.summary(httpserver.url_for("/p"), "transport")
-    assert lean.transport is not None and lean.metadata is None
+    doc = wc.fetch(httpserver.url_for("/p"))
+    assert doc.transport().ok
+    assert doc.metadata().title == "Hi"
+    assert doc.structure().toc[0].text == "Big"
 
 
 def test_core_is_the_async_surface(wc):

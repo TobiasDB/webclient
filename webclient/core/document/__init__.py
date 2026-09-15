@@ -23,14 +23,11 @@ from .events import EventBacking
 from .html import HtmlBacking
 from .json import JsonBacking
 from .status import StatusBacking
-from .summary import (
-    MetadataBacking,
-    ProbeBacking,
-    RuntimeBacking,
-    StructureBacking,
-    SummaryBacking,
-    TransportBacking,
-)
+from .transport import TransportBacking
+from .metadata import MetadataBacking
+from .structure import StructureBacking
+from .runtime import RuntimeBacking
+from .probe import ProbeBacking
 
 if TYPE_CHECKING:
     from ...surfaces.lazy import LazyDocument
@@ -90,7 +87,6 @@ class Document(WebCore, IDocument):
         StructureBacking(),
         RuntimeBacking(),
         ProbeBacking(),
-        SummaryBacking(),
     )
 
     @property

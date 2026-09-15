@@ -36,7 +36,7 @@ def _ns() -> dict[str, Any]:
         from ..core.client import WebClient
         from ..core.document import Document, Element
         from ..core.reference import HttpMethod, Reference
-        from ..summary import Metadata, Runtime, Structure, Summary, Transport
+        from ..core.document.models import Metadata, Runtime, Structure, Transport
 
         _NS = {
             "Reference": Reference,
@@ -46,7 +46,6 @@ def _ns() -> dict[str, Any]:
             "Field": Field,
             "Collection": Collection,
             "HttpMethod": HttpMethod,
-            "Summary": Summary,
             "Transport": Transport,
             "Metadata": Metadata,
             "Structure": Structure,

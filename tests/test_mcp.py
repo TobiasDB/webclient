@@ -27,7 +27,7 @@ def wc():
 def test_tool_registry_is_well_formed(wc):
     tools = build_tools(wc)
     names = {t.name for t in tools}
-    assert {"fetch_markdown", "links", "summary", "crawl", "discover_sitemaps",
+    assert {"fetch_markdown", "links", "skeleton", "crawl", "discover_sitemaps",
             "validate_plan", "run_plan"} <= names
     for t in tools:  # every tool has a JSON-schema object with properties
         assert t.input_schema["type"] == "object" and "properties" in t.input_schema
@@ -41,12 +41,6 @@ def test_fetch_markdown_and_links_tools(httpserver, wc):
     assert "# Aeropress" in md
     urls = dispatch("links", {"url": url}, wc)
     assert any(u.endswith("/i/1") for u in urls)
-
-
-def test_summary_tool_selects_facets(httpserver, wc):
-    httpserver.expect_request("/p").respond_with_data(PAGE, content_type="text/html")
-    s = dispatch("summary", {"url": httpserver.url_for("/p"), "facets": ["metadata"]}, wc)
-    assert s["metadata"]["title"] == "Shop" and s["transport"] is None
 
 
 def test_validate_and_run_plan_tools(httpserver, wc):

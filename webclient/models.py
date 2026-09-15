@@ -7,8 +7,8 @@ circular-reference risk. The runtime machinery that *uses* these lives elsewhere
 -- the event bus/registry in :mod:`webclient.events`, which re-exports these
 names so ``from webclient.events import NetworkEvent`` keeps working. A core's own
 value models now live with that core (its ``models.py``): the document's
-``Element`` / ``Summary`` facets in :mod:`webclient.core.document.models`, the
-client's ``SearchResult`` in :mod:`webclient.core.client.models`.
+``Element`` / ``Transport`` / ``Metadata`` / ``Structure`` / ``Runtime`` /
+``Probe`` facet models in :mod:`webclient.core.document.models`.
 """
 
 from __future__ import annotations

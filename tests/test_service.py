@@ -385,16 +385,6 @@ def test_task_verb_markdown_and_links(client_and_server):
     assert any(u.endswith("/i/1") for u in links)
 
 
-def test_task_verb_summary_selects_facets(client_and_server):
-    api, server = client_and_server
-    r = api.post(
-        "/summary",
-        headers=AUTH,
-        json={"url": server.url_for("/cards"), "facets": ["transport", "metadata"]},
-    ).json()["result"]
-    assert r["transport"] and r["metadata"] and r["structure"] is None
-
-
 def test_task_verb_missing_url_is_422(client_and_server):
     api, _ = client_and_server
     r = api.post("/markdown", headers=AUTH, json={})

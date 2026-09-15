@@ -75,8 +75,8 @@ def _rel(url: str | None, base: str) -> str:
 
 
 def _purl(page: Any, base: str) -> str:
-    """A crawled page's URL (from its transport summary), relative to ``base``."""
-    return _rel(page.transport.final_url, base) if page.transport else ""
+    """A crawled page's URL (the retained Document), relative to ``base``."""
+    return _rel(page.final_url or page.url, base)
 
 
 def main() -> None:
@@ -113,13 +113,13 @@ def main() -> None:
         ) as crawl:
             crawl.run()
             for p in crawl.pages:
-                title = p.metadata.title if p.metadata else None
+                title = p.metadata().title if p.has_op("metadata") else None
                 print("  page:     ", _purl(p, base), "|", title)
 
         # -- 3. Sitemap: an eager, single-domain map ----------------------------
         print("\n== sitemap (eager single-domain crawl) ==")
         smap = wc.sitemap(f"{base}/", depth=2, width=20)
-        mapped = sorted(_purl(p, base) for p in smap.pages if p.transport)
+        mapped = sorted(_purl(p, base) for p in smap.pages)
         print("  pages:    ", len(smap.pages))
         print("  urls:     ", mapped)
         print("  external kept out:", "/x" not in " ".join(mapped))
@@ -150,7 +150,7 @@ def main() -> None:
             print("    urls:   ", sorted(_rel(u, base) for u in data["urls"]))
             first = data["pages"][0]
             print(
-                "    page[0] summary keys:",
+                "    page[0] handle keys:",
                 sorted(k for k, v in first.items() if v is not None),
             )
             m = api.post("/sitemap", headers=auth, json={"url": f"{base}/", "depth": 2})
