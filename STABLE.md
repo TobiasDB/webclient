@@ -3,8 +3,9 @@
 The last commit whose full gate is green (`gen_stubs --check`, `mypy --strict`,
 `pyright`, `pytest`, `demo.py`). Roll back here if autonomous work broke something:
 
-    git reset --hard HEAD
+    git reset --hard 01fde9b
 
+- **commit:** `01fde9b`
 - **subject:** crawl dedup folds locale + pagination variants; scope by registrable domain (388 passed)
 - **date:** 2026-09-15
 
