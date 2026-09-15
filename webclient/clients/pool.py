@@ -116,12 +116,32 @@ class ClientPool:
             self._idle[kind].clear()
             await factory.aclose()
 
+    def _total(self, kind: str) -> int:
+        """The denominator ``free`` is measured against. A recycled kind reuses a
+        bounded set of warm clients, so its total is how many were ever created
+        (<= the limit). A non-recycled kind (pages: closed on release) has no warm
+        set -- ``created`` is a cumulative open counter, not a live population -- so
+        its total is the concurrency cap (the limit)."""
+        if kind in self._RECYCLE:
+            return self._created.get(kind, 0)
+        return self._limits.get(kind, 0)
+
+    def _free(self, kind: str) -> int:
+        """Clients available to lease right now. Recycled kinds hand back idle warm
+        clients; non-recycled kinds have none idle (closed on release), so ``free``
+        is the unheld capacity (``limit - held``). Both are bounded by ``_total``
+        (``held >= 0`` and ``idle`` is a subset of ``created``), so the reported
+        ``free`` can never exceed ``total`` -- see ``pages_free``/``pages_total``."""
+        if kind in self._RECYCLE:
+            return len(self._idle.get(kind, []))
+        return self._limits.get(kind, 0) - self._held.get(kind, 0)
+
     def stats(self) -> PoolStats:
         return PoolStats(
-            http_total=self._created.get("http", 0),
-            http_free=len(self._idle.get("http", [])),
-            pages_total=self._created.get("page", 0),
-            pages_free=self._limits.get("page", 0) - self._held.get("page", 0),
+            http_total=self._total("http"),
+            http_free=self._free("http"),
+            pages_total=self._total("page"),
+            pages_free=self._free("page"),
             waiting=sum(self._waiting.values()),
         )
 
