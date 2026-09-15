@@ -32,6 +32,7 @@ def _ns() -> dict[str, Any]:
     not import the cores at module load. Mirrors ``scripts.gen_stubs._NS``."""
     global _NS
     if _NS is None:
+        from ..clients import WaitConfig
         from ..collection import Collection, Field
         from ..core.client import WebClient
         from ..core.document import Document, Element
@@ -50,6 +51,7 @@ def _ns() -> dict[str, Any]:
             "Metadata": Metadata,
             "Structure": Structure,
             "Signal": Signal,
+            "WaitConfig": WaitConfig,
             "Any": Any,
         }
     return _NS

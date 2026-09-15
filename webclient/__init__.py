@@ -1,5 +1,6 @@
 """webclient -- declarative web client (ground-up rewrite in progress)."""
 
+from .clients import DEFAULT_WAIT, WaitConfig, WaitEvent
 from .collection import Collection, Field
 from .core.crawl import Crawl, Edge
 from .core.document import Element, HtmlBacking, JsonBacking
@@ -82,6 +83,9 @@ __all__ = [
     "ProxyPolicy",
     "AntiBotPolicy",
     "BrowserPolicy",
+    "WaitConfig",
+    "WaitEvent",
+    "DEFAULT_WAIT",
     "AUTO",
     "Backing",
     "WebCore",

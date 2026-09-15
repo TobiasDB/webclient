@@ -12,11 +12,82 @@ domain -- clean layering.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Literal
 
+from ..errors import RAISE, RETURN, _Policy, select_error
 from .base import Client, ClientFactory
 
 Phase = Literal["init", "load", "drain"]
+
+
+class WaitEvent(Enum):
+    """The DOM/navigation milestone ``open`` waits for after navigating -- the
+    controllable, self-describing replacement for the old opaque "wait for stable
+    DOM". Pick the one that matches how the page delivers its content:
+
+    * ``DOMCONTENTLOADED`` -- the served HTML is parsed (Playwright's
+      ``domcontentloaded``). The cheapest wait: use it for a server-rendered page
+      whose content is already in the initial HTML (no JS needed to see it).
+    * ``LOAD`` -- the ``load`` event (sub-resources fetched too). Use it when the
+      content you need depends on images/stylesheets/synchronous scripts having run.
+    * ``NETWORKIDLE`` -- no network connections for ``quiet`` seconds. Use it for a
+      page that fetches its data over XHR/fetch right after load and you want those
+      responses in before snapshotting. Many sites never truly idle, so it is always
+      bounded by ``timeout``.
+    * ``DOM_STABLE`` -- the element count stops changing for ``quiet`` seconds (after
+      a bounded network-idle nudge). The default and the safest general wait for a
+      JS/SPA page: it returns the moment the page stops rewriting its own DOM, so a
+      fast page costs little and a slow one is capped at ``timeout``. This is the
+      historical "wait for stable DOM" made explicit.
+    * ``SELECTOR`` -- a specific ``selector`` appears in the DOM. The most precise
+      wait: use it when you know the one element that marks "the content I want is
+      here" (e.g. ``.product-list``), so you neither under- nor over-wait.
+    """
+
+    LOAD = "load"
+    DOMCONTENTLOADED = "domcontentloaded"
+    NETWORKIDLE = "networkidle"
+    DOM_STABLE = "dom_stable"
+    SELECTOR = "selector"
+
+
+@dataclass(frozen=True)
+class WaitConfig:
+    """How ``open`` waits for the page to be ready before snapshotting, and what to
+    do if that wait times out.
+
+    ``event`` picks the milestone (see :class:`WaitEvent`). ``timeout`` bounds the
+    *whole* wait in seconds. ``quiet`` is the settle window for ``NETWORKIDLE`` /
+    ``DOM_STABLE`` (how long "nothing changed" must hold). ``selector`` is the target
+    for ``WaitEvent.SELECTOR``.
+
+    ``on_timeout`` is the timeout policy, in the library's loud-by-default model:
+    :data:`~webclient.errors.RAISE` (the default) raises a structured
+    ``WebException`` when the awaited milestone is not reached in time;
+    :data:`~webclient.errors.RETURN` instead returns what has rendered so far (the
+    partial DOM). ``DOM_STABLE`` and ``NETWORKIDLE`` treat reaching the budget as a
+    normal settle, not a failure, so they only consult ``on_timeout`` when the page
+    is still actively mutating at the deadline; ``LOAD`` / ``DOMCONTENTLOADED`` /
+    ``SELECTOR`` await a concrete condition, so a timeout there is a real miss."""
+
+    event: WaitEvent = WaitEvent.DOM_STABLE
+    timeout: float = 8.0
+    quiet: float = 0.4
+    selector: str | None = None
+    on_timeout: _Policy = RAISE
+
+
+#: the default wait: the historical lenient "settle the DOM" behaviour made
+#: explicit -- poll until the DOM stops mutating, and never raise if it never fully
+#: settles (a bounded best-effort, exactly as before).
+DEFAULT_WAIT = WaitConfig(event=WaitEvent.DOM_STABLE, on_timeout=RETURN)
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    """Whether ``exc`` is a Playwright timeout (its timeout classes all end in
+    ``TimeoutError``) -- the stringly-typed heuristic, kept transport-local."""
+    return "Timeout" in type(exc).__name__
 
 
 @dataclass(frozen=True)
@@ -61,14 +132,16 @@ class BrowserClient(Client):
 
     async def _wait_stable(
         self, page: Any, *, timeout: float = 8.0, quiet: float = 0.4, poll: float = 0.2
-    ) -> None:
+    ) -> bool:
         """Wait for the DOM to settle so JS/lazy-loaded content is present before the
         snapshot: first let the network go idle (bounded -- many sites never truly
         idle), then poll the element count until it is unchanged for ``quiet`` seconds.
         Returns early the moment it's stable, so a page that settles quickly costs
         little; a JS page waits just until it stops mutating. ``timeout`` bounds the
         *whole* wait (the network-idle phase counts against it), so a page that never
-        settles can never block longer than ``timeout``."""
+        settles can never block longer than ``timeout``. Returns ``True`` if the DOM
+        settled, ``False`` if the budget was exhausted while it was still mutating (so
+        the caller can apply its timeout policy)."""
         import time as _time
 
         deadline = _time.monotonic() + timeout  # set first: the total budget
@@ -83,14 +156,48 @@ class BrowserClient(Client):
             try:
                 count = await page.evaluate("() => document.getElementsByTagName('*').length")
             except Exception:
-                return
+                return True  # page went away -> nothing more to wait for
             if count == last:
                 stable += 1
                 if stable >= need:
-                    return
+                    return True
             else:
                 last, stable = count, 0
             await page.wait_for_timeout(poll * 1000)
+        return False  # deadline hit while still mutating
+
+    async def _do_wait(self, page: Any, wait: WaitConfig) -> None:
+        """Apply a :class:`WaitConfig` after navigation: wait for its milestone,
+        bounded by ``wait.timeout``, then honour ``wait.on_timeout`` if the milestone
+        is not reached (``RAISE`` -> a structured miss; ``RETURN`` -> the partial DOM).
+        ``DOM_STABLE`` / ``NETWORKIDLE`` treat reaching the budget as a normal settle
+        unless the page is still actively mutating at the deadline."""
+        ms = wait.timeout * 1000
+        try:
+            if wait.event is WaitEvent.DOM_STABLE:
+                settled = await self._wait_stable(
+                    page, timeout=wait.timeout, quiet=wait.quiet
+                )
+                if not settled and wait.on_timeout is RAISE:
+                    raise select_error(
+                        f"wait: DOM still mutating after {wait.timeout}s"
+                    )
+                return
+            if wait.event is WaitEvent.SELECTOR:
+                if not wait.selector:
+                    raise ValueError("WaitEvent.SELECTOR requires a selector")
+                await page.wait_for_selector(wait.selector, timeout=ms)
+                return
+            # LOAD / DOMCONTENTLOADED / NETWORKIDLE map to a Playwright load state.
+            await page.wait_for_load_state(wait.event.value, timeout=ms)
+        except Exception as exc:
+            if _is_timeout(exc) and wait.on_timeout is RETURN:
+                return  # lenient: hand back what has rendered so far
+            if _is_timeout(exc):
+                raise select_error(
+                    f"wait: {wait.event.value} not reached within {wait.timeout}s"
+                ) from exc
+            raise
 
     async def open(
         self,
@@ -98,17 +205,19 @@ class BrowserClient(Client):
         *,
         scripts: "tuple[PageScript, ...] | list[PageScript]" = (),
         replay: "list[dict[str, Any]]" = [],
-        wait_stable: bool = True,
+        wait: "WaitConfig | None" = None,
     ) -> PageResult:
         """Navigate to ``url``, installing ``scripts`` by phase (``init`` before
         nav, ``load`` once after, ``drain`` after any replay), capturing console +
         network requests, and replaying any recorded actions. Returns the raw page
         facts; the domain (document + events) is built by the caller.
 
-        ``wait_stable`` (default) waits for the DOM to settle after navigation, so
+        ``wait`` (a :class:`WaitConfig`, default :data:`DEFAULT_WAIT` -- settle the
+        DOM) chooses which milestone to wait for and the timeout behaviour, so
         JS/lazy-loaded content (links, cards, …) is in the snapshot -- the fix for
         a render that captured the shell before the page finished loading."""
         page = self.page
+        wait = wait or DEFAULT_WAIT
         for s in scripts:  # init scripts must be installed before navigation
             if s.phase == "init":
                 await page.add_init_script(s.source)
@@ -117,8 +226,7 @@ class BrowserClient(Client):
         network: list[tuple[str, str, str]] = []
         page.on("request", lambda r: network.append((r.method, r.url, r.resource_type)))
         await page.goto(url, wait_until="domcontentloaded")
-        if wait_stable:  # let JS/lazy content load before snapshotting
-            await self._wait_stable(page)
+        await self._do_wait(page, wait)  # let JS/lazy content load before snapshotting
         # snapshot the settled console/network + the DOM mutations the page made
         # during load/settle (drained now, before any replay, so ``mutations`` is
         # the load-time rewrite -- how the page composed its own DOM).
@@ -187,4 +295,13 @@ class BrowserFactory(ClientFactory):
             self._browser = self._pw = None
 
 
-__all__ = ["BrowserClient", "BrowserFactory", "PageScript", "PageResult", "Phase"]
+__all__ = [
+    "BrowserClient",
+    "BrowserFactory",
+    "PageScript",
+    "PageResult",
+    "Phase",
+    "WaitEvent",
+    "WaitConfig",
+    "DEFAULT_WAIT",
+]

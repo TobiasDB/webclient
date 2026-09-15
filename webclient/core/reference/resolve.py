@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from ..web_core import Backing
 
 if TYPE_CHECKING:
+    from ...clients import WaitConfig
     from ..document import Document
     from . import Reference
 
@@ -26,10 +27,13 @@ class ResolveBacking(Backing):
         optional: bool = False,
         error: Any = None,
         keep_alive: "bool | float" = False,
+        wait: "WaitConfig | None" = None,
     ) -> "Document":
         """Resolve into a document. ``keep_alive`` (browser only) marks the live page
         as caller-owned so a plan won't auto-release it -- release it yourself with
-        ``release(doc)``, or pass a number of seconds for a TTL auto-release."""
+        ``release(doc)``, or pass a number of seconds for a TTL auto-release. ``wait``
+        (a :class:`~webclient.clients.WaitConfig`, browser only) picks the render wait
+        strategy + timeout behaviour."""
         from ...errors import lenient
 
         target = core._session or core._client  # bound (a default by _bridge_io)
@@ -38,4 +42,5 @@ class ResolveBacking(Backing):
             optional=lenient(optional, error),
             browser=browser,
             keep_alive=keep_alive,
+            wait=wait,
         )

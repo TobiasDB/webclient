@@ -9,7 +9,14 @@ system are later M4 work and are intentionally not exercised here.)
 
 import pytest
 
-from webclient import RETURN, DOMUpdateEvent, LiveDocument, WebClient
+from webclient import (
+    RETURN,
+    DOMUpdateEvent,
+    LiveDocument,
+    WaitConfig,
+    WaitEvent,
+    WebClient,
+)
 
 APP = """
 <html><head><title>App</title></head><body>
@@ -338,3 +345,94 @@ def test_plan_interact_then_select_sees_post_interaction_dom(httpserver, wc):
         wc.ref(httpserver.url_for("/i")),
     )
     assert len(rows) == 1  # the click's node is visible to the subsequent select
+
+
+# -- Ask 2: controllable wait-for-stable-DOM (enum + timeout + policy) ----------
+
+DELAYED = """
+<html><body><div id="base">base</div>
+<script>
+  setTimeout(function () {
+    var d = document.createElement('div');
+    d.id = 'late'; d.textContent = 'late-content';
+    document.body.appendChild(d);
+  }, 1500);
+</script></body></html>
+"""
+
+
+def test_wait_selector_reaches_the_dom_state(httpserver, wc):
+    # WaitEvent.SELECTOR waits precisely until the (delayed) element appears.
+    httpserver.expect_request("/w1").respond_with_data(DELAYED, content_type="text/html")
+    doc = wc.fetch(
+        httpserver.url_for("/w1"),
+        browser=True,
+        wait=WaitConfig(event=WaitEvent.SELECTOR, selector="#late", timeout=5.0),
+    )
+    try:
+        assert doc.select("#late", error=RETURN).ok
+        assert "late-content" in doc.text_content
+    finally:
+        wc.release(doc)
+
+
+def test_wait_domcontentloaded_snapshots_early(httpserver, wc):
+    # WaitEvent.DOMCONTENTLOADED returns at parse time -- the delayed element is
+    # not in the snapshot yet, showing the mode reaches its own (earlier) state.
+    httpserver.expect_request("/w2").respond_with_data(DELAYED, content_type="text/html")
+    doc = wc.fetch(
+        httpserver.url_for("/w2"),
+        browser=True,
+        wait=WaitConfig(event=WaitEvent.DOMCONTENTLOADED, timeout=5.0),
+    )
+    try:
+        assert "base" in doc.text_content  # the served DOM is there
+        assert doc.select("#late", error=RETURN).ok is False  # not injected yet
+    finally:
+        wc.release(doc)
+
+
+def test_wait_timeout_raises_by_default_and_returns_partial(httpserver, wc):
+    # loud-by-default: a wait whose milestone never arrives raises; under
+    # on_timeout=RETURN it hands back the partial DOM instead (Ask 2 timeout policy).
+    httpserver.expect_request("/w3").respond_with_data(DELAYED, content_type="text/html")
+    url = httpserver.url_for("/w3")
+
+    with pytest.raises(LookupError):  # RAISE is the default on_timeout
+        wc.fetch(
+            url,
+            browser=True,
+            wait=WaitConfig(event=WaitEvent.SELECTOR, selector="#never", timeout=0.5),
+        )
+
+    doc = wc.fetch(
+        url,
+        browser=True,
+        wait=WaitConfig(
+            event=WaitEvent.SELECTOR, selector="#never", timeout=0.5, on_timeout=RETURN
+        ),
+    )
+    try:
+        assert doc.ok  # returned what rendered so far
+        assert "base" in doc.text_content
+        assert doc.select("#never", error=RETURN).ok is False
+    finally:
+        wc.release(doc)
+
+
+def test_browser_policy_wait_for_is_honoured(httpserver, wc):
+    # the existing BrowserPolicy.wait_for hook now drives a SELECTOR wait through
+    # the browser= path (no explicit WaitConfig needed).
+    from webclient import BrowserPolicy
+
+    httpserver.expect_request("/w4").respond_with_data(DELAYED, content_type="text/html")
+    doc = wc.fetch(
+        httpserver.url_for("/w4"),
+        browser=BrowserPolicy(when="always", wait_for="#late"),
+    )
+    try:
+        assert doc.select("#late", error=RETURN).ok
+    finally:
+        wc.release(doc)
+
+

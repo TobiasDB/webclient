@@ -17,7 +17,14 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 from pydantic import PrivateAttr
 
-from ...clients import BrowserFactory, ClientPool, HTTPXFactory, PageScript
+from ...clients import (
+    BrowserFactory,
+    ClientPool,
+    HTTPXFactory,
+    PageScript,
+    WaitConfig,
+    WaitEvent,
+)
 from ...collection import Field
 from ...errors import WebError, WebException
 from ...events import EventBus
@@ -55,6 +62,19 @@ def _browser_mode(browser: Any) -> str:
         return browser if browser in _MODES else "never"
     when = getattr(browser, "when", None)  # a BrowserPolicy
     return when if when in _MODES else "auto"
+
+
+def _wait_of(browser: Any, wait: "WaitConfig | None") -> "WaitConfig | None":
+    """The browser-render wait config for this fetch. An explicit ``wait`` wins;
+    otherwise a ``BrowserPolicy.wait_for`` selector (the existing policy hook) is
+    honoured as a ``WaitEvent.SELECTOR`` wait; otherwise ``None`` (the client's
+    default DOM settle)."""
+    if wait is not None:
+        return wait
+    selector = getattr(browser, "wait_for", None)  # a BrowserPolicy
+    if selector:
+        return WaitConfig(event=WaitEvent.SELECTOR, selector=selector)
+    return None
 
 
 def _remedy(sig: "Signals") -> "str | None":
@@ -388,6 +408,7 @@ class WebClient(WebCore, IWebClient):
         browser: Any = False,
         resolve: Any = None,
         keep_alive: "bool | float" = False,
+        wait: "WaitConfig | None" = None,
     ) -> Document:
         """Resolve ``ref`` into a document over a leased transport (http) or a
         browser page. ``browser`` picks the tier: ``False``/``"never"`` = static
@@ -400,12 +421,15 @@ class WebClient(WebCore, IWebClient):
         proxy service, and its ``retry.max`` bounds the local retry loop.
         ``keep_alive`` marks a browser page the CALLER owns (a plan won't
         auto-release it); a number keeps it with a TTL (auto-released after N
-        seconds as a safety net)."""
+        seconds as a safety net). ``wait`` (a :class:`~webclient.clients.WaitConfig`)
+        chooses the browser-render wait strategy + timeout behaviour; ``None`` uses a
+        ``BrowserPolicy.wait_for`` selector when given, else the default DOM settle."""
         import asyncio
 
         pol = resolve if resolve is not None else self.resolve
         max_retries = pol.retry.max if pol is not None else self.retries
         mode = _browser_mode(browser)
+        wait = _wait_of(browser, wait)
         if self.block_private_hosts and await self._host_blocked(ref):
             doc = Document(
                 url=ref.dispatch("url"),
@@ -422,7 +446,7 @@ class WebClient(WebCore, IWebClient):
             return doc
         if mode == "always":
             try:
-                return await self._alive(ref, keep_alive=keep_alive)
+                return await self._alive(ref, keep_alive=keep_alive, wait=wait)
             except WebException:
                 raise
             except Exception as exc:  # a render/launch failure
@@ -481,7 +505,7 @@ class WebClient(WebCore, IWebClient):
                     self._capture(doc, ref, resp)
                 return await self._escalate_to_browser(
                     ref, list(doc._events), doc.content,
-                    tiers=[*tiers, "browser"], keep_alive=keep_alive,
+                    tiers=[*tiers, "browser"], keep_alive=keep_alive, wait=wait,
                 )
         if resp is not None:  # emit navigation/network events for the final doc
             self._capture(doc, ref, resp)
@@ -507,13 +531,14 @@ class WebClient(WebCore, IWebClient):
         *,
         tiers: "list[str] | None" = None,
         keep_alive: "bool | float" = False,
+        wait: "WaitConfig | None" = None,
     ) -> Document:
         """The static tier said this page is JS-gated; render it in a browser. The
         static hop's events are carried onto the browser doc so ``doc.events`` keeps
         the full trail (both tiers); the static HTML is kept so ``skeleton()`` can
         mark server-initial vs client-injected nodes, and the tier trail is recorded
         on the document for the ``transport`` facet."""
-        doc = await self._alive(ref, keep_alive=keep_alive)
+        doc = await self._alive(ref, keep_alive=keep_alive, wait=wait)
         doc._static_html = static_html
         doc._tiers = tiers or ["static", "browser"]
         if static_events:
@@ -699,6 +724,7 @@ class WebClient(WebCore, IWebClient):
         replay: list[dict[str, Any]] | None = None,
         *,
         keep_alive: "bool | float" = False,
+        wait: "WaitConfig | None" = None,
     ) -> Document:
         lease = await self.pool.lease("page")
         browser = cast(Any, lease.client)  # the leased BrowserClient (subclass)
@@ -711,6 +737,7 @@ class WebClient(WebCore, IWebClient):
                 ref.dispatch("url"),
                 scripts=self._browser_scripts(),
                 replay=replay or [],
+                wait=wait,
             )
             doc = Document(
                 url=ref.dispatch("url"),

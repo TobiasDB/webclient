@@ -13,6 +13,7 @@ from ..reference import HttpMethod, Reference, from_url
 from ..web_core import Backing
 
 if TYPE_CHECKING:
+    from ...clients import WaitConfig
     from . import WebClient
 
 
@@ -47,6 +48,7 @@ class FetchBacking(Backing):
         optional: bool = False,
         error: Any = None,
         keep_alive: "bool | float" = False,
+        wait: "WaitConfig | None" = None,
         **kw: Any,
     ) -> "Document":
         """Resolve ``ref(url)`` into a document -- straight to the client's
@@ -54,13 +56,16 @@ class FetchBacking(Backing):
         ``resolve`` op (``fetch`` IS a resolve). ``browser`` picks the tier
         (``False`` static / ``"auto"`` escalate on the response's signals / ``True``
         always). ``keep_alive`` (browser only) marks the live page caller-owned so a
-        plan won't auto-release it (a number gives a TTL). An IO op: the interface
-        bridges it (``dispatch``)."""
+        plan won't auto-release it (a number gives a TTL). ``wait`` (a
+        :class:`~webclient.clients.WaitConfig`, browser only) picks the render
+        wait strategy + timeout behaviour. An IO op: the interface bridges it
+        (``dispatch``)."""
         from ...errors import lenient
 
         ref = self.ref(core, url, **kw)
         return await core.afetch(
-            ref, optional=lenient(optional, error), browser=browser, keep_alive=keep_alive
+            ref, optional=lenient(optional, error), browser=browser,
+            keep_alive=keep_alive, wait=wait,
         )
 
 

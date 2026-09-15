@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict
 from ..reference.models import Resolve
 
 if TYPE_CHECKING:
+    from ...clients import WaitConfig  # noqa: F401  (fetch wait strategy)
     from ...collection import Collection  # noqa: F401  (sitemaps -> Collection)
     from ..document import Document  # noqa: F401  (fetch -> Document)
     from ..reference import Reference  # noqa: F401  (ref/sitemaps -> Reference)
@@ -47,7 +48,7 @@ class IWebClient(BaseModel):
         # >>> generated: WebClient interface <<<
         # fmt: off
         def discover_sitemaps(self, url: Any, *, limit: int = ...) -> "Collection[Reference]": ...
-        def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ..., **kw: Any) -> "Document": ...
+        def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ..., wait: 'WaitConfig | None' = ..., **kw: Any) -> "Document": ...
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "Reference": ...
         # fmt: on
         # >>> end generated <<<

@@ -28,6 +28,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from webclient.clients import WaitConfig  # noqa: E402
 from webclient.collection import Field  # noqa: E402
 from webclient.core.client import WebClient  # noqa: E402
 from webclient.core.crawl import Crawl  # noqa: E402
@@ -95,6 +96,7 @@ _NS = {
     "DOMUpdateEvent": DOMUpdateEvent,
     "E": _EventTypeVar,
     "Any": Any,
+    "WaitConfig": WaitConfig,
 }
 _SCALAR = {str: "str", int: "int", float: "float", bytes: "bytes", bool: "bool"}
 _UNION = (typing.Union, getattr(_types, "UnionType", None))

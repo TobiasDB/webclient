@@ -20,6 +20,8 @@ from webclient import (
     Event,
     HtmlBacking,
     NavigationEvent,
+    WaitConfig,
+    WaitEvent,
     WebClient,
     from_blob,
     from_url,
@@ -301,6 +303,17 @@ def main() -> None:
                 "tiers": probed.transport().escalation,
             },
         )
+        # [wait] a controllable wait strategy: WaitEvent names the milestone and
+        #      WaitConfig the timeout + on-timeout policy (RAISE loud by default,
+        #      RETURN hands back the partial DOM). Here: wait for a selector.
+        waited = wc.fetch(
+            f"{base}/app",
+            browser=True,
+            wait=WaitConfig(event=WaitEvent.SELECTOR, selector="#add", timeout=5.0),
+        )
+        print("waited:     ", waited.select("#add", error=RETURN).ok)
+        wc.release(waited)
+
         reloaded = live.reload()
         print("reloaded:   ", reloaded.select("#cart li", error=RETURN).ok)
         wc.release(reloaded)
