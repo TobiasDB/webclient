@@ -27,26 +27,20 @@ DEFAULT_FANOUT = 8
 _DROP = object()
 
 #: element ops that fan out per element (the generated Collection lift). A plan
-#: ending in one of these streams its per-element results.
-_ELEMENT_OPS = frozenset(
-    {
-        "attr",
-        "text_content",
-        "title",
-        "render",
-        "ref",
-        "select",
-        "select_all",
-        "is_ok",
-        "is_empty",
-        "message",
-        "click",
-        "write",
-        "reload",
-        "screenshot",
-        "wait_for",
-    }
-)
+#: ending in one of these streams its per-element results. DERIVED from the
+#: Document core's own op tables (call + property ops), so a new Document backing
+#: op is streamable automatically -- there is no hand-maintained list to forget
+#: (which used to silently degrade streaming to evaluate-then-yield).
+_ELEMENT_OPS_CACHE: "frozenset[str] | None" = None
+
+
+def _element_ops() -> "frozenset[str]":
+    global _ELEMENT_OPS_CACHE
+    if _ELEMENT_OPS_CACHE is None:
+        from ..core.document import Document
+
+        _ELEMENT_OPS_CACHE = frozenset(Document.ops()) | frozenset(Document.prop_ops())
+    return _ELEMENT_OPS_CACHE
 
 _OPS = {
     "eq": operator.eq,
@@ -293,7 +287,7 @@ def _stream_tail(steps: list[Step]) -> int | None:
         ):
             i -= 2
         return i
-    if name in _ELEMENT_OPS:
+    if name in _element_ops():
         return n - 2
     return None
 

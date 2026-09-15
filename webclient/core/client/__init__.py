@@ -820,17 +820,21 @@ class WebClient(WebCore, IWebClient):
 
 
 _DEFAULT: "WebClient | None" = None
+_DEFAULT_LOCK = threading.Lock()
 
 
 def default_client() -> WebClient:
     """The process-local shared engine, used wherever an operation has no bound
     client -- an unbound reference/plan (``reference(url).resolve()``), a lazy
     root collected without a client, etc. Recreated after it is closed, so every
-    such op shares ONE engine (pool + loop) instead of spinning up throwaways."""
+    such op shares ONE engine (pool + loop) instead of spinning up throwaways.
+    Locked, so concurrent first use from several threads constructs exactly one
+    engine (an unlocked check-then-set would build -- and leak -- several)."""
     global _DEFAULT
-    if _DEFAULT is None or _DEFAULT._closed:
-        _DEFAULT = WebClient()
-    return _DEFAULT
+    with _DEFAULT_LOCK:
+        if _DEFAULT is None or _DEFAULT._closed:
+            _DEFAULT = WebClient()
+        return _DEFAULT
 
 
 def async_client(**policy: Any) -> WebClient:

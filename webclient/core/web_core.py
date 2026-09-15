@@ -183,7 +183,7 @@ class WebCore:
                 client = default_client()
                 try:
                     self._client = client
-                except Exception:
+                except AttributeError:  # a core without the private slot -- fine
                     pass
         return cast(Any, client).bridge(coro)
 
@@ -301,7 +301,7 @@ class WebCore:
         hops = getattr(client, "_remote_hops", 0) + 1
         try:
             client._remote_hops = hops
-        except Exception:
+        except AttributeError:  # not a remote client (no counter slot) -- nothing to nag
             return
         if hops == _CHATTY_ROUND_TRIPS and not getattr(client, "_nagged", False):
             client._nagged = True
@@ -402,10 +402,12 @@ def _wrap_result(value: Any) -> Any:
     """Present a dispatch result as an eager value: a list of cores becomes a
     ``Collection`` (so the row-shaping ops apply); a single core is already its
     own surface; anything else (a ``Field``/scalar) passes through."""
-    if isinstance(value, (list, tuple)) and any(isinstance(v, WebCore) for v in value):
-        owner = getattr(value[0], "_client", None)
-        root = getattr(value[0], "root", "") or getattr(value[0], "name", "")
-        return Collection(list(value), client=owner, root=root)
+    if isinstance(value, (list, tuple)):
+        first = next((v for v in value if isinstance(v, WebCore)), None)
+        if first is not None:  # derive owner/root from a real core, not value[0]
+            owner = getattr(first, "_client", None)
+            root = getattr(first, "root", "") or getattr(first, "name", "")
+            return Collection(list(value), client=owner, root=root)
     return value
 
 
