@@ -148,7 +148,16 @@ class WebCore:
         """Run ``op`` on its backing, passing this core as the receiver. An IO op
         (an ``async def`` on the backing -- see ``Backing.io``) returns a
         coroutine that is bridged onto the right dispatcher here, so backings never
-        touch ``bridge`` themselves; every other op returns its value directly."""
+        touch ``bridge`` themselves; every other op returns its value directly.
+
+        Mode-aware, exactly like ``__getattr__``: under the remote dispatcher an op
+        that needs the server round-trips instead of running locally, so ``dispatch``
+        is a single entry point with the same semantics as attribute access (no
+        second, mode-blind path)."""
+        if self._dispatch_mode() == "remote" and self._goes_remote(op):
+            is_prop = op in type(self).prop_ops()
+            remote = self._remote_call(op, is_prop)
+            return remote if is_prop else remote(*args, **kwargs)
         result = getattr(self.backing(op), op)(self, *args, **kwargs)
         if op in type(self).io_ops():
             return self._bridge_io(result)

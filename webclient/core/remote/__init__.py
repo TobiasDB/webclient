@@ -13,15 +13,18 @@ handle type, no interface exceptions. Batch a chain/fan-out with ``.lazy``.
 
 from __future__ import annotations
 
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import httpx
 from pydantic import PrivateAttr
 
 from ...query.expr import Expr
-from ..client import WebClient, _materialize
+from ..client import WebClient, _materialize, _seed_urls
 from ..document import Document
 from ..reference import Reference
+
+if TYPE_CHECKING:
+    from ..crawl import Crawl
 
 
 def _url_of(source: dict[str, Any]) -> str:
@@ -116,6 +119,93 @@ class RemoteWebClientCore(WebClient):
         doc._client = self
         doc._remote_handle = True
         return doc
+
+    # -- crawl / sitemap: run server-side via the service endpoints ----------
+    # A crawl is client-held state driving many fetches; over the wire that is a
+    # server-side job (the same shape as a server-side ``session``), so remote
+    # crawl/sitemap POST to the service's /crawl and /sitemap endpoints and hand
+    # back a finished :class:`Crawl` -- run to completion in one round-trip
+    # (turn-based ``step()`` steering is a local-client feature).
+    def _remote_crawl(self, path: str, body: dict[str, Any]) -> "Crawl":
+        from ..crawl import Crawl, Edge
+        from ..document.models import Summary
+
+        sid = getattr(self, "_sid", "")
+        if sid:  # a session-scoped crawl runs with the server session's identity
+            body["session"] = sid
+        payload = {k: v for k, v in body.items() if v is not None}
+        resp = self._http.post(
+            f"{self.url}{path}", json=payload, headers=self._headers()
+        )
+        if not (200 <= resp.status_code < 300):
+            from ...errors import RemoteError, WebError
+
+            err: WebError | None = None
+            try:
+                data = resp.json()
+                if isinstance(data, dict) and isinstance(data.get("error"), dict):
+                    err = WebError(**data["error"])
+            except Exception:
+                pass
+            raise RemoteError(resp.status_code, resp.text[:200], error=err)
+        data = resp.json()
+        core = Crawl(
+            status="closed",  # the server ran it to completion
+            pages=[Summary(**p) for p in data.get("pages", [])],
+            frontier=[Edge(**e) for e in data.get("frontier", [])],
+        )
+        return core.bind(self)
+
+    def crawl(
+        self,
+        seeds: Any,
+        *,
+        scope: str | None = None,
+        auto: bool = False,
+        width: int = 10,
+        depth: int = 3,
+        max_pages: int = 50,
+        same_origin: bool = True,
+        obey_robots: bool = True,
+        keywords: list[str] | None = None,
+        include: str | None = None,
+        exclude: str | None = None,
+        facets: list[str] | None = None,
+    ) -> "Crawl":
+        urls = _seed_urls(seeds)
+        return self._remote_crawl(
+            "/crawl",
+            {
+                "url": urls[0] if urls else "",
+                "width": width,
+                "depth": depth,
+                "max_pages": max_pages,
+                "same_origin": same_origin,
+                "obey_robots": obey_robots,
+                "keywords": keywords,
+                "include": include,
+                "exclude": exclude,
+                "facets": facets,
+            },
+        )
+
+    def sitemap(
+        self,
+        url: Any,
+        *,
+        depth: int = 2,
+        width: int = 20,
+        max_pages: int = 1000,
+        use_sitemap_xml: bool = True,
+    ) -> "Crawl":
+        target = url if isinstance(url, str) else str(getattr(url, "url", url))
+        return self._remote_crawl(
+            "/sitemap", {"url": target, "depth": depth, "width": width, "max_pages": max_pages}
+        )
+
+    def release(self, doc: Document) -> None:
+        """No-op on remote: the server owns its transport pool and reclaims pages
+        (the doc store is LRU-bounded); there is no local page to return."""
 
     def close(self) -> None:
         if self._http is not None:

@@ -74,6 +74,32 @@ def test_fetch_returns_handle(remote):
     assert d.id
 
 
+def test_remote_crawl_runs_server_side(remote):
+    # F5: crawl is 100% available on a remote client -- it runs on the server (one
+    # round-trip) and returns a real, finished Crawl. No local pool, no crash.
+    from webclient import Crawl
+
+    rc, server = remote
+    crawl = rc.crawl(server.url_for("/cards"), auto=True, max_pages=3, obey_robots=False)
+    assert isinstance(crawl, Crawl) and crawl.done
+    urls = [p.transport.final_url for p in crawl.pages if p.transport]
+    assert any(u.endswith("/cards") for u in urls)
+
+
+def test_remote_sitemap_and_sitemaps(remote):
+    rc, server = remote
+    sm = rc.sitemap(server.url_for("/cards"), max_pages=3)
+    assert sm.done and len(sm.pages) >= 1
+    # sitemaps() discovery also works remotely (an io op that round-trips)
+    assert isinstance(rc.sitemaps(server.url_for("/cards")), list)
+
+
+def test_remote_release_is_a_noop(remote):
+    rc, server = remote
+    d = rc.fetch(server.url_for("/cards"))
+    rc.release(d)  # must not raise (no local page to free on a remote client)
+
+
 def test_auth_enforced(httpserver):
     httpserver.expect_request("/x").respond_with_data("ok")
     app = create_app(token="secret")
