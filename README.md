@@ -35,8 +35,8 @@ from webclient import WebClient
 with WebClient() as wc:
     page = wc.fetch("https://example.com")   # eager -> a Document
     print(page.ok, page.title)
-    print(page.render("markdown"))                      # page as markdown
-    for link in page.render("links"):                   # a Collection[Reference]
+    print(page.markdown())                              # page as markdown
+    for link in page.links():                           # a Collection[Reference]
         print(link.url)
 ```
 
@@ -78,9 +78,9 @@ with WebClient() as wc:
 
 `select` takes CSS or XPath; a selected node is itself a `Document`, so selection
 nests. `attr("href"/"src"/"action")` returns a `Reference` you can `.resolve()`;
-other attributes return a `Field`. `render(...)` supports
-`"markdown"`, `"text"` (`main_content_only=True` to strip nav/chrome),
-`"elements"` (typed blocks), `"links"`, and `"html"`.
+other attributes return a `Field`. Rendering has typed named methods —
+`.markdown()`, `.text(main_content_only=True)`, `.links()`, `.elements()` (typed
+blocks), `.html()` — over the generic `render(format)` dispatch.
 
 ## Task verbs -- for scripts and LLM tools
 
@@ -163,7 +163,7 @@ LLM reads *instead of* the page:
 
 ```python
 s = wc.summary("https://example.com/")
-s.metadata.title        # "Example Domain"
+s.metadata.title        # "Example Domain"  (metadata is None on a non-html page)
 s.structure.word_count  # 19
 s.structure.toc         # [TocEntry(level=1, text=...), ...]
 
@@ -184,7 +184,8 @@ with wc.crawl("https://books.example/", auto=True, max_pages=20,
               keywords=["pricing"]) as crawl:
     crawl.run()                     # or crawl.step(select=...) to steer each round
 for page in crawl.pages:            # each a lean .summary()
-    print(page.transport.final_url, page.metadata.title)
+    if page.transport and page.metadata:            # facets are None when N/A
+        print(page.transport.final_url, page.metadata.title)
 ```
 
 Each page carries a lean default summary (`transport` + `metadata`); pass

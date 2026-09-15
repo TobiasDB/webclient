@@ -35,9 +35,13 @@ class JsonBacking(Backing):
     """Dotted-path ops for json. A selected node is a Document holding the
     sub-value; ``attr('value')`` / ``text_content`` read it."""
 
-    provides = frozenset({"select", "select_all", "attr", "render"})
+    provides = frozenset({"select", "select_all", "attr", "render", "elements"})
     props = frozenset({"text_content"})
     gate = "tree"
+
+    def elements(self, core: "Document") -> "list[Element]":
+        """The json as a flat list of typed content blocks (dotted-path ids)."""
+        return _json_elements(self._data(core))
 
     def applies(self, core: "Document") -> bool:
         return core.kind == "json"

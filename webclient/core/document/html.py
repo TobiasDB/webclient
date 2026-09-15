@@ -275,9 +275,34 @@ class HtmlBacking(Backing):
     descendant text, tags stripped -- the DOM ``textContent``); ``attr`` reads a
     real HTML attribute."""
 
-    provides = frozenset({"select", "select_all", "attr", "render"})
+    provides = frozenset(
+        {"select", "select_all", "attr", "render",
+         "markdown", "text", "html", "links", "elements"}
+    )
     props = frozenset({"text_content", "title"})
     gate = "tree"
+
+    # -- named render front doors (typed sugar over ``render(format)``) --------
+    def markdown(self, core: "Document", *, main_content_only: bool = False) -> str:
+        """The page as markdown (``render("markdown")`` with a proper ``str`` type
+        and no stringly-typed format arg)."""
+        return self.render(core, "markdown", main_content_only=main_content_only)
+
+    def text(self, core: "Document", *, main_content_only: bool = True) -> str:
+        """The page's readable text (nav/chrome stripped by default)."""
+        return self.render(core, "text", main_content_only=main_content_only)
+
+    def html(self, core: "Document") -> str:
+        """The raw decoded HTML source."""
+        return self.render(core, "html")
+
+    def links(self, core: "Document") -> "list[Reference]":
+        """The page's outbound links as References."""
+        return self.render(core, "links")
+
+    def elements(self, core: "Document") -> "list[Element]":
+        """The page as a flat list of typed content blocks."""
+        return self.render(core, "elements")
 
     def applies(self, core: "Document") -> bool:
         return core.kind in ("html", "xml")

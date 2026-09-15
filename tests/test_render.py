@@ -41,6 +41,19 @@ def test_markdown_via_view_sugar():
     assert "# Big News" in make_doc().render("markdown")
 
 
+def test_named_render_methods():
+    # typed front doors over render(format): no stringly-typed arg, proper return
+    doc = make_doc()
+    assert "# Big News" in doc.markdown()
+    assert "First bold paragraph" in doc.text()
+    assert "<main>" in doc.html()
+    assert [r.path for r in doc.links()] == ["/home", "/more"]
+    assert [e.type for e in doc.elements()][0] == "title"
+    # json elements() works too
+    jdoc = Document(kind="json", content=b'{"a": 1}', status_code=200)
+    assert any(e.id == "a" for e in jdoc.elements())
+
+
 def test_markdown_renders_tables_as_gfm():
     html = (
         b"<html><body><table>"
