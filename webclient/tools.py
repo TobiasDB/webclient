@@ -47,7 +47,7 @@ def page_skeleton(
 ) -> str:
     """Fetch ``url`` and return its token-lean DOM skeleton -- an HTML-tag outline
     an LLM reads to write CSS selectors (bloat removed, leaf text hinted, every
-    sibling shown). Pass ``browser="probe"`` for a JS/SPA page: the skeleton then
+    sibling shown). Pass ``browser="auto"`` for a JS/SPA page: the skeleton then
     marks client-injected nodes ``[xhr]``/``[js]`` and lists the data APIs. ``**kw``
     forwards ``max_lines`` / ``collapse`` / ``legend`` etc."""
     return _client(client).fetch(url, browser=browser).skeleton(**kw)

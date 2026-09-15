@@ -58,6 +58,8 @@ class TransportBacking(Backing):
             server=h.get("server"),
             cdn=_cdn(h),
             region=h.get("cf-ipcountry") or h.get("x-country"),
+            escalation=list(core._tiers) or ["static"],
+            final_tier=core._tiers[-1] if core._tiers else "static",
         )
 
 

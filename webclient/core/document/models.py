@@ -77,6 +77,10 @@ class Transport(BaseModel):
     server: str | None = None
     cdn: str | None = None
     region: str | None = None
+    #: how the bytes were obtained: the transport tiers this resolution took (the
+    #: last is ``final_tier``), e.g. ``["static"]`` or ``["static", "proxy", "browser"]``.
+    escalation: list[str] = ["static"]
+    final_tier: str = "static"
 
 
 class Metadata(BaseModel):
@@ -111,67 +115,43 @@ class Structure(BaseModel):
     media_video: int = 0
 
 
-class Runtime(BaseModel):
-    """Browser-only signals, read from captured DOM/network events (``None`` on a
-    static fetch)."""
+class Signal(BaseModel):
+    """One detected fact about a resolved response -- self-describing, so an LLM (or
+    the auto-escalation loop) can act on it directly. A signal reads from whatever
+    the document already carries: the access signals (``anti_bot`` / ``blocked`` /
+    ``paywall`` / ``login_wall``) from the status/headers/cookies/body -- available
+    on ANY fetch; the JS-nature signals (``body_injected`` / ``xhr_composed`` /
+    ``client_shell``, rolled up by ``spa``) from the captured DOM/network events --
+    filled on a browser render. Empty (``present=False``) is normal, not an error:
+    it means "nothing notable of this kind."
 
-    is_spa: bool | None = None
-    framework: str | None = None
-    uses_xhr: bool | None = None
-    uses_fetch: bool | None = None
-    xhr_endpoints: list[XhrCall] = []
-    dynamic_elements: list[str] = []
-    #: how the page was built (the finer detail behind ``is_spa``, so a caller can set
-    #: its own threshold): the fraction of the page's text that was injected AFTER the
-    #: initial load (0.0 = fully server-rendered, ~1.0 = a client-rendered shell),
-    #: the count of nodes injected after load, and whether that injected content
-    #: landed in the main content area (position: middle-of-page injection is a
-    #: stronger SPA signal than an edge widget).
-    injected_ratio: float | None = None
-    injected_nodes: int | None = None
-    injected_in_main: bool | None = None
-    #: the page rewrote its MAIN content after navigation using data it fetched from
-    #: its OWN origin -- i.e. the content is composed client-side from ``xhr_endpoints``.
-    #: When true, an agent can often **skip rendering the page** and fetch those
-    #: endpoints directly (they are the real data source).
-    content_from_xhr: bool | None = None
+    Several signals can point at the same conclusion from different evidence -- a
+    page is a SPA because ``xhr_composed`` (its main content is correlated with
+    same-origin XHR, rrweb-style) AND ``body_injected`` (most of the body text
+    appeared after the initial response). Each is its own signal; read whichever you
+    want, or the ``spa`` roll-up.
 
+    The ``webclient.resiliency.detect`` layer computes the raw facts; the signals
+    facet wraps each into this shape."""
 
-class Probe(BaseModel):
-    """What an auto-resolve had to escalate to (``None`` unless the resolution
-    recorded it) -- the read-side of the resiliency layer."""
+    #: the detector's stable identifier, e.g. ``"anti_bot"`` / ``"body_injected"`` /
+    #: ``"xhr_composed"`` -- so a signal from ``signals()`` is self-identifying.
+    name: str = ""
+    present: bool = False
+    #: the evidence, e.g. ">40% of the page's text was injected after load via
+    #: same-origin XHR" or "datadome challenge on a 403".
+    reason: str = ""
+    #: the salient metric or label behind the signal -- an ``injected_ratio`` (0.62),
+    #: a vendor name ("datadome"), a status code (403). Type varies by signal.
+    value: Any = None
+    #: the transport escalation that would plausibly help -- ``"browser"`` (render
+    #: JS), ``"proxy"`` (rotate IP past a block), ``"stealth"`` (a browser behind a
+    #: proxy, for a named anti-bot vendor), or ``None`` (nothing the client can do,
+    #: e.g. a paywall / login wall). The auto-resolve loop reads this to escalate.
+    remedy: Literal["browser", "proxy", "stealth"] | None = None
 
-    was_browser_required: bool | None = None
-    was_proxy_required: bool | None = None
-    anti_bot: str | None = None
-    js_required: bool | None = None
-    paywall: bool | None = None
-    login_wall: bool | None = None
-    render_blocked: bool | None = None
-    #: extra visible words a browser render recovered over the static response
-    #: (only set by ``browser="probe"``): >0 means JS injects content worth a
-    #: browser; 0 means the static HTML already carried it.
-    render_gain: int | None = None
-
-
-class ProbeRecord(BaseModel):
-    """The raw resolution record the transport ladder writes onto a Document as it
-    fetches / escalates -- the source the ``probe`` summary facet projects from (and
-    the wire form for a remote resolve). Richer than the facet: it also keeps the
-    tier trail. See :mod:`docs.design.resiliency`."""
-
-    was_browser_required: bool = False
-    was_proxy_required: bool = False
-    anti_bot: str | None = None  # cloudflare / datadome / perimeterx / ... / None
-    js_required: bool = False
-    paywall: bool = False
-    login_wall: bool = False
-    render_blocked: bool = False
-    render_gain: int | None = None  # probe: extra visible words the browser recovered
-    escalation: list[str] = []  # tiers taken, e.g. ["static", "browser"]
-    reason: str = ""  # the final trigger, e.g. "datadome-403"
-    attempts: int = 1
-    final_tier: str = "static"
+    def __bool__(self) -> bool:
+        return self.present
 
 
 class IDocument(BaseModel):
@@ -216,24 +196,30 @@ class IDocument(BaseModel):
         def text_content(self) -> str | None: ...
         @property
         def title(self) -> str | None: ...
+        def anti_bot(self) -> "Signal": ...
         @overload
         def attr(self, name: Literal['href', 'src', 'action']) -> "Reference": ...  # type: ignore[overload-overlap]
         @overload
         def attr(self, name: str, *, optional: bool = ..., error: Any = ...) -> "Field[str]": ...
+        def blocked(self) -> "Signal": ...
+        def body_injected(self) -> "Signal": ...
         def click(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ..., error: Any = ...) -> "Document": ...
+        def client_shell(self) -> "Signal": ...
         def elements(self) -> "list[Element]": ...
         def evaluate(self, script: str) -> "Any": ...
         @overload
         def events_of(self, event_type: type[E]) -> "list[E]": ...
         @overload
         def events_of(self, event_type: str) -> "list[Event]": ...
+        def framework(self) -> "str | None": ...
         def html(self) -> "str": ...
         def is_empty(self) -> "Field[bool]": ...
         def is_ok(self) -> "Field[bool]": ...
         def links(self) -> "Collection[Reference]": ...
+        def login_wall(self) -> "Signal": ...
         def markdown(self, *, main_content_only: bool = ...) -> "str": ...
         def metadata(self) -> "Metadata": ...
-        def probe(self) -> "Probe": ...
+        def paywall(self) -> "Signal": ...
         def ref(self) -> "Reference": ...
         def reload(self) -> "Document": ...
         @overload
@@ -242,16 +228,19 @@ class IDocument(BaseModel):
         def render(self, format: Literal['links']) -> "Collection[Reference]": ...
         @overload
         def render(self, format: str, **options: Any) -> "str": ...
-        def runtime(self) -> "Runtime": ...
         def screenshot(self, selector: str | None = ...) -> "Document": ...
         def select(self, selector: str, *, index: int = ..., optional: bool = ..., error: Any = ...) -> "Document": ...
         def select_all(self, selector: str, *, limit: int | None = ..., offset: int = ...) -> "Collection[Document]": ...
+        def signals(self) -> "list[Signal]": ...
         def skeleton(self, *, max_lines: int = ..., text_chars: int = ..., max_depth: int = ..., max_siblings: int = ..., legend: bool = ..., collapse: bool = ..., annotate_origin: bool = ...) -> "str": ...
+        def spa(self) -> "Signal": ...
         def structure(self) -> "Structure": ...
         def text(self, *, main_content_only: bool = ...) -> "str": ...
         def transport(self) -> "Transport": ...
         def wait_for(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ..., error: Any = ...) -> "Document": ...
         def write(self, selector: str, text: str, *, timeout: float | None = ..., optional: bool = ..., error: Any = ...) -> "Document": ...
+        def xhr_composed(self) -> "Signal": ...
+        def xhr_endpoints(self) -> "list[XhrCall]": ...
         # fmt: on
         # >>> end generated <<<
         pass
@@ -266,7 +255,5 @@ __all__ = [
     "Transport",
     "Metadata",
     "Structure",
-    "Runtime",
-    "Probe",
-    "ProbeRecord",
+    "Signal",
 ]

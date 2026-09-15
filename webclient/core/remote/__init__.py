@@ -53,14 +53,13 @@ def _wire_models() -> "dict[str, type[Any]]":
         from ..document.models import (
             Element,
             Metadata,
-            Probe,
-            Runtime,
+            Signal,
             Structure,
             Transport,
         )
 
         models: list[type[Any]] = [
-            Transport, Metadata, Structure, Runtime, Probe, Element,
+            Transport, Metadata, Structure, Signal, Element,
             Edge, Event, NavigationEvent, NetworkEvent, ConsoleEvent,
             DOMUpdateEvent, ActionEvent, PlanEvent,
         ]

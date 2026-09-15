@@ -116,7 +116,7 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
         Tool("links", "Fetch a URL and return its outbound link URLs.",
              _schema(url={**_URL, "_required": True}), links),
         Tool("skeleton", "Fetch a URL and return a token-lean DOM skeleton "
-             "(an HTML-tag outline) to write CSS selectors from. Set browser='probe' "
+             "(an HTML-tag outline) to write CSS selectors from. Set browser='auto' "
              "for a JS/SPA page: injected nodes are marked [xhr]/[js] and data APIs listed.",
              _schema(url={**_URL, "_required": True}, browser={"type": "string"}), skeleton),
         Tool("discover_sitemaps", "Discover a site's real sitemap.xml page URLs.",

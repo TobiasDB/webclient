@@ -1,8 +1,9 @@
-"""Resiliency P1: pure response classification + observe-mode probe recording.
+"""Resiliency: pure response classification + the signal-driven escalation ladder.
 
-The escalation ladder (acting on the detection) lands in later phases; here we
-check detection is accurate + conservative, and that a static fetch records what
-it detected onto the ``probe`` summary facet (without escalating).
+Detection (:func:`webclient.resiliency.classify`) is pure and conservative; a
+resolved document surfaces it through the ``signals`` facet (anti_bot / blocked /
+spa / ...), and ``browser="auto"`` escalates on those signals (a proxy exit for a
+block, a browser render for JS-gated content).
 """
 
 import pytest
@@ -128,24 +129,24 @@ def wc():
         yield client
 
 
-def test_static_fetch_records_anti_bot_probe(httpserver, wc):
+def test_static_fetch_reports_anti_bot_signal(httpserver, wc):
     httpserver.expect_request("/blocked").respond_with_data(
         "<html>blocked</html>",
         status=403,
         headers={"x-datadome": "1", "Content-Type": "text/html"},
     )
     doc = wc.ref(httpserver.url_for("/blocked")).resolve(error=None, optional=True).collect()
-    probe = doc.probe()
-    assert probe is not None and probe.anti_bot == "datadome"
+    ab = doc.anti_bot()  # the signals facet reads the response's own status/headers
+    assert ab.present and ab.value == "datadome"
 
 
-def test_static_fetch_of_normal_page_has_no_probe(httpserver, wc):
+def test_static_fetch_of_normal_page_reports_no_signals(httpserver, wc):
     httpserver.expect_request("/ok").respond_with_data(
         "<html><body><h1>Fine</h1>" + "content " * 80 + "</body></html>",
         content_type="text/html",
     )
     doc = wc.fetch(httpserver.url_for("/ok"))
-    assert not doc.has_op("probe")  # nothing to escalate -> facet absent
+    assert doc.signals() == []  # nothing notable (total facet, empty)
 
 
 # -- P3/P4: resolve policy declared to a proxy service as request headers -------
@@ -204,15 +205,16 @@ _SPA = (
 def test_browser_auto_escalates_a_js_gated_page(httpserver, wc):
     httpserver.expect_request("/spa").respond_with_data(_SPA, content_type="text/html")
     url = httpserver.url_for("/spa")
-    # a plain static fetch: empty shell, records js_required, does NOT escalate
+    # a plain static fetch: an empty SPA shell -> spa() fires with a browser remedy,
+    # and it stayed on the static tier (no escalation requested)
     static = wc.fetch(url)
-    sp = static.probe()
-    assert sp is not None and sp.js_required and not sp.was_browser_required
+    assert static.spa().present and static.spa().remedy == "browser"
+    assert static.transport().final_tier == "static"
     # browser="auto": the JS-gated page is escalated to a browser render
     auto = wc.fetch(url, browser="auto")
     assert "Loaded content" in (auto.text_content or "")  # JS ran
-    assert auto.probe().was_browser_required is True  # the facet
-    assert auto._probe.escalation == ["static", "browser"]  # the raw record's trail
+    assert auto.transport().final_tier == "browser"  # the tier trail
+    assert auto.transport().escalation == ["static", "browser"]
 
 
 def test_browser_auto_stays_static_for_a_normal_page(httpserver, wc):
@@ -222,4 +224,4 @@ def test_browser_auto_stays_static_for_a_normal_page(httpserver, wc):
     )
     doc = wc.fetch(httpserver.url_for("/plain"), browser="auto")
     assert doc._page is None  # never launched a browser
-    assert not doc.has_op("probe")
+    assert doc.transport().final_tier == "static" and doc.signals() == []

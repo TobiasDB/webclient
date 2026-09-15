@@ -59,7 +59,7 @@ class IReference(BaseModel):
         def url(self) -> str: ...
         def join(self, href: str) -> "Reference": ...
         def replace(self, **fields: Any) -> "Reference": ...
-        def resolve(self, *, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ...) -> "Document": ...
+        def resolve(self, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ...) -> "Document": ...
         def with_params(self, **params: str) -> "Reference": ...
         # fmt: on
         # >>> end generated <<<
@@ -142,11 +142,9 @@ class BrowserPolicy(BaseModel, frozen=True):
     stealth: bool = False
     wait_for: str | None = None
     #: ``never`` static-only, ``always`` straight to a browser, ``auto`` static then
-    #: browser only if the static page looks JS-gated (empty/SPA shell), ``probe``
-    #: (diagnostic, explicit-only) resolve *both* tiers and compare to report
-    #: definitively whether a browser is needed -- the "can I scrape this / what do
-    #: I need" mode; returns the fuller (browser) document with an accurate probe.
-    when: Literal["never", "auto", "always", "probe"] = "never"
+    #: escalate on the response's signals (a proxy exit for a block/anti-bot
+    #: challenge, a browser render for JS-gated content).
+    when: Literal["never", "auto", "always"] = "never"
 
     @classmethod
     def auto(cls) -> "BrowserPolicy":

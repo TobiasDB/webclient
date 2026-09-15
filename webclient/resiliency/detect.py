@@ -85,16 +85,6 @@ def _visible_text(html: str) -> str:
     return " ".join(_ANYTAG.sub(" ", _TAGS.sub(" ", html)).split())
 
 
-def visible_word_count(html: "str | bytes | None") -> int:
-    """The number of visible words in an HTML string/bytes (script/style + tags
-    stripped). Used by ``browser="probe"`` to measure how much content a browser
-    render recovers over the static response."""
-    if not html:
-        return 0
-    text = html.decode("utf-8", "replace") if isinstance(html, (bytes, bytearray)) else html
-    return len(_visible_text(text).split())
-
-
 #: statuses that are, on their own, evidence of a bot block / challenge (a bare
 #: 403/429/503 with no vendor fingerprint -- e.g. an origin WAF or a rate-limit
 #: gate). 401 stays out: that is an auth/login wall, not an anti-bot challenge.
@@ -183,4 +173,4 @@ def classify(
     )
 
 
-__all__ = ["Signals", "classify", "detect_anti_bot", "visible_word_count"]
+__all__ = ["Signals", "classify", "detect_anti_bot"]

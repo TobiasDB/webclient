@@ -3,7 +3,7 @@
 ``ICrawl`` is a site traversal's state: its options (scope / bounds / keywords) and
 its live state -- the ``frontier`` (unresolved :class:`Edge` links) and the ``pages``
 it has fetched (the resolved :class:`Document`\\ s, so their content is an expression:
-``doc.attr("text")``, ``doc.runtime()``, ``doc.extract(...).project()``) -- plus,
+``doc.attr("text")``, ``doc.signals()``, ``doc.extract(...).project()``) -- plus,
 under ``TYPE_CHECKING``, the ops it implements (``step`` / ``run`` / ``done``).
 ``Crawl`` inherits it and holds the dedup/scope machinery.
 """
@@ -66,7 +66,7 @@ class ICrawl(BaseModel):
     status: Literal["running", "closed"] = "running"
     # -- live state ----------------------------------------------------------
     #: the resolved pages, as :class:`Document`\\ s (kept, not projected -- extract
-    #: whatever facet/content you want per page: ``doc.title`` / ``doc.runtime()`` /
+    #: whatever facet/content you want per page: ``doc.title`` / ``doc.signals()`` /
     #: ``doc.markdown()`` / ``doc.extract(...).project()``). Stored untyped so pydantic
     #: never copies a live Document.
     pages: list[Any] = []

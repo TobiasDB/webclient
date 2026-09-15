@@ -24,9 +24,9 @@ from ...events import EventBus
 from ...models import NavigationEvent, NetworkEvent, PlanEvent
 from ...query.executor import aevaluate, astream, evaluate
 from ..document import Document
-from ..document.models import ProbeRecord
-from ...resiliency import Signals, classify, policy_headers, visible_word_count
+from ...resiliency import Signals, classify, policy_headers
 from ..reference import Reference, from_url
+from ..reference.models import ProxyPolicy, Resolve
 from ..web_core import Backing, WebCore
 from .fetch import FetchBacking
 from .loop import EngineLoop
@@ -39,15 +39,14 @@ if TYPE_CHECKING:
     from ...surfaces.lazy import LazyWebClient
 
 
-_MODES = ("never", "auto", "always", "probe")
+_MODES = ("never", "auto", "always")
 
 
 def _browser_mode(browser: Any) -> str:
     """Normalise the ``browser`` kwarg to a tier: ``"never"`` (static only),
-    ``"auto"`` (static, escalate if JS-gated), ``"always"`` (straight to browser),
-    or ``"probe"`` (resolve both tiers and compare -- the explicit diagnostic).
-    Accepts a bool, one of those strings, ``AUTO``, or a ``BrowserPolicy`` (its
-    ``when``)."""
+    ``"auto"`` (static first, escalate on the response's signals), or ``"always"``
+    (straight to a browser). Accepts a bool, one of those strings, ``AUTO``, or a
+    ``BrowserPolicy`` (its ``when``)."""
     if browser is True:
         return "always"
     if not browser:  # False / None
@@ -58,19 +57,16 @@ def _browser_mode(browser: Any) -> str:
     return when if when in _MODES else "auto"
 
 
-def _probe_reason(s: Signals) -> str:
-    """A short label for the most salient detected signal (ProbeRecord.reason)."""
-    if s.anti_bot:
-        return s.anti_bot
-    if s.blocked:
-        return "blocked"
-    if s.paywall:
-        return "paywall"
-    if s.login_wall:
-        return "login_wall"
-    if s.js_required or s.empty:
-        return "js_required"
-    return ""
+def _remedy(sig: "Signals") -> "str | None":
+    """The transport escalation a static response's signals call for, or None (the
+    response is fine, or nothing the ladder can do -- a paywall / login wall). A
+    block / anti-bot challenge wants a fresh IP (``"proxy"``); JS-gated content wants
+    a render (``"browser"``)."""
+    if sig.anti_bot or sig.blocked:
+        return "proxy"  # rotate an exit past the block (declared to the proxy service)
+    if sig.needs_browser:
+        return "browser"  # render the client-built content (JS-gated)
+    return None
 
 
 def _seed_urls(seeds: Any) -> list[str]:
@@ -424,11 +420,9 @@ class WebClient(WebCore, IWebClient):
             if not optional:
                 raise WebException(cast(WebError, doc.error), document=doc)
             return doc
-        if mode in ("always", "probe"):
+        if mode == "always":
             try:
-                if mode == "always":
-                    return await self._alive(ref, keep_alive=keep_alive)
-                return await self._probe_compare(ref)
+                return await self._alive(ref, keep_alive=keep_alive)
             except WebException:
                 raise
             except Exception as exc:  # a render/launch failure
@@ -461,19 +455,34 @@ class WebClient(WebCore, IWebClient):
             attempt += 1
             doc, resp = await self._afetch_once(ref, headers)
         self._register(doc, ref)
-        signals = self._observe(doc, resp)  # record what would escalate (P1)
-        # P2: browser="auto" -- escalate a JS-gated static page to a browser render.
-        if (
-            mode == "auto"
-            and doc.error is None
-            and signals is not None
-            and signals.needs_browser
-        ):
-            if resp is not None:  # keep the static hop's navigation/network events
-                self._capture(doc, ref, resp)
-            return await self._escalate_to_browser(
-                ref, signals, list(doc._events), doc.content, keep_alive=keep_alive
-            )
+        doc._tiers = ["static"]
+        signals = self._observe(doc, resp)
+        # browser="auto": a signal-driven escalation ladder. Inspect the static
+        # response; escalate to the tier its signals call for (a fresh proxy exit for
+        # a block/anti-bot challenge, a browser render for JS-gated content), then
+        # re-inspect. Bounded: static -> (proxy) -> browser.
+        if mode == "auto" and doc.error is None and signals is not None:
+            tiers = ["static"]
+            if _remedy(signals) == "proxy":  # rotate an exit via the proxy service
+                tiers.append("proxy")
+                proxy_headers = {
+                    **policy_headers(Resolve(proxy=ProxyPolicy.auto())), **headers
+                }
+                doc, resp = await self._afetch_once(ref, proxy_headers)
+                self._register(doc, ref)
+                doc._tiers = list(tiers)
+                signals = self._observe(doc, resp)
+            if (
+                signals is not None
+                and doc.error is None
+                and _remedy(signals) == "browser"
+            ):
+                if resp is not None:  # keep the static hop's navigation/network events
+                    self._capture(doc, ref, resp)
+                return await self._escalate_to_browser(
+                    ref, list(doc._events), doc.content,
+                    tiers=[*tiers, "browser"], keep_alive=keep_alive,
+                )
         if resp is not None:  # emit navigation/network events for the final doc
             self._capture(doc, ref, resp)
         if doc.error is not None and not optional:  # loud by default
@@ -481,104 +490,36 @@ class WebClient(WebCore, IWebClient):
         return doc
 
     def _observe(self, doc: Document, resp: Any) -> "Signals | None":
-        """Resiliency P1 (observe): classify the static response and, if anything
-        notable is detected (anti-bot / JS-gated / paywall / login wall / hard
-        block), record it onto the document for the ``probe`` summary facet. Returns
-        the signals so ``afetch`` can decide whether to escalate. Pure detection
-        (:mod:`webclient.resiliency.detect`), so a remote resolve records the same."""
+        """Classify the static response into :class:`Signals` (anti-bot / JS-gated /
+        paywall / login wall / hard block) so ``afetch`` can decide whether -- and to
+        what tier -- to escalate. Pure detection (:mod:`webclient.resiliency.detect`),
+        so a remote resolve reads the same signals; the ``signals`` facet re-derives
+        them on read, so nothing is recorded here."""
         if resp is None:
             return None
-        signals = classify(doc.status_code, resp.headers, doc._set_cookies, doc.content)
-        if not signals.any:
-            return signals
-        doc._probe = ProbeRecord(
-            was_browser_required=False,
-            anti_bot=signals.anti_bot,
-            js_required=signals.js_required,
-            paywall=signals.paywall,
-            login_wall=signals.login_wall,
-            escalation=["static"],
-            reason=_probe_reason(signals),
-            final_tier="static",
-        )
-        return signals
+        return classify(doc.status_code, resp.headers, doc._set_cookies, doc.content)
 
     async def _escalate_to_browser(
         self,
         ref: Reference,
-        signals: "Signals",
         static_events: "list[Any] | None" = None,
         static_html: "bytes | None" = None,
         *,
+        tiers: "list[str] | None" = None,
         keep_alive: "bool | float" = False,
     ) -> Document:
-        """The static tier said this page is JS-gated; render it in a browser and
-        record the two-tier trail on the resulting document (the ``probe`` facet).
-        The static hop's events are carried onto the browser doc so ``doc.events``
-        keeps the full trail (both tiers); the static HTML is kept so ``skeleton()``
-        can mark server-initial vs client-injected nodes."""
+        """The static tier said this page is JS-gated; render it in a browser. The
+        static hop's events are carried onto the browser doc so ``doc.events`` keeps
+        the full trail (both tiers); the static HTML is kept so ``skeleton()`` can
+        mark server-initial vs client-injected nodes, and the tier trail is recorded
+        on the document for the ``transport`` facet."""
         doc = await self._alive(ref, keep_alive=keep_alive)
         doc._static_html = static_html
+        doc._tiers = tiers or ["static", "browser"]
         if static_events:
             doc._events = [*static_events, *doc._events]
-        doc._probe = ProbeRecord(
-            was_browser_required=True,
-            js_required=True,
-            anti_bot=signals.anti_bot,
-            escalation=["static", "browser"],
-            reason="js_required",
-            attempts=2,
-            final_tier="browser",
-        )
         await self._arelease(doc)  # content captured; don't hold the page
         return doc
-
-    async def _probe_compare(self, ref: Reference) -> Document:
-        """``browser="probe"``: resolve *both* tiers and compare, then return the
-        fuller (browser) document carrying an accurate ``probe`` facet -- the
-        explicit "can I scrape this / what do I need" diagnostic. It measures how
-        much visible content the browser render recovers over the static response
-        (``render_gain``) and reports ``was_browser_required`` definitively (rather
-        than the conservative ``auto`` heuristic), so a full, content-complete
-        summary can be built with an accurate account of what the page needed."""
-        static = await self.afetch(ref, browser=False, optional=True)
-        try:
-            browser = await self._alive(ref)
-        except Exception:  # browser tier unavailable -> the static doc is all we have
-            if static._probe is not None:
-                static._probe.reason = "browser_unavailable"
-            return static
-        browser._static_html = static.content  # for skeleton() origin annotation
-        static_words = visible_word_count(static.content) if static.ok else 0
-        browser_words = visible_word_count(browser.content)
-        gain = max(0, browser_words - static_words)
-        # content the browser actually recovered: a real gain in visible words
-        # (>= 20) that is either everything (static was empty) or a clear >=25%
-        # growth. A sparse static page the browser does NOT enrich (gain == 0) is
-        # NOT flagged -- render_gain == 0 must mean "static already carried it".
-        content_gated = static.ok and gain >= 20 and (
-            static_words == 0 or browser_words >= static_words * 1.25
-        )
-        sp = static._probe  # what the static tier detected (anti-bot / js / walls)
-        required = bool(content_gated or not static.ok)
-        browser._probe = ProbeRecord(
-            was_browser_required=required,
-            js_required=bool(content_gated),
-            anti_bot=sp.anti_bot if sp else None,
-            paywall=sp.paywall if sp else False,
-            login_wall=sp.login_wall if sp else False,
-            render_gain=gain,
-            escalation=["static", "browser"],
-            reason=(
-                "js_injected_content" if content_gated
-                else "static_blocked" if not static.ok
-                else "static_sufficient"
-            ),
-            attempts=2,
-            final_tier="browser",
-        )
-        await self._arelease(browser)  # diagnostic done; release the compared page
-        return browser
 
     # -- plan execution (machinery): the surface's sync/async entry ----------
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
@@ -665,7 +606,7 @@ class WebClient(WebCore, IWebClient):
         """A scoped site traversal sharing this engine (a :class:`Crawl` core). The
         client manages the frontier (dedup, scope, fetching); use it as a context
         manager and read ``.pages`` (the resolved Documents -- extract whatever you
-        want per page: ``doc.title`` / ``doc.runtime()`` / ``doc.extract(...)``) and
+        want per page: ``doc.title`` / ``doc.signals()`` / ``doc.extract(...)``) and
         ``.frontier`` (the scored :class:`Edge` links).
 
         Defaults are tuned for the common "map this site" case:
@@ -784,13 +725,7 @@ class WebClient(WebCore, IWebClient):
             doc._keep_alive = bool(keep_alive)  # caller owns the lifecycle if set
             if isinstance(keep_alive, (int, float)) and not isinstance(keep_alive, bool):
                 self._expire_page(doc, float(keep_alive))  # TTL safety-net release
-            # the read-side of the resiliency ladder: this document needed a real
-            # browser (P0 records the fact; later phases fill the rest of the trail).
-            doc._probe = ProbeRecord(
-                was_browser_required=True,
-                final_tier="browser",
-                escalation=["browser"],
-            )
+            doc._tiers = ["browser"]  # the tier trail for the transport facet
             self._register(doc, ref)
             # a browser render is a navigation too: emit the NavigationEvent the
             # static path emits (via ``_capture``), so ``doc.events`` is populated

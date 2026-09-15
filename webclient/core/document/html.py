@@ -583,8 +583,8 @@ class HtmlBacking(Backing):
         selectors with ``select``/``select_all``/``extract``). ``collapse=True``
         merges structurally-identical siblings to ``×N`` for very repetitive pages.
 
-        On a browser-rendered document (``browser="probe"``/``"auto"``) with a static
-        baseline, nodes that were NOT in the server's initial HTML are marked
+        On a browser-rendered document (``browser="auto"``/``"always"``) with a
+        static baseline, nodes that were NOT in the server's initial HTML are marked
         ``[xhr]`` (if the page issued XHR/fetch calls) or ``[js]``, and observed data
         APIs are listed -- so the LLM sees what is server-initial vs client-loaded."""
         static_html = core._static_html if annotate_origin else None

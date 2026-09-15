@@ -135,60 +135,45 @@ PLAIN = (
 )
 
 
-def test_probe_mode_flags_js_injected_content(httpserver, wc):
-    """``browser="probe"`` resolves both tiers and compares: a page whose content
-    is injected by JS is flagged was_browser_required with a positive render_gain,
-    and the returned document is the fuller (browser-rendered) one."""
+def test_auto_escalates_js_injected_content(httpserver, wc):
+    """``browser="auto"`` escalates a JS-gated page (an empty shell whose content is
+    injected by script) to a browser render; the returned document is the fuller
+    (browser-rendered) one, and its transport trail shows the escalation."""
     httpserver.expect_request("/inj").respond_with_data(INJECTED, content_type="text/html")
-    doc = wc.fetch(httpserver.url_for("/inj"), browser="probe")
-    try:
-        assert "injected content word" in doc.text_content  # browser recovered it
-        p = doc._probe
-        assert p is not None and p.was_browser_required is True
-        assert p.js_required is True and p.render_gain and p.render_gain > 0
-        assert p.reason == "js_injected_content" and p.escalation == ["static", "browser"]
-        facet = doc.probe()
-        assert facet is not None and facet.was_browser_required and facet.render_gain > 0
-    finally:
-        wc.release(doc)
+    doc = wc.fetch(httpserver.url_for("/inj"), browser="auto")
+    assert "injected content word" in doc.text_content  # browser recovered it
+    assert doc.transport().escalation == ["static", "browser"]
+    assert doc.transport().final_tier == "browser"
+    assert doc.spa().present  # the JS-built content is flagged a SPA
 
 
-def test_probe_sparse_static_page_is_not_browser_required(httpserver, wc):
-    # R-M2: a genuinely sparse static page the browser does NOT enrich must report
-    # was_browser_required False / render_gain 0 -- not a false positive from a
-    # bare word-count threshold.
+def test_auto_stays_static_for_a_sparse_page(httpserver, wc):
+    # a genuinely sparse static page the browser would not enrich (empty but no
+    # bundle to run) is NOT escalated -- it stays on the static tier.
     sparse = "<html><body><main><p>Short login screen.</p></main></body></html>"
     httpserver.expect_request("/sparse").respond_with_data(sparse, content_type="text/html")
-    doc = wc.fetch(httpserver.url_for("/sparse"), browser="probe")
-    try:
-        p = doc._probe
-        assert p is not None and p.was_browser_required is False
-        assert p.render_gain == 0 and p.reason == "static_sufficient"
-    finally:
-        wc.release(doc)
+    doc = wc.fetch(httpserver.url_for("/sparse"), browser="auto")
+    assert doc._page is None  # never launched a browser
+    assert doc.transport().final_tier == "static"
 
 
-def test_probe_and_browser_crawl_do_not_leak_the_page(httpserver, wc):
-    # F10: a content-only browser path (probe) returns its page to the pool
-    # automatically -- no explicit release needed, no lease leak.
-    httpserver.expect_request("/plain").respond_with_data(PLAIN, content_type="text/html")
+def test_auto_escalation_does_not_leak_the_page(httpserver, wc):
+    # a content-only browser escalation returns its page to the pool automatically
+    # -- no explicit release needed, no lease leak, and the content survives.
+    httpserver.expect_request("/inj").respond_with_data(INJECTED, content_type="text/html")
     before = wc.pool.stats().pages_free
-    doc = wc.fetch(httpserver.url_for("/plain"), browser="probe")
+    doc = wc.fetch(httpserver.url_for("/inj"), browser="auto")
     assert wc.pool.stats().pages_free == before  # page already returned
-    assert "real static content" in doc.text_content  # content survives release
+    assert "injected content word" in doc.text_content  # content survives release
 
 
-def test_probe_mode_reports_static_is_sufficient(httpserver, wc):
-    """A page whose content is already in the static HTML: probe returns it with
-    was_browser_required False and render_gain 0 -- 'you don't need a browser'."""
+def test_auto_returns_static_when_content_is_already_present(httpserver, wc):
+    """A page whose content is already in the static HTML is returned as-is on the
+    static tier -- 'you don't need a browser'."""
     httpserver.expect_request("/plain").respond_with_data(PLAIN, content_type="text/html")
-    doc = wc.fetch(httpserver.url_for("/plain"), browser="probe")
-    try:
-        p = doc._probe
-        assert p is not None and p.was_browser_required is False
-        assert p.render_gain == 0 and p.reason == "static_sufficient"
-    finally:
-        wc.release(doc)
+    doc = wc.fetch(httpserver.url_for("/plain"), browser="auto")
+    assert doc._page is None and doc.transport().final_tier == "static"
+    assert "real static content" in doc.text_content
 
 
 def test_crawl_browser_captures_xhr_endpoints_into_frontier(httpserver, wc):
@@ -214,7 +199,7 @@ def test_crawl_browser_captures_xhr_endpoints_into_frontier(httpserver, wc):
 
 
 def test_skeleton_marks_xhr_injected_content_on_a_real_spa(httpserver, wc):
-    # a JS page that issues a fetch and injects a list: browser="probe" renders it,
+    # a JS page that issues a fetch and injects a list: browser="auto" renders it,
     # and skeleton() marks the injected nodes [xhr] and lists the data API, while
     # the server-initial shell stays unmarked. (Feature A on a real SPA.)
     page = (
@@ -226,18 +211,15 @@ def test_skeleton_marks_xhr_injected_content_on_a_real_spa(httpserver, wc):
     )
     httpserver.expect_request("/spa").respond_with_data(page, content_type="text/html")
     httpserver.expect_request("/api/items").respond_with_json({"items": [1, 2, 3]})
-    doc = wc.fetch(httpserver.url_for("/spa"), browser="probe")
-    try:
-        sk = doc.skeleton()
-        assert "/api/items" in sk                       # observed data API listed
-        assert '<div id="app">' in sk                    # the shell node: server-initial
-        item_line = next(l for l in sk.splitlines() if '<li class="item">' in l)
-        assert "[xhr]" in item_line                     # injected -> marked xhr
-        assert sk.count('<li class="item">') == 3       # all 3 shown faithfully (no collapse)
-        # collapse=True merges the identical injected items
-        assert '<li class="item"> [xhr] ×3' in doc.skeleton(collapse=True)
-    finally:
-        wc.release(doc)
+    doc = wc.fetch(httpserver.url_for("/spa"), browser="auto")  # escalates: empty shell
+    sk = doc.skeleton()
+    assert "/api/items" in sk                       # observed data API listed
+    assert '<div id="app">' in sk                    # the shell node: server-initial
+    item_line = next(l for l in sk.splitlines() if '<li class="item">' in l)
+    assert "[xhr]" in item_line                     # injected -> marked xhr
+    assert sk.count('<li class="item">') == 3       # all 3 shown faithfully (no collapse)
+    # collapse=True merges the identical injected items
+    assert '<li class="item"> [xhr] ×3' in doc.skeleton(collapse=True)
 
 
 def test_release_returns_page_to_pool(httpserver, wc):

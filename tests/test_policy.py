@@ -1,7 +1,6 @@
-"""Resolve policies (data) + the ``probe`` facet op (their read-side). P0:
-the models exist and the facet projects a recorded ProbeRecord; the escalation
-ladder that would write richer records lands in later phases.
-"""
+"""Resolve policies (data) + the ``signals`` facet's access signals (their
+read-side): a resolved document classifies its own response into self-describing
+:class:`Signal`\\ s (anti_bot / blocked / paywall / login_wall)."""
 
 import pytest
 
@@ -14,7 +13,6 @@ from webclient import (
     RetryPolicy,
 )
 from webclient.core.document import Document
-from webclient.core.document.models import ProbeRecord
 from webclient.core.reference.models import resolve_policy
 
 
@@ -43,25 +41,32 @@ def test_resolve_policy_normalises_the_kwarg():
 
 
 def _doc(**kw):
-    return Document(url="http://x/", kind="html", status_code=200, **kw)
+    kw.setdefault("status_code", 200)
+    return Document(url="http://x/", kind="html", **kw)
 
 
-def test_probe_facet_absent_without_a_record():
+def test_signals_absent_on_a_normal_page():
     doc = _doc(content=b"<html><title>T</title></html>")
-    assert not doc.has_op("probe")  # a plain fetch records nothing to probe
+    assert doc.signals() == []  # a plain page reports nothing (total facet, empty)
+    assert not doc.anti_bot() and not doc.blocked()
 
 
-def test_probe_facet_projects_the_record():
-    doc = _doc(content=b"<html></html>")
-    doc._probe = ProbeRecord(was_browser_required=True, final_tier="browser")
-    probe = doc.probe()
-    assert probe is not None and probe.was_browser_required is True
-    assert probe.paywall is None  # lean: false flags project to None
+def test_anti_bot_signal_from_the_response():
+    doc = _doc(status_code=403, response_headers={"x-datadome": "1"}, content=b"blocked")
+    ab = doc.anti_bot()  # a vendor challenge on a blocking status
+    assert ab.present and ab.value == "datadome" and ab.remedy == "stealth"
+    assert doc.blocked().present  # a 403 is also a hard block
+    assert doc.anti_bot() in doc.signals()  # it shows in the digest
 
 
-def test_probe_facet_reports_anti_bot():
-    doc = _doc(content=b"<html></html>")
-    doc._probe = ProbeRecord(anti_bot="cloudflare", was_proxy_required=True)
-    probe = doc.probe()  # the probe facet is its own op
-    assert probe is not None
-    assert probe.anti_bot == "cloudflare" and probe.was_proxy_required is True
+def test_bare_challenge_suggests_a_fresh_proxy_exit():
+    doc = _doc(status_code=429, content=b"slow down")
+    ab = doc.anti_bot()  # no named vendor -> a generic challenge
+    assert ab.present and ab.value == "challenge" and ab.remedy == "proxy"
+
+
+def test_login_wall_signal_has_no_transport_remedy():
+    doc = _doc(status_code=401, content=b"unauthorized")
+    lw = doc.login_wall()
+    assert lw.present and lw.remedy is None  # needs credentials, not an escalation
+    assert not doc.anti_bot()  # a 401 is a login wall, not an anti-bot challenge

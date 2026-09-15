@@ -3,8 +3,9 @@
 Core Fields = the resolved response (the surface's data). Backings = per-medium
 op providers, one module each: :mod:`.html` (HtmlBacking -- css/xpath select,
 attr, text_content, render), :mod:`.json` (JsonBacking -- dotted path),
-:mod:`.status` (StatusBacking -- ok/error/is_ok/reload/summary), :mod:`.events`
-(EventBacking) and :mod:`..live` (LiveBacking -- browser interaction). A selected
+:mod:`.status` (StatusBacking -- ok/error/is_ok/reload), the facet backings
+(:mod:`.transport`/:mod:`.metadata`/:mod:`.structure`/:mod:`.signals`),
+:mod:`.events` (EventBacking) and :mod:`..live` (LiveBacking). A selected
 element is itself a Document (subtree / json sub-value), so selection nests:
 a selection backing asks the core for the child via ``Document._sub`` (it owns
 the sub-core wiring), and the ``Element`` value type lives in :mod:`...models`.
@@ -26,8 +27,7 @@ from .status import StatusBacking
 from .transport import TransportBacking
 from .metadata import MetadataBacking
 from .structure import StructureBacking
-from .runtime import RuntimeBacking
-from .probe import ProbeBacking
+from .signals import SignalsBacking
 
 if TYPE_CHECKING:
     from ...surfaces.lazy import LazyDocument
@@ -68,15 +68,15 @@ class Document(WebCore, IDocument):
     _set_cookies: dict[str, str] = PrivateAttr(  # transport-parsed Set-Cookie
         default_factory=dict
     )
-    #: the pre-JS (static) HTML for a browser-rendered document (probe / auto
-    #: escalation), so ``skeleton()`` can mark nodes server-initial vs client-injected.
+    #: the pre-JS (static) HTML for a browser-rendered document (auto escalation),
+    #: so ``skeleton()`` can mark nodes server-initial vs client-injected.
     _static_html: "bytes | None" = PrivateAttr(default=None)
+    #: the transport tiers this resolution took, e.g. ``["static"]`` or
+    #: ``["static", "proxy", "browser"]`` -- read by the ``transport`` facet.
+    _tiers: list[str] = PrivateAttr(default_factory=list)
     #: a server-side handle (remote dispatcher): it holds no local content, so its
     #: content ops round-trip. Set by ``RemoteWebClientCore`` on deserialize.
     _remote_handle: bool = PrivateAttr(default=False)
-    #: what the transport ladder had to escalate to (browser/proxy/anti-bot), or
-    #: None on a plain static fetch. Read by the ``probe`` summary facet.
-    _probe: Any = PrivateAttr(default=None)  # ProbeRecord | None
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (
         StatusBacking(),
@@ -87,8 +87,7 @@ class Document(WebCore, IDocument):
         TransportBacking(),
         MetadataBacking(),
         StructureBacking(),
-        RuntimeBacking(),
-        ProbeBacking(),
+        SignalsBacking(),
     )
 
     @property
@@ -129,7 +128,7 @@ class Document(WebCore, IDocument):
     # extract evaluates several named expressions against THIS document and stages
     # them as its row; project renders that row. These mirror the Collection ops
     # (which are just this primitive fanned out) so a lone Document is usable the
-    # same way -- ``doc.extract(run=doc.runtime()).project()``. Hand-written (like
+    # same way -- ``doc.extract(spa=doc.spa()).project()``. Hand-written (like
     # Collection/Field), not backings, so they are not lifted or fanned out.
     async def aextract(self, **exprs: Any) -> "Document":
         """Evaluate each named expression against this document and stage the

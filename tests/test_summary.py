@@ -1,11 +1,12 @@
-"""Facet ops: transport / metadata / structure / runtime -- deterministic
-projections of a resolved Document (keys-not-values, no escalation), each a
-first-class Document op (there is no aggregating summary())."""
+"""Facet ops: transport / metadata / structure / signals -- deterministic
+projections of a resolved Document (keys-not-values), each a first-class Document
+op (there is no aggregating summary()). The ``signals`` facet reports self-describing
+:class:`Signal`\\ s (spa / anti_bot / blocked / ...) built from the response."""
 
 import pytest
 
 from webclient import WebClient
-from webclient.core.document.models import Metadata, Runtime, Structure, Transport
+from webclient.core.document.models import Metadata, Signal, Structure, Transport
 
 PAGE = """
 <html lang="en">
@@ -80,12 +81,11 @@ def test_structure_facet_maps_body_shape(page):
     assert s.word_count and s.reading_time_min == 1
 
 
-def test_runtime_facet_reads_captured_browser_events():
-    # runtime reads DOM/network events a browser render captured -- no browser
+def test_spa_signal_reads_captured_browser_events():
+    # the spa signal reads DOM/network events a browser render captured -- no browser
     # needed for the projection itself, so we seed the events directly.
     from webclient.core.document import Document
     from webclient.core.document.live import network_event
-    from webclient.events import DOMUpdateEvent
 
     doc = Document(
         kind="html",
@@ -96,15 +96,14 @@ def test_runtime_facet_reads_captured_browser_events():
     doc._events = [
         network_event("GET", "https://app.example/api/items", "xhr", doc),
         network_event("POST", "https://app.example/api/track", "fetch", doc),
-        DOMUpdateEvent(kind="added", selector="#cart"),
     ]
-    r = doc.dispatch("runtime")
-    assert isinstance(r, Runtime)
-    assert r.framework == "next" and r.is_spa is True
-    assert r.uses_xhr and r.uses_fetch
-    assert {c.method for c in r.xhr_endpoints} == {"GET", "POST"}
-    assert any("api/items" in c.url for c in r.xhr_endpoints)
-    assert r.dynamic_elements == ["added:#cart"]
+    spa = doc.spa()
+    assert isinstance(spa, Signal) and spa.present  # a "next" framework marker
+    assert spa.remedy == "browser"  # a render would recover the client-built content
+    assert doc.framework() == "next"
+    eps = doc.xhr_endpoints()  # the SPA's data sources (an agent can hit them direct)
+    assert {c.method for c in eps} == {"GET", "POST"}
+    assert any("api/items" in c.url for c in eps)
 
 
 def _load_mut(*, in_main=True):
@@ -118,13 +117,13 @@ def _load_mut(*, in_main=True):
     )
 
 
-def test_spa_graded_by_net_injected_text_not_raw_xhr_or_reorg():
-    # the new balance: same-origin XHRs ALONE no longer flag a SPA (too greedy), and
-    # merely re-organising the DOM (net text unchanged) is not client rendering.
+def test_body_injected_signal_graded_by_net_text_not_reorg():
+    # the body_injected signal carries the injected ratio; same-origin XHRs ALONE
+    # don't flag it, and merely re-organising the DOM (net text unchanged) doesn't.
     from webclient.core.document import Document
     from webclient.core.document.live import network_event
 
-    # (a) XHRs + DOM churn but the text was already there at DCL -> NOT a SPA
+    # (a) XHRs + DOM churn but the text was already there at DCL -> NOT injected
     ssr = Document(kind="html", url="https://news.acme.com/",
                    content=b"<html><body>x</body></html>", status_code=200)
     ssr._render_stats = {"text": 1000, "dclText": 980}  # only 2% net-new after load
@@ -133,21 +132,24 @@ def test_spa_graded_by_net_injected_text_not_raw_xhr_or_reorg():
         network_event("GET", "https://news.acme.com/b.json", "fetch", ssr),
         _load_mut(),
     ]
-    r = ssr.dispatch("runtime")
-    assert r.injected_ratio < 0.4 and r.is_spa is False
+    bi = ssr.body_injected()
+    assert not bi.present and bi.value < 0.4  # value carries the injected ratio
+    assert not ssr.spa()  # no SPA-family detector fired
 
-    # (b) most of the text built after DCL -> a SPA (no framework marker needed)
-    spa = Document(kind="html", url="https://app.acme.com/",
+    # (b) most of the text built after DCL -> body_injected fires -> spa rolls it up
+    doc = Document(kind="html", url="https://app.acme.com/",
                    content=b"<html><body></body></html>", status_code=200)
-    spa._render_stats = {"text": 1000, "dclText": 100}  # 90% net-new after load
-    spa._events = [_load_mut()]
-    r = spa.dispatch("runtime")
-    assert r.injected_ratio >= 0.4 and r.is_spa is True and r.injected_nodes == 1
+    doc._render_stats = {"text": 1000, "dclText": 100}  # 90% net-new after load
+    doc._events = [_load_mut()]
+    bi = doc.body_injected()
+    assert bi.present and bi.value >= 0.4 and bi.remedy == "browser"
+    spa = doc.spa()
+    assert spa.present and "body_injected" in spa.value  # the roll-up names its evidence
 
 
-def test_content_from_xhr_needs_main_injection_plus_own_origin_data():
-    # the actionable signal: substantial content injected INTO THE MAIN AREA from the
-    # page's own origin -> an agent can skip the render and hit the endpoints.
+def test_xhr_composed_is_a_distinct_signal_for_the_same_conclusion():
+    # the actionable case: content injected INTO THE MAIN AREA from the page's own
+    # origin -> a separate signal from body_injected, both may fire for one SPA.
     from webclient.core.document import Document
     from webclient.core.document.live import network_event
 
@@ -158,18 +160,22 @@ def test_content_from_xhr_needs_main_injection_plus_own_origin_data():
         network_event("GET", "https://news.acme.com/blocks/hero.plain.html", "fetch", doc),
         _load_mut(in_main=True),
     ]
-    r = doc.dispatch("runtime")
-    assert r.content_from_xhr is True and r.injected_in_main is True and r.is_spa is True
+    xc = doc.xhr_composed()
+    assert xc.present and "XHR" in xc.reason
+    assert any("hero.plain.html" in u for u in xc.value)  # the data endpoints
+    # both xhr_composed AND body_injected fire -> two signals, same conclusion
+    names = {s.name for s in doc.signals()}
+    assert {"xhr_composed", "body_injected"} <= names
 
-    # same injection but only THIRD-party data -> not content_from_xhr
+    # same injection but only THIRD-party data -> not a same-origin composition
     doc2 = Document(kind="html", url="https://blog.acme.com/",
                     content=b"<html><body></body></html>", status_code=200)
-    doc2._render_stats = {"text": 1000, "dclText": 400}
+    doc2._render_stats = {"text": 1000, "dclText": 850}  # 15% net-new, third-party only
     doc2._events = [
         network_event("GET", "https://cdn.ads.example/w", "fetch", doc2),
         _load_mut(in_main=True),
     ]
-    assert doc2.dispatch("runtime").content_from_xhr is False
+    assert not doc2.xhr_composed().present
 
 
 def test_third_party_only_xhr_does_not_flag_a_static_page_as_spa():
@@ -188,15 +194,21 @@ def test_third_party_only_xhr_does_not_flag_a_static_page_as_spa():
         network_event("POST", "https://api.segment.io/v1/t", "fetch", doc),
         network_event("GET", "https://www.google-analytics.com/g/collect", "xhr", doc),
     ]
-    r = doc.dispatch("runtime")
-    assert r.is_spa is False  # only cross-origin analytics -> still server-rendered
+    assert not doc.spa().present  # only cross-origin analytics -> server-rendered
 
 
-def test_metadata_and_structure_absent_on_json(httpserver):
+def test_signals_is_a_total_facet_empty_on_a_normal_page(page):
+    # signals always applies; an ordinary page reports nothing (no dance, no error).
+    assert page.signals() == []
+    assert not page.spa() and not page.anti_bot() and not page.blocked()
+
+
+def test_metadata_and_structure_absent_on_json_but_signals_total(httpserver):
     httpserver.expect_request("/j").respond_with_json({"a": 1})
     with WebClient() as wc:
         doc = wc.fetch(httpserver.url_for("/j")).collect()
         assert doc.transport().kind == "json"  # transport applies to any kind
+        assert doc.has_op("signals")  # signals is total -- applies to any kind
         # metadata/structure gate on an html/xml tree
         assert not doc.has_op("metadata")
         assert not doc.has_op("structure")

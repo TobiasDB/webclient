@@ -36,7 +36,7 @@ from webclient.core.reference import Reference  # noqa: E402
 from webclient.core.session import Session  # noqa: E402
 from webclient.core.document.models import (  # noqa: E402
     Metadata,
-    Runtime,
+    Signal,
     Structure,
     Transport,
 )
@@ -87,7 +87,7 @@ _NS = {
     "Element": Element,
     "Transport": Transport,
     "Metadata": Metadata,
-    "Runtime": Runtime,
+    "Signal": Signal,
     "Structure": Structure,
     "Event": Event,
     "ActionEvent": ActionEvent,

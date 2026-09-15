@@ -288,18 +288,19 @@ def main() -> None:
         print("chain:      ", [a["op"] for a in live.ref().actions])
         wc.release(live)  # page back to the pool
 
-        # [probe] browser="probe": resolve BOTH tiers and compare -- the explicit
-        #      "can I scrape this / what do I need" diagnostic. The /spa page injects
-        #      its content via JS, so probe reports was_browser_required with the
-        #      count of extra words the browser recovered.
-        probed = wc.fetch(f"{base}/spa", browser="probe")
-        pr = probed.probe()
-        assert pr is not None  # probe mode always records the comparison
+        # [signals] browser="auto" escalates a JS-gated page to a browser render on
+        #      the response's signals. The /spa page injects its content via JS, so
+        #      spa() fires (a browser remedy) and the transport trail shows the
+        #      static -> browser escalation.
+        probed = wc.fetch(f"{base}/spa", browser="auto")
         print(
-            "probe:      ",
-            {"browser_required": pr.was_browser_required, "render_gain": pr.render_gain},
+            "signals:    ",
+            {
+                "spa": probed.spa().present,
+                "reason": probed.spa().reason,
+                "tiers": probed.transport().escalation,
+            },
         )
-        wc.release(probed)
         reloaded = live.reload()
         print("reloaded:   ", reloaded.select("#cart li", error=RETURN).ok)
         wc.release(reloaded)
