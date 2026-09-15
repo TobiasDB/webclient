@@ -46,7 +46,17 @@ class Crawl(WebCore, ICrawl):
         from .backing import _canon
 
         self._client = client
-        self._seen = {_canon(e.url) for e in self.frontier}
+        # dedup the seed frontier itself by canonical key (not just the ledger), so
+        # two seeds that collapse to one target aren't both fetched.
+        seen: set[str] = set()
+        deduped = []
+        for edge in self.frontier:
+            key = _canon(edge.url)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(edge)
+        self.frontier = deduped
+        self._seen = seen
         return self
 
 

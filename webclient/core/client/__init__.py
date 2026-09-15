@@ -647,8 +647,10 @@ class WebClient(WebCore, IWebClient):
         use_sitemap_xml: bool = True,
     ) -> "Crawl":
         """Map a site: an eager, single-domain :meth:`crawl` in auto mode, run to
-        completion. Returns the finished crawl -- a ``.summary()`` per page in
-        ``.pages`` plus the unresolved ``.frontier`` edges. ``use_sitemap_xml``
+        completion -- HEAVY (fetches up to ``max_pages`` pages). Returns the finished
+        crawl -- a ``.summary()`` per page in ``.pages`` plus the unresolved
+        ``.frontier`` edges. (For just the list of sitemap URLs, use the cheap
+        :meth:`sitemaps` instead -- ``sitemap`` runs a crawl.) ``use_sitemap_xml``
         (default on) first discovers the site's real ``sitemap.xml`` URLs
         (:meth:`sitemaps`) and seeds the frontier with them, so a declared sitemap
         is honoured; it still link-crawls to fill in whatever the sitemap omits."""

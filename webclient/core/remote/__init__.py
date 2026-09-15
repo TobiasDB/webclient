@@ -31,6 +31,45 @@ def _url_of(source: dict[str, Any]) -> str:
     return cast(str, Reference(**source).dispatch("url"))
 
 
+_WIRE_MODELS_CACHE: "dict[str, type[Any]] | None" = None
+
+
+def _wire_models() -> "dict[str, type[Any]]":
+    """Name -> class for the value models an op can return over the wire (built
+    once), so ``_deserialize`` rebuilds a real ``Summary``/``SearchResult``/… from a
+    tagged ``{"__model__": ...}`` payload."""
+    global _WIRE_MODELS_CACHE
+    if _WIRE_MODELS_CACHE is None:
+        from ...models import (
+            ActionEvent,
+            ConsoleEvent,
+            DOMUpdateEvent,
+            Event,
+            NavigationEvent,
+            NetworkEvent,
+            PlanEvent,
+        )
+        from ..client.models import SearchResult
+        from ..crawl.models import Edge
+        from ..document.models import (
+            Element,
+            Metadata,
+            Probe,
+            Runtime,
+            Structure,
+            Summary,
+            Transport,
+        )
+
+        models: list[type[Any]] = [
+            Summary, Transport, Metadata, Structure, Runtime, Probe, Element,
+            SearchResult, Edge, Event, NavigationEvent, NetworkEvent, ConsoleEvent,
+            DOMUpdateEvent, ActionEvent, PlanEvent,
+        ]
+        _WIRE_MODELS_CACHE = {m.__name__: m for m in models}
+    return _WIRE_MODELS_CACHE
+
+
 class RemoteWebClientCore(WebClient):
     """A ``WebClient`` in ``"remote"`` mode: its ``execute`` POSTs one Plan to
     ``/execute`` instead of running locally, and ``WebCore``'s remote dispatcher
@@ -102,6 +141,12 @@ class RemoteWebClientCore(WebClient):
             ref = Reference(**rows["__ref__"])
             ref._client = self
             return ref
+        if isinstance(rows, dict) and "__model__" in rows:
+            # rebuild the real value model (Summary/SearchResult/Element/…) so a
+            # remote result has the same type as a local one (s.title, not s["title"]).
+            model = _wire_models().get(rows["__model__"])
+            data = rows.get("data", {})
+            return model.model_validate(data) if model is not None else data
         if isinstance(rows, list):
             return [self._deserialize(r) for r in rows]
         return rows

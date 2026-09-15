@@ -73,9 +73,11 @@ class SitemapBacking(Backing):
     async def sitemaps(
         self, core: "WebClient", url: Any, *, limit: int = 5000
     ) -> "list[Reference]":
-        """Discover ``url``'s site's sitemap page URLs: read ``robots.txt`` for
-        ``Sitemap:`` directives (else the well-known ``/sitemap.xml``), fetch each,
-        and collect the ``<loc>`` page URLs -- expanding a ``<sitemapindex>`` one
+        """Discover ``url``'s site's sitemap page URLs -- CHEAP (a couple of fetches),
+        returns the list of URLs. (Not to be confused with ``wc.sitemap(url)``, which
+        *runs a whole crawl*.) Reads ``robots.txt`` for
+        ``Sitemap:`` directives (else the well-known ``/sitemap.xml``), fetches each,
+        and collects the ``<loc>`` page URLs -- expanding a ``<sitemapindex>`` one
         level into its child sitemaps. Returns deduped References, capped at
         ``limit``. A site with no sitemap yields an empty list (never raises)."""
         base = str(getattr(url, "url", url))

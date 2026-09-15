@@ -32,6 +32,7 @@ class Lease:
         self._pool = pool
         self.client = client
         self.kind = client.kind
+        self.released = False  # guard against a double-release inflating the permit
 
     async def __aenter__(self) -> "Lease":
         return self
@@ -91,6 +92,9 @@ class ClientPool:
         return Lease(self, client)
 
     async def release(self, lease: Lease) -> None:
+        if lease.released:  # idempotent: a second release must not inflate the permit
+            return
+        lease.released = True
         kind = lease.kind
         self._held[kind] -= 1
         # always return the permit, even if reset()/recycle/aclose() raises (a

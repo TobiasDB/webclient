@@ -111,6 +111,15 @@ def test_crawl_chooses_which_facets_each_page_carries(wc, site):
     assert all(p.structure is None and p.metadata is None for p in crawl.pages)
 
 
+def test_crawl_dedups_seed_variants(wc, site):
+    # two seeds that canonicalise to the same target collapse to one edge.
+    with wc.crawl(
+        [site.url_for("/a"), site.url_for("/a/"), site.url_for("/a?utm_source=x")],
+        max_pages=10,
+    ) as crawl:
+        assert len(crawl.frontier) == 1  # deduped at seed time
+
+
 def test_crawl_canonicalises_urls_for_dedup(wc, httpserver):
     # /page, /page/, and /page?utm_source=x are the same target -> fetched once.
     body = (

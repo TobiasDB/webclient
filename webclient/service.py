@@ -60,6 +60,12 @@ def _serialize(value: Any, store: dict[str, Any]) -> Any:
         return {"__doc__": handle}
     if isinstance(value, Reference):  # rebuilt client-side as a real Reference
         return {"__ref__": value.model_dump(mode="json")}
+    from pydantic import BaseModel
+
+    if isinstance(value, BaseModel):  # a value model (Summary/SearchResult/Element/…)
+        # tag it so the remote client rebuilds the real model, not a bare dict --
+        # remote and local collect() then return the same type.
+        return {"__model__": type(value).__name__, "data": value.model_dump(mode="json")}
     if isinstance(value, list):
         return [_serialize(v, store) for v in value]
     if isinstance(value, dict):

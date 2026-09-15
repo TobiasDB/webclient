@@ -130,7 +130,7 @@ def test_new_scope_indices_are_unique_under_concurrency():
 
         def make() -> None:
             for _ in range(50):
-                s = wc._core.new_scope()
+                s = wc.core.new_scope()
                 with lock:
                     indices.append(s.index)
 

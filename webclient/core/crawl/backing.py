@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 #: query params that never identify a distinct page (tracking / analytics); dropped
 #: when canonicalising so ``/p?utm_source=x`` and ``/p`` are the same crawl target.
 _TRACKING = frozenset(
-    {"fbclid", "gclid", "gclsrc", "dclid", "msclkid", "mc_eid", "igshid", "ref", "ref_src"}
-)
+    {"fbclid", "gclid", "gclsrc", "dclid", "msclkid", "mc_eid", "igshid"}
+)  # unambiguous analytics params; ``ref``/``ref_src`` are left in (can be meaningful)
 
 
 def _fold_host(host: str) -> str:

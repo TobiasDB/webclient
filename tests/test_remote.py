@@ -94,6 +94,29 @@ def test_remote_sitemap_and_sitemaps(remote):
     assert isinstance(rc.sitemaps(server.url_for("/cards")), list)
 
 
+def test_remote_summary_is_a_real_model(remote):
+    # F5-a: remote summary() returns a Summary model (not a bare dict), matching
+    # local -- so s.metadata.title works the same over the wire.
+    from webclient.summary import Summary
+
+    rc, server = remote
+    s = rc.summary(server.url_for("/cards"))
+    assert isinstance(s, Summary)
+    assert s.metadata is not None and s.metadata.title == "Shop"
+    # and a document handle's own summary() too
+    d = rc.fetch(server.url_for("/cards"))
+    assert isinstance(d.summary(), Summary)
+
+
+def test_remote_crawl_step_fails_cleanly(remote):
+    # F5-b: a remote crawl runs to completion; calling step() on it raises a clear
+    # error instead of shipping a malformed plan (500).
+    rc, server = remote
+    crawl = rc.crawl(server.url_for("/cards"), auto=True, max_pages=2, obey_robots=False)
+    with pytest.raises(NotImplementedError, match="remote"):
+        crawl.step()
+
+
 def test_remote_release_is_a_noop(remote):
     rc, server = remote
     d = rc.fetch(server.url_for("/cards"))
