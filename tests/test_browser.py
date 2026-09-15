@@ -233,7 +233,9 @@ def test_skeleton_marks_xhr_injected_content_on_a_real_spa(httpserver, wc):
         assert '<div id="app">' in sk                    # the shell node: server-initial
         item_line = next(l for l in sk.splitlines() if '<li class="item">' in l)
         assert "[xhr]" in item_line                     # injected -> marked xhr
-        assert '<li class="item"> [xhr] ×3' in sk        # and the 3 identical items merged
+        assert sk.count('<li class="item">') == 3       # all 3 shown faithfully (no collapse)
+        # collapse=True merges the identical injected items
+        assert '<li class="item"> [xhr] ×3' in doc.skeleton(collapse=True)
     finally:
         wc.release(doc)
 

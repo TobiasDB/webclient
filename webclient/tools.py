@@ -46,10 +46,10 @@ def page_skeleton(
     url: str, *, browser: Any = False, client: WebClient | None = None, **kw: Any
 ) -> str:
     """Fetch ``url`` and return its token-lean DOM skeleton -- an HTML-tag outline
-    outline an LLM reads to write CSS selectors (bloat removed, uniform siblings
-    collapsed, leaf text hinted). Pass ``browser="probe"`` for a JS/SPA page: the
-    skeleton then marks client-injected nodes ``[xhr]``/``[js]`` and lists the data
-    APIs. ``**kw`` forwards ``max_lines`` / ``text_chars`` / ``legend`` etc."""
+    an LLM reads to write CSS selectors (bloat removed, leaf text hinted, every
+    sibling shown). Pass ``browser="probe"`` for a JS/SPA page: the skeleton then
+    marks client-injected nodes ``[xhr]``/``[js]`` and lists the data APIs. ``**kw``
+    forwards ``max_lines`` / ``collapse`` / ``legend`` etc."""
     return _client(client).fetch(url, browser=browser).skeleton(**kw)
 
 

@@ -41,9 +41,17 @@ def test_legend_present_and_toggleable():
 # -- MERGE SAFETY (the dangerous part) ----------------------------------------
 
 
+def test_siblings_are_not_collapsed_by_default():
+    # the default is a faithful outline: every sibling on its own line, no ×N.
+    html = b"<html><body><ul>" + b'<li class="i">x</li>' * 4 + b"</ul></body></html>"
+    out = sk(html)
+    assert "×" not in out
+    assert out.count('<li class="i">') == 4  # all four shown, not merged
+
+
 def test_identical_siblings_merge():
     html = b"<html><body><ul>" + b'<li class="i"><span class="t">x</span></li>' * 5 + b"</ul></body></html>"
-    out = sk(html)
+    out = sk(html, collapse=True)
     assert '<li class="i"> ×5' in out
     assert out.count('<li class="i">') == 1  # collapsed to a single representative line
 
@@ -57,7 +65,7 @@ def test_structurally_different_sibling_is_NOT_merged_away():
         b'<li class="i"><span class="t">c</span><span class="badge">SALE</span></li>'
         b"</ul></body></html>"
     )
-    out = sk(html)
+    out = sk(html, collapse=True)
     assert '<li class="i"> ×2' in out       # the two identical ones merged
     assert 'class="badge"' in out     # the odd sibling's extra field survives
     # the merged run and the odd one are separate lines
@@ -79,7 +87,7 @@ def test_ids_are_unique_so_siblings_never_merge():
 def test_merge_is_order_sensitive_runs_only():
     # a, a, b, a  -> the two leading a's merge; the trailing a is its own line.
     html = b'<html><body><i class="a">1</i><i class="a">2</i><i class="b">3</i><i class="a">4</i></body></html>'
-    out = sk(html)
+    out = sk(html, collapse=True)
     assert '<i class="a"> ×2' in out and '<i class="b">' in out
     assert out.count('<i class="a">') == 2  # the run of 2, plus the lone trailing one
 
@@ -211,7 +219,7 @@ def test_tables_render():
 def test_xml_document_skeletonises():
     xml = b'<?xml version="1.0"?><feed><entry><title>A</title></entry><entry><title>B</title></entry></feed>'
     d = Document(kind="xml", content=xml, status_code=200)
-    out = d.skeleton()
+    out = d.skeleton(collapse=True)
     assert '<entry> ×2' in out  # two identical entries merge
 
 
@@ -237,7 +245,7 @@ def test_injected_nodes_marked_xhr_with_api_header():
         static=b'<html><body><div id="app"></div></body></html>',
         xhr_url="https://x/api/quotes",
     )
-    out = d.skeleton()
+    out = d.skeleton(collapse=True)
     assert "# XHR/fetch data APIs: https://x/api/quotes" in out
     assert '<div id="app">' in out and "[xhr]" not in _first_line_for(out, '<div id="app">')  # shell: initial
     assert "[xhr]" in _first_line_for(out, '<ul class="list">')  # injected

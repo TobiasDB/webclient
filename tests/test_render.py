@@ -90,7 +90,8 @@ def test_skeleton_is_a_selector_outline():
     sk = Document(content=html, status_code=200).skeleton()
     assert '<main id="main" class="container">' in sk
     assert '<ul id="results" class="list">' in sk
-    assert '<li class="item"> ×2' in sk  # repeated siblings collapsed
+    assert sk.count('<li class="item">') == 2  # faithful: both siblings shown
+    assert "×" not in sk  # no collapse by default
     assert '<span class="title">' in sk
     assert '<input type="text" name="q">' in sk
     assert "script" not in sk and "style" not in sk  # bloat removed

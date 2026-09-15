@@ -251,7 +251,7 @@ def _selector_sig(el: Any) -> str:
 
 _SKELETON_LEGEND = (
     '# skeleton: an HTML-tag outline (open tags only, indentation = nesting). '
-    '×N=N identical siblings, "…"=sample text'
+    '"…"=sample text'
 )
 
 
@@ -315,20 +315,25 @@ def _skeleton(
     max_depth: int = 30,
     max_siblings: int = 200,
     legend: bool = True,
+    collapse: bool = False,
     static_html: "bytes | None" = None,
     xhr_endpoints: "list[str] | None" = None,
 ) -> str:
     """A token-lean DOM skeleton: an indented outline of HTML open-tag signatures
-    with structural noise (script/style/svg/meta/comments/…) removed, a short text
-    hint on leaf nodes, and consecutive *structurally-identical* siblings collapsed
-    to ``… ×N`` -- so a uniform list of 50 cards is one line, but a sibling with a
-    different shape is shown in full (never silently merged away). Keeps every id
-    and class path so an LLM can write CSS selectors without the raw HTML.
+    with structural noise (script/style/svg/meta/comments/…) removed and a short
+    text hint on leaf nodes -- a faithful outline of the page, every sibling shown,
+    so an LLM can write CSS selectors (incl. ``:nth-child``) without the raw HTML.
+    Bounded by ``max_lines`` / ``max_depth`` / ``max_siblings``.
+
+    ``collapse`` (off by default) opts into merging consecutive *structurally-
+    identical* siblings to ``… ×N`` -- a uniform list of 50 cards becomes one line
+    (a differently-shaped sibling is never merged away) -- for very repetitive pages
+    where faithfulness costs too many tokens.
 
     When ``static_html`` (the pre-JS response) is supplied, a node whose signature
     is NOT in that baseline is marked ``[xhr]`` (if the page issued XHR/fetch
     requests) or ``[js]`` -- so the LLM sees which content is server-initial vs
-    client-loaded. Bounded by ``max_lines`` / ``max_depth`` / ``max_siblings``."""
+    client-loaded."""
     lines: list[str] = []
     memo: dict[int, str] = {}
     static_sigs = _static_sig_set(static_html)
@@ -355,10 +360,13 @@ def _skeleton(
                 lines.append("  " * depth + f"… ({len(children) - i} more)")
                 return
             child = children[i]
-            ssig = _struct_sig(child, memo)  # merge on STRUCTURE, not just the sig
-            j = i + 1
-            while j < len(children) and _struct_sig(children[j], memo) == ssig:
-                j += 1
+            if collapse:  # merge consecutive structurally-identical siblings
+                ssig = _struct_sig(child, memo)  # on STRUCTURE, not just the sig
+                j = i + 1
+                while j < len(children) and _struct_sig(children[j], memo) == ssig:
+                    j += 1
+            else:  # faithful: one line per sibling
+                j = i + 1
             count = j - i
             kids = _kept_children(child)
             text = _norm("".join(child.itertext())) if not kids else ""
@@ -375,6 +383,8 @@ def _skeleton(
     header: list[str] = []
     if legend:
         leg = _SKELETON_LEGEND
+        if collapse:
+            leg += ' ×N=N identical siblings collapsed;'
         if static_sigs is not None:
             leg += "  [xhr]/[js]=client-injected (unmarked=server-initial)"
         header.append(leg)
@@ -563,14 +573,15 @@ class HtmlBacking(Backing):
         max_depth: int = 30,
         max_siblings: int = 200,
         legend: bool = True,
+        collapse: bool = False,
         annotate_origin: bool = True,
     ) -> str:
-        """A token-lean DOM skeleton -- an indented ``tag#id.class[attr=val]`` outline
-        with the bloat (scripts/styles/svg/…) removed, structurally-identical siblings
-        collapsed to ``×N`` (a differently-shaped sibling is never merged away), and
-        leaf text hinted. Keeps every id and class path so an LLM can write CSS
+        """A token-lean DOM skeleton -- an indented HTML open-tag outline with the
+        bloat (scripts/styles/svg/…) removed and leaf text hinted, every sibling
+        shown faithfully. Keeps every id and class path so an LLM can write CSS
         selectors for the page cheaply (feed this instead of raw HTML, then use the
-        selectors with ``select``/``select_all``/``extract``).
+        selectors with ``select``/``select_all``/``extract``). ``collapse=True``
+        merges structurally-identical siblings to ``×N`` for very repetitive pages.
 
         On a browser-rendered document (``browser="probe"``/``"auto"``) with a static
         baseline, nodes that were NOT in the server's initial HTML are marked
@@ -585,6 +596,7 @@ class HtmlBacking(Backing):
             max_depth=max_depth,
             max_siblings=max_siblings,
             legend=legend,
+            collapse=collapse,
             static_html=static_html,
             xhr_endpoints=xhr,
         )
