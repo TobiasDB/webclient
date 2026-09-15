@@ -252,6 +252,24 @@ def test_frontier_scores_and_sorts_useful_links_first(wc, scored_site):
     assert scores == sorted(scores, reverse=True)
 
 
+def test_keyword_match_dominates_importance_score(wc, scored_site):
+    # a keyword the caller passed must outrank the importance heuristic: even a
+    # low-importance footer link that matches the keyword beats a high-importance
+    # article link that does not (regression guard -- importance must not swamp
+    # the explicit steering signal).
+    from webclient.core.crawl.backing import CrawlBacking
+
+    b = CrawlBacking()
+    with wc.crawl(scored_site.url_for("/"), keywords=["privacy"]) as crawl:
+        crawl.step()
+        by_path = {_path_of(e.url): e for e in crawl.frontier}
+        privacy = by_path["/privacy"]  # keyword match, footer (low importance)
+        article = by_path["/news/2026/09/big-announcement-today"]  # high importance
+        assert privacy.score < 0 < article.score  # importance disagrees...
+        # ...but best-first selection puts the keyword match ahead.
+        assert b._score(crawl, privacy) > b._score(crawl, article)
+
+
 def test_link_score_ranks_by_region_text_and_url_shape():
     # the scorer itself: a "read more" article link in <main> beats a footer legal
     # link beats a social widget beats a bare icon link.

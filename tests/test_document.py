@@ -174,6 +174,24 @@ def test_element_select_is_scoped_to_element():
     assert card.status_code == 200 and card.url == "https://example.com/list"
 
 
+def test_region_reports_the_landmark_an_element_sits_in():
+    page = (
+        "<html><body>"
+        '<nav><a id="n" href="/x">nav</a></nav>'
+        '<main><article><a id="a" href="/y">art</a></article></main>'
+        '<div role="contentinfo"><a id="f" href="/z">foot</a></div>'
+        '<aside class="sidebar"><a id="s" href="/w">side</a></aside>'
+        '<a id="none" href="/q">loose</a>'
+        "</body></html>"
+    )
+    doc = make_doc(content=page.encode())
+    assert doc.select("#n").region == "nav"
+    assert doc.select("#a").region == "article"  # nearest landmark wins
+    assert doc.select("#f").region == "footer"  # via ARIA role
+    assert doc.select("#s").region == "aside"  # via class hint
+    assert doc.select("#none").region == ""  # no landmark ancestor
+
+
 def test_attr_missing_raises_unless_policy_returns():
     node = make_doc().select(".card .title")
     with pytest.raises(LookupError):

@@ -40,9 +40,10 @@ _RESOURCE_EXT = frozenset(
     "zip gz tgz tar rar 7z bz2 dmg exe pkg deb rpm apk msi".split()
 )
 
-#: region weights (a link inherits the importance of the page landmark it sits in):
-#: article/main content and nav links are what a crawl wants; footer / sidebar
-#: (legal, social, "more from us") links are noise, so they sink.
+#: region weights (a link inherits the importance of the page landmark it sits in,
+#: as reported by the document's ``region`` op): article/main content and nav links
+#: are what a crawl wants; footer / sidebar (legal, social, "more from us") links
+#: are noise, so they sink.
 _REGION_WEIGHT = {
     "article": 1.2,
     "main": 1.0,
@@ -52,26 +53,11 @@ _REGION_WEIGHT = {
     "footer": -1.2,
 }
 
-#: class / id landmark hints, checked (in order) when an ancestor has no landmark
-#: tag or ARIA role -- the first hit classifies the region.
-_REGION_HINTS = (
-    ("footer", "footer"),
-    ("masthead", "header"),
-    ("breadcrumb", "nav"),
-    ("menu", "nav"),
-    ("nav", "nav"),
-    ("sidebar", "aside"),
-)
-
-#: ARIA landmark roles -> region.
-_REGION_ROLES = {
-    "navigation": "nav",
-    "main": "main",
-    "article": "article",
-    "banner": "header",
-    "contentinfo": "footer",
-    "complementary": "aside",
-}
+#: how much one keyword hit outweighs the importance heuristic. ``_link_score``
+#: spans roughly -4..+4, so a single explicit keyword match (>= this) dominates it
+#: -- a keyword-directed crawl surfaces the matching page first, with importance
+#: only breaking ties among equally-matching links.
+_KEYWORD_WEIGHT = 10.0
 
 #: call-to-action anchor text -- the "read more" / "continue reading" links the
 #: user specifically wants surfaced (a strong article signal).
@@ -88,26 +74,22 @@ _CTA = (
     "keep reading",
 )
 
-#: boilerplate anchor text / paths -- legal + housekeeping links that are almost
-#: never worth crawling; they sink to the bottom of the frontier.
-_BOILER = (
-    "privacy",
-    "terms",
-    "cookie",
-    "legal",
-    "accessibility",
-    "gdpr",
-    "do not sell",
-    "sitemap",
-    "trademark",
+#: boilerplate anchor text -- legal + housekeeping links that are almost never
+#: worth crawling; they sink in the frontier. Matched as whole words (so an
+#: *article* titled "Cookies Guide" or "Terms of Endearment" is not mistaken for a
+#: cookie/legal link).
+_BOILER_RE = re.compile(
+    r"\b(?:privacy|terms|cookie|legal|accessibility|gdpr|do not sell|sitemap"
+    r"|trademark|copyright|imprint)\b"
 )
-_BOILER_PATH = (
-    "/privacy",
-    "/terms",
-    "/legal",
-    "/cookie",
-    "/accessibility",
-    "/gdpr",
+
+#: boilerplate *paths* -- a terminal legal/housekeeping segment (``/privacy``,
+#: ``/cookie-policy``, ``/terms-of-use`` ...). Anchored so ``/blog/cookies-guide``
+#: (a real article) does not match ``/cookie``.
+_BOILER_PATH_RE = re.compile(
+    r"/(?:privacy|terms|legal|cookies?|accessibility|gdpr|copyright|trademark|imprint)"
+    r"(?:-(?:policy|policies|notice|statement|preferences|settings|choices"
+    r"|of-use|of-service|and-conditions))?/?$"
 )
 
 #: social / sharing hosts -- off-site widget links (share buttons, follow icons),
@@ -152,14 +134,6 @@ def _ext(path: str) -> str:
     """The lowercased file extension of a URL path (``""`` if none)."""
     last = path.rsplit("/", 1)[-1]
     return last.rsplit(".", 1)[-1].lower() if "." in last else ""
-
-
-def _local_tag(node: Any) -> str:
-    """An lxml element's tag with any namespace stripped, lowercased."""
-    tag = getattr(node, "tag", None)
-    if not isinstance(tag, str):  # comments / PIs have callable tags
-        return ""
-    return tag.rsplit("}", 1)[-1].lower()
 
 
 def _fold_host(host: str) -> str:
@@ -285,30 +259,9 @@ class CrawlBacking(Backing):
         base = edge.score - 0.01 * edge.depth
         if core.keywords:
             blob = f"{edge.text} {edge.url}".lower()
-            base += sum(blob.count(k) for k in core.keywords)
+            hits = sum(blob.count(k) for k in core.keywords)
+            base += _KEYWORD_WEIGHT * hits  # an explicit keyword match dominates
         return base
-
-    def _region(self, el: Any) -> str:
-        """Classify the page landmark an anchor sits in by walking its ancestors --
-        ``article`` / ``main`` / ``nav`` / ``header`` / ``footer`` / ``aside`` (or
-        ``""``) -- from the landmark tag, ARIA ``role``, then a class/id hint. The
-        nearest landmark wins, so a link's importance reflects where it lives."""
-        node, hops = el, 0
-        while node is not None and hops < 25:
-            tag = _local_tag(node)
-            if tag in _REGION_WEIGHT:
-                return tag
-            role = (node.get("role") or "").strip().lower()
-            if role in _REGION_ROLES:
-                return _REGION_ROLES[role]
-            hint = f"{node.get('class') or ''} {node.get('id') or ''}".lower()
-            if hint.strip():
-                for needle, region in _REGION_HINTS:
-                    if needle in hint:
-                        return region
-            node = node.getparent()
-            hops += 1
-        return ""
 
     def _link_score(self, text: str, url: str, region: str) -> float:
         """Discovery-time importance of a link: high for article / "read more" /
@@ -327,8 +280,8 @@ class CrawlBacking(Backing):
                 score += 0.3
             if any(c in t for c in _CTA):  # "read more" / "continue reading" ...
                 score += 1.2
-            if any(b in t for b in _BOILER):
-                score -= 1.5
+            if _BOILER_RE.search(t):  # whole-word legal/housekeeping text
+                score -= 1.0
 
         if any(seg in path for seg in _EDITORIAL):
             score += 0.8
@@ -337,7 +290,7 @@ class CrawlBacking(Backing):
         last = path.rstrip("/").rsplit("/", 1)[-1]
         if "-" in last and len(last) > 8 and "." not in last:  # a content slug
             score += 0.5
-        if any(b in path for b in _BOILER_PATH):
+        if _BOILER_PATH_RE.search(path):  # a terminal legal path segment
             score -= 1.2
         if _canon_host(url) in _SOCIAL_HOSTS:  # off-site share / follow widget
             score -= 1.5
@@ -379,7 +332,7 @@ class CrawlBacking(Backing):
             if _ext(_path(url)) in _RESOURCE_EXT:  # a resource link, not a page
                 continue
             text = (a.text_content or "").strip()
-            region = self._region(a._element)
+            region = a.region  # the document's landmark op (nav / main / footer ...)
             self._add_edge(core, url, text, depth, self._link_score(text, url, region))
         self._sort_frontier(core)
 

@@ -199,7 +199,17 @@ with wc.crawl("https://books.example/", auto=True, max_pages=20,
 for page in crawl.pages:            # each a lean .summary()
     if page.transport and page.metadata:            # facets are None when N/A
         print(page.transport.final_url, page.metadata.title)
+for edge in crawl.frontier:         # discovered-but-unfetched, best links first
+    print(edge.score, edge.url)     # nav/"read more"/article high; footer/legal low
 ```
+
+The frontier is cleaned and ranked for you: links to page **resources**
+(images/scripts/media) are dropped, and each edge carries an importance `score`
+(page region + anchor text + URL shape) that the frontier is **sorted by**, so the
+useful links (nav, "read more", article permalinks) lead and footer/legal/social
+links sink. Set `browser=True` to render JS-heavy pages first (each load waits for
+the DOM to settle, so client-rendered links are captured); a browser crawl also
+adds the page's XHR/data-API endpoints to the frontier.
 
 Each page carries a lean default summary (`transport` + `metadata`); pass
 `facets=[...]` to widen or narrow it. `wc.discover_sitemaps(url)` discovers a site's real

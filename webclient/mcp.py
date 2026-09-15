@@ -124,7 +124,10 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
         Tool("discover_sitemaps", "Discover a site's real sitemap.xml page URLs.",
              _schema(url={**_URL, "_required": True}), discover_sitemaps),
         Tool("crawl", "Bounded, same-origin crawl from a seed URL; a summary per page "
-             "plus the unresolved frontier. Steer with 'keywords'/'include'/'exclude'.",
+             "plus the unresolved frontier. Resource links (images/scripts/media) are "
+             "dropped and each edge carries an importance 'score' (nav/'read more'/"
+             "article high, footer/legal/social low); the frontier is sorted by it, so "
+             "the useful links lead. Steer with 'keywords'/'include'/'exclude'.",
              _schema(url={**_URL, "_required": True},
                      max_pages={"type": "integer"},
                      keywords={"type": "array", "items": {"type": "string"}},

@@ -446,19 +446,75 @@ def _miss(parent: "Document", message: str, error: Any) -> "Document":
     return sub
 
 
+#: the page landmarks ``region`` classifies an element into (the HTML sectioning
+#: elements + their ARIA-role and class/id equivalents).
+_LANDMARKS = frozenset({"nav", "main", "article", "header", "footer", "aside"})
+
+#: ARIA landmark ``role`` -> the landmark it denotes.
+_LANDMARK_ROLES = {
+    "navigation": "nav",
+    "main": "main",
+    "article": "article",
+    "banner": "header",
+    "contentinfo": "footer",
+    "complementary": "aside",
+}
+
+#: class / id substring hints, tried (in order) when an ancestor has no landmark
+#: tag or ARIA role -- the first hit classifies the region.
+_LANDMARK_HINTS = (
+    ("footer", "footer"),
+    ("masthead", "header"),
+    ("breadcrumb", "nav"),
+    ("menu", "nav"),
+    ("nav", "nav"),
+    ("sidebar", "aside"),
+)
+
+
 class HtmlBacking(Backing):
     """Tree ops for html/xml. ``select``/``select_all`` yield element
     Documents; ``text_content`` reads the element's decoded text (all
     descendant text, tags stripped -- the DOM ``textContent``); ``attr`` reads a
-    real HTML attribute."""
+    real HTML attribute; ``region`` reports which page landmark an element sits
+    in."""
 
     provides = frozenset(
         {"select", "select_all", "attr", "render",
          "markdown", "text", "html", "links", "elements", "skeleton"}
     )
     collections = frozenset({"select_all", "links"})  # return a Collection of cores
-    props = frozenset({"text_content", "title"})
+    props = frozenset({"text_content", "title", "region"})
     gate = "tree"
+
+    def region(self, core: "Document") -> str:
+        """The page landmark this element sits in -- ``nav`` / ``main`` /
+        ``article`` / ``header`` / ``footer`` / ``aside`` (or ``""`` if none) --
+        found by walking its ancestors for the nearest landmark tag, ARIA
+        ``role``, or class/id hint. A standard-web-semantics primitive: "is this
+        link in the nav, the article, or the footer?" (a crawl scores links by
+        it; an LLM can filter on it)."""
+        node = core._element
+        hops = 0
+        while node is not None and hops < 25:
+            tag = _tag(node).rsplit("}", 1)[-1]  # strip any XML namespace
+            if tag in _LANDMARKS:
+                return tag
+            role = (node.get("role") or "").strip().lower() if hasattr(node, "get") else ""
+            if role in _LANDMARK_ROLES:
+                return _LANDMARK_ROLES[role]
+            hint = (
+                f"{node.get('class') or ''} {node.get('id') or ''}".lower()
+                if hasattr(node, "get")
+                else ""
+            )
+            if hint.strip():
+                for needle, landmark in _LANDMARK_HINTS:
+                    if needle in hint:
+                        return landmark
+            node = node.getparent()
+            hops += 1
+        return ""
 
     # -- named render front doors (typed sugar over ``render(format)``) --------
     def markdown(self, core: "Document", *, main_content_only: bool = False) -> str:

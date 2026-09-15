@@ -54,21 +54,24 @@ class BrowserClient(Client):
         self.page = page
 
     async def _wait_stable(
-        self, page: Any, *, timeout: float = 8.0, quiet: float = 0.5, poll: float = 0.25
+        self, page: Any, *, timeout: float = 8.0, quiet: float = 0.4, poll: float = 0.2
     ) -> None:
         """Wait for the DOM to settle so JS/lazy-loaded content is present before the
         snapshot: first let the network go idle (bounded -- many sites never truly
-        idle), then poll the element count until it is unchanged for ``quiet`` seconds
-        (or ``timeout`` elapses). Returns early the moment it's stable, so a static
-        page costs almost nothing; a JS page waits just until it stops mutating."""
+        idle), then poll the element count until it is unchanged for ``quiet`` seconds.
+        Returns early the moment it's stable, so a page that settles quickly costs
+        little; a JS page waits just until it stops mutating. ``timeout`` bounds the
+        *whole* wait (the network-idle phase counts against it), so a page that never
+        settles can never block longer than ``timeout``."""
         import time as _time
 
+        deadline = _time.monotonic() + timeout  # set first: the total budget
+        idle_ms = min(timeout, 3.0) * 1000
         try:  # a bounded network-idle wait; ignore if it never idles
-            await page.wait_for_load_state("networkidle", timeout=min(timeout, 3.0) * 1000)
+            await page.wait_for_load_state("networkidle", timeout=idle_ms)
         except Exception:
             pass
-        deadline = _time.monotonic() + timeout
-        need = max(1, int(quiet / poll))
+        need = max(1, round(quiet / poll))
         last, stable = -1, 0
         while _time.monotonic() < deadline:
             try:
