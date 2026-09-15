@@ -20,6 +20,15 @@ if TYPE_CHECKING:
     from . import Crawl  # noqa: F401  (step/run return the crawl itself)
 
 
+#: the lean default set of summary facets a crawl carries per page when ``facets``
+#: is not set. Running *every* applicable facet on every fetched page is wasteful
+#: at crawl scale (structure/runtime/probe add cssselect + model-build work); the
+#: default keeps the essentials -- transport (url/status/kind) and metadata
+#: (title/description/canonical). Pass ``facets=[...]`` to a crawl to widen or
+#: narrow it (``facets=list(FACETS)`` for the full summary).
+DEFAULT_FACETS = ("transport", "metadata")
+
+
 class Edge(BaseModel):
     """An unresolved frontier edge: a discovered-but-not-yet-fetched link. ``text``
     is the anchor text (the keyword-relevance signal); ``depth`` is its distance
@@ -46,7 +55,7 @@ class ICrawl(BaseModel):
     keywords: list[str] = []  # best-first relevance signal (auto mode)
     include: str | None = None  # only follow links whose path contains this
     exclude: str | None = None  # skip links whose path contains this
-    facets: list[str] = []  # which summary backings each page carries ([] = all)
+    facets: list[str] = []  # which summary backings each page carries ([] = DEFAULT_FACETS)
     status: Literal["running", "closed"] = "running"
     # -- live state (the LLM-efficient output) -------------------------------
     pages: list[Summary] = []  # a .summary() per fetched page
@@ -64,4 +73,4 @@ class ICrawl(BaseModel):
         pass
 
 
-__all__ = ["Edge", "ICrawl"]
+__all__ = ["DEFAULT_FACETS", "Edge", "ICrawl"]

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from ..web_core import Backing
-from .models import Edge
+from .models import DEFAULT_FACETS, Edge
 
 if TYPE_CHECKING:
     from urllib.robotparser import RobotFileParser
@@ -72,8 +72,9 @@ class CrawlBacking(Backing):
             if not doc.ok:
                 continue
             # the crawl decides which backings populate each page's summary
-            # (``facets`` empty -> every applicable facet).
-            core.pages.append(doc.summary(*core.facets))
+            # (``facets`` empty -> the lean DEFAULT_FACETS, not every facet, since
+            # a full summary per page is wasteful at crawl scale).
+            core.pages.append(doc.summary(*(core.facets or DEFAULT_FACETS)))
             if edge.depth < core.max_depth and doc.kind in ("html", "xml"):
                 self._expand(core, doc, edge.depth + 1)
         return core

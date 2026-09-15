@@ -560,7 +560,9 @@ class WebClient(WebCore, IWebClient):
         round (``crawl.step(select)``) or lets it self-drive (``auto=True`` -> the
         top-``width`` edges best-first by ``keywords``). Use as a context manager.
         ``facets`` picks which summary backings each fetched page carries (``None``
-        / empty -> every applicable facet)."""
+        / empty -> the lean ``crawl.DEFAULT_FACETS``, not every facet -- a full
+        summary per page is wasteful at crawl scale; pass ``facets=list(FACETS)``
+        for the full summary)."""
         from ..crawl import Crawl, Edge
 
         urls = _seed_urls(seeds)

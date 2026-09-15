@@ -111,6 +111,19 @@ def test_crawl_chooses_which_facets_each_page_carries(wc, site):
     assert all(p.structure is None and p.metadata is None for p in crawl.pages)
 
 
+def test_default_crawl_carries_only_the_lean_facets(wc, site):
+    # no `facets` -> the lean DEFAULT_FACETS (transport + metadata), not every
+    # facet, so a large crawl does not run structure/runtime/probe per page.
+    from webclient.core.crawl.models import DEFAULT_FACETS
+
+    assert DEFAULT_FACETS == ("transport", "metadata")
+    with wc.crawl(site.url_for("/"), auto=True, max_pages=5) as crawl:
+        crawl.run()
+    assert crawl.pages
+    assert all(p.transport is not None for p in crawl.pages)
+    assert all(p.structure is None and p.runtime is None for p in crawl.pages)
+
+
 def test_sitemaps_discovers_urls_from_robots_and_sitemap_xml(wc, httpserver):
     # robots.txt points at a sitemap index; the index points at a child sitemap
     # whose urlset lists the real pages.
