@@ -162,20 +162,44 @@ class LiveBacking(Backing):
         return core
 
     async def wait_for(
-        self, core: Any, selector: str | None = None, *, timeout: float | None = None
+        self,
+        core: Any,
+        selector: str | None = None,
+        *,
+        timeout: float | None = None,
+        optional: bool = False,
     ) -> "Document":
-        await self._await_for(core, selector, timeout)
+        from ...errors import select_error
+
+        try:
+            await self._await_for(core, selector, timeout)
+        except Exception as exc:  # a Playwright timeout -> structured miss (or lenient)
+            if optional and "Timeout" in type(exc).__name__:
+                return core
+            if "Timeout" in type(exc).__name__:
+                raise select_error(f"wait_for: no {selector!r} within timeout") from exc
+            raise
         return core
 
     # ``select`` / ``select_all`` are NOT ``io``: on a static document (the common
     # case) they are in-memory (HtmlBacking). On a live page they bridge on the
     # engine loop here (a live+async selection is an untested edge).
     def select(
-        self, core: Any, selector: str, *, index: int = 0, error: Any = None
+        self,
+        core: Any,
+        selector: str,
+        *,
+        index: int = 0,
+        optional: bool = False,
+        error: Any = None,
     ) -> "Document":
+        from ...errors import RETURN
+
         return cast(
             "Document",
-            self._loop(core).run(self._aselect(core, selector, index, error)),
+            self._loop(core).run(
+                self._aselect(core, selector, index, RETURN if optional else error)
+            ),
         )
 
     def select_all(self, core: Any, selector: str) -> "list[Document]":
@@ -231,7 +255,9 @@ class LiveBacking(Backing):
             if optional and "Timeout" in type(exc).__name__:
                 return
             if "Timeout" in type(exc).__name__:
-                raise LookupError(f"{action}: no target for {selector!r}") from exc
+                from ...errors import select_error
+
+                raise select_error(f"{action}: no target for {selector!r}") from exc
             raise
         await drain(core)
 
@@ -261,10 +287,12 @@ class LiveBacking(Backing):
         from ...errors import RETURN
         from . import Document
 
+        from ...errors import select_error
+
         loc = core._page.locator(selector)
         if await loc.count() <= index:
             if error is not RETURN:  # live select is loud by default
-                raise LookupError(f"no match for {selector!r}")
+                raise select_error(f"no match for {selector!r}")
             sub = Document(url=core.url, kind="html", status_code=core.status_code)
             sub._client = core._client
             sub._missing = True

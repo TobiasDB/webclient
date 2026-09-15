@@ -83,6 +83,21 @@ class WebException(Exception):
 FetchError = WebException
 
 
+class SelectError(WebException, LookupError):
+    """A miss on a data-navigation op (``select`` / ``attr`` / a live ``select``).
+    A :class:`WebException` -- so ONE ``except WebException`` catches fetch failures
+    *and* selection misses, and ``.error`` is always a structured ``WebError`` with
+    ``.type``/``.retriable`` -- while remaining a ``LookupError`` for back-compat
+    with ``except LookupError``. Not retriable (the selector won't start matching)."""
+
+
+def select_error(message: str, *, selector: str | None = None) -> SelectError:
+    """Build a structured :class:`SelectError` for a missing selection/attribute."""
+    return SelectError(
+        WebError(type="LookupError", message=message, status_code=0, retriable=False)
+    )
+
+
 class RemoteError(Exception):
     """A remote ``/execute`` call returned a non-2xx response. ``error`` carries
     the server's structured ``WebError`` when it sent one (so ``.error.retriable``
@@ -114,6 +129,8 @@ __all__ = [
     "RETURN",
     "WebError",
     "WebException",
+    "SelectError",
+    "select_error",
     "FetchError",
     "RemoteError",
     "error_for",

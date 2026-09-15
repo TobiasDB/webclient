@@ -14,7 +14,15 @@ from .core.reference.models import (
 )
 from .core.web_core import Backing, WebCore
 from .core.client.models import SearchResult
-from .errors import RAISE, RETURN, FetchError, RemoteError, WebError, WebException
+from .errors import (
+    RAISE,
+    RETURN,
+    FetchError,
+    RemoteError,
+    SelectError,
+    WebError,
+    WebException,
+)
 from .events import (
     ActionEvent,
     ConsoleEvent,
@@ -99,6 +107,7 @@ __all__ = [
     "RETURN",
     "WebError",
     "WebException",
+    "SelectError",
     "FetchError",
     "RemoteError",
     "Event",

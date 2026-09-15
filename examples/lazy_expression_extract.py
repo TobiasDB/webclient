@@ -55,7 +55,7 @@ def run_across_pages(wc: WebClient, blob: str, max_pages: int = 3) -> None:
         total += len(quotes)
         print(f"  page {page_no}: {len(quotes)} quotes  "
               f"e.g. {quotes[0].author!r}: {quotes[0].text[:48]!r}")
-        nxt = wc.fetch(url).select(".next a", error=None)
+        nxt = wc.fetch(url).select(".next a", optional=True)
         if not nxt.ok:
             break
         url = nxt.attr("href").url

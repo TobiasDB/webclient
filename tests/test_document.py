@@ -73,6 +73,29 @@ def test_select_missing_raises_unless_policy_returns():
     assert missing.root == doc.name or missing.root is None
 
 
+def test_select_miss_is_a_structured_webexception():
+    # one `except WebException` now covers fetch failures AND selection misses,
+    # and it stays a LookupError for back-compat.
+    from webclient import WebException
+    from webclient.errors import SelectError
+
+    doc = make_doc()
+    with pytest.raises(WebException) as ei:
+        doc.select(".nope")
+    exc = ei.value
+    assert isinstance(exc, SelectError) and isinstance(exc, LookupError)
+    assert exc.error.type == "LookupError" and exc.error.retriable is False
+    assert "nope" in exc.error.message
+
+
+def test_optional_is_a_universal_lenient_spelling():
+    # `optional=True` returns a not-ok result on select/attr (same as error=RETURN)
+    doc = make_doc()
+    assert not doc.select(".nope", optional=True).ok
+    node = doc.select(".card .title")
+    assert node.attr("data-nope", optional=True).ok is False
+
+
 def test_select_rejects_attribute_and_text_xpath():
     doc = make_doc()
     with pytest.raises(ValueError, match="attr"):

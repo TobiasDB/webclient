@@ -208,11 +208,14 @@ def _decode(core: "Document") -> str:
 
 
 def _miss(parent: "Document", message: str, error: Any) -> "Document":
-    """A missing selection: raise under RAISE, else a not-ok sub-document."""
-    from ...errors import RAISE, WebError, current_policy
+    """A missing selection: raise a structured ``SelectError`` under RAISE, else a
+    not-ok sub-document. ``SelectError`` is both a ``WebException`` (so one
+    ``except WebException`` covers fetch failures and misses alike) and a
+    ``LookupError`` (back-compat)."""
+    from ...errors import RAISE, WebError, current_policy, select_error
 
     if (error or current_policy()) is RAISE:
-        raise LookupError(message)
+        raise select_error(message)
     sub = parent._sub(None)
     sub.error = WebError(type="LookupError", message=message)
     return sub
@@ -292,11 +295,19 @@ class HtmlBacking(Backing):
         return list(root.cssselect(selector))
 
     def select(
-        self, core: "Document", selector: str, *, index: int = 0, error: Any = None
+        self,
+        core: "Document",
+        selector: str,
+        *,
+        index: int = 0,
+        optional: bool = False,
+        error: Any = None,
     ) -> "Document":
+        from ...errors import RETURN
+
         els = self._find(core, selector)
         if not (-len(els) <= index < len(els)):
-            return _miss(core, f"no match for {selector!r}", error)
+            return _miss(core, f"no match for {selector!r}", RETURN if optional else error)
         return core._sub(els[index])
 
     def select_all(
@@ -318,10 +329,12 @@ class HtmlBacking(Backing):
     ) -> "Reference": ...  # type: ignore[overload-overlap]  # noqa: E501
     @overload
     def attr(
-        self, core: "Document", name: str, *, error: Any = None
+        self, core: "Document", name: str, *, optional: bool = False, error: Any = None
     ) -> "Field[str]": ...  # noqa: E501
 
-    def attr(self, core: "Document", name: str, *, error: Any = None) -> Any:
+    def attr(
+        self, core: "Document", name: str, *, optional: bool = False, error: Any = None
+    ) -> Any:
         if core._missing:
             return Field(None, ok=False)
         el = core._element
@@ -331,10 +344,10 @@ class HtmlBacking(Backing):
             ref._client = core._client  # inherit the client so it resolves
             return ref
         if value is None:  # absent attribute
-            from ...errors import RAISE, current_policy
+            from ...errors import RAISE, current_policy, select_error
 
-            if (error or current_policy()) is RAISE:
-                raise LookupError(f"no attribute {name!r}")
+            if not optional and (error or current_policy()) is RAISE:
+                raise select_error(f"no attribute {name!r}")
             return Field(None, ok=False)
         return Field(value)
 

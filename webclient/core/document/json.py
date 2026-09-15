@@ -70,16 +70,33 @@ class JsonBacking(Backing):
             core._data = _json.loads(core.content or b"null")
         return core._data
 
-    def select(self, core: "Document", path: str) -> "Document":
+    def select(
+        self,
+        core: "Document",
+        path: str,
+        *,
+        index: int = 0,  # unified with html select; json paths address nodes directly
+        optional: bool = False,
+        error: Any = None,
+    ) -> "Document":
+        from ...errors import RETURN
+
+        from .html import _miss
+
         value = self._data(core)
+        missed = False
         try:
             for tok in re.findall(r"[^.\[\]]+|\[\d+\]", path):
                 value = value[int(tok[1:-1])] if tok.startswith("[") else value[tok]
         except (KeyError, IndexError, TypeError):
-            value = None
+            missed = True
+        if missed:  # a genuine miss: raise/return like html (consistent contract)
+            return _miss(core, f"no match for {path!r}", RETURN if optional else error)
         return core._sub(value)
 
-    def attr(self, core: "Document", name: str, *, error: Any = None) -> Any:
+    def attr(
+        self, core: "Document", name: str, *, optional: bool = False, error: Any = None
+    ) -> Any:
         if core._missing:
             return Field(None, ok=False)
         data = self._data(core)

@@ -58,12 +58,17 @@ class SearchBacking(Backing):
         *,
         limit: int = 10,
         endpoint: str | None = None,
+        optional: bool = False,
     ) -> "list[SearchResult]":
         """Search ``query`` and return up to ``limit`` structured hits (title / url
-        / description). An IO op -- the interface bridges it (``dispatch``)."""
+        / description). ``optional=True`` returns ``[]`` if the results page itself
+        fails to fetch (instead of raising) -- the lenient spelling shared with the
+        other verbs. An IO op -- the interface bridges it (``dispatch``)."""
         ref = from_url(endpoint or self.ENDPOINT, "get", params={"q": query})
         ref._client = core
-        doc = await core.afetch(ref)
+        doc = await core.afetch(ref, optional=optional)
+        if not doc.ok:  # lenient: the results page failed -> no hits
+            return []
         results: list[SearchResult] = []
         # the core implements its ops (via its generated interface), so a backing
         # reads them directly and typed -- no ``dispatch("...")`` string, no cast.
