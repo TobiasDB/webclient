@@ -84,6 +84,42 @@ parenthesise each side: `(a) & (b)`.
 - **`project(Model)` is eager-only.** A model class is not part of a portable blob;
   project to dict rows in a blob and validate into a model after the plan runs.
 
+## Choosing stable selectors
+
+A selector is only as good as it is durable — pages get re-styled and re-ordered.
+Prefer hooks that describe *what* a node is over *where* it sits or how it looks.
+
+Prefer, best first:
+1. **Purpose-built test/id hooks:** `#id`, `[data-testid=…]`, `[data-test=…]`,
+   `[data-qa=…]`, `[data-cy=…]` — added for automation, rarely change.
+2. **Semantic attributes / microdata:** `[itemprop=price]`, `[role=…]`,
+   `[aria-label=…]`, `[name=…]`, `[type=…]`, and semantic elements
+   (`article`, `nav`, `main`, `time`, `address`).
+3. **Meaningful, human-named classes:** `.product-card`, `.price`, `.byline` —
+   names that describe content, not styling.
+
+Avoid — these break on any redesign:
+- **Hashed / generated classes:** `.css-1a2b3c`, `.Button_x7Kd`, `.sc-bdVaJa` (CSS
+  modules / styled-components). Match the stable part instead: `[class*="price"]`.
+- **Utility classes:** `.mt-4`, `.flex`, `.text-sm` (Tailwind & co.) — they mark
+  layout, not content, and repeat everywhere.
+- **Deep positional chains:** `div > div:nth-child(3) > span` — one inserted `<div>`
+  and it's wrong.
+- **Tag-only selectors:** `span`, `a` — too broad; they grab the wrong node.
+
+Techniques:
+- **Anchor on a stable ancestor, then a semantic leaf:** `.product-card .price`
+  scopes a common leaf to the right container. With `select_all` + `extract`, select
+  the row on a stable container class and the fields relative to it (`wq.doc`).
+- **`nth-child` / `nth-of-type` only for truly uniform, order-stable lists** (e.g.
+  table columns), never to reach into hand-built markup.
+- **Attribute *contains* for partial-stable classes:** `[class*="teaser"]`,
+  `[href*="/product/"]`.
+- **Use XPath when you must match on text** the CSS can't express, e.g.
+  `//button[normalize-space()="Add to cart"]`.
+- **Verify breadth:** a `select_all` should match exactly the set you mean — too many
+  hits means the selector is too broad, zero means too specific.
+
 ## Examples
 
 Rows → list of dicts:
