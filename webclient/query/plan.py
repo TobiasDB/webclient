@@ -8,9 +8,18 @@ executor (``webclient.executor``) walks it against a live context.
 
 from __future__ import annotations
 
+import base64
+import json
+import zlib
 from typing import Any, Literal
 
 from pydantic import BaseModel
+
+#: plan-blob format tags: ``p1:`` = deflate+base64url, ``p0:`` = plain base64url
+#: (chosen per-plan, whichever is shorter -- deflate inflates a tiny plan). Bump
+#: if the compact encoding ever changes.
+_BLOB_DEFLATE = "p1:"
+_BLOB_RAW = "p0:"
 
 
 class Arg(BaseModel):
@@ -51,6 +60,42 @@ class Plan(BaseModel):
 
     def extend(self, step: Step) -> "Plan":
         return self.model_copy(update={"steps": [*self.steps, step]})
+
+    def to_blob(self) -> str:
+        """A short, url-safe, self-describing blob for the whole expression: compact
+        JSON, base64url-encoded, tagged with its encoding (``p1:`` deflate, ``p0:``
+        plain -- whichever is shorter). The inverse of :meth:`from_blob`. Only
+        non-default fields are encoded, so a typical chain is a few dozen characters
+        -- an LLM can pass a plan around (and rebuild + validate + pretty-print it)
+        as one token-cheap string."""
+        data = self.model_dump(exclude_defaults=True, exclude_none=True)
+        raw = json.dumps(data, separators=(",", ":"), sort_keys=True).encode()
+        plain = _BLOB_RAW + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        deflated = (
+            _BLOB_DEFLATE
+            + base64.urlsafe_b64encode(zlib.compress(raw, 9)).decode().rstrip("=")
+        )
+        return min(plain, deflated, key=len)
+
+    @classmethod
+    def from_blob(cls, blob: str) -> "Plan":
+        """Rebuild a plan from :meth:`to_blob`'s output. Raises ``ValueError`` on a
+        malformed blob (bad prefix / base64 / compression / JSON) so the caller can
+        report it; call ``validate_names`` after to enforce the safety boundary."""
+        if blob.startswith(_BLOB_DEFLATE):
+            body, inflate = blob[len(_BLOB_DEFLATE) :], True
+        elif blob.startswith(_BLOB_RAW):
+            body, inflate = blob[len(_BLOB_RAW) :], False
+        else:
+            raise ValueError(f"not a plan blob (missing {_BLOB_DEFLATE!r}/{_BLOB_RAW!r})")
+        try:
+            raw = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
+            data = json.loads(zlib.decompress(raw) if inflate else raw)
+        except (ValueError, zlib.error) as exc:
+            raise ValueError(f"corrupt plan blob: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError("plan blob did not decode to an object")
+        return cls.model_validate(data)
 
     def validate_names(self) -> "Plan":
         """Reject a plan that could not have been legitimately recorded: an

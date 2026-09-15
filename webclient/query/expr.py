@@ -148,6 +148,15 @@ class Expr:
     def is_lazy(self) -> bool:
         return True
 
+    def to_blob(self) -> str:
+        """This expression's plan as a short, url-safe blob (see
+        :meth:`Plan.to_blob`) -- rebuild it with :func:`from_blob`."""
+        return self._plan.to_blob()
+
+    def explain(self) -> str:
+        """A readable one-line rendering of the recorded chain (pretty-print)."""
+        return self._plan.describe()
+
     def __repr__(self) -> str:
         return f"lazy {self._plan.describe()}"
 
@@ -178,13 +187,23 @@ def lazy_root(core: Any) -> "Expr":
     return Expr(Plan(), client=getattr(core, "_client", None), context=core)
 
 
-def from_plan(plan: Plan | dict[str, Any], client: Any = None) -> Expr:
-    """Rebuild an ``Expr`` from its wire form (a Plan or its dict), validating
-    its names first -- the wire safety boundary for the service/remote."""
-    if isinstance(plan, dict):
+def from_plan(plan: Plan | dict[str, Any] | str, client: Any = None) -> Expr:
+    """Rebuild an ``Expr`` from its wire form -- a ``Plan``, its dict, or a
+    ``to_blob`` string -- validating its names first (the wire safety boundary for
+    the service/remote). A blob is recognised by its ``p1:`` prefix."""
+    if isinstance(plan, str):
+        plan = Plan.from_blob(plan)
+    elif isinstance(plan, dict):
         plan = Plan.model_validate(plan)
     plan.validate_names()
     return Expr(plan, client)
+
+
+def from_blob(blob: str, client: Any = None) -> Expr:
+    """Rebuild an ``Expr`` from a :meth:`Plan.to_blob` string, validated -- the
+    LLM-authoring path: write a plan, encode it to a blob, rebuild + validate +
+    (via ``expr.explain()``) pretty-print it before running."""
+    return from_plan(blob, client)
 
 
 __all__ = [
@@ -192,5 +211,6 @@ __all__ = [
     "lazy",
     "lazy_root",
     "from_plan",
+    "from_blob",
     "to_arg",
 ]

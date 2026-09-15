@@ -350,6 +350,164 @@ def create_app(
                 hint="retry if retriable; else the seed is unavailable or blocked",
             )
 
+    # -- task verbs: ready-to-use values for an agent (no plan machinery) -----
+    def _verb_url(body: dict[str, Any]) -> "str | JSONResponse":
+        if not body.get("url"):
+            return _error(
+                422, "InvalidRequest", "this verb requires a 'url'",
+                hint='POST {"url": "https://..."}',
+            )
+        return str(body["url"])
+
+    def _run_verb(fn: Any) -> "dict[str, Any] | JSONResponse":
+        """Run a task verb, mapping a fetch/resolve failure to a structured error."""
+        try:
+            return {"result": fn()}
+        except WebException as exc:
+            return _error(
+                502, exc.error.type, str(exc),
+                retriable=exc.error.retriable, status_code=exc.error.status_code,
+                hint="retry if retriable; else the target is unavailable or blocked",
+            )
+
+    @app.post("/markdown", response_model=None)
+    def markdown(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Fetch ``url`` and return its content as markdown."""
+        _auth(authorization)
+        url = _verb_url(body)
+        if isinstance(url, JSONResponse):
+            return url
+        wc_: WebClient = app.state.wc
+        return _run_verb(lambda: wc_.fetch(url).render("markdown"))
+
+    @app.post("/text", response_model=None)
+    def text(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Fetch ``url`` and return its readable text (chrome stripped)."""
+        _auth(authorization)
+        url = _verb_url(body)
+        if isinstance(url, JSONResponse):
+            return url
+        wc_: WebClient = app.state.wc
+        return _run_verb(
+            lambda: wc_.fetch(url).render(
+                "text", main_content_only=body.get("main_content_only", True)
+            )
+        )
+
+    @app.post("/links", response_model=None)
+    def links(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Fetch ``url`` and return its outbound link URLs (absolute)."""
+        _auth(authorization)
+        url = _verb_url(body)
+        if isinstance(url, JSONResponse):
+            return url
+        wc_: WebClient = app.state.wc
+        return _run_verb(lambda: [r.url for r in wc_.fetch(url).render("links")])
+
+    @app.post("/summary", response_model=None)
+    def summary(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Fetch ``url`` and return its :class:`Summary` (``facets`` picks which
+        backing sections; ``browser`` picks the transport tier)."""
+        _auth(authorization)
+        url = _verb_url(body)
+        if isinstance(url, JSONResponse):
+            return url
+        wc_: WebClient = app.state.wc
+        facets = body.get("facets") or []
+        browser = body.get("browser", False)
+        return _run_verb(
+            lambda: wc_.fetch(url, browser=browser).summary(*facets).model_dump()
+        )
+
+    @app.post("/search", response_model=None)
+    def search(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Run a web search; returns structured hits (title/url/description)."""
+        _auth(authorization)
+        if not body.get("query"):
+            return _error(
+                422, "InvalidRequest", "search requires a 'query'",
+                hint='POST {"query": "...", "limit": 10}',
+            )
+        wc_: WebClient = app.state.wc
+        return _run_verb(
+            lambda: [
+                h.model_dump()
+                for h in wc_.search(body["query"], limit=int(body.get("limit", 10)))
+            ]
+        )
+
+    @app.post("/sitemaps", response_model=None)
+    def sitemaps(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Discover a site's real sitemap.xml page URLs from ``url``."""
+        _auth(authorization)
+        url = _verb_url(body)
+        if isinstance(url, JSONResponse):
+            return url
+        wc_: WebClient = app.state.wc
+        return _run_verb(lambda: [r.url for r in wc_.sitemaps(url)])
+
+    # -- plan authoring: validate / pretty-print / (de)serialise a lazy expr --
+    @app.post("/plan", response_model=None)
+    def plan(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Author-time helper for a lazy expression: accepts a ``plan`` (dict) or a
+        ``blob`` (a ``to_blob`` string), validates it (the wire safety boundary),
+        and returns its human-readable ``describe`` plus the round-tripped ``plan``
+        and ``blob`` -- so an LLM can write a plan, check it validates and reads as
+        intended, and get the token-cheap blob. With ``"run": true`` it also
+        executes it (``url``/``document_id`` supply the context, as for /execute)."""
+        _auth(authorization)
+        wc_ = app.state.wc
+        source = body.get("blob") if body.get("blob") is not None else body.get("plan")
+        if source is None:
+            return _error(
+                422, "InvalidRequest", "provide a 'plan' (object) or a 'blob' (string)",
+                hint='POST {"plan": {...}} or {"blob": "p1:..."}; add "run": true to run',
+            )
+        try:
+            expr = from_plan(source, wc_)
+        except ValueError as exc:
+            return _error(
+                422, "InvalidPlan", str(exc),
+                hint="check the root/operator/step names and the blob encoding",
+            )
+        out: dict[str, Any] = {
+            "valid": True,
+            "describe": expr._plan.describe(),
+            "plan": expr._plan.model_dump(mode="json"),
+            "blob": expr.to_blob(),
+        }
+        if body.get("run"):
+            if body.get("document_id") in app.state.docs:
+                context: Any = app.state.docs[body["document_id"]]
+            elif body.get("url"):
+                context = wc_.ref(body["url"])
+            else:
+                context = None
+            try:
+                result = wc_.execute(expr, context)
+            except WebException as exc:
+                return _error(
+                    502, exc.error.type, str(exc), retriable=exc.error.retriable,
+                    status_code=exc.error.status_code,
+                    hint="retry if retriable; else the target is unavailable or blocked",
+                )
+            out["rows"] = _serialize(result, app.state.docs)
+        return out
+
     # -- live event stream ---------------------------------------------------
     @app.websocket("/events")
     async def events(ws: WebSocket) -> None:

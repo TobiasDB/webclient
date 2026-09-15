@@ -21,6 +21,7 @@ from webclient import (
     HtmlBacking,
     NavigationEvent,
     WebClient,
+    from_blob,
     from_url,
     wq,
 )
@@ -410,6 +411,30 @@ def main() -> None:
                 "cdn": overview.transport.cdn,
             },
         )
+        # summary() also takes arbitrary backing methods by name (-> .extra),
+        # so a crawl can decide exactly which backings populate each page.
+        rich = wc.summary(f"{base}/", "transport", "title")
+        print("summary+meth:", {"title": rich.extra.get("title")})
+
+        # [D] Serialisable expressions: an LLM writes a lazy plan, encodes it to a
+        #     short blob, and rebuilds + validates + pretty-prints it before running.
+        expr = wq.doc.select(".title").text_content
+        blob = expr.to_blob()
+        print("expr blob:   ", blob)
+        print("expr rebuilt:", from_blob(blob).explain())
+
+        # [#3] Discover a site's real sitemap.xml URLs (none served here -> []).
+        print("sitemaps:    ", [r.url for r in wc.sitemaps(f"{base}/")])
+
+    # [#7] The resiliency policy bundle is declared to a proxy service as request
+    #      headers (the service is assumed to exist; here we just show the headers).
+    from webclient.core.reference.models import ProxyPolicy, RatePolicy, Resolve
+    from webclient.resiliency import policy_headers
+
+    declared = policy_headers(
+        Resolve(proxy=ProxyPolicy(pool="residential", geo="us"), rate=RatePolicy(rps=2))
+    )
+    print("policy hdrs: ", {k: declared[k] for k in sorted(declared)})
 
     # [async] The same eager surface, awaited. AsyncWebClient is the very same
     #      core with async dispatch (an instance flag, not a subclass): IO ops

@@ -96,3 +96,36 @@ def test_private_names_are_refused_at_record_and_on_the_wire():
 def test_describe_is_human_readable():
     text = reference("https://e.com/").resolve().select_all(".c")._plan.describe()
     assert text == "Reference(e.com).resolve().select_all('.c')"
+
+
+def test_blob_roundtrips_and_rebuilds_the_expression():
+    from webclient.query.expr import from_blob
+
+    expr = ref.resolve().select_all(".card").extract(t=doc.text_content).project()
+    blob = expr.to_blob()
+    assert blob.startswith(("p0:", "p1:")) and " " not in blob
+    back = from_blob(blob)
+    assert back._plan == expr._plan  # exact rebuild
+    assert back.explain() == expr.explain()  # and pretty-prints the same
+
+
+def test_blob_is_accepted_by_from_plan_and_validated():
+    # an LLM authoring path: a blob is a valid from_plan input, but still passes
+    # through name validation (the wire safety boundary).
+    good = doc.select("a").attr("href").to_blob()
+    assert from_plan(good).is_lazy
+    evil = Plan(root="Document", steps=[Step(kind="get", name="a")]).to_blob()
+    # tamper: a hand-built plan naming a private op still fails on rebuild.
+    bad = Plan(root="Document", steps=[Step(kind="get", name="__class__")]).to_blob()
+    assert from_plan(evil).is_lazy  # a normal name is fine
+    with pytest.raises(ValueError, match="private name"):
+        from_plan(bad)
+
+
+def test_corrupt_blob_is_rejected():
+    from webclient.query.expr import from_blob
+
+    with pytest.raises(ValueError, match="not a plan blob"):
+        from_blob("nope")
+    with pytest.raises(ValueError, match="corrupt plan blob"):
+        from_blob("p1:!!!!")

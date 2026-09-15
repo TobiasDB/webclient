@@ -27,7 +27,7 @@ from .events import (
     NetworkEvent,
     PlanEvent,
 )
-from .query.expr import from_plan
+from .query.expr import from_blob, from_plan
 from .core.remote import RemoteWebClientCore
 from .surfaces import (
     AsyncDocument,
@@ -81,6 +81,7 @@ __all__ = [
     "JsonBacking",
     "from_url",
     "from_plan",
+    "from_blob",
     "default_client",
     "Collection",
     "Field",

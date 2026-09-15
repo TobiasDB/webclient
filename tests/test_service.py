@@ -357,3 +357,57 @@ def test_execute_ssrf_guard_blocks_loopback():
         )
         assert r.status_code == 502 and r.json()["error"]["type"] == "BlockedHost"
     app.state.wc.close()
+
+
+# -- task verbs + plan authoring endpoint --------------------------------------
+
+
+def test_task_verb_markdown_and_links(client_and_server):
+    api, server = client_and_server
+    url = server.url_for("/cards")
+    md = api.post("/markdown", headers=AUTH, json={"url": url}).json()["result"]
+    assert "# Aeropress" in md
+    links = api.post("/links", headers=AUTH, json={"url": url}).json()["result"]
+    assert any(u.endswith("/i/1") for u in links)
+
+
+def test_task_verb_summary_selects_facets(client_and_server):
+    api, server = client_and_server
+    r = api.post(
+        "/summary",
+        headers=AUTH,
+        json={"url": server.url_for("/cards"), "facets": ["transport", "metadata"]},
+    ).json()["result"]
+    assert r["transport"] and r["metadata"] and r["structure"] is None
+
+
+def test_task_verb_missing_url_is_422(client_and_server):
+    api, _ = client_and_server
+    r = api.post("/markdown", headers=AUTH, json={})
+    assert r.status_code == 422 and r.json()["error"]["type"] == "InvalidRequest"
+
+
+def test_plan_endpoint_validates_describes_and_runs(client_and_server):
+    api, server = client_and_server
+    plan = ref.resolve().select("h1").text_content._plan.model_dump()
+    # validate + describe + blob, no run
+    v = api.post("/plan", headers=AUTH, json={"plan": plan}).json()
+    assert v["valid"] and v["describe"] == "Reference.resolve().select('h1').text_content"
+    assert v["blob"].startswith(("p0:", "p1:"))
+    # the returned blob round-trips through the same endpoint and can run
+    r = api.post(
+        "/plan",
+        headers=AUTH,
+        json={"blob": v["blob"], "url": server.url_for("/cards"), "run": True},
+    ).json()
+    assert r["rows"] == "Aeropress"
+
+
+def test_plan_endpoint_rejects_a_bad_plan(client_and_server):
+    api, _ = client_and_server
+    r = api.post(
+        "/plan",
+        headers=AUTH,
+        json={"plan": {"root": "Document", "steps": [{"kind": "get", "name": "_x"}]}},
+    )
+    assert r.status_code == 422 and r.json()["error"]["type"] == "InvalidPlan"
