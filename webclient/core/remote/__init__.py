@@ -49,7 +49,6 @@ def _wire_models() -> "dict[str, type[Any]]":
             NetworkEvent,
             PlanEvent,
         )
-        from ..client.models import SearchResult
         from ..crawl.models import Edge
         from ..document.models import (
             Element,
@@ -63,7 +62,7 @@ def _wire_models() -> "dict[str, type[Any]]":
 
         models: list[type[Any]] = [
             Summary, Transport, Metadata, Structure, Runtime, Probe, Element,
-            SearchResult, Edge, Event, NavigationEvent, NetworkEvent, ConsoleEvent,
+            Edge, Event, NavigationEvent, NetworkEvent, ConsoleEvent,
             DOMUpdateEvent, ActionEvent, PlanEvent,
         ]
         _WIRE_MODELS_CACHE = {m.__name__: m for m in models}

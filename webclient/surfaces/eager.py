@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from ..collection import Collection, Field
     from ..core.document import Element
     from ..events import EventBus
-    from ..core.client.models import SearchResult
     from ..models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
     from ..clients import ClientPool
     from ..summary import Metadata, Probe, Runtime, Structure, Summary, Transport
@@ -174,7 +173,6 @@ if TYPE_CHECKING:
         async def discover_sitemaps(self, url: Any, *, limit: int = ...) -> "Collection[AsyncReference]": ...  # type: ignore[override]
         async def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ..., **kw: Any) -> "AsyncDocument": ...  # type: ignore[override]
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "AsyncReference": ...
-        async def search(self, query: str, *, limit: int = ..., endpoint: str | None = ..., browser: Any = ..., optional: bool = ..., error: Any = ...) -> "list[SearchResult]": ...  # type: ignore[override]
         async def summary(self, url: Any, *include: str, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., resolve: Any = ..., optional: bool = ..., error: Any = ..., exclude: Any = ..., **kw: Any) -> "Summary": ...  # type: ignore[override]
         # fmt: on
         # >>> end generated <<<

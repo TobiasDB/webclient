@@ -13,7 +13,6 @@ from .core.reference.models import (
     RetryPolicy,
 )
 from .core.web_core import Backing, WebCore
-from .core.client.models import SearchResult
 from .errors import (
     RAISE,
     RETURN,
@@ -77,7 +76,6 @@ __all__ = [
     "Crawl",
     "Edge",
     "Element",
-    "SearchResult",
     "Resolve",
     "RetryPolicy",
     "RatePolicy",

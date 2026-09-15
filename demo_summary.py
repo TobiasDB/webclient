@@ -255,18 +255,7 @@ def main() -> None:
         call("[r.url for r in wc.discover_sitemaps(base)]")
         out([r.url for r in wc.discover_sitemaps(base)])
 
-        # 9 -------------------------------------------------------------------
-        panel(
-            "9. SEARCH -- structured web results",
-            "a research step: title + url + snippet, ads/junk filtered out.",
-        )
-        hits = wc.search("widget 3", endpoint=f"{base}/search", limit=2)
-        call('wc.search("widget 3")')
-        for h in hits:
-            out(f"#{h.rank} {h.title} -> {h.url}")
-            out(f"     {h.description}")
-
-        # 10 ------------------------------------------------------------------
+        # 9 ------------------------------------------------------------------
         panel(
             "10. ERRORS -- loud by default, opt-in lenient",
             "the model can trust a result, or ask for a miss it can branch on.",

@@ -78,9 +78,6 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
         facets = a.get("facets") or []
         return wc().fetch(a["url"], browser=a.get("browser", False)).summary(*facets).model_dump()
 
-    def search(a: dict[str, Any]) -> list[dict[str, Any]]:
-        return [h.model_dump() for h in wc().search(a["query"], limit=int(a.get("limit", 10)))]
-
     def discover_sitemaps(a: dict[str, Any]) -> list[str]:
         return [r.url for r in wc().discover_sitemaps(a["url"])]
 
@@ -127,9 +124,6 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
              _schema(url={**_URL, "_required": True},
                      facets={"type": "array", "items": {"type": "string"}},
                      browser={"type": "boolean"}), summary),
-        Tool("search", "Web search; returns structured hits (title/url/description).",
-             _schema(query={"type": "string", "_required": True},
-                     limit={"type": "integer"}), search),
         Tool("discover_sitemaps", "Discover a site's real sitemap.xml page URLs.",
              _schema(url={**_URL, "_required": True}), discover_sitemaps),
         Tool("crawl", "Bounded, same-origin crawl from a seed URL; a summary per page "

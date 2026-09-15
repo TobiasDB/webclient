@@ -31,7 +31,6 @@ from ..web_core import Backing, WebCore
 from .fetch import FetchBacking
 from .loop import EngineLoop
 from .models import IWebClient
-from .search import SearchBacking
 from .sitemap import SitemapBacking
 
 if TYPE_CHECKING:
@@ -160,7 +159,7 @@ class WebClient(WebCore, IWebClient):
     """The engine: its Core Fields (policy) + eager verbs come from the
     ``IWebClient`` model/interface it inherits (:mod:`.models`); this core adds the
     machinery (loop, ClientPool, bus, name scopes, transport + plan execution). Its
-    user-facing verbs are backings (``FetchBacking`` / ``SearchBacking``); a remote
+    user-facing verbs are backings (``FetchBacking``); a remote
     backend is just a subclass that swaps ``execute``, sessions a scoped subclass."""
 
     if TYPE_CHECKING:  # narrow WebCore.lazy (Any) to this core's lazy surface
@@ -235,7 +234,6 @@ class WebClient(WebCore, IWebClient):
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (
         FetchBacking(),
-        SearchBacking(),
         SitemapBacking(),
     )
 
@@ -955,7 +953,6 @@ __all__ = [
     "default_client",
     "NameScope",
     "FetchBacking",
-    "SearchBacking",
     "_materialize",
     "_retry_after_seconds",
 ]

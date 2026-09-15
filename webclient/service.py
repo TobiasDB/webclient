@@ -466,25 +466,6 @@ def create_app(
             lambda: wc_.fetch(url, browser=browser).summary(*facets).model_dump()
         )
 
-    @app.post("/search", response_model=None)
-    def search(
-        body: dict[str, Any], authorization: str | None = Header(default=None)
-    ) -> "dict[str, Any] | JSONResponse":
-        """Run a web search; returns structured hits (title/url/description)."""
-        _auth(authorization)
-        if not body.get("query"):
-            return _error(
-                422, "InvalidRequest", "search requires a 'query'",
-                hint='POST {"query": "...", "limit": 10}',
-            )
-        wc_: WebClient = app.state.wc
-        return _run_verb(
-            lambda: [
-                h.model_dump()
-                for h in wc_.search(body["query"], limit=int(body.get("limit", 10)))
-            ]
-        )
-
     @app.post("/discover_sitemaps", response_model=None)
     def discover_sitemaps(
         body: dict[str, Any], authorization: str | None = Header(default=None)

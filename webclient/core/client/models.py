@@ -24,21 +24,11 @@ if TYPE_CHECKING:
     from ..reference import Reference  # noqa: F401  (ref/sitemaps -> Reference)
 
 
-class SearchResult(BaseModel):
-    """One search hit: ``title`` / ``url`` / ``description`` as the provider gave
-    them, plus ``rank`` (1-based position on the results page)."""
-
-    rank: int = 0
-    title: str = ""
-    url: str = ""
-    description: str = ""
-
-
 class IWebClient(BaseModel):
     """The client's Core Fields (policy), plus (for the checker) the eager
-    authoring verbs ``WebClient`` implements -- ``fetch`` / ``ref`` / ``search``
-    / ``summary``. The verbs are ``TYPE_CHECKING``-only, so at runtime this is just
-    the policy model."""
+    authoring verbs ``WebClient`` implements -- ``fetch`` / ``ref`` / ``summary``.
+    The verbs are ``TYPE_CHECKING``-only, so at runtime this is just the policy
+    model."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -60,11 +50,10 @@ class IWebClient(BaseModel):
         def discover_sitemaps(self, url: Any, *, limit: int = ...) -> "Collection[Reference]": ...
         def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ..., **kw: Any) -> "Document": ...
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "Reference": ...
-        def search(self, query: str, *, limit: int = ..., endpoint: str | None = ..., browser: Any = ..., optional: bool = ..., error: Any = ...) -> "list[SearchResult]": ...
         def summary(self, url: Any, *include: str, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., resolve: Any = ..., optional: bool = ..., error: Any = ..., exclude: Any = ..., **kw: Any) -> "Summary": ...
         # fmt: on
         # >>> end generated <<<
         pass
 
 
-__all__ = ["SearchResult", "IWebClient"]
+__all__ = ["IWebClient"]

@@ -173,12 +173,6 @@ def main() -> None:
         missing = wc.ref(f"{base}/nope").resolve(error=RETURN)
         print("optional:   ", missing.status_code, "ok:", missing.ok)
 
-        # [M2] Search: a client verb returning structured hits (title/url/desc),
-        #      built on the interface itself (fetch + select). DDG by default;
-        #      point it at the demo's own results page here.
-        hits = wc.search("coffee", endpoint=f"{base}/search", limit=2)
-        print("search:     ", [(h.rank, h.title, h.url) for h in hits])
-
         # [M2] Crawl: a client-held, scoped traversal used as a context manager.
         #      The client manages the frontier (dedup/scope); the caller steers a
         #      round (crawl.step(select)) or lets it self-drive (auto). Output is an
