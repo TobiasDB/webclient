@@ -101,9 +101,11 @@ def test_describe_is_human_readable():
 def test_blob_roundtrips_and_rebuilds_the_expression():
     from webclient.query.expr import from_blob
 
+    import json
+
     expr = ref.resolve().select_all(".card").extract(t=doc.text_content).project()
     blob = expr.to_blob()
-    assert blob.startswith(("p0:", "p1:")) and " " not in blob
+    assert isinstance(json.loads(blob), dict)  # a plain JSON object, no compression
     back = from_blob(blob)
     assert back._plan == expr._plan  # exact rebuild
     assert back.explain() == expr.explain()  # and pretty-prints the same
@@ -125,7 +127,7 @@ def test_blob_is_accepted_by_from_plan_and_validated():
 def test_corrupt_blob_is_rejected():
     from webclient.query.expr import from_blob
 
-    with pytest.raises(ValueError, match="not a plan blob"):
-        from_blob("nope")
-    with pytest.raises(ValueError, match="corrupt plan blob"):
-        from_blob("p1:!!!!")
+    with pytest.raises(ValueError, match="invalid plan blob"):
+        from_blob("nope")  # not JSON
+    with pytest.raises(ValueError, match="did not decode to an object"):
+        from_blob("[1, 2, 3]")  # JSON, but not an object

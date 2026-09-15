@@ -393,7 +393,9 @@ def test_plan_endpoint_validates_describes_and_runs(client_and_server):
     # validate + describe + blob, no run
     v = api.post("/plan", headers=AUTH, json={"plan": plan}).json()
     assert v["valid"] and v["describe"] == "Reference.resolve().select('h1').text_content"
-    assert v["blob"].startswith(("p0:", "p1:"))
+    import json as _json
+
+    assert isinstance(_json.loads(v["blob"]), dict)  # blob is plain JSON
     # the returned blob round-trips through the same endpoint and can run
     r = api.post(
         "/plan",

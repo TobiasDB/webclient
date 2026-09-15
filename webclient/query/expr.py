@@ -189,8 +189,8 @@ def lazy_root(core: Any) -> "Expr":
 
 def from_plan(plan: Plan | dict[str, Any] | str, client: Any = None) -> Expr:
     """Rebuild an ``Expr`` from its wire form -- a ``Plan``, its dict, or a
-    ``to_blob`` string -- validating its names first (the wire safety boundary for
-    the service/remote). A blob is recognised by its ``p1:`` prefix."""
+    ``to_blob`` string (a JSON object) -- validating its names first (the wire
+    safety boundary for the service/remote)."""
     if isinstance(plan, str):
         plan = Plan.from_blob(plan)
     elif isinstance(plan, dict):

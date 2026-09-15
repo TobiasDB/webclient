@@ -93,12 +93,17 @@ class ClientPool:
     async def release(self, lease: Lease) -> None:
         kind = lease.kind
         self._held[kind] -= 1
-        await lease.client.reset()
-        if kind in self._RECYCLE:
-            self._idle[kind].append(lease.client)
-        else:
-            await lease.client.aclose()
-        self._semaphore(kind).release()
+        # always return the permit, even if reset()/recycle/aclose() raises (a
+        # crashed browser page whose close() throws, say) -- otherwise the permit
+        # bleeds and the pool deadlocks after enough flaky releases.
+        try:
+            await lease.client.reset()
+            if kind in self._RECYCLE:
+                self._idle[kind].append(lease.client)
+            else:
+                await lease.client.aclose()
+        finally:
+            self._semaphore(kind).release()
 
     async def aclose(self) -> None:
         for kind, factory in self._factories.items():

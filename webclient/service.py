@@ -475,7 +475,7 @@ def create_app(
         if source is None:
             return _error(
                 422, "InvalidRequest", "provide a 'plan' (object) or a 'blob' (string)",
-                hint='POST {"plan": {...}} or {"blob": "p1:..."}; add "run": true to run',
+                hint='POST {"plan": {...}} or {"blob": "<json>"}; add "run": true to run',
             )
         try:
             expr = from_plan(source, wc_)

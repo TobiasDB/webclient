@@ -145,6 +145,8 @@ async def _aapply(
             return await _acall(value, step.name, nxt, context, client), i + 2
         return getattr(value, step.name), i + 1
     if step.kind == "op":
+        if step.name == "not":  # unary: ~expr -> logical not (no rhs arg)
+            return (not truthy(value)), i + 1
         other = await _aarg(step.args[0], context, client) if step.args else None
         return _OPS[step.name](value, other), i + 1
     if step.kind == "when":

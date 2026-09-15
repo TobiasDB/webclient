@@ -3,7 +3,7 @@ exposes, and a Reference's ``expect`` hint overriding a mislabelled response."""
 
 import pytest
 
-from webclient import WebClient
+from webclient import WebClient, wq
 from webclient.clients.http import sniff_kind
 
 
@@ -126,3 +126,18 @@ def test_expect_defaults_to_none_and_does_not_misguide(httpserver, wc):
     ref = wc.ref(httpserver.url_for("/ok"))
     assert ref.expect is None            # no hint by default
     assert ref.resolve().kind == "json"  # pure sniffing still works
+
+
+def test_not_operator_evaluates(httpserver, wc):
+    # `~expr` records op "not"; regression: it used to KeyError (500) at execution.
+    page = b'<html><body><div class="item">a</div>' \
+           b'<div class="item"><span class="hide">x</span>b</div></body></html>'
+    httpserver.expect_request("/n").respond_with_data(page, content_type="text/html")
+    # keep only items with NO .hide child (the ~ predicate must evaluate)
+    kept = (
+        wc.fetch(httpserver.url_for("/n"))
+        .select_all(".item")
+        .filter(~wq.doc.select(".hide").is_ok())
+        .project()
+    )
+    assert len(kept) == 1  # the first item (no .hide) survived
