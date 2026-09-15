@@ -90,6 +90,11 @@ class WebCore:
     #: provides an op wins).
     BACKINGS: ClassVar[tuple[Backing, ...]] = ()
 
+    #: per-class memoised op tables (derived from BACKINGS; see ops/prop_ops/io_ops).
+    _ops_memo: ClassVar["dict[str, Backing] | None"] = None
+    _prop_ops_memo: ClassVar["dict[str, Backing] | None"] = None
+    _io_ops_memo: ClassVar["frozenset[str] | None"] = None
+
     # -- choose / capabilities ----------------------------------------------
     def use(self, backing: "Backing") -> Self:
         """Register a ``Backing`` on this core's client: every core the client
@@ -341,29 +346,46 @@ class WebCore:
             raise AttributeError(name)
 
     # -- op surface (for generation) ----------------------------------------
+    # These three reflect only ``cls.BACKINGS`` (a class-invariant ClassVar) yet sit
+    # on the hot path -- ``dispatch``/``__getattr__`` consult them on every op and
+    # every fan-out element. Memoise per class (the returned tables are read-only).
     @classmethod
     def ops(cls) -> dict[str, Backing]:
         """Every *call* op, op-name -> owning backing (first wins)."""
-        table: dict[str, Backing] = {}
-        for backing in cls.BACKINGS:
-            for op in backing.provides:
-                table.setdefault(op, backing)
-        return table
+        memo = cls.__dict__.get("_ops_memo")
+        if memo is None:
+            memo = {}
+            for backing in cls.BACKINGS:
+                for op in backing.provides:
+                    memo.setdefault(op, backing)
+            cls._ops_memo = memo
+        return cast("dict[str, Backing]", memo)
 
     @classmethod
     def prop_ops(cls) -> dict[str, Backing]:
         """Every *property* op, name -> owning backing (first wins)."""
-        table: dict[str, Backing] = {}
-        for backing in cls.BACKINGS:
-            for op in backing.props:
-                table.setdefault(op, backing)
-        return table
+        memo = cls.__dict__.get("_prop_ops_memo")
+        if memo is None:
+            memo = {}
+            for backing in cls.BACKINGS:
+                for op in backing.props:
+                    memo.setdefault(op, backing)
+            cls._prop_ops_memo = memo
+        return cast("dict[str, Backing]", memo)
 
     @classmethod
     def io_ops(cls) -> frozenset[str]:
         """The call ops that cross the IO bridge (awaitable under an async
         dispatcher) -- the union of the backings' ``io`` sets."""
-        return frozenset().union(*(b.io for b in cls.BACKINGS)) if cls.BACKINGS else frozenset()
+        memo = cls.__dict__.get("_io_ops_memo")
+        if memo is None:
+            memo = (
+                frozenset().union(*(b.io for b in cls.BACKINGS))
+                if cls.BACKINGS
+                else frozenset()
+            )
+            cls._io_ops_memo = memo
+        return cast("frozenset[str]", memo)
 
 
 def _wrap_result(value: Any) -> Any:
