@@ -30,9 +30,9 @@ class _FakeBrowserClient(BrowserClient):
     def __init__(self) -> None:
         self.page = _FakePage("about:blank")
 
-    async def open(self, url, *, scripts=(), replay=[], wait_stable=True):  # type: ignore[override]
+    async def open(self, url, *, scripts=(), replay=[], wait=None):  # type: ignore[override]
         await asyncio.sleep(0.02)  # let siblings pile up so accumulation would bite
-        return PageResult(url, b"<html><body>ok</body></html>", [], [])
+        return PageResult(url, b"<html><body>ok</body></html>", console=[], network=[])
 
     async def reset(self) -> None:
         pass
