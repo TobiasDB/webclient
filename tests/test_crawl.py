@@ -286,12 +286,14 @@ def test_canon_collapses_locale_and_pagination_variants():
         "https://site.com/fr/news?locale=fr",  # locale path + param
         "https://en.site.com/news",            # locale subdomain
         "https://site.com/news?page=1",        # first page
-        "https://site.com/news/page/1",        # path-based first page
+        "https://site.com/news?page=7",        # ANY page collapses (dedup the series)
+        "https://site.com/news?offset=40",     # offset pagination
+        "https://site.com/news/page/3",        # path-based pagination
         "https://www.site.com/news/",          # www + trailing slash
     ]:
         assert _canon(variant) == base, variant
-    # a real later page is NOT collapsed (distinct content)
-    assert _canon("https://site.com/news?page=2") != base
+    # a `?p=` post id is NOT a page number -> stays distinct (WordPress guard)
+    assert _canon("https://site.com/?p=1") != _canon("https://site.com/?p=2")
 
 
 def test_scope_accepts_same_registrable_domain_subdomains(wc, httpserver):
@@ -311,6 +313,25 @@ def test_paginated_links_are_scored_down(wc, scored_site):
     fresh = b._link_score("Big story", "https://s.ex/news/big-story", "main")
     page3 = b._link_score("Older posts", "https://s.ex/news?page=3", "main")
     assert page3 < fresh  # a later listing page sinks below fresh content
+
+
+def test_frontier_dedups_a_whole_pagination_series(wc, httpserver):
+    # once one page of a listing is seen, the other pages dedup -- the frontier is
+    # not flooded with ?page=2/3/... of a page already represented.
+    body = (
+        '<a href="/news">Newsroom</a>'
+        '<a href="/news?page=2">2</a><a href="/news?page=3">3</a>'
+        '<a href="/news?page=4">4</a><a href="/news/page/5">5</a>'
+        '<a href="/about">About</a>'
+    )
+    httpserver.expect_request("/").respond_with_data(
+        f"<html><body>{body}</body></html>", content_type="text/html"
+    )
+    with wc.crawl(httpserver.url_for("/"), browser=False) as crawl:
+        crawl.step()
+    news = [e for e in crawl.frontier if "/news" in e.url]
+    assert len(news) == 1  # the whole /news pagination series collapsed to one edge
+    assert any(e.url.endswith("/about") for e in crawl.frontier)  # other pages kept
 
 
 def test_frontier_never_contains_whitespace_urls(wc, httpserver):

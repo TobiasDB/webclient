@@ -28,14 +28,15 @@ _TRACKING = frozenset(
     {"fbclid", "gclid", "gclsrc", "dclid", "msclkid", "mc_eid", "igshid"}
 )  # unambiguous analytics params; ``ref``/``ref_src`` are left in (can be meaningful)
 
-#: pagination query params. The FIRST page (``page=1`` / ``offset=0``) collapses to
-#: the base URL for dedup (``/x?page=1`` == ``/x`` -- so we don't re-scrape page 1);
-#: later pages stay distinct but are scored down (a paginated page is lower-value
-#: than a fresh link, and there are usually many of them).
-_PAGE_PARAMS = frozenset({"page", "p", "pg", "pagenum", "paged", "pagina", "pn"})
-_OFFSET_PARAMS = frozenset(
-    {"start", "offset", "skip", "begin", "first", "from", "cursor", "after"}
-)
+#: pagination query params -- a page-number (``page``/``pg``/…) or an offset
+#: (``offset``/``start``/``skip``). These are dropped ENTIRELY from the dedup key, so
+#: *every* page of one listing collapses to a single crawl target: once any page has
+#: been seen, all the other pages of that series dedup (rather than flooding the
+#: frontier with ``?page=2``, ``?page=3``, …). ``p`` is deliberately excluded -- it is
+#: too often a post/id param (``?p=123``), not a page number.
+_PAGE_NUM_PARAMS = frozenset({"page", "pg", "pagenum", "paged", "pagina", "pn"})
+_OFFSET_PARAMS = frozenset({"offset", "start", "skip"})
+_PAGINATION_PARAMS = _PAGE_NUM_PARAMS | _OFFSET_PARAMS
 
 #: locale / language / country selector query params -- dropped for dedup so the
 #: same page in different locales collapses to one crawl target.
@@ -231,48 +232,54 @@ def _registrable(host: str) -> str:
     return ".".join(labels[-keep:])
 
 
-def _is_first_page(key: str, value: str) -> bool:
-    """Whether a pagination param is the first page (collapses to the base URL)."""
-    v = value.strip()
-    return (key in _PAGE_PARAMS and v in ("", "1")) or (
-        key in _OFFSET_PARAMS and v in ("", "0")
-    )
+#: a ``/page/N`` (or ``/pg/N``) pagination path segment.
+_PAGE_PATH_RE = re.compile(r"/(?:page|pg)/(\d+)(?=/|$)", re.I)
+
+
+def _strip_pagination_path(path: str) -> str:
+    """Drop a ``/page/N`` / ``/pg/N`` pagination segment (any page) so every page of
+    a path-paginated listing collapses to one dedup target."""
+    return _PAGE_PATH_RE.sub("", path) or "/"
 
 
 def _is_paginated(url: str) -> bool:
-    """Whether a URL is a later page of a listing (page 2+, offset>0, or a
-    ``/page/N`` path) -- lower-value than a fresh link, so it is scored down."""
+    """Whether a URL is a *later* page of a listing (page 2+, offset>0, or
+    ``/page/N`` with N>1) -- lower-value than a fresh link, so it is scored down.
+    (For dedup, every page collapses; this is only for the surviving edge's score.)"""
     for k, v in parse_qsl(urlparse(url).query):
-        kl = k.lower()
-        if (kl in _PAGE_PARAMS or kl in _OFFSET_PARAMS) and not _is_first_page(kl, v):
+        kl, vv = k.lower(), v.strip()
+        if kl in _PAGE_NUM_PARAMS and vv not in ("", "1"):
             return True
-    return bool(re.search(r"/(?:page|pg|p)/\d+/?$", urlparse(url).path.lower()))
+        if kl in _OFFSET_PARAMS and vv not in ("", "0"):
+            return True
+    m = _PAGE_PATH_RE.search(urlparse(url).path)
+    return bool(m and m.group(1) != "1")
 
 
 def _canon(url: str) -> str:
     """A canonical dedup key: lowercased scheme+host (``www.`` + a locale subdomain
-    folded, default port dropped), a leading locale path segment stripped, trailing
-    slash and ``/page/1`` normalised, tracking / locale / first-page params removed
-    and the rest sorted, fragment stripped -- so ``/p``, ``/p/``, ``/en/p?utm=1``,
-    ``/p?page=1`` and ``//WWW.H/p`` all collapse to one key (and are not re-fetched)."""
+    folded, default port dropped), leading locale + ``/page/N`` path segments
+    stripped, trailing slash normalised, tracking / locale / *pagination* params
+    removed and the rest sorted, fragment stripped -- so ``/p``, ``/p/``,
+    ``/en/p?utm=1``, and **every page of a listing** (``/p?page=1``, ``/p?page=7``,
+    ``/p/page/3``) all collapse to ONE key: once any page is seen the rest dedup."""
     try:
         parts = urlsplit(url)
     except ValueError:
         return url
     host = _dedup_host(urlparse(url).hostname or "")
     netloc = f"{host}:{parts.port}" if parts.port and parts.port not in (80, 443) else host
-    path = _strip_locale_path(parts.path or "/")
-    path = re.sub(r"/(?:page|pg|p)/1/?$", "", path, flags=re.I) or "/"  # /x/page/1 -> /x
+    path = _strip_pagination_path(_strip_locale_path(parts.path or "/"))
     if len(path) > 1:
         path = path.rstrip("/") or "/"
-    kept = []
-    for k, v in parse_qsl(parts.query, keep_blank_values=True):
-        kl = k.lower()
-        if kl in _TRACKING or kl.startswith("utm_") or kl in _LOCALE_PARAMS:
-            continue
-        if _is_first_page(kl, v):  # ``page=1`` / ``offset=0`` == the base page
-            continue
-        kept.append((k, v))
+    kept = [
+        (k, v)
+        for k, v in parse_qsl(parts.query, keep_blank_values=True)
+        if (kl := k.lower()) not in _TRACKING
+        and not kl.startswith("utm_")
+        and kl not in _LOCALE_PARAMS
+        and kl not in _PAGINATION_PARAMS  # every page collapses to the base
+    ]
     query = urlencode(sorted(kept))
     return urlunsplit(((parts.scheme or "https").lower(), netloc, path, query, ""))
 
