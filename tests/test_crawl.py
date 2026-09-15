@@ -170,14 +170,14 @@ def test_sitemaps_discovers_urls_from_robots_and_sitemap_xml(wc, httpserver):
         f"<url><loc>{base}/a</loc></url><url><loc>{base}/b</loc></url></urlset>",
         content_type="application/xml",
     )
-    refs = wc.sitemaps(httpserver.url_for("/"))
+    refs = wc.discover_sitemaps(httpserver.url_for("/"))
     urls = sorted(r.url for r in refs)
     assert urls == [f"{base}/a", f"{base}/b"]
 
 
 def test_sitemaps_on_a_site_without_one_is_empty(wc, site):
     # the `site` fixture has a robots.txt with no Sitemap: and no /sitemap.xml.
-    assert list(wc.sitemaps(site.url_for("/"))) == []
+    assert list(wc.discover_sitemaps(site.url_for("/"))) == []
 
 
 def test_context_manager_closes_the_crawl(wc, site):

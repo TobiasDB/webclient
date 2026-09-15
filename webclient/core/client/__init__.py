@@ -650,13 +650,13 @@ class WebClient(WebCore, IWebClient):
         completion -- HEAVY (fetches up to ``max_pages`` pages). Returns the finished
         crawl -- a ``.summary()`` per page in ``.pages`` plus the unresolved
         ``.frontier`` edges. (For just the list of sitemap URLs, use the cheap
-        :meth:`sitemaps` instead -- ``sitemap`` runs a crawl.) ``use_sitemap_xml``
+        :meth:`discover_sitemaps` instead -- ``sitemap`` runs a crawl.) ``use_sitemap_xml``
         (default on) first discovers the site's real ``sitemap.xml`` URLs
-        (:meth:`sitemaps`) and seeds the frontier with them, so a declared sitemap
+        (:meth:`discover_sitemaps`) and seeds the frontier with them, so a declared sitemap
         is honoured; it still link-crawls to fill in whatever the sitemap omits."""
         seeds: list[Any] = [url]
         if use_sitemap_xml:
-            discovered = self.dispatch("sitemaps", url)
+            discovered = self.dispatch("discover_sitemaps", url)
             seeds += [r.url for r in discovered]
         return self.crawl(
             seeds, auto=True, depth=depth, width=width, max_pages=max_pages

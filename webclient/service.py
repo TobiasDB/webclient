@@ -453,8 +453,8 @@ def create_app(
             ]
         )
 
-    @app.post("/sitemaps", response_model=None)
-    def sitemaps(
+    @app.post("/discover_sitemaps", response_model=None)
+    def discover_sitemaps(
         body: dict[str, Any], authorization: str | None = Header(default=None)
     ) -> "dict[str, Any] | JSONResponse":
         """Discover a site's real sitemap.xml page URLs from ``url``."""
@@ -463,7 +463,7 @@ def create_app(
         if isinstance(url, JSONResponse):
             return url
         wc_: WebClient = app.state.wc
-        return _run_verb(lambda: [r.url for r in wc_.sitemaps(url)])
+        return _run_verb(lambda: [r.url for r in wc_.discover_sitemaps(url)])
 
     # -- plan authoring: validate / pretty-print / (de)serialise a lazy expr --
     @app.post("/plan", response_model=None)

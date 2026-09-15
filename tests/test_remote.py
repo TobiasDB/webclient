@@ -91,7 +91,7 @@ def test_remote_sitemap_and_sitemaps(remote):
     sm = rc.sitemap(server.url_for("/cards"), max_pages=3)
     assert sm.done and len(sm.pages) >= 1
     # sitemaps() discovery also works remotely (an io op that round-trips)
-    assert isinstance(rc.sitemaps(server.url_for("/cards")), list)
+    assert isinstance(rc.discover_sitemaps(server.url_for("/cards")), list)
 
 
 def test_remote_summary_is_a_real_model(remote):

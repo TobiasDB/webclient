@@ -2,7 +2,7 @@
 
 MCP is the way most agents consume a browsing/scraping capability, and this is an
 *adapter*, not new capability: each tool is a thin wrapper over an existing verb
-(``fetch``/``render``/``search``/``crawl``/``sitemaps``) or the plan machinery
+(``fetch``/``render``/``search``/``crawl``/``discover_sitemaps``) or the plan machinery
 (write + validate + run a lazy expression from a blob). The tool registry
 (:func:`build_tools`) is plain data + handlers, so it is testable with no MCP SDK
 installed; :func:`serve` wires it onto an stdio MCP server, importing the ``mcp``
@@ -75,8 +75,8 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
     def search(a: dict[str, Any]) -> list[dict[str, Any]]:
         return [h.model_dump() for h in wc().search(a["query"], limit=int(a.get("limit", 10)))]
 
-    def sitemaps(a: dict[str, Any]) -> list[str]:
-        return [r.url for r in wc().sitemaps(a["url"])]
+    def discover_sitemaps(a: dict[str, Any]) -> list[str]:
+        return [r.url for r in wc().discover_sitemaps(a["url"])]
 
     def crawl(a: dict[str, Any]) -> dict[str, Any]:
         c = wc().crawl(
@@ -114,8 +114,8 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
         Tool("search", "Web search; returns structured hits (title/url/description).",
              _schema(query={"type": "string", "_required": True},
                      limit={"type": "integer"}), search),
-        Tool("sitemaps", "Discover a site's real sitemap.xml page URLs.",
-             _schema(url={**_URL, "_required": True}), sitemaps),
+        Tool("discover_sitemaps", "Discover a site's real sitemap.xml page URLs.",
+             _schema(url={**_URL, "_required": True}), discover_sitemaps),
         Tool("crawl", "Bounded, same-origin crawl from a seed URL; a summary per page "
              "plus the unresolved frontier. Steer with 'keywords'/'include'/'exclude'.",
              _schema(url={**_URL, "_required": True},

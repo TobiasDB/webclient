@@ -450,7 +450,7 @@ def main() -> None:
         print("expr rebuilt:", from_blob(blob).explain())
 
         # [#3] Discover a site's real sitemap.xml URLs (none served here -> []).
-        print("sitemaps:    ", [r.url for r in wc.sitemaps(f"{base}/")])
+        print("sitemaps:    ", [r.url for r in wc.discover_sitemaps(f"{base}/")])
 
     # [#7] The resiliency policy bundle is declared to a proxy service as request
     #      headers (the service is assumed to exist; here we just show the headers).

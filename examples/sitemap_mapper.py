@@ -8,7 +8,7 @@ What it does: (1) discover the site's declared sitemap URLs (reads robots.txt fo
 level); (2) map a bounded slice -- a single-domain crawl that honours the real
 sitemap by seeding the frontier from it -- and show a lean summary per page.
 
-Features: sitemaps() discovery, sitemap() map.
+Features: discover_sitemaps() discovery, sitemap() map.
 Run:  env/bin/python examples/sitemap_mapper.py
 """
 
@@ -22,7 +22,7 @@ UA = "webclient-examples/0.1"
 
 def discover(wc: WebClient) -> None:
     print("== discovery: real sitemap.xml URLs ==")
-    refs = list(wc.sitemaps(SITE))
+    refs = list(wc.discover_sitemaps(SITE))
     print(f"discovered {len(refs)} URLs from the sitemap")
     for r in refs[:8]:
         print(f"  {r.url}")

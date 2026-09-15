@@ -6,7 +6,7 @@ Built on the interface (``core.afetch`` + ``core.ref``), like ``search`` and
 well-known ``/sitemap.xml``, then parses each sitemap -- expanding a
 ``<sitemapindex>`` one level into its child sitemaps -- and returns the page URLs
 as :class:`~webclient.core.reference.Reference` objects (deduped, bounded). Users
-call it directly (``wc.sitemaps(url)``); the ``sitemap()`` map verb seeds its
+call it directly (``wc.discover_sitemaps(url)``); the ``sitemap()`` map verb seeds its
 crawl frontier from it so a real sitemap is honoured, not just link-following.
 """
 
@@ -64,13 +64,13 @@ def _locs(content: bytes) -> "tuple[str, list[str]]":
 
 
 class SitemapBacking(Backing):
-    """The client's ``sitemaps`` verb: discover a site's sitemap page URLs."""
+    """The client's ``discover_sitemaps`` verb: discover a site's sitemap URLs."""
 
-    provides = frozenset({"sitemaps"})
-    io = frozenset({"sitemaps"})  # an IO op: the interface bridges it (dispatch)
+    provides = frozenset({"discover_sitemaps"})
+    io = frozenset({"discover_sitemaps"})  # IO op: the interface bridges it (dispatch)
     gate = "ok"
 
-    async def sitemaps(
+    async def discover_sitemaps(
         self, core: "WebClient", url: Any, *, limit: int = 5000
     ) -> "list[Reference]":
         """Discover ``url``'s site's sitemap page URLs -- CHEAP (a couple of fetches),

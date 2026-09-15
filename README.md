@@ -189,7 +189,7 @@ for page in crawl.pages:            # each a lean .summary()
 ```
 
 Each page carries a lean default summary (`transport` + `metadata`); pass
-`facets=[...]` to widen or narrow it. `wc.sitemaps(url)` discovers a site's real
+`facets=[...]` to widen or narrow it. `wc.discover_sitemaps(url)` discovers a site's real
 `sitemap.xml` URLs (robots `Sitemap:` directives, the well-known path, one level of
 `<sitemapindex>`); `wc.sitemap(url)` maps a site, seeding from that discovery.
 
@@ -232,7 +232,7 @@ rows = from_blob(blob, wc).collect(wc.ref(url))   # rebuilt + name-validated, th
 ## MCP & task-verb endpoints
 
 `webclient.mcp` exposes the verbs (fetch/markdown/links/summary/search/crawl/
-sitemaps) plus plan authoring as Model Context Protocol tools -- the way agents
+discover_sitemaps) plus plan authoring as Model Context Protocol tools -- the way agents
 consume this category. The registry (`build_tools` / `dispatch`) works with no MCP
 SDK installed; `serve()` runs an stdio server. The HTTP service mirrors them as
 task-verb endpoints (`POST /markdown`, `/summary`, `/crawl`, `/plan`, ...).
