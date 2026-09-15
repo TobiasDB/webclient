@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from webclient import WebClient, WebException, wq
 
 CATALOG = "https://books.toscrape.com/"
-UA = "webclient-examples/0.1 (+https://github.com/TobiasDB/webclient)"
+UA = "webclient-examples/0.1"
 
 
 class Book(BaseModel):

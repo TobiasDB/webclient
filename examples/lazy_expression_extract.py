@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from webclient import WebClient, WebException, from_blob, wq
 
 START = "https://quotes.toscrape.com/"
-UA = "webclient-examples/0.1 (+https://github.com/TobiasDB/webclient)"
+UA = "webclient-examples/0.1"
 
 
 class Quote(BaseModel):

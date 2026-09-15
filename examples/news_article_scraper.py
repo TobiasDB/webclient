@@ -17,7 +17,7 @@ from __future__ import annotations
 from webclient import WebClient, WebException
 
 FRONT = "https://text.npr.org/"
-UA = "webclient-examples/0.1 (+https://github.com/TobiasDB/webclient)"
+UA = "webclient-examples/0.1"
 N_ARTICLES = 3
 
 

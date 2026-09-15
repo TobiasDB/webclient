@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from webclient import RAISE, RETURN, WebClient, WebException
 
-UA = "webclient-examples/0.1 (+https://github.com/TobiasDB/webclient)"
+UA = "webclient-examples/0.1"
 
 
 def case(label, fn) -> None:

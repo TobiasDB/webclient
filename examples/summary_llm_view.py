@@ -18,7 +18,7 @@ import json
 
 from webclient import WebClient, WebException
 
-UA = "webclient-examples/0.1 (+https://github.com/TobiasDB/webclient)"
+UA = "webclient-examples/0.1"
 PAGES = [
     ("news article", "https://text.npr.org/"),
     ("shop listing", "https://books.toscrape.com/"),

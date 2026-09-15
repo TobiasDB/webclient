@@ -17,7 +17,7 @@ from __future__ import annotations
 from webclient import WebClient, WebException
 
 SITE = "https://webscraper.io/"
-UA = "webclient-examples/0.1 (+https://github.com/TobiasDB/webclient)"
+UA = "webclient-examples/0.1"
 
 
 def discover(wc: WebClient) -> None:

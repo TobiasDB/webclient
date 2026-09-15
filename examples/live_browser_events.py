@@ -29,7 +29,7 @@ from collections import Counter
 from webclient import NavigationEvent, WebClient, WebException
 
 JS_PAGE = "https://quotes.toscrape.com/js/"
-UA = "webclient-examples/0.1 (+https://github.com/TobiasDB/webclient)"
+UA = "webclient-examples/0.1"
 
 
 def main() -> None:
