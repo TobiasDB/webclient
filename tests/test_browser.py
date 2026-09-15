@@ -230,10 +230,10 @@ def test_skeleton_marks_xhr_injected_content_on_a_real_spa(httpserver, wc):
     try:
         sk = doc.skeleton()
         assert "/api/items" in sk                       # observed data API listed
-        assert "div#app" in sk                          # the shell node: server-initial
-        item_line = next(l for l in sk.splitlines() if "li.item" in l)
+        assert '<div id="app">' in sk                    # the shell node: server-initial
+        item_line = next(l for l in sk.splitlines() if '<li class="item">' in l)
         assert "[xhr]" in item_line                     # injected -> marked xhr
-        assert "li.item [xhr] ×3" in sk                 # and the 3 identical items merged
+        assert '<li class="item"> [xhr] ×3' in sk        # and the 3 identical items merged
     finally:
         wc.release(doc)
 

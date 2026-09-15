@@ -24,8 +24,8 @@ def lines(html: bytes, **kw) -> list[str]:
 
 def test_basic_outline_keeps_ids_and_classes():
     out = sk(b'<html><body><main id="m" class="a b"><p class="x">hi</p></main></body></html>')
-    assert "main#m.a.b" in out
-    assert "p.x" in out and '"hi"' in out
+    assert '<main id="m" class="a b">' in out
+    assert '<p class="x">' in out and '"hi"' in out
 
 
 def test_render_skeleton_equals_method():
@@ -44,8 +44,8 @@ def test_legend_present_and_toggleable():
 def test_identical_siblings_merge():
     html = b"<html><body><ul>" + b'<li class="i"><span class="t">x</span></li>' * 5 + b"</ul></body></html>"
     out = sk(html)
-    assert "li.i ×5" in out
-    assert out.count("li.i") == 1  # collapsed to a single representative line
+    assert '<li class="i"> ×5' in out
+    assert out.count('<li class="i">') == 1  # collapsed to a single representative line
 
 
 def test_structurally_different_sibling_is_NOT_merged_away():
@@ -58,30 +58,30 @@ def test_structurally_different_sibling_is_NOT_merged_away():
         b"</ul></body></html>"
     )
     out = sk(html)
-    assert "li.i ×2" in out          # the two identical ones merged
-    assert ".badge" in out           # the odd sibling's extra field survives
+    assert '<li class="i"> ×2' in out       # the two identical ones merged
+    assert 'class="badge"' in out     # the odd sibling's extra field survives
     # the merged run and the odd one are separate lines
-    assert out.count("li.i") == 2
+    assert out.count('<li class="i">') == 2
 
 
 def test_different_class_siblings_do_not_merge():
     html = b'<html><body><div class="a">1</div><div class="b">2</div></body></html>'
     out = sk(html, legend=False)
-    assert "div.a" in out and "div.b" in out and "×" not in out
+    assert '<div class="a">' in out and '<div class="b">' in out and "×" not in out
 
 
 def test_ids_are_unique_so_siblings_never_merge():
     html = b'<html><body><section id="one">a</section><section id="two">b</section></body></html>'
     out = sk(html, legend=False)
-    assert "section#one" in out and "section#two" in out and "×" not in out
+    assert '<section id="one">' in out and '<section id="two">' in out and "×" not in out
 
 
 def test_merge_is_order_sensitive_runs_only():
     # a, a, b, a  -> the two leading a's merge; the trailing a is its own line.
     html = b'<html><body><i class="a">1</i><i class="a">2</i><i class="b">3</i><i class="a">4</i></body></html>'
     out = sk(html)
-    assert "i.a ×2" in out and "i.b" in out
-    assert out.count("i.a") == 2  # the run of 2, plus the lone trailing one
+    assert '<i class="a"> ×2' in out and '<i class="b">' in out
+    assert out.count('<i class="a">') == 2  # the run of 2, plus the lone trailing one
 
 
 # -- bloat removal ------------------------------------------------------------
@@ -119,24 +119,24 @@ def test_selector_relevant_attributes_surface():
         b"</body></html>"
     )
     out = sk(html)
-    assert "input[type=email][name=e][placeholder=Email][aria-label=Email addr]" in out
-    assert "a[role=button][href]" in out
-    assert "img[alt=pic][src]" in out
-    assert "div[data-testid=cart]" in out
+    assert '<input type="email" name="e" placeholder="Email" aria-label="Email addr">' in out
+    assert '<a role="button" href>' in out
+    assert '<img alt="pic" src>' in out
+    assert '<div data-testid="cart">' in out
 
 
 def test_class_soup_is_capped():
     classes = " ".join(f"c{i}" for i in range(20))
     html = f'<html><body><div class="{classes}">x</div></body></html>'.encode()
     out = sk(html)
-    assert ".…+12" in out  # 20 classes - 8 shown = 12 hidden
-    assert ".c9" not in out  # beyond the cap
+    assert "…+12" in out  # 20 classes - 8 shown = 12 hidden
+    assert "c9" not in out  # beyond the cap
 
 
 def test_attribute_values_are_clipped_and_normalised():
     html = b'<html><body><div role="a   b" title="' + b"z" * 100 + b'">x</div></body></html>'
     out = sk(html)
-    assert "[role=a b]" in out  # whitespace collapsed
+    assert 'role="a b"' in out  # whitespace collapsed
     assert "z" * 24 in out and "z" * 25 not in out  # clipped to 24
 
 
@@ -146,9 +146,9 @@ def test_attribute_values_are_clipped_and_normalised():
 def test_text_hint_on_leaves_only_and_truncated():
     html = b"<html><body><p>" + b"word " * 40 + b"</p><div><span>child</span></div></body></html>"
     out = sk(html)
-    p_line = next(l for l in out.splitlines() if l.strip().startswith("p"))
+    p_line = next(l for l in out.splitlines() if l.strip().startswith("<p"))
     assert p_line.endswith('…"') and "word" in p_line  # leaf p has a truncated hint
-    div_line = next(l for l in out.splitlines() if l.strip().startswith("div"))
+    div_line = next(l for l in out.splitlines() if l.strip().startswith("<div"))
     assert '"' not in div_line  # a node with element children gets no text hint
 
 
@@ -166,7 +166,7 @@ def test_max_siblings_bounds_a_huge_flat_list():
     items = b"".join(f'<div id="d{i}">{i}</div>'.encode() for i in range(5000))
     out = sk(b"<html><body>" + items + b"</body></html>", max_siblings=50)
     assert "more)" in out
-    body = [l for l in out.splitlines() if "div#d" in l]
+    body = [l for l in out.splitlines() if '<div id="d' in l]
     assert len(body) <= 51
 
 
@@ -196,7 +196,7 @@ def test_empty_or_trivial_pages_do_not_crash(html):
 
 def test_malformed_html_recovers():
     out = sk(b"<html><body><div class=x><p>unclosed<ul><li>a</body>")
-    assert "div.x" in out  # lxml recover mode still produces a tree
+    assert '<div class="x">' in out  # lxml recover mode still produces a tree
 
 
 def test_tables_render():
@@ -212,7 +212,7 @@ def test_xml_document_skeletonises():
     xml = b'<?xml version="1.0"?><feed><entry><title>A</title></entry><entry><title>B</title></entry></feed>'
     d = Document(kind="xml", content=xml, status_code=200)
     out = d.skeleton()
-    assert "entry ×2" in out  # two identical entries merge
+    assert '<entry> ×2' in out  # two identical entries merge
 
 
 # -- origin annotation (initial vs XHR/JS) ------------------------------------
@@ -239,9 +239,9 @@ def test_injected_nodes_marked_xhr_with_api_header():
     )
     out = d.skeleton()
     assert "# XHR/fetch data APIs: https://x/api/quotes" in out
-    assert "div#app" in out and "[xhr]" not in _first_line_for(out, "div#app")  # shell node: initial
-    assert "[xhr]" in _first_line_for(out, "ul.list")  # injected
-    assert "li.quote [xhr] ×2" in out
+    assert '<div id="app">' in out and "[xhr]" not in _first_line_for(out, '<div id="app">')  # shell: initial
+    assert "[xhr]" in _first_line_for(out, '<ul class="list">')  # injected
+    assert '<li class="quote"> [xhr] ×2' in out
 
 
 def test_injected_nodes_marked_js_without_xhr():
@@ -250,7 +250,7 @@ def test_injected_nodes_marked_js_without_xhr():
         static=b'<html><body><div id="app"></div></body></html>',
     )
     out = d.skeleton()
-    assert "[js]" in _first_line_for(out, "p.c")
+    assert "[js]" in _first_line_for(out, '<p class="c">')
     assert "XHR/fetch" not in out  # no xhr calls observed
 
 

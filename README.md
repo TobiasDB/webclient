@@ -82,7 +82,7 @@ other attributes return a `Field`. Rendering has typed named methods —
 `.markdown()`, `.text(main_content_only=True)`, `.links()`, `.elements()` (typed
 blocks), `.html()`, `.skeleton()` — over the generic `render(format)` dispatch.
 
-`page.skeleton()` is a **token-lean DOM outline** (`tag#id.class`, bloat removed,
+`page.skeleton()` is a **token-lean DOM outline** (HTML open-tags, bloat removed,
 repeated siblings collapsed) — feed it to an LLM to write CSS selectors for the
 page cheaply, then use them with `select`/`extract`. See
 [docs/llm-lazy-queries.md](docs/llm-lazy-queries.md) for a guide to building lazy

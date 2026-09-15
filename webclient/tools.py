@@ -45,7 +45,7 @@ def links(url: str, *, client: WebClient | None = None, **kw: Any) -> list[str]:
 def page_skeleton(
     url: str, *, browser: Any = False, client: WebClient | None = None, **kw: Any
 ) -> str:
-    """Fetch ``url`` and return its token-lean DOM skeleton -- a ``tag#id.class``
+    """Fetch ``url`` and return its token-lean DOM skeleton -- an HTML-tag outline
     outline an LLM reads to write CSS selectors (bloat removed, uniform siblings
     collapsed, leaf text hinted). Pass ``browser="probe"`` for a JS/SPA page: the
     skeleton then marks client-injected nodes ``[xhr]``/``[js]`` and lists the data

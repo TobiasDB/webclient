@@ -418,4 +418,4 @@ def test_plan_endpoint_rejects_a_bad_plan(client_and_server):
 def test_skeleton_endpoint(client_and_server):
     api, server = client_and_server
     r = api.post("/skeleton", headers=AUTH, json={"url": server.url_for("/cards")}).json()
-    assert "div.card" in r["result"] and "span.title" in r["result"]
+    assert '<div class="card">' in r["result"] and '<span class="title">' in r["result"]

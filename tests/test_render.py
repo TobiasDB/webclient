@@ -88,11 +88,11 @@ def test_skeleton_is_a_selector_outline():
         b'</ul><input type="text" name="q"></main></body></html>'
     )
     sk = Document(content=html, status_code=200).skeleton()
-    assert "main#main.container" in sk
-    assert "ul#results.list" in sk
-    assert "li.item ×2" in sk  # repeated siblings collapsed
-    assert "span.title" in sk
-    assert "input[type=text][name=q]" in sk
+    assert '<main id="main" class="container">' in sk
+    assert '<ul id="results" class="list">' in sk
+    assert '<li class="item"> ×2' in sk  # repeated siblings collapsed
+    assert '<span class="title">' in sk
+    assert '<input type="text" name="q">' in sk
     assert "script" not in sk and "style" not in sk  # bloat removed
     # render("skeleton") is the same
     assert Document(content=html, status_code=200).render("skeleton") == sk

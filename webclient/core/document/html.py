@@ -209,33 +209,37 @@ def _kept_children(el: Any) -> "list[Any]":
 
 
 def _selector_sig(el: Any) -> str:
-    """A CSS-selector-style signature for ONE element: ``tag#id.class.class`` plus a
-    few selector-relevant attributes (``role``/``type``/``name``/``data-testid`` …,
-    ``[href]`` on a link). Classes are capped so utility-class soup can't blow up a
-    line. Exactly what an LLM needs to target the element."""
+    """An HTML open-tag signature for ONE element: ``<tag id="x" class="a b"
+    role="button" href>`` -- the tag with its id, (capped) classes, a few
+    selector-relevant attributes (``role``/``type``/``name``/``data-testid`` …), and
+    ``href``/``src`` presence (name only, not the value). Real HTML syntax an LLM
+    reads natively, and everything it needs to write a CSS selector for the node.
+    Classes are capped so utility-class soup can't blow up a line."""
     tag = _tag(el) or "?"
     parts = [tag]
     eid = el.get("id")
     if eid:
-        parts.append(f"#{_norm(eid)}")
+        parts.append(f'id="{_norm(eid)}"')
     classes = (el.get("class") or "").split()
-    for cls in classes[:_MAX_CLASSES]:
-        parts.append(f".{cls}")
-    if len(classes) > _MAX_CLASSES:
-        parts.append(f".…+{len(classes) - _MAX_CLASSES}")
+    if classes:
+        shown = " ".join(classes[:_MAX_CLASSES])
+        if len(classes) > _MAX_CLASSES:
+            shown += f" …+{len(classes) - _MAX_CLASSES}"
+        parts.append(f'class="{shown}"')
     for attr in _SKELETON_ATTRS:
         val = el.get(attr)
         if val is not None and val != "":
-            parts.append(f"[{attr}={_norm(val)[:24]}]")
+            parts.append(f'{attr}="{_norm(val)[:24]}"')
     if el.get("href") is not None:  # a link/area target (presence, not the url)
-        parts.append("[href]")
+        parts.append("href")
     if el.get("src") is not None:  # img/media/iframe source (presence)
-        parts.append("[src]")
-    return "".join(parts)
+        parts.append("src")
+    return "<" + " ".join(parts) + ">"
 
 
 _SKELETON_LEGEND = (
-    "# skeleton: tag#id.class[attr=val]  ×N=N identical siblings  \"…\"=sample text"
+    '# skeleton: an HTML-tag outline (open tags only, indentation = nesting). '
+    '×N=N identical siblings, "…"=sample text'
 )
 
 
@@ -302,7 +306,7 @@ def _skeleton(
     static_html: "bytes | None" = None,
     xhr_endpoints: "list[str] | None" = None,
 ) -> str:
-    """A token-lean DOM skeleton: an indented outline of ``tag#id.class`` signatures
+    """A token-lean DOM skeleton: an indented outline of HTML open-tag signatures
     with structural noise (script/style/svg/meta/comments/…) removed, a short text
     hint on leaf nodes, and consecutive *structurally-identical* siblings collapsed
     to ``… ×N`` -- so a uniform list of 50 cards is one line, but a sibling with a
