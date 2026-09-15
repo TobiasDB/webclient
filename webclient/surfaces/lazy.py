@@ -84,6 +84,7 @@ class LazyReference(Lazy["Reference"]):
     follow_redirects: LazyField[bool]
     timeout: LazyField[float | None]
     actions: LazyField[Any]
+    expect: LazyField[Any]
     ok: "LazyField[bool]"
     url: "LazyField[str]"
     def join(self, href: str) -> "LazyReference": ...

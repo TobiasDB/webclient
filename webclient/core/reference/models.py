@@ -46,6 +46,11 @@ class IReference(BaseModel):
     follow_redirects: bool = True
     timeout: float | None = None
     actions: list[dict[str, Any]] = []  # recorded live-interaction chain (reload)
+    #: an explicit content-kind hint for the response (``None`` = pure sniffing, the
+    #: default -- no hint, so a wrong guess is never forced). Set it (e.g. ``"json"``)
+    #: when a server mislabels or omits its ``Content-Type`` and you know the kind;
+    #: it overrides the sniffer for this request.
+    expect: Literal["html", "json", "xml", "binary"] | None = None
 
     if TYPE_CHECKING:
         # >>> generated: Reference interface <<<

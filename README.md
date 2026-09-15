@@ -44,6 +44,12 @@ with WebClient() as wc:
 `wc.ref(url).resolve()`). To batch or defer, use `wc.lazy` -- it records a plan
 run by `.collect()`: `wc.lazy.fetch(url).select(".t").text_content.collect()`.
 
+The response kind (`html` / `json` / `xml` / `binary`) is sniffed from the
+`Content-Type` then the leading bytes, and each kind gets its own ops (dotted-path
+`select` on json, tree `select` on html/xml). If a server mislabels or omits its
+type, pass an explicit hint: `wc.fetch(url, expect="json")` (`None` by default, so
+a wrong guess is never forced).
+
 ### Select and extract
 
 ```python

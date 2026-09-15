@@ -7,7 +7,7 @@ the client -- :mod:`.resolve`). Pure data + dispatch, like every core.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import parse_qs, urlparse
 
 from pydantic import PrivateAttr
@@ -63,8 +63,11 @@ def from_url(
     params: dict[str, str | list[str]] | None = None,
     headers: dict[str, str] | None = None,
     cookies: dict[str, str] | None = None,
+    expect: str | None = None,
 ) -> Reference:
-    """Build a Reference from a URL string."""
+    """Build a Reference from a URL string. ``expect`` is an optional content-kind
+    hint for the response (``"html"``/``"json"``/``"xml"``/``"binary"``; ``None`` =
+    pure sniffing)."""
     parsed = urlparse(url)
     query: dict[str, str | list[str]] = {
         k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed.query).items()
@@ -81,6 +84,7 @@ def from_url(
         params=query,
         headers=headers or {},
         cookies=cookies or {},
+        expect=cast("Any", expect),
     )
 
 

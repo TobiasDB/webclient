@@ -3,7 +3,7 @@ sniffing helpers that go with it."""
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import httpx
 
@@ -88,7 +88,11 @@ class HTTPXClient(Client):
         doc = Document(
             url=ref.dispatch("url"),
             final_url=str(resp.url),
-            kind=sniff_kind(resp.headers.get("content-type"), resp.content),
+            kind=sniff_kind(
+                resp.headers.get("content-type"),
+                resp.content,
+                getattr(ref, "expect", None),
+            ),
             content=resp.content,
             status_code=resp.status_code,
             response_headers=dict(resp.headers),
@@ -122,9 +126,16 @@ class HTTPXFactory(ClientFactory):
 
 
 def sniff_kind(
-    content_type: str | None, content: bytes
+    content_type: str | None,
+    content: bytes,
+    hint: str | None = None,
 ) -> Literal["html", "json", "xml", "binary"]:
-    """Content-type header first, leading bytes as fallback."""
+    """Classify a response into a document kind. An explicit ``hint`` (a Reference's
+    ``expect``) wins outright -- the caller declared the kind, so a mislabelled or
+    absent ``Content-Type`` cannot misguide it. Otherwise: the content-type header
+    first, then the leading bytes as a fallback, then ``binary``."""
+    if hint in ("html", "json", "xml", "binary"):
+        return cast('Literal["html", "json", "xml", "binary"]', hint)
     mime = (content_type or "").split(";")[0].strip().lower()
     if "html" in mime:
         return "html"
