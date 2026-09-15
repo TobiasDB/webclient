@@ -28,6 +28,46 @@ _TRACKING = frozenset(
     {"fbclid", "gclid", "gclsrc", "dclid", "msclkid", "mc_eid", "igshid"}
 )  # unambiguous analytics params; ``ref``/``ref_src`` are left in (can be meaningful)
 
+#: pagination query params. The FIRST page (``page=1`` / ``offset=0``) collapses to
+#: the base URL for dedup (``/x?page=1`` == ``/x`` -- so we don't re-scrape page 1);
+#: later pages stay distinct but are scored down (a paginated page is lower-value
+#: than a fresh link, and there are usually many of them).
+_PAGE_PARAMS = frozenset({"page", "p", "pg", "pagenum", "paged", "pagina", "pn"})
+_OFFSET_PARAMS = frozenset(
+    {"start", "offset", "skip", "begin", "first", "from", "cursor", "after"}
+)
+
+#: locale / language / country selector query params -- dropped for dedup so the
+#: same page in different locales collapses to one crawl target.
+_LOCALE_PARAMS = frozenset(
+    {"locale", "lang", "language", "hl", "gl", "lr", "country", "region",
+     "ui_locales", "setlang", "culture"}
+)
+
+#: ISO 639-1 language + ISO 3166-1 country codes that appear as URL locale segments
+#: (``/en/…``, ``/en-us/…``, ``/jp/…``) or locale subdomains (``fr.site.com``). A
+#: leading locale segment/subdomain is folded for dedup, so a page's many localised
+#: copies collapse to one crawl target (e.g. a big multi-region site is crawled once,
+#: not once per country).
+_LOCALE_CODES = frozenset(
+    (
+        "aa ab ae af ak am an ar as av ay az ba be bg bh bi bm bn bo br bs ca ce ch co "
+        "cr cs cu cv cy da de dv dz ee el en eo es et eu fa ff fi fj fo fr fy ga gd gl "
+        "gn gu gv ha he hi ho hr ht hu hy hz ia id ie ig ii ik io is it iu ja jv ka kg "
+        "ki kj kk kl km kn ko kr ks ku kv kw ky la lb lg li ln lo lt lu lv mg mh mi mk "
+        "ml mn mr ms mt my na nb nd ne ng nl nn no nr nv ny oc oj om or os pa pi pl ps "
+        "pt qu rm rn ro ru rw sa sc sd se sg si sk sl sm sn so sq sr ss st su sv sw ta "
+        "te tg th ti tk tl tn to tr ts tt tw ty ug uk ur uz ve vi vo wa wo xh yi yo za "
+        "zh zu "  # -- ISO 639-1 language codes above --
+        "us gb ca au nz jp cn tw hk sg my ph vn pk bd lk sa il eg ng ke br cl pe mx ve "
+        "ec uy py bo cr pa gt do at ch lu gr cz sk hu bg hr si rs ua by dk"  # countries
+    ).split()
+)
+
+#: second-level labels that are really public suffixes (``example.co.uk``), so the
+#: registrable domain keeps three labels there, not two.
+_PUBLIC_SLDS = frozenset("co com org net gov edu ac mil gob gouv go or ne".split())
+
 #: file extensions whose links are page *assets*, not crawlable documents -- an
 #: anchor pointing at one is dropped from the frontier (it is a resource to load,
 #: not a page to fetch and expand). XHR data-APIs (often ``.json``) are added by a
@@ -147,27 +187,93 @@ def _canon_host(url: str) -> str:
     return _fold_host(urlparse(url).hostname or "")
 
 
+def _is_locale(seg: str) -> bool:
+    """Whether a path segment / subdomain label is a locale code -- a bare code
+    (``en``, ``jp``) or a ``lang-country`` / ``lang_country`` pair (``en-us``)."""
+    s = seg.lower()
+    if s in _LOCALE_CODES:
+        return True
+    for sep in ("-", "_"):
+        if sep in s:
+            a, _, b = s.partition(sep)
+            if a in _LOCALE_CODES and b in _LOCALE_CODES:
+                return True
+    return False
+
+
+def _strip_locale_path(path: str) -> str:
+    """Drop a leading locale segment (``/en/news`` -> ``/news``) so a page's
+    localised copies dedup to one target."""
+    segs = path.split("/")  # path starts "/", so segs[0] == ""
+    if len(segs) > 1 and _is_locale(segs[1]):
+        return "/" + "/".join(segs[2:])
+    return path
+
+
+def _dedup_host(host: str) -> str:
+    """The host for dedup: ``www.`` folded and a leading locale subdomain dropped
+    (``fr.site.com`` / ``en.site.com`` -> ``site.com``)."""
+    host = _fold_host(host)
+    labels = host.split(".")
+    if len(labels) > 2 and _is_locale(labels[0]):
+        host = ".".join(labels[1:])
+    return host
+
+
+def _registrable(host: str) -> str:
+    """The registrable domain (eTLD+1) of a host, for scope: subdomains of the same
+    site share it (``news.adobe.com`` / ``blog.adobe.com`` -> ``adobe.com``). A
+    small public-suffix heuristic keeps three labels for ``example.co.uk``."""
+    labels = _fold_host(host).split(".")
+    if len(labels) <= 2:
+        return ".".join(labels)
+    keep = 3 if labels[-2] in _PUBLIC_SLDS else 2
+    return ".".join(labels[-keep:])
+
+
+def _is_first_page(key: str, value: str) -> bool:
+    """Whether a pagination param is the first page (collapses to the base URL)."""
+    v = value.strip()
+    return (key in _PAGE_PARAMS and v in ("", "1")) or (
+        key in _OFFSET_PARAMS and v in ("", "0")
+    )
+
+
+def _is_paginated(url: str) -> bool:
+    """Whether a URL is a later page of a listing (page 2+, offset>0, or a
+    ``/page/N`` path) -- lower-value than a fresh link, so it is scored down."""
+    for k, v in parse_qsl(urlparse(url).query):
+        kl = k.lower()
+        if (kl in _PAGE_PARAMS or kl in _OFFSET_PARAMS) and not _is_first_page(kl, v):
+            return True
+    return bool(re.search(r"/(?:page|pg|p)/\d+/?$", urlparse(url).path.lower()))
+
+
 def _canon(url: str) -> str:
-    """A canonical dedup key: lowercased scheme+host (``www.`` folded, default port
-    dropped), normalised trailing slash, tracking params removed and the rest
-    sorted, fragment stripped -- so ``/p``, ``/p/``, ``/p?utm=1`` and ``//WWW.H/p``
-    collapse to one key (and are not re-fetched)."""
+    """A canonical dedup key: lowercased scheme+host (``www.`` + a locale subdomain
+    folded, default port dropped), a leading locale path segment stripped, trailing
+    slash and ``/page/1`` normalised, tracking / locale / first-page params removed
+    and the rest sorted, fragment stripped -- so ``/p``, ``/p/``, ``/en/p?utm=1``,
+    ``/p?page=1`` and ``//WWW.H/p`` all collapse to one key (and are not re-fetched)."""
     try:
         parts = urlsplit(url)
     except ValueError:
         return url
-    host = _canon_host(url)
+    host = _dedup_host(urlparse(url).hostname or "")
     netloc = f"{host}:{parts.port}" if parts.port and parts.port not in (80, 443) else host
-    path = parts.path or "/"
+    path = _strip_locale_path(parts.path or "/")
+    path = re.sub(r"/(?:page|pg|p)/1/?$", "", path, flags=re.I) or "/"  # /x/page/1 -> /x
     if len(path) > 1:
         path = path.rstrip("/") or "/"
-    query = urlencode(
-        sorted(
-            (k, v)
-            for k, v in parse_qsl(parts.query, keep_blank_values=True)
-            if k not in _TRACKING and not k.startswith("utm_")
-        )
-    )
+    kept = []
+    for k, v in parse_qsl(parts.query, keep_blank_values=True):
+        kl = k.lower()
+        if kl in _TRACKING or kl.startswith("utm_") or kl in _LOCALE_PARAMS:
+            continue
+        if _is_first_page(kl, v):  # ``page=1`` / ``offset=0`` == the base page
+            continue
+        kept.append((k, v))
+    query = urlencode(sorted(kept))
     return urlunsplit(((parts.scheme or "https").lower(), netloc, path, query, ""))
 
 
@@ -298,6 +404,8 @@ class CrawlBacking(Backing):
             score -= 1.5
         if path in ("", "/"):  # bare homepage link (nav "home", logo)
             score -= 0.2
+        if _is_paginated(url):  # a later listing page -- low value, and there are many
+            score -= 0.8
         return round(score, 3)
 
     def _add_edge(
@@ -314,7 +422,11 @@ class CrawlBacking(Backing):
         key = _canon(url)
         if key in core._seen:
             return
-        if core.same_origin and _canon_host(url) != _fold_host(core.scope):
+        # scope: same registrable domain (eTLD+1), so subdomains of the same site
+        # (news./blog./www.) are in scope but a different domain is not.
+        if core.same_origin and _registrable(urlparse(url).hostname or "") != _registrable(
+            core.scope
+        ):
             return
         path = _path(url)
         if core.include is not None and core.include not in path:

@@ -275,6 +275,44 @@ def scored_site(httpserver):
     return httpserver
 
 
+def test_canon_collapses_locale_and_pagination_variants():
+    # dedup folds locale prefixes/subdomains, first-page pagination, and locale
+    # params to one key, so a page's many variants aren't all crawled.
+    from webclient.core.crawl.backing import _canon
+
+    base = _canon("https://site.com/news")
+    for variant in [
+        "https://site.com/en/news",            # locale path
+        "https://site.com/fr/news?locale=fr",  # locale path + param
+        "https://en.site.com/news",            # locale subdomain
+        "https://site.com/news?page=1",        # first page
+        "https://site.com/news/page/1",        # path-based first page
+        "https://www.site.com/news/",          # www + trailing slash
+    ]:
+        assert _canon(variant) == base, variant
+    # a real later page is NOT collapsed (distinct content)
+    assert _canon("https://site.com/news?page=2") != base
+
+
+def test_scope_accepts_same_registrable_domain_subdomains(wc, httpserver):
+    # same-site subdomains (news./blog.) are in scope; a different domain is not.
+    from webclient.core.crawl.backing import _registrable
+
+    assert _registrable("news.acme.com") == _registrable("blog.acme.com") == "acme.com"
+    assert _registrable("acme.com") == "acme.com"
+    assert _registrable("acme.co.uk") == "acme.co.uk"  # public-suffix aware
+    assert _registrable("news.acme.com") != _registrable("acme.net")
+
+
+def test_paginated_links_are_scored_down(wc, scored_site):
+    from webclient.core.crawl.backing import CrawlBacking
+
+    b = CrawlBacking()
+    fresh = b._link_score("Big story", "https://s.ex/news/big-story", "main")
+    page3 = b._link_score("Older posts", "https://s.ex/news?page=3", "main")
+    assert page3 < fresh  # a later listing page sinks below fresh content
+
+
 def test_frontier_never_contains_whitespace_urls(wc, httpserver):
     # a text-like or newline-padded href must not enter the frontier as an invalid
     # URL with raw whitespace (regression: `<a href="Read More">` -> `.../Read More`).
