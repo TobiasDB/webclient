@@ -304,6 +304,24 @@ def test_scope_accepts_same_registrable_domain_subdomains(wc, httpserver):
     assert _registrable("acme.com") == "acme.com"
     assert _registrable("acme.co.uk") == "acme.co.uk"  # public-suffix aware
     assert _registrable("news.acme.com") != _registrable("acme.net")
+    # IP literals are never folded (different machines, not a shared domain)
+    assert _registrable("192.168.1.1") != _registrable("172.16.1.1")
+    assert _registrable("192.168.1.1") == "192.168.1.1"
+
+
+def test_malformed_port_url_does_not_crash_a_crawl(wc, httpserver):
+    # a bad/out-of-range port in a scraped href must not abort the whole step.
+    from webclient.core.crawl.backing import _canon
+
+    for bad in ("https://h:99999/p", "https://h:abc/p", "https://h:-1/p"):
+        assert isinstance(_canon(bad), str)  # no ValueError
+    body = '<a href="https://h:99999/x">bad</a><a href="/ok">ok</a>'
+    httpserver.expect_request("/").respond_with_data(
+        f"<html><body>{body}</body></html>", content_type="text/html"
+    )
+    with wc.crawl(httpserver.url_for("/"), browser=False) as crawl:
+        crawl.step()  # must not raise
+    assert crawl.pages  # the seed was crawled
 
 
 def test_paginated_links_are_scored_down(wc, scored_site):
@@ -418,3 +436,18 @@ def _path_of(url: str) -> str:
     from urllib.parse import urlparse
 
     return urlparse(url).path
+
+
+def test_optional_browser_render_failure_is_swallowed(wc, monkeypatch):
+    # a browser render/launch failure under optional (a browser crawl fetches
+    # optional=True) returns a not-ok doc, not a raise that aborts the crawl.
+    from webclient import RETURN
+
+    async def boom(ref, **kw):
+        raise RuntimeError("render failed")
+
+    monkeypatch.setattr(wc, "_alive", boom)
+    doc = wc.fetch("https://x.example/", browser=True, error=RETURN)
+    assert not doc.ok and "render failed" in (doc.error.message or "")
+    with pytest.raises(Exception):  # loud by default (no optional)
+        wc.fetch("https://x.example/", browser=True)

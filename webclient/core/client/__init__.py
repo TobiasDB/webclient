@@ -426,10 +426,23 @@ class WebClient(WebCore, IWebClient):
             if not optional:
                 raise WebException(cast(WebError, doc.error), document=doc)
             return doc
-        if mode == "always":
-            return await self._alive(ref, keep_alive=keep_alive)
-        if mode == "probe":
-            return await self._probe_compare(ref)
+        if mode in ("always", "probe"):
+            try:
+                if mode == "always":
+                    return await self._alive(ref, keep_alive=keep_alive)
+                return await self._probe_compare(ref)
+            except WebException:
+                raise
+            except Exception as exc:  # a render/launch failure
+                if not optional:  # loud by default -- a browser crawl is optional=True
+                    raise
+                doc = Document(
+                    url=ref.dispatch("url"), status_code=0,
+                    error=WebError(type="BrowserError", message=str(exc)),
+                )
+                doc._client = self
+                self._register(doc, ref)
+                return doc
         # declare the resolve policy (rate/retry/proxy) to a downstream proxy
         # service as X-WebClient-* headers; explicit headers still win over them.
         headers = {

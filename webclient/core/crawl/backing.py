@@ -224,10 +224,13 @@ def _dedup_host(host: str) -> str:
 def _registrable(host: str) -> str:
     """The registrable domain (eTLD+1) of a host, for scope: subdomains of the same
     site share it (``news.adobe.com`` / ``blog.adobe.com`` -> ``adobe.com``). A
-    small public-suffix heuristic keeps three labels for ``example.co.uk``."""
-    labels = _fold_host(host).split(".")
-    if len(labels) <= 2:
-        return ".".join(labels)
+    small public-suffix heuristic keeps three labels for ``example.co.uk``. An IP
+    literal is returned whole (never folded -- ``192.168.1.1`` and ``10.0.1.1`` are
+    different machines, not a shared "1.1" domain)."""
+    host = _fold_host(host)
+    labels = host.split(".")
+    if len(labels) <= 2 or all(label.isdigit() for label in labels):  # short host / IPv4
+        return host
     keep = 3 if labels[-2] in _PUBLIC_SLDS else 2
     return ".".join(labels[-keep:])
 
@@ -265,10 +268,11 @@ def _canon(url: str) -> str:
     ``/p/page/3``) all collapse to ONE key: once any page is seen the rest dedup."""
     try:
         parts = urlsplit(url)
+        port = parts.port  # lazily parsed -- raises ValueError on a bad/huge port
     except ValueError:
         return url
     host = _dedup_host(urlparse(url).hostname or "")
-    netloc = f"{host}:{parts.port}" if parts.port and parts.port not in (80, 443) else host
+    netloc = f"{host}:{port}" if port and port not in (80, 443) else host
     path = _strip_pagination_path(_strip_locale_path(parts.path or "/"))
     if len(path) > 1:
         path = path.rstrip("/") or "/"
@@ -425,6 +429,10 @@ class CrawlBacking(Backing):
         it)."""
         url = url.split("#", 1)[0]
         if not url.startswith(("http://", "https://")):
+            return
+        try:  # skip an unfetchable URL (a bad/out-of-range port) -- from_url would raise
+            urlsplit(url).port
+        except ValueError:
             return
         key = _canon(url)
         if key in core._seen:

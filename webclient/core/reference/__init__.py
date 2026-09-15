@@ -74,11 +74,15 @@ def from_url(
     }
     if params:
         query.update(params)
+    try:  # ``.port`` is parsed lazily; a bad/out-of-range port raises -> drop it
+        port = parsed.port
+    except ValueError:
+        port = None
     return Reference(
         hostname=parsed.hostname or "",
         method=method,
         scheme=parsed.scheme or "https",
-        port=parsed.port,
+        port=port,
         path=parsed.path or "",
         fragment=parsed.fragment or "",
         params=query,
