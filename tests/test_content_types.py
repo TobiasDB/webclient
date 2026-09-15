@@ -125,6 +125,29 @@ def test_meta_charset_is_honoured_for_non_utf8(httpserver, wc):
     assert "привет" in doc.select("p").text_content
 
 
+def test_html_degrades_on_a_bogus_charset(wc, httpserver):
+    # a mislabelled Content-Type charset must not crash html() (re-review F1).
+    httpserver.expect_request("/b").respond_with_data(
+        b"<html><body><p>hi</p></body></html>",
+        content_type="text/html; charset=unknown-8bit",
+    )
+    doc = wc.fetch(httpserver.url_for("/b"))
+    assert "<p>hi</p>" in doc.html()  # no LookupError
+    assert doc.markdown() == "hi"
+
+
+def test_bom_prefixed_single_block_renders(wc, httpserver):
+    # a UTF-8 BOM must be stripped so a doctype-less single-block page still renders
+    # (re-review F2).
+    httpserver.expect_request("/bom").respond_with_data(
+        b"\xef\xbb\xbf<html><body><p>Only para</p></body></html>",
+        content_type="text/html",
+    )
+    doc = wc.fetch(httpserver.url_for("/bom"))
+    assert doc.markdown() == "Only para"
+    assert [e.text for e in doc.elements()] == ["Only para"]
+
+
 def test_http_charset_header_is_honoured(httpserver, wc):
     # charset declared ONLY in the HTTP Content-Type (no in-document meta): the
     # header is authoritative and must decode correctly (regression guard).

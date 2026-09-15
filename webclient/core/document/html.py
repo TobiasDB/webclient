@@ -74,16 +74,19 @@ def _html_text(core: "Document", raw: bytes) -> str:
     ``Content-Type`` charset, else an in-document ``<meta charset>`` / BOM, else
     utf-8 with a latin-1 fallback). Invalid/unknown charset names degrade, never
     raise."""
+    # strip a leading BOM (browsers do; a retained U+FEFF makes lxml treat a
+    # doctype-less single-block page's element as the root -> empty markdown).
     enc = core.encoding or _sniff_charset(raw)
     if enc:
         try:
-            return raw.decode(enc, "replace")
-        except LookupError:
+            return raw.decode(enc, "replace").lstrip("﻿")
+        except LookupError:  # a bogus/unknown charset name -> fall through
             pass
     try:
-        return raw.decode("utf-8")
+        text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return raw.decode("latin-1", "replace")
+        text = raw.decode("latin-1", "replace")
+    return text.lstrip("﻿")
 
 
 def _tag(el: Any) -> str:
@@ -242,19 +245,6 @@ def _html_elements(root: Any) -> list[Element]:
     return out
 
 
-def _decode(core: "Document") -> str:
-    """Decode the response bytes: the declared encoding first, else utf-8 with
-    a latin-1 fallback (covers undeclared single-byte pages)."""
-    if isinstance(core._element, str):
-        return core._element
-    if core.encoding:
-        return (core.content or b"").decode(core.encoding, "replace")
-    try:
-        return (core.content or b"").decode("utf-8")
-    except UnicodeDecodeError:
-        return (core.content or b"").decode("latin-1", "replace")
-
-
 def _miss(parent: "Document", message: str, error: Any) -> "Document":
     """A missing selection: raise a structured ``SelectError`` under RAISE, else a
     not-ok sub-document. ``SelectError`` is both a ``WebException`` (so one
@@ -279,6 +269,7 @@ class HtmlBacking(Backing):
         {"select", "select_all", "attr", "render",
          "markdown", "text", "html", "links", "elements"}
     )
+    collections = frozenset({"select_all", "links"})  # return a Collection of cores
     props = frozenset({"text_content", "title"})
     gate = "tree"
 
@@ -324,7 +315,7 @@ class HtmlBacking(Backing):
 
     def render(self, core: "Document", format: str, **options: Any) -> Any:
         if format == "html":
-            return (core.content or b"").decode(core.encoding or "utf-8", "replace")
+            return _html_text(core, core.content or b"")  # graceful on a bogus charset
         root = self._tree(core)
         if format == "links":
             return [

@@ -12,7 +12,7 @@ Every example targets a **scraper-friendly** site on purpose:
 | `news_article_scraper.py` | text.npr.org | NPR's text-only edition: tiny pages, stable markup, meant for low-bandwidth/accessibility | fetch, `render("text"/"markdown")`, `summary()`, select/attr, Reference resolve |
 | `product_catalog_crawler.py` | books.toscrape.com | a sandbox built explicitly for scraping practice | `crawl`, `select_all`/`extract`/`project(Model)` |
 | `lazy_expression_extract.py` | quotes.toscrape.com | scraping sandbox | lazy `Expr`, `to_blob`/`from_blob`, `project(Model)`, pagination |
-| `sitemap_mapper.py` | webscraper.io | a scraping-tools company's own site (real `sitemap.xml`) | `sitemaps()` discovery, `sitemap()` map |
+| `sitemap_mapper.py` | webscraper.io | a scraping-tools company's own site (real `sitemap.xml`) | `discover_sitemaps()` + `sitemap()` map |
 | `live_browser_events.py` | quotes.toscrape.com/js | JS-rendered sandbox page | live browser render, `events`, `summary().runtime` |
 | `summary_llm_view.py` | mixed | — | `summary()` as an LLM's token-lean view of a page |
 | `error_handling.py` | httpbin.org (+ local guards) | httpbin exists to return chosen statuses/delays | structured errors, `optional=`, select-miss, SSRF/robots |

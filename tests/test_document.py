@@ -73,6 +73,25 @@ def test_select_missing_raises_unless_policy_returns():
     assert missing.root == doc.name or missing.root is None
 
 
+def test_empty_select_all_is_a_collection_not_a_bare_list():
+    # a select_all that matches nothing must still be a Collection, so the headline
+    # extract/project pattern doesn't AttributeError on a zero-match page.
+    from webclient.collection import Collection
+
+    from webclient import doc as ldoc  # the lazy authoring root
+
+    d = make_doc()
+    empty = d.select_all(".no-such-thing")
+    assert isinstance(empty, Collection) and len(empty) == 0
+    # the row-shaping ops apply (and yield []) instead of AttributeError-ing
+    assert empty.extract(t=ldoc.select(".title").text_content).project() == []
+
+
+def test_empty_links_is_a_collection():
+    doc = make_doc(content=b"<html><body><p>no links here</p></body></html>")
+    assert doc.links().project() == []  # Collection, not a bare list
+
+
 def test_select_miss_is_a_structured_webexception():
     # one `except WebException` now covers fetch failures AND selection misses,
     # and it stays a LookupError for back-compat.

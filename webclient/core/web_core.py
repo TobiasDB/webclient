@@ -49,6 +49,11 @@ class Backing:
     #: an async dispatcher they hand back an awaitable, so the async surface stub
     #: types them ``async def``. Everything else is in-memory (sync) either way.
     io: ClassVar[frozenset[str]] = frozenset()
+    #: ops that return a Collection of cores (e.g. ``select_all``): declared so the
+    #: eager surface wraps even an EMPTY result into a ``Collection`` (an empty list
+    #: has no member to detect), keeping the type honest so a downstream
+    #: ``.extract()/.project()`` never hits a bare ``list``.
+    collections: ClassVar[frozenset[str]] = frozenset()
     #: browser page scripts this backing wants installed on live pages (a
     #: ``clients.PageScript`` each -- ``init`` before nav / ``load`` after). The
     #: client gathers them (``WebClient._browser_scripts``) and the browser
@@ -94,6 +99,7 @@ class WebCore:
     _ops_memo: ClassVar["dict[str, Backing] | None"] = None
     _prop_ops_memo: ClassVar["dict[str, Backing] | None"] = None
     _io_ops_memo: ClassVar["frozenset[str] | None"] = None
+    _collection_ops_memo: ClassVar["frozenset[str] | None"] = None
 
     # -- choose / capabilities ----------------------------------------------
     def use(self, backing: "Backing") -> Self:
@@ -340,15 +346,18 @@ class WebCore:
                 if is_prop or is_call:
                     if self._dispatch_mode() == "remote" and self._goes_remote(name):
                         return self._remote_call(name, is_prop)
+                    is_coll = name in cls.collection_ops()
                     if is_prop:
-                        return _wrap_result(self.dispatch(name))
+                        return _wrap_result(self.dispatch(name), self, is_coll)
 
                     def _call(*args: Any, **kwargs: Any) -> Any:
                         # an eager op is already materialised, so the lazy
                         # recorder's per-call ``_collect=True`` escape hatch is a
                         # no-op here (drop it before it reaches the backing).
                         kwargs.pop("_collect", None)
-                        return _wrap_result(self.dispatch(name, *args, **kwargs))
+                        return _wrap_result(
+                            self.dispatch(name, *args, **kwargs), self, is_coll
+                        )
 
                     return _call
             # delegate to pydantic's __getattr__ (private attrs); it is a runtime
@@ -387,6 +396,16 @@ class WebCore:
         return cast("dict[str, Backing]", memo)
 
     @classmethod
+    def collection_ops(cls) -> frozenset[str]:
+        """Ops that return a Collection of cores (union of the backings'
+        ``collections`` sets) -- used to force-wrap an empty result."""
+        memo = cls.__dict__.get("_collection_ops_memo")
+        if memo is None:
+            memo = frozenset().union(*(b.collections for b in cls.BACKINGS)) if cls.BACKINGS else frozenset()
+            cls._collection_ops_memo = memo
+        return cast("frozenset[str]", memo)
+
+    @classmethod
     def io_ops(cls) -> frozenset[str]:
         """The call ops that cross the IO bridge (awaitable under an async
         dispatcher) -- the union of the backings' ``io`` sets."""
@@ -401,16 +420,25 @@ class WebCore:
         return cast("frozenset[str]", memo)
 
 
-def _wrap_result(value: Any) -> Any:
+def _wrap_result(value: Any, owner: Any = None, force_collection: bool = False) -> Any:
     """Present a dispatch result as an eager value: a list of cores becomes a
     ``Collection`` (so the row-shaping ops apply); a single core is already its
-    own surface; anything else (a ``Field``/scalar) passes through."""
+    own surface; anything else (a ``Field``/scalar) passes through. ``force_collection``
+    wraps even an EMPTY list (a collection op that matched nothing), deriving the
+    client/root from ``owner`` since there is no member to read them from -- so a
+    downstream ``.extract()/.project()`` never hits a bare ``list``."""
     if isinstance(value, (list, tuple)):
         first = next((v for v in value if isinstance(v, WebCore)), None)
         if first is not None:  # derive owner/root from a real core, not value[0]
-            owner = getattr(first, "_client", None)
+            client = getattr(first, "_client", None)
             root = getattr(first, "root", "") or getattr(first, "name", "")
-            return Collection(list(value), client=owner, root=root)
+            return Collection(list(value), client=client, root=root)
+        if force_collection:  # an empty collection result -> an empty Collection
+            # the client must be the ENGINE (has ``loop``): the owner itself if it is
+            # a client, else the owner's bound client (never a Document).
+            client = owner if hasattr(owner, "loop") else getattr(owner, "_client", None)
+            root = getattr(owner, "name", "") or getattr(owner, "root", "")
+            return Collection(list(value), client=client, root=root)
     return value
 
 

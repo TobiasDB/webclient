@@ -98,6 +98,7 @@ class LiveBacking(Backing):
     provides = frozenset(
         {"click", "write", "wait_for", "select", "select_all", "evaluate", "screenshot"}
     )
+    collections = frozenset({"select_all"})
     props = frozenset({"dom_mutations", "console"})
     #: the always-IO browser interactions -> awaitable under async. ``select`` /
     #: ``select_all`` are omitted: on a *static* document (the common case) they

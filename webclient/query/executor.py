@@ -235,8 +235,9 @@ async def astream(
     fan-out then runs as-completed (``fan_out_stream``, bounded by the pool) and
     each row/element is yielded the moment its element finishes -- nothing is
     materialised first. Two tail shapes stream: a terminal ``project()`` (rows,
-    optionally preceded by ``extract``/``filter``) and a terminal element op
-    (e.g. ``.text_content``). Any other plan falls back to evaluate-then-yield.
+    optionally preceded by ``extract``/``filter``) and a terminal element CALL op
+    (e.g. ``.summary()``/``.attr(...)``). Any other plan falls back to
+    evaluate-then-yield.
     """
     from ..collection import Collection
 

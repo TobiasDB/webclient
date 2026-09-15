@@ -1,4 +1,4 @@
-"""SitemapBacking: the client's ``sitemaps`` verb -- discover a site's real
+"""SitemapBacking: the client's ``discover_sitemaps`` verb -- discover a site's real
 ``sitemap.xml`` URLs.
 
 Built on the interface (``core.afetch`` + ``core.ref``), like ``search`` and
@@ -67,6 +67,7 @@ class SitemapBacking(Backing):
     """The client's ``discover_sitemaps`` verb: discover a site's sitemap URLs."""
 
     provides = frozenset({"discover_sitemaps"})
+    collections = frozenset({"discover_sitemaps"})
     io = frozenset({"discover_sitemaps"})  # IO op: the interface bridges it (dispatch)
     gate = "ok"
 

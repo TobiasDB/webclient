@@ -36,6 +36,7 @@ class JsonBacking(Backing):
     sub-value; ``attr('value')`` / ``text_content`` read it."""
 
     provides = frozenset({"select", "select_all", "attr", "render", "elements"})
+    collections = frozenset({"select_all"})
     props = frozenset({"text_content"})
     gate = "tree"
 
