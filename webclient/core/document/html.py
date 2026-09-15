@@ -4,6 +4,7 @@ markdown / text / elements / links render helpers -- all html-only."""
 from __future__ import annotations
 
 import copy
+import re
 from typing import TYPE_CHECKING, Any, Literal, overload
 from urllib.parse import urljoin
 
@@ -41,13 +42,48 @@ def tree(core: "Document") -> Any:
 
         raw = core.content or b""
         if core.kind == "xml":
+            # libxml2 reads the in-document ``<?xml encoding?>`` declaration natively
+            # from the bytes (namespaces/CDATA preserved).
             parsed = etree.fromstring(
                 raw or b"<root/>", parser=etree.XMLParser(recover=True)
             )
             core._tree = parsed if parsed is not None else etree.fromstring(b"<root/>")
         else:
-            core._tree = _lh.fromstring(raw or b"<html></html>")
+            # decode with the right charset, then hand lxml a str -- so a Python codec
+            # name (``latin-1``/``windows-1251``/``shift_jis``) that libxml2's own
+            # parser would reject still works.
+            core._tree = _lh.fromstring(_html_text(core, raw) or "<html></html>")
     return core._tree
+
+
+_CHARSET_RE = re.compile(rb"""(?:charset|encoding)\s*=\s*["']?\s*([A-Za-z0-9_\-]+)""", re.I)
+
+
+def _sniff_charset(raw: bytes) -> str | None:
+    """The in-document charset from a ``<meta>`` declaration or BOM in the first 2 KB,
+    else ``None``. Mirrors a browser's encoding prescan; only consulted when no HTTP
+    charset was sent."""
+    if raw[:3] == b"\xef\xbb\xbf":
+        return "utf-8"
+    m = _CHARSET_RE.search(raw[:2048])
+    return m.group(1).decode("ascii", "ignore") if m else None
+
+
+def _html_text(core: "Document", raw: bytes) -> str:
+    """Decode HTML bytes with the correct charset (WHATWG precedence: HTTP
+    ``Content-Type`` charset, else an in-document ``<meta charset>`` / BOM, else
+    utf-8 with a latin-1 fallback). Invalid/unknown charset names degrade, never
+    raise."""
+    enc = core.encoding or _sniff_charset(raw)
+    if enc:
+        try:
+            return raw.decode(enc, "replace")
+        except LookupError:
+            pass
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1", "replace")
 
 
 def _tag(el: Any) -> str:

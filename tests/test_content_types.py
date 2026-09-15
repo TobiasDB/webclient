@@ -72,6 +72,19 @@ def test_fetch_json_document(httpserver, wc):
     assert any(e.id == "items[0].n" and e.text == "1" for e in els)
 
 
+def test_json_attr_missing_key_is_a_miss_not_the_whole_node(wc, httpserver):
+    # json attr now honours optional/error and never silently returns the parent
+    # node on a missing key (unified with html attr).
+    from webclient import WebException
+
+    httpserver.expect_request("/j").respond_with_json({"product": {"name": "Widget"}})
+    node = wc.fetch(httpserver.url_for("/j")).select("product")
+    assert node.attr("name").get() == "Widget"  # present key
+    with pytest.raises(WebException):
+        node.attr("price")  # missing key raises (structured), not Field(whole node)
+    assert node.attr("price", optional=True).ok is False  # lenient -> not-ok
+
+
 def test_fetch_xml_document(httpserver, wc):
     rss = (
         b'<?xml version="1.0"?><rss><channel>'
@@ -109,6 +122,18 @@ def test_meta_charset_is_honoured_for_non_utf8(httpserver, wc):
     )
     httpserver.expect_request("/cp").respond_with_data(body, content_type="text/html")
     doc = wc.fetch(httpserver.url_for("/cp"))
+    assert "привет" in doc.select("p").text_content
+
+
+def test_http_charset_header_is_honoured(httpserver, wc):
+    # charset declared ONLY in the HTTP Content-Type (no in-document meta): the
+    # header is authoritative and must decode correctly (regression guard).
+    cyrillic = "привет".encode("windows-1251")
+    body = b"<html><body><p>" + cyrillic + b"</p></body></html>"
+    httpserver.expect_request("/hc").respond_with_data(
+        body, content_type="text/html; charset=windows-1251"
+    )
+    doc = wc.fetch(httpserver.url_for("/hc"))
     assert "привет" in doc.select("p").text_content
 
 

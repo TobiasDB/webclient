@@ -137,6 +137,11 @@ def _element_type(tp: Any) -> Any:
     return args[0] if args else Any
 
 
+def _is_optional(tp: Any) -> bool:
+    """Whether ``tp`` is a union that includes ``None`` (an ``X | None``)."""
+    return typing.get_origin(tp) in _UNION and type(None) in typing.get_args(tp)
+
+
 def _unwrap_union(tp: Any) -> Any:
     """A union -> its single non-None member (else ``Any``); a plain type passes."""
     if typing.get_origin(tp) in _UNION:
@@ -223,6 +228,11 @@ def _render(tp: Any, tier: str) -> str:
         return f"Field[{base}]" if sync else f"LazyField[{base}]"
     base = _name(inner)  # a plain scalar or a pydantic data model
     if sync:
+        # preserve optionality for a plain scalar value (e.g. text_content/title ->
+        # str | None), so the type doesn't lie on the lenient chain; a core return
+        # (Reference | None) is handled above and keeps its surface name.
+        if _is_optional(tp) and not _is_model(inner):
+            return f"{base} | None"
         return base
     if tier == "client":
         return f"Lazy[{base}]"

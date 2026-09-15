@@ -100,12 +100,20 @@ class JsonBacking(Backing):
     def attr(
         self, core: "Document", name: str, *, optional: bool = False, error: Any = None
     ) -> Any:
+        from ...errors import RAISE, current_policy, select_error
+
         if core._missing:
             return Field(None, ok=False)
         data = self._data(core)
-        if name != "value" and isinstance(data, dict) and name in data:
+        if name == "value":  # the node's own value
+            return Field(data)
+        if isinstance(data, dict) and name in data:
             return Field(data[name])
-        return Field(data)
+        # a missing key: same contract as html attr -- raise (structured) by default,
+        # a not-ok Field under optional / RETURN. (Never silently return the node.)
+        if not optional and (error or current_policy()) is RAISE:
+            raise select_error(f"no key {name!r}")
+        return Field(None, ok=False)
 
     def text_content(self, core: "Document") -> "str | None":
         if core._missing:

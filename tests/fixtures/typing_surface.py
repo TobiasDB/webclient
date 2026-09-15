@@ -83,7 +83,7 @@ _wc = WebClient()
 _page = _wc.fetch("https://e.com").collect()
 assert_type(_page, Document)
 assert_type(_page.select("a").select_all("li"), Collection[Document])
-assert_type(_page.text_content, str)  # an eager scalar is raw
+assert_type(_page.text_content, str | None)  # lenient miss -> None
 assert_type(_page.attr("href"), Reference)
 assert_type(_page.render("markdown"), str)
 assert_type(_page.render("elements"), list[Element])
@@ -118,11 +118,11 @@ assert_type(
 )
 assert_type(_wc.fetch("https://e.com").select(".t"), Document)
 assert_type(_wc.fetch("https://e.com").attr("href"), Reference)
-assert_type(_wc.fetch("https://e.com").text_content, str)
+assert_type(_wc.fetch("https://e.com").text_content, str | None)
 assert_type(_wc.fetch("https://e.com").collect(), Document)  # collect() is identity
 assert_type(_wc.ref("https://e.com").resolve(), Document)
 assert_type(
-    _wc.ref("https://e.com").resolve().select(".t").text_content, str
+    _wc.ref("https://e.com").resolve().select(".t").text_content, str | None
 )
 
 # -- .lazy: the batching/deferring recorder on the same client ---------------
@@ -144,7 +144,7 @@ async def _async_surface() -> None:
     assert_type(await _ac.summary("https://e.com"), Summary)
     assert_type(await _ac.ref("https://e.com").resolve(), AsyncDocument)
     _adoc = await _ac.fetch("https://e.com")
-    assert_type(_adoc.text_content, str)  # in-memory ops stay sync
+    assert_type(_adoc.text_content, str | None)  # in-memory ops stay sync
     assert_type(_adoc.select(".t"), AsyncDocument)
     assert_type(await _adoc.select("a").attr("href").resolve(), AsyncDocument)
     # deeper batching still available via .lazy plans
