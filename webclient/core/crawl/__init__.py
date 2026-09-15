@@ -37,6 +37,11 @@ class Crawl(WebCore, ICrawl):
     _client: "WebClient" = PrivateAttr(default=None)  # type: ignore[assignment]
     _seen: set[str] = PrivateAttr(default_factory=set)  # dedup ledger (canonical urls)
     _robots: dict[str, Any] = PrivateAttr(default_factory=dict)  # per-host RobotFileParser
+    #: serialises ``step`` rounds so a step's frontier-claim + page-budget + expansion
+    #: is atomic. Without it, concurrently-awaited steps (async mode) each read the
+    #: same ``len(pages)`` before appending, so each claims the full remaining budget
+    #: and ``max_pages`` is blown past. Lazily created on the crawl's own loop.
+    _step_lock: Any = PrivateAttr(default=None)  # asyncio.Lock (lazy, loop-bound)
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (CrawlBacking(),)
 

@@ -10,7 +10,8 @@ discovery -- so a crawl is one backing over existing cores.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import asyncio
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse, urlsplit
 
 from ..web_core import Backing
@@ -68,38 +69,52 @@ class CrawlBacking(Backing):
         """Fetch one round. ``select`` (a subset of ``frontier`` -- edges or their
         URLs) chooses which edges to expand; ``None`` takes the top-``width`` edges
         best-first (by keyword relevance in auto mode, else shallowest-first). Each
-        fetched page is summarised into ``pages`` and its links added to
-        ``frontier``. Returns the crawl (so ``crawl.step()`` chains/reads)."""
-        chosen = self._select(core, select)
-        # only take (and remove from the frontier) what the page budget allows, so a
-        # nearly-full budget doesn't silently discard the un-fetched chosen edges --
-        # they stay in the frontier for the next step.
-        room = max(0, core.max_pages - len(core.pages))
-        to_fetch = chosen[:room]
-        taken = {e.url for e in to_fetch}
-        core.frontier = [e for e in core.frontier if e.url not in taken]
-        for edge in to_fetch:
-            if core.obey_robots and not await self._allowed(core, edge.url):
-                continue
-            doc = await core._client.afetch(
-                core._client.ref(edge.url),
-                optional=True,
-                browser=core.browser,
-                resolve=core.resolve,
-            )
-            if not doc.ok:
-                continue
-            # expand the frontier BEFORE releasing the page (needs the DOM), then
-            # free the browser page -- its content is retained on the Document, so
-            # the crawl keeps the whole doc (extract facets/content from it later).
-            if edge.depth < core.max_depth and doc.kind in ("html", "xml"):
-                self._expand(core, doc, edge.depth + 1)
-            if core.browser and edge.depth < core.max_depth:
-                self._expand_xhr(core, doc, edge.depth + 1)
-            if core.browser:  # captured the render + its XHR events; free the page
-                await core._client._arelease(doc)  # (content kept; select in-memory)
-            core.pages.append(doc)
-        return core
+        fetched page is retained (as a Document) in ``pages`` and its links added to
+        ``frontier``. Returns the crawl (so ``crawl.step()`` chains/reads).
+
+        A per-crawl lock serialises rounds: the frontier-claim + page-budget +
+        expansion of one round runs atomically, so concurrently-awaited steps
+        (async mode) can't each claim the full remaining budget and blow past
+        ``max_pages`` -- each sees the previous round's appended pages first."""
+        async with self._lock(core):
+            chosen = self._select(core, select)
+            # only take (and remove from the frontier) what the page budget allows,
+            # so a nearly-full budget doesn't silently discard the un-fetched chosen
+            # edges -- they stay in the frontier for the next step.
+            room = max(0, core.max_pages - len(core.pages))
+            to_fetch = chosen[:room]
+            taken = {e.url for e in to_fetch}
+            core.frontier = [e for e in core.frontier if e.url not in taken]
+            for edge in to_fetch:
+                if core.obey_robots and not await self._allowed(core, edge.url):
+                    continue
+                doc = await core._client.afetch(
+                    core._client.ref(edge.url),
+                    optional=True,
+                    browser=core.browser,
+                    resolve=core.resolve,
+                )
+                if not doc.ok:
+                    continue
+                # expand the frontier BEFORE releasing the page (needs the DOM), then
+                # free the browser page -- its content is retained on the Document, so
+                # the crawl keeps the whole doc (extract facets/content from it later).
+                if edge.depth < core.max_depth and doc.kind in ("html", "xml"):
+                    self._expand(core, doc, edge.depth + 1)
+                if core.browser and edge.depth < core.max_depth:
+                    self._expand_xhr(core, doc, edge.depth + 1)
+                if core.browser:  # captured the render + its XHR events; free the page
+                    await core._client._arelease(doc)  # (content kept; select in-memory)
+                core.pages.append(doc)
+            return core
+
+    def _lock(self, core: "Crawl") -> "asyncio.Lock":
+        """The crawl's step lock, created lazily on its running loop. The check +
+        assign is synchronous (no await), so even the first two concurrent steps
+        agree on one lock rather than each minting its own."""
+        if core._step_lock is None:
+            core._step_lock = asyncio.Lock()
+        return cast("asyncio.Lock", core._step_lock)
 
     async def run(self, core: "Crawl") -> "Crawl":
         """Auto-drive: ``step`` (top-``width`` best-first) each round until

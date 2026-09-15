@@ -4,9 +4,11 @@ A small linked site is served locally (with a robots.txt), so the turn-based /
 auto / keyword / robots behaviour is exercised over the real fetch+parse path.
 """
 
+import asyncio
+
 import pytest
 
-from webclient import Crawl, Edge, WebClient
+from webclient import AsyncWebClient, Crawl, Edge, WebClient
 
 
 # a link-heavy site: the home links to many pages and each page links to many
@@ -450,6 +452,64 @@ def test_frontier_is_bounded_on_a_link_heavy_crawl(wc, linkfarm):
     # the cap keeps the frontier sorted best-first (it drops the low-scored tail)
     scores = [e.score for e in crawl.frontier]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_concurrent_steps_respect_max_pages(httpserver):
+    # a per-crawl lock serialises `step` rounds: concurrently-awaited steps (async
+    # mode) must not each read the same `len(pages)` and independently claim the
+    # full remaining budget -- doing so blows past `max_pages` (regression: 6
+    # gathered steps once fetched ~55 pages against a budget of 10).
+    n = 60
+    for i in range(n):
+        httpserver.expect_request(f"/p{i}").respond_with_data(
+            f"<html><body>page {i}</body></html>", content_type="text/html"
+        )
+    home = "".join(f'<a href="/p{i}">P{i}</a>' for i in range(n))
+    httpserver.expect_request("/").respond_with_data(
+        f"<html><body>{home}</body></html>", content_type="text/html"
+    )
+    url = httpserver.url_for("/")
+
+    async def main():
+        async with AsyncWebClient() as ac:
+            crawl = ac.crawl(
+                url, auto=True, max_pages=10, browser=False,
+                obey_robots=False, width=10, depth=2,
+            )
+            async with crawl:
+                await crawl.step()  # seed -> a large frontier
+                # fire several concurrent rounds at once
+                await asyncio.gather(*[crawl.step() for _ in range(6)])
+            return len(crawl.pages)
+
+    assert asyncio.run(main()) == 10  # the budget held under concurrency
+
+
+def test_browser_crawl_releases_every_page(httpserver, wc):
+    # a browser-backed crawl leases a page per fetched Document; each must be
+    # released after content capture, so the pool's free-page count is unchanged
+    # after the crawl and `max_pages` still stops it (no lease leak, bound held).
+    pages = {
+        "/": '<a href="/a">A</a> <a href="/b">B</a> <a href="/c">C</a>',
+        "/a": '<a href="/d">D</a>',
+        "/b": "leaf b",
+        "/c": "leaf c",
+        "/d": "leaf d",
+    }
+    for path, body in pages.items():
+        httpserver.expect_request(path).respond_with_data(
+            f"<html><body>{body}</body></html>", content_type="text/html"
+        )
+    before = wc.pool.stats()
+    with wc.crawl(
+        httpserver.url_for("/"), auto=True, max_pages=3, browser=True,
+        obey_robots=False, width=5, depth=3,
+    ) as crawl:
+        crawl.run()
+    after = wc.pool.stats()
+    assert len(crawl.pages) <= 3  # the page budget stopped it
+    assert crawl.pages  # it did render some pages via the browser
+    assert after.pages_free == before.pages_free  # no leaked page lease
 
 
 def test_optional_browser_render_failure_is_swallowed(wc, monkeypatch):
