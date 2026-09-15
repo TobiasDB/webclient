@@ -143,6 +143,49 @@ def test_runtime_facet_reads_captured_browser_events():
     assert doc.dispatch("summary").runtime is not None
 
 
+def test_spa_detected_from_same_origin_xhr_without_a_known_framework():
+    # a client-composed page with no recognised framework marker (e.g. Adobe Edge
+    # Delivery) is still a SPA: it fetches its own content from its own origin.
+    # Regression: this used to read is_spa=False (only framework/mutations counted).
+    from webclient.core.document import Document
+    from webclient.core.document.live import network_event
+
+    doc = Document(
+        kind="html",
+        url="https://news.acme.com/",
+        content=b"<html><body><div><script src='/scripts/x.js'></script></div></body></html>",
+        status_code=200,
+    )
+    doc._events = [
+        network_event("GET", "https://news.acme.com/blocks/hero.plain.html", "fetch", doc),
+        network_event("GET", "https://news.acme.com/placeholders.json", "fetch", doc),
+        network_event("GET", "https://www.google-analytics.com/g/collect", "xhr", doc),
+    ]
+    r = doc.dispatch("runtime")
+    assert r.framework is None  # no known framework marker
+    assert r.is_spa is True  # ...but two same-origin content fetches -> SPA
+
+
+def test_third_party_only_xhr_does_not_flag_a_static_page_as_spa():
+    # a server-rendered page whose only XHR/fetch calls are third-party analytics
+    # is NOT a SPA (cross-origin beacons don't imply client composition).
+    from webclient.core.document import Document
+    from webclient.core.document.live import network_event
+
+    doc = Document(
+        kind="html",
+        url="https://blog.acme.com/post",
+        content=b"<html><body><article>Full server-rendered content here.</article></body></html>",
+        status_code=200,
+    )
+    doc._events = [
+        network_event("POST", "https://api.segment.io/v1/t", "fetch", doc),
+        network_event("GET", "https://www.google-analytics.com/g/collect", "xhr", doc),
+    ]
+    r = doc.dispatch("runtime")
+    assert r.is_spa is False  # only cross-origin analytics -> still server-rendered
+
+
 def test_metadata_and_structure_absent_on_json(httpserver):
     httpserver.expect_request("/j").respond_with_json({"a": 1})
     with WebClient() as wc:

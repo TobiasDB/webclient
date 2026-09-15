@@ -46,7 +46,38 @@ _FRAMEWORKS = (
     ("angular", "ng-version"),
     ("vue", "data-v-"),
     ("svelte", "svelte-"),
+    ("gatsby", "___gatsby"),
+    ("remix", "__remixContext"),
+    ("astro", "astro-island"),
+    ("aem-edge", "window.hlx"),  # Adobe Edge Delivery / Helix / Franklin
+    ("aem-edge", "/scripts/aem.js"),
+    ("aem-edge", "/scripts/scripts.js"),
 )
+
+#: generic client-hydration structural markers -> a Single-Page-App even when no
+#: named framework matched (an SPA root container the JS mounts into, a serialised
+#: initial-state blob, or the block-status attributes Adobe Edge Delivery sets).
+_SPA_MARKERS = (
+    'id="root"',
+    'id="app"',
+    'id="__next"',
+    'id="__nuxt"',
+    "data-server-rendered",
+    "__INITIAL_STATE__",
+    "__APOLLO_STATE__",
+    "__PRELOADED_STATE__",
+    "data-block-status",
+    "data-section-status",
+)
+
+#: how many *same-origin* content XHR/fetch requests a render must make before the
+#: page is judged client-composed (a Single-Page-App). A server-rendered page ships
+#: its content in the HTML and fetches at most a beacon or two; a client-composed
+#: one (React/Next hydration, Adobe Edge Delivery blocks, …) fetches its own
+#: fragments/data from its own origin -- e.g. news.adobe.com pulls ~9. Third-party
+#: analytics/ad calls don't count (they are cross-origin), so this rarely mislabels
+#: a plain SSR page.
+_SPA_XHR_MIN = 2
 
 
 def _cdn(h: dict[str, str]) -> str | None:
@@ -265,22 +296,34 @@ class RuntimeBacking(Backing):
         mutations = [e for e in core._events if isinstance(e, DOMUpdateEvent)]
         html = (core.content or b"").decode(core.encoding or "utf-8", "replace")
         framework = _framework(html)
+        endpoints = [
+            XhrCall(
+                method=(
+                    str(e.request.method).upper() if e.request is not None else "GET"
+                ),
+                url=str(e.request.dispatch("url")) if e.request is not None else "",
+            )
+            for e in xhr
+        ]
+        # client-composition signal: how many of the page's XHR/fetch calls hit its
+        # OWN origin (fetching content/fragments, as an SPA does) vs third-party
+        # analytics/ads (which don't imply an SPA).
+        page_host = (urlparse(core.final_url or core.url).hostname or "").lower()
+        same_origin_xhr = sum(
+            1 for c in endpoints if (urlparse(c.url).hostname or "").lower() == page_host
+        )
+        is_spa = (
+            framework is not None  # a known JS framework / Edge-Delivery marker
+            or bool(mutations)  # DOM changed after the initial render
+            or any(m in html for m in _SPA_MARKERS)  # a hydration-root / state blob
+            or same_origin_xhr >= _SPA_XHR_MIN  # composes itself from its own origin
+        )
         return Runtime(
-            is_spa=framework is not None or bool(mutations),
+            is_spa=is_spa,
             framework=framework,
             uses_xhr=any(e.resource_type == "xhr" for e in xhr),
             uses_fetch=any(e.resource_type == "fetch" for e in xhr),
-            xhr_endpoints=[
-                XhrCall(
-                    method=(
-                        str(e.request.method).upper()
-                        if e.request is not None
-                        else "GET"
-                    ),
-                    url=str(e.request.dispatch("url")) if e.request is not None else "",
-                )
-                for e in xhr
-            ],
+            xhr_endpoints=endpoints,
             dynamic_elements=sorted(
                 {f"{e.kind}:{e.selector}" if e.selector else e.kind for e in mutations}
             ),
