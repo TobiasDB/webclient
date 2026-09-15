@@ -656,6 +656,18 @@ class WebClient(WebCore, IWebClient):
                 escalation=["browser"],
             )
             self._register(doc, ref)
+            # a browser render is a navigation too: emit the NavigationEvent the
+            # static path emits (via ``_capture``), so ``doc.events`` is populated
+            # for a browser fetch and static/browser parity holds. Navigation first,
+            # then the load-time console/network events ``on_load`` appends.
+            nav = NavigationEvent(
+                request=ref,
+                status_code=doc.status_code,
+                document_id=doc.id,
+                source="core-browser",
+            )
+            self.bus.publish(nav)
+            doc._events.append(nav)
             for backing in doc.choose():  # backings shape the load into events
                 backing.on_load(doc, result)
             return doc

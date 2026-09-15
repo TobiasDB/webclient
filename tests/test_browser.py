@@ -48,6 +48,17 @@ def test_browser_fetch_returns_live_document(app):
     assert app.select('//div[@id="c2"]/h2').text_content == "Card Two"  # xpath
 
 
+def test_browser_render_emits_a_navigation_event(app):
+    # parity with the static path: a browser render records a NavigationEvent, so
+    # doc.events is populated even for a page that issues no XHR/console output.
+    from webclient import NavigationEvent
+
+    navs = app.events_of(NavigationEvent)
+    assert len(navs) == 1
+    assert navs[0].status_code == 200 and navs[0].source == "core-browser"
+    assert navs[0].document_id == app.id
+
+
 def test_click_mutates_dom_and_records_everything(app):
     app.click("#c1 button")
     app.wait_for(".added", timeout=5.0)
