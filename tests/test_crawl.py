@@ -111,6 +111,35 @@ def test_crawl_chooses_which_facets_each_page_carries(wc, site):
     assert all(p.structure is None and p.metadata is None for p in crawl.pages)
 
 
+def test_sitemaps_discovers_urls_from_robots_and_sitemap_xml(wc, httpserver):
+    # robots.txt points at a sitemap index; the index points at a child sitemap
+    # whose urlset lists the real pages.
+    base = httpserver.url_for("/").rstrip("/")
+    httpserver.expect_request("/robots.txt").respond_with_data(
+        f"User-agent: *\nSitemap: {base}/sitemap_index.xml\n", content_type="text/plain"
+    )
+    httpserver.expect_request("/sitemap_index.xml").respond_with_data(
+        '<?xml version="1.0"?>'
+        '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f"<sitemap><loc>{base}/pages.xml</loc></sitemap></sitemapindex>",
+        content_type="application/xml",
+    )
+    httpserver.expect_request("/pages.xml").respond_with_data(
+        '<?xml version="1.0"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f"<url><loc>{base}/a</loc></url><url><loc>{base}/b</loc></url></urlset>",
+        content_type="application/xml",
+    )
+    refs = wc.sitemaps(httpserver.url_for("/"))
+    urls = sorted(r.url for r in refs)
+    assert urls == [f"{base}/a", f"{base}/b"]
+
+
+def test_sitemaps_on_a_site_without_one_is_empty(wc, site):
+    # the `site` fixture has a robots.txt with no Sitemap: and no /sitemap.xml.
+    assert list(wc.sitemaps(site.url_for("/"))) == []
+
+
 def test_context_manager_closes_the_crawl(wc, site):
     with wc.crawl(site.url_for("/")) as crawl:
         assert crawl.status == "running"

@@ -32,6 +32,7 @@ from .fetch import FetchBacking
 from .loop import EngineLoop
 from .models import IWebClient
 from .search import SearchBacking
+from .sitemap import SitemapBacking
 
 if TYPE_CHECKING:
     from ..crawl import Crawl
@@ -228,7 +229,11 @@ class WebClient(WebCore, IWebClient):
             *(s._scope for s in self._sessions if s._scope is not None),
         ]
 
-    BACKINGS: ClassVar[tuple[Backing, ...]] = (FetchBacking(), SearchBacking())
+    BACKINGS: ClassVar[tuple[Backing, ...]] = (
+        FetchBacking(),
+        SearchBacking(),
+        SitemapBacking(),
+    )
 
     # -- loop / lifecycle ----------------------------------------------------
     def loop(self) -> EngineLoop:
@@ -570,13 +575,26 @@ class WebClient(WebCore, IWebClient):
         return core.bind(self)
 
     def sitemap(
-        self, url: Any, *, depth: int = 2, width: int = 20, max_pages: int = 1000
+        self,
+        url: Any,
+        *,
+        depth: int = 2,
+        width: int = 20,
+        max_pages: int = 1000,
+        use_sitemap_xml: bool = True,
     ) -> "Crawl":
         """Map a site: an eager, single-domain :meth:`crawl` in auto mode, run to
         completion. Returns the finished crawl -- a ``.summary()`` per page in
-        ``.pages`` plus the unresolved ``.frontier`` edges."""
+        ``.pages`` plus the unresolved ``.frontier`` edges. ``use_sitemap_xml``
+        (default on) first discovers the site's real ``sitemap.xml`` URLs
+        (:meth:`sitemaps`) and seeds the frontier with them, so a declared sitemap
+        is honoured; it still link-crawls to fill in whatever the sitemap omits."""
+        seeds: list[Any] = [url]
+        if use_sitemap_xml:
+            discovered = self.dispatch("sitemaps", url)
+            seeds += [r.url for r in discovered]
         return self.crawl(
-            url, auto=True, depth=depth, width=width, max_pages=max_pages
+            seeds, auto=True, depth=depth, width=width, max_pages=max_pages
         ).run()
 
     # -- live / browser ------------------------------------------------------

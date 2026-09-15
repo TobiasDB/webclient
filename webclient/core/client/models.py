@@ -16,9 +16,10 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
+    from ...collection import Collection  # noqa: F401  (sitemaps -> Collection)
     from ..document import Document  # noqa: F401  (fetch -> Document)
     from ..document.models import Summary  # noqa: F401  (summary -> Summary)
-    from ..reference import Reference  # noqa: F401  (ref -> Reference)
+    from ..reference import Reference  # noqa: F401  (ref/sitemaps -> Reference)
 
 
 class SearchResult(BaseModel):
@@ -53,6 +54,7 @@ class IWebClient(BaseModel):
         def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ..., **kw: Any) -> "Document": ...
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "Reference": ...
         def search(self, query: str, *, limit: int = ..., endpoint: str | None = ...) -> "list[SearchResult]": ...
+        def sitemaps(self, url: Any, *, limit: int = ...) -> "Collection[Reference]": ...
         def summary(self, url: Any, *include: str, **kw: Any) -> "Summary": ...
         # fmt: on
         # >>> end generated <<<
