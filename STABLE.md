@@ -3,10 +3,10 @@
 The last commit whose full gate is green (`gen_stubs --check`, `mypy --strict`,
 `pyright`, `pytest`, `demo.py`). Roll back here if autonomous work broke something:
 
-    git reset --hard f721cdac4508f2d18b435ca30e56228ef35b0ee0
+    git reset --hard dc50be5cd6f8ece8a7e27d3805057f384ef7642c
 
-- **commit:** `f721cdac4508f2d18b435ca30e56228ef35b0ee0`
-- **subject:** Content-type handling: sniff tests + Reference.expect hint
+- **commit:** `dc50be5cd6f8ece8a7e27d3805057f384ef7642c`
+- **subject:** Review-driven fixes: blob=JSON, remote parity, error contract, crawl/probe/content correctness
 - **date:** 2026-09-15
 
 _Updated after each green milestone. 276 passed; verified against ~30 live real-site
