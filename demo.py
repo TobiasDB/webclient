@@ -168,9 +168,9 @@ def main() -> None:
         wc.bus.subscribe("network", _on_network)
 
         # [M2] Fetch through a redirect; loud by default, optional=True lenient.
-        shop = wc.ref(f"{base}/old").resolve().collect()
+        shop = wc.ref(f"{base}/old").resolve()
         print("final url:  ", shop.final_url)
-        missing = wc.ref(f"{base}/nope").resolve(error=RETURN).collect()
+        missing = wc.ref(f"{base}/nope").resolve(error=RETURN)
         print("optional:   ", missing.status_code, "ok:", missing.ok)
 
         # [M2] Search: a client verb returning structured hits (title/url/desc),
@@ -266,13 +266,13 @@ def main() -> None:
         #      ttl'd lifecycle. Cookies set by responses persist; sessions
         #      are isolated from each other.
         session = wc.session(ttl=300, headers={"x-app": "demo"})
-        session.ref(f"{base}/login").resolve().collect()
+        session.ref(f"{base}/login").resolve()
         print("session:    ", session.status, "cookies:", session.cookies)
 
         # [M4] browser=True -> a LiveDocument backed by a real page. Actions
         #      auto-wait and are recorded; the DOM/console/network are
         #      captured onto the document as events.
-        live = wc.ref(f"{base}/app").resolve(browser=True).collect()
+        live = wc.ref(f"{base}/app").resolve(browser=True)
         live.write("#qty", "3").click("#add")
         live.wait_for("#cart li", timeout=5.0)
         print("live dom:   ", live.select("#cart li").text_content)
@@ -403,7 +403,7 @@ def main() -> None:
             )
 
         # [P3] Eager and lazy agree: the same extract on a resolved page.
-        page = wc.ref(f"{base}/").resolve().collect()
+        page = wc.ref(f"{base}/").resolve()
         cards = page.select_all(".card").extract(
             title=wq.doc.select(".title").text_content
         )

@@ -218,9 +218,12 @@ class WebCore:
 
     # -- realization: an eager value is already realised -----------------------
     def collect(self, context: Any = None) -> "Self":
-        """An eager surface is already materialised, so ``collect`` is identity
-        (the lazy recorder's ``collect`` runs the plan; this is the eager twin so
-        the same ``x.collect()`` works whether ``x`` is eager or lazy)."""
+        """Identity: an eager surface is ALREADY the materialised value, so it needs
+        no ``collect()`` -- ``wc.fetch(url)`` / ``ref.resolve()`` hand back a ready
+        ``Document`` directly. ``collect()`` is what runs a *lazy* plan (a ``.lazy``
+        chain or a ``wq`` expression); this eager twin exists only so mode-agnostic
+        code can call ``x.collect()`` whether ``x`` is eager or lazy. Don't append it
+        to an eager chain by habit -- it does nothing there."""
         return self
 
     async def acollect(self, context: Any = None) -> "Self":
