@@ -43,7 +43,7 @@ class Crawl(WebCore, ICrawl):
     def bind(self, client: "WebClient") -> "Crawl":
         """Share ``client``'s engine (its ``afetch``/pool drive the crawl) and seed
         the dedup ledger (canonicalised) from the initial frontier."""
-        from .backing import _canon
+        from .canon import _canon
 
         self._client = client
         # dedup the seed frontier itself by canonical key (not just the ledger), so

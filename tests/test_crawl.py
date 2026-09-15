@@ -278,7 +278,7 @@ def scored_site(httpserver):
 def test_canon_collapses_locale_and_pagination_variants():
     # dedup folds locale prefixes/subdomains, first-page pagination, and locale
     # params to one key, so a page's many variants aren't all crawled.
-    from webclient.core.crawl.backing import _canon
+    from webclient.core.crawl.canon import _canon
 
     base = _canon("https://site.com/news")
     for variant in [
@@ -298,7 +298,7 @@ def test_canon_collapses_locale_and_pagination_variants():
 
 def test_scope_accepts_same_registrable_domain_subdomains(wc, httpserver):
     # same-site subdomains (news./blog.) are in scope; a different domain is not.
-    from webclient.core.crawl.backing import _registrable
+    from webclient.core.crawl.canon import _registrable
 
     assert _registrable("news.acme.com") == _registrable("blog.acme.com") == "acme.com"
     assert _registrable("acme.com") == "acme.com"
@@ -311,7 +311,7 @@ def test_scope_accepts_same_registrable_domain_subdomains(wc, httpserver):
 
 def test_malformed_port_url_does_not_crash_a_crawl(wc, httpserver):
     # a bad/out-of-range port in a scraped href must not abort the whole step.
-    from webclient.core.crawl.backing import _canon
+    from webclient.core.crawl.canon import _canon
 
     for bad in ("https://h:99999/p", "https://h:abc/p", "https://h:-1/p"):
         assert isinstance(_canon(bad), str)  # no ValueError
