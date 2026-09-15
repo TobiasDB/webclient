@@ -92,6 +92,13 @@ def network_event(method: str, url: str, resource_type: str, doc: Any) -> Networ
     )
 
 
+def _html() -> Any:
+    """The (stateless) HTML backing, for an in-memory select on captured content."""
+    from .html import HtmlBacking
+
+    return HtmlBacking()
+
+
 class LiveBacking(Backing):
     """Interaction + live selection on a browser page (capability ``page``)."""
 
@@ -204,8 +211,13 @@ class LiveBacking(Backing):
         return core
 
     # ``select`` / ``select_all`` are NOT ``io``: on a static document (the common
-    # case) they are in-memory (HtmlBacking). On a live page they bridge on the
-    # engine loop here (a live+async selection is an untested edge).
+    # case) they are in-memory (HtmlBacking). On a live page they bridge to the
+    # live DOM off the engine loop -- BUT when the caller is already ON the engine
+    # loop (a plan run by the evaluator, e.g. ``wc.execute`` of a
+    # ``resolve(browser="always").select(...)`` plan) that sync bridge is illegal
+    # (it would block the loop on itself). There we fall back to an in-memory select
+    # on the captured rendered content -- correct for a resolve->select plan, and it
+    # keeps the page for any live interaction ops (which are ``io`` and await fine).
     def select(
         self,
         core: Any,
@@ -217,6 +229,10 @@ class LiveBacking(Backing):
     ) -> "Document":
         from ...errors import RETURN
 
+        if self._loop(core).on_loop_thread():
+            return _html().select(
+                core, selector, index=index, optional=optional, error=error
+            )
         return cast(
             "Document",
             self._loop(core).run(
@@ -225,6 +241,8 @@ class LiveBacking(Backing):
         )
 
     def select_all(self, core: Any, selector: str) -> "list[Document]":
+        if self._loop(core).on_loop_thread():
+            return _html().select_all(core, selector)
         return cast(
             "list[Document]",
             self._loop(core).run(self._aselect_all(core, selector)),

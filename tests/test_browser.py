@@ -274,3 +274,31 @@ def test_injected_scripts_run_on_live_pages(httpserver):
             assert doc.evaluate("() => window.__wc_marker") == "m"
         finally:
             c.release(doc)
+
+
+def test_execute_plan_with_browser_always_selects_on_engine_loop(httpserver, wc):
+    # Regression: a plan run by wc.execute resolves on the ENGINE loop, so a live
+    # doc's select/select_all (which normally sync-bridge to the page) must not try
+    # to bridge from the engine loop thread -- they fall back to an in-memory select
+    # on the captured rendered content. (Was: RuntimeError "sync facade method
+    # called from the engine loop thread".)
+    from webclient import wq
+
+    page = (
+        '<html><body><h1 id="h">Hi</h1>'
+        '<div class="card"><span class="t">A</span></div>'
+        '<div class="card"><span class="t">B</span></div></body></html>'
+    )
+    httpserver.expect_request("/e").respond_with_data(page, content_type="text/html")
+    url = httpserver.url_for("/e")
+
+    single = wq.ref.resolve(browser="always").select("#h").text_content
+    assert wc.execute(single, wc.ref(url)).get() == "Hi"
+
+    rows = (
+        wq.ref.resolve(browser="always")
+        .select_all(".card")
+        .extract(t=wq.doc.select(".t").text_content)
+        .project()
+    )
+    assert wc.execute(rows, wc.ref(url)) == [{"t": "A"}, {"t": "B"}]
