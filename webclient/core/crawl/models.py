@@ -20,13 +20,18 @@ if TYPE_CHECKING:
     from . import Crawl  # noqa: F401  (step/run return the crawl itself)
 
 
-#: the lean default set of summary facets a crawl carries per page when ``facets``
-#: is not set. Running *every* applicable facet on every fetched page is wasteful
-#: at crawl scale (structure/runtime/probe add cssselect + model-build work); the
-#: default keeps the essentials -- transport (url/status/kind) and metadata
-#: (title/description/canonical). Pass ``facets=[...]`` to a crawl to widen or
-#: narrow it (``facets=list(FACETS)`` for the full summary).
-DEFAULT_FACETS = ("transport", "metadata")
+#: the default set of summary facets a crawl carries per page when ``facets`` is
+#: not set -- tuned for the crawl's main user, an LLM mapping a site and deciding
+#: which pages to read next. It carries the three facets that answer "is this page
+#: ok, what is it, and what's on it": transport (url/status/kind), metadata
+#: (title/description/canonical), and structure (headings/TOC, word count, links,
+#: forms, pagination). ``structure`` is nearly free here -- the crawl already parses
+#: every page's DOM to expand its links, so the facet just reads the cached tree.
+#: The browser-only facets (runtime/probe) are excluded: they only apply after a
+#: render/escalation, so on a static crawl they are always empty anyway. Pass
+#: ``facets=[...]`` to widen (``facets=list(FACETS)`` for everything, adding runtime
+#: on a browser crawl) or narrow it (``facets=["metadata"]`` for the leanest).
+DEFAULT_FACETS = ("transport", "metadata", "structure")
 
 
 class Edge(BaseModel):
@@ -86,7 +91,11 @@ class ICrawl(BaseModel):
                 url = t.final_url if t else "?"
                 code = t.status_code if t else "?"
                 title = pg.metadata.title if pg.metadata else None
-                lines.append(f"  [{code}] {url}" + (f" — {title}" if title else ""))
+                # a compact substance hint from the structure facet (word count),
+                # so the scan shows which pages carry real content vs. thin ones.
+                wc = pg.structure.word_count if pg.structure else None
+                tail = (f" — {title}" if title else "") + (f" ({wc}w)" if wc else "")
+                lines.append(f"  [{code}] {url}{tail}")
             if len(self.pages) > 10:
                 lines.append(f"  … +{len(self.pages) - 10} more")
         if self.frontier:

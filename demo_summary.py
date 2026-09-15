@@ -172,7 +172,7 @@ def main() -> None:
         call('doc.summary("transport", "metadata", "structure")')
         out(doc.summary("transport", "metadata", "structure"))
         print()
-        print("    # a crawl carries this lean summary per page; print() is the digest.")
+        print("    # this is the default a crawl carries per page; print() is the digest.")
 
         # 2 -------------------------------------------------------------------
         panel(

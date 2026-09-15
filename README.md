@@ -211,7 +211,10 @@ links sink. Set `browser=True` to render JS-heavy pages first (each load waits f
 the DOM to settle, so client-rendered links are captured); a browser crawl also
 adds the page's XHR/data-API endpoints to the frontier.
 
-Each page carries a lean default summary (`transport` + `metadata`); pass
+Each page carries a default summary tuned for site-mapping -- `transport` +
+`metadata` + `structure` (is it ok / what is it / what's on it); `structure` is
+free here since the crawl already parses each page to find links. The browser-only
+facets (`runtime`/`probe`) stay out unless you crawl with `browser=True`. Pass
 `facets=[...]` to widen or narrow it. `wc.discover_sitemaps(url)` discovers a site's real
 `sitemap.xml` URLs (robots `Sitemap:` directives, the well-known path, one level of
 `<sitemapindex>`); `wc.sitemap(url)` maps a site, seeding from that discovery.
