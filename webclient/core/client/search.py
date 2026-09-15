@@ -59,14 +59,17 @@ class SearchBacking(Backing):
         limit: int = 10,
         endpoint: str | None = None,
         optional: bool = False,
+        error: Any = None,
     ) -> "list[SearchResult]":
         """Search ``query`` and return up to ``limit`` structured hits (title / url
-        / description). ``optional=True`` returns ``[]`` if the results page itself
-        fails to fetch (instead of raising) -- the lenient spelling shared with the
-        other verbs. An IO op -- the interface bridges it (``dispatch``)."""
+        / description). ``optional=True`` (or ``error=RETURN``) returns ``[]`` if the
+        results page itself fails to fetch (instead of raising). An IO op -- the
+        interface bridges it (``dispatch``)."""
+        from ...errors import lenient
+
         ref = from_url(endpoint or self.ENDPOINT, "get", params={"q": query})
         ref._client = core
-        doc = await core.afetch(ref, optional=optional)
+        doc = await core.afetch(ref, optional=lenient(optional, error))
         if not doc.ok:  # lenient: the results page failed -> no hits
             return []
         results: list[SearchResult] = []

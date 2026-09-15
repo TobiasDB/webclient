@@ -141,9 +141,13 @@ class LiveBacking(Backing):
         *,
         timeout: float | None = None,
         optional: bool = False,
+        error: Any = None,
     ) -> "Document":
+        from ...errors import lenient
+
         await self._aact(
-            core, "click", selector=selector, timeout=timeout, optional=optional
+            core, "click", selector=selector, timeout=timeout,
+            optional=lenient(optional, error),
         )
         return core
 
@@ -155,9 +159,13 @@ class LiveBacking(Backing):
         *,
         timeout: float | None = None,
         optional: bool = False,
+        error: Any = None,
     ) -> "Document":
+        from ...errors import lenient
+
         await self._aact(
-            core, "write", selector=selector, text=text, timeout=timeout, optional=optional
+            core, "write", selector=selector, text=text, timeout=timeout,
+            optional=lenient(optional, error),
         )
         return core
 
@@ -168,9 +176,11 @@ class LiveBacking(Backing):
         *,
         timeout: float | None = None,
         optional: bool = False,
+        error: Any = None,
     ) -> "Document":
-        from ...errors import select_error
+        from ...errors import lenient, select_error
 
+        optional = lenient(optional, error)
         try:
             await self._await_for(core, selector, timeout)
         except Exception as exc:  # a Playwright timeout -> structured miss (or lenient)

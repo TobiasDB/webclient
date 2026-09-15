@@ -84,7 +84,7 @@ if TYPE_CHECKING:
         def attr(self, name: Literal['href', 'src', 'action']) -> "AsyncReference": ...  # type: ignore[overload-overlap]
         @overload
         def attr(self, name: str, *, optional: bool = ..., error: Any = ...) -> "Field[str]": ...
-        async def click(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ...) -> "AsyncDocument": ...  # type: ignore[override]
+        async def click(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ..., error: Any = ...) -> "AsyncDocument": ...  # type: ignore[override]
         def elements(self) -> "list[Element]": ...
         async def evaluate(self, script: str) -> "Any": ...  # type: ignore[override]
         @overload
@@ -114,8 +114,8 @@ if TYPE_CHECKING:
         def summary(self, *include: str, exclude: Any = ...) -> "Summary": ...
         def text(self, *, main_content_only: bool = ...) -> "str": ...
         def transport(self) -> "Transport": ...
-        async def wait_for(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ...) -> "AsyncDocument": ...  # type: ignore[override]
-        async def write(self, selector: str, text: str, *, timeout: float | None = ..., optional: bool = ...) -> "AsyncDocument": ...  # type: ignore[override]
+        async def wait_for(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ..., error: Any = ...) -> "AsyncDocument": ...  # type: ignore[override]
+        async def write(self, selector: str, text: str, *, timeout: float | None = ..., optional: bool = ..., error: Any = ...) -> "AsyncDocument": ...  # type: ignore[override]
         # fmt: on
         # >>> end generated <<<
 
@@ -170,7 +170,7 @@ if TYPE_CHECKING:
         # fmt: off
         async def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., optional: bool = ..., error: Any = ..., **kw: Any) -> "AsyncDocument": ...  # type: ignore[override]
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "AsyncReference": ...
-        async def search(self, query: str, *, limit: int = ..., endpoint: str | None = ..., optional: bool = ...) -> "list[SearchResult]": ...  # type: ignore[override]
+        async def search(self, query: str, *, limit: int = ..., endpoint: str | None = ..., optional: bool = ..., error: Any = ...) -> "list[SearchResult]": ...  # type: ignore[override]
         async def sitemaps(self, url: Any, *, limit: int = ...) -> "Collection[AsyncReference]": ...  # type: ignore[override]
         async def summary(self, url: Any, *include: str, **kw: Any) -> "Summary": ...  # type: ignore[override]
         # fmt: on
