@@ -32,11 +32,14 @@ DEFAULT_FACETS = ("transport", "metadata")
 class Edge(BaseModel):
     """An unresolved frontier edge: a discovered-but-not-yet-fetched link. ``text``
     is the anchor text (the keyword-relevance signal); ``depth`` is its distance
-    from the seeds."""
+    from the seeds; ``score`` is a discovery-time importance (nav / "read more" /
+    article links score high, footer / legal / social / icon links low) -- the
+    frontier is kept sorted by it, so the useful links surface first."""
 
     url: str
     text: str = ""
     depth: int = 0
+    score: float = 0.0
 
 
 class ICrawl(BaseModel):

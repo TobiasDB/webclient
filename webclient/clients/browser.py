@@ -53,17 +53,52 @@ class BrowserClient(Client):
     def __init__(self, page: Any) -> None:
         self.page = page
 
+    async def _wait_stable(
+        self, page: Any, *, timeout: float = 8.0, quiet: float = 0.5, poll: float = 0.25
+    ) -> None:
+        """Wait for the DOM to settle so JS/lazy-loaded content is present before the
+        snapshot: first let the network go idle (bounded -- many sites never truly
+        idle), then poll the element count until it is unchanged for ``quiet`` seconds
+        (or ``timeout`` elapses). Returns early the moment it's stable, so a static
+        page costs almost nothing; a JS page waits just until it stops mutating."""
+        import time as _time
+
+        try:  # a bounded network-idle wait; ignore if it never idles
+            await page.wait_for_load_state("networkidle", timeout=min(timeout, 3.0) * 1000)
+        except Exception:
+            pass
+        deadline = _time.monotonic() + timeout
+        need = max(1, int(quiet / poll))
+        last, stable = -1, 0
+        while _time.monotonic() < deadline:
+            try:
+                count = await page.evaluate("() => document.getElementsByTagName('*').length")
+            except Exception:
+                return
+            if count == last:
+                stable += 1
+                if stable >= need:
+                    return
+            else:
+                last, stable = count, 0
+            await page.wait_for_timeout(poll * 1000)
+
     async def open(
         self,
         url: str,
         *,
         scripts: "tuple[PageScript, ...] | list[PageScript]" = (),
         replay: "list[dict[str, Any]]" = [],
+        wait_stable: bool = True,
     ) -> PageResult:
         """Navigate to ``url``, installing ``scripts`` by phase (``init`` before
         nav, ``load`` once after, ``drain`` after any replay), capturing console +
         network requests, and replaying any recorded actions. Returns the raw page
-        facts; the domain (document + events) is built by the caller."""
+        facts; the domain (document + events) is built by the caller.
+
+        ``wait_stable`` (default) waits for the DOM to settle after navigation, so
+        JS/lazy-loaded content (links, cards, …) is in the snapshot -- the fix for
+        a render that captured the shell before the page finished loading."""
         page = self.page
         for s in scripts:  # init scripts must be installed before navigation
             if s.phase == "init":
@@ -72,8 +107,10 @@ class BrowserClient(Client):
         page.on("console", lambda m: console.append((m.type, m.text)))
         network: list[tuple[str, str, str]] = []
         page.on("request", lambda r: network.append((r.method, r.url, r.resource_type)))
-        await page.goto(url)
-        # snapshot the load-time console/network (replay-time noise is discarded,
+        await page.goto(url, wait_until="domcontentloaded")
+        if wait_stable:  # let JS/lazy content load before snapshotting
+            await self._wait_stable(page)
+        # snapshot the settled console/network (replay-time noise is discarded,
         # like the drained DOM mutations)
         result = PageResult(
             page.url, (await page.content()).encode(), list(console), list(network)

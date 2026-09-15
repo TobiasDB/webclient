@@ -194,3 +194,83 @@ def test_context_manager_closes_the_crawl(wc, site):
     with wc.crawl(site.url_for("/")) as crawl:
         assert crawl.status == "running"
     assert crawl.status == "closed"  # aexit fired via the backing lifecycle
+
+
+# a page with the mix a real site has: a nav, an article "read more" link, a
+# footer full of legal/social links, and asset links (a logo image, a stylesheet).
+SCORED_PAGE = """
+<html><body>
+  <nav><a href="/products">Products</a><a href="/news">Newsroom</a></nav>
+  <main>
+    <article>
+      <a href="/news/2026/09/big-announcement-today">Read more</a>
+    </article>
+  </main>
+  <footer>
+    <a href="/privacy">Privacy Policy</a>
+    <a href="/terms">Terms of Use</a>
+    <a href="https://twitter.com/acme">Follow us</a>
+    <a href="/logo.png"><img src="/logo.png"></a>
+    <a href="/style.css">theme</a>
+  </footer>
+</body></html>
+"""
+
+
+@pytest.fixture
+def scored_site(httpserver):
+    httpserver.expect_request("/").respond_with_data(
+        SCORED_PAGE, content_type="text/html"
+    )
+    return httpserver
+
+
+def test_frontier_drops_resource_links(wc, scored_site):
+    # links to assets (a .png, a .css) are not crawlable pages -> filtered out.
+    with wc.crawl(scored_site.url_for("/")) as crawl:
+        crawl.step()
+    paths = [_path_of(e.url) for e in crawl.frontier]
+    assert "/logo.png" not in paths and "/style.css" not in paths
+    assert "/news" in paths  # real page links survive
+
+
+def test_frontier_scores_and_sorts_useful_links_first(wc, scored_site):
+    # the important links (article "read more", nav) must outrank the footer's
+    # legal + social links, and the frontier is sorted by that score by default.
+    with wc.crawl(scored_site.url_for("/")) as crawl:
+        crawl.step()
+    by_path = {_path_of(e.url): e for e in crawl.frontier}
+    read_more = by_path["/news/2026/09/big-announcement-today"]
+    privacy = by_path["/privacy"]
+    # the article link scores high; the legal footer link sinks below zero.
+    assert read_more.score > 1.0
+    assert privacy.score < 0
+    # the frontier is sorted best-first, so the useful link leads.
+    assert crawl.frontier[0].url == read_more.url
+    # scores are monotonically non-increasing across the frontier.
+    scores = [e.score for e in crawl.frontier]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_link_score_ranks_by_region_text_and_url_shape():
+    # the scorer itself: a "read more" article link in <main> beats a footer legal
+    # link beats a social widget beats a bare icon link.
+    from webclient.core.crawl.backing import CrawlBacking
+
+    b = CrawlBacking()
+    read_more = b._link_score(
+        "Read more", "https://s.example/news/2026/09/the-big-story", "main"
+    )
+    nav = b._link_score("Products", "https://s.example/products", "nav")
+    legal = b._link_score("Privacy Policy", "https://s.example/privacy", "footer")
+    social = b._link_score("", "https://twitter.com/acme", "footer")
+    icon = b._link_score("", "https://s.example/x", "footer")
+    assert read_more > nav > 0
+    assert legal < 0 and social < legal  # social widget is the worst
+    assert icon < 0
+
+
+def _path_of(url: str) -> str:
+    from urllib.parse import urlparse
+
+    return urlparse(url).path

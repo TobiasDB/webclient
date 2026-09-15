@@ -10,6 +10,7 @@ discovery -- so a crawl is one backing over existing cores.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
@@ -26,6 +27,139 @@ if TYPE_CHECKING:
 _TRACKING = frozenset(
     {"fbclid", "gclid", "gclsrc", "dclid", "msclkid", "mc_eid", "igshid"}
 )  # unambiguous analytics params; ``ref``/``ref_src`` are left in (can be meaningful)
+
+#: file extensions whose links are page *assets*, not crawlable documents -- an
+#: anchor pointing at one is dropped from the frontier (it is a resource to load,
+#: not a page to fetch and expand). XHR data-APIs (often ``.json``) are added by a
+#: different path (``_expand_xhr``) so they are deliberately not listed here.
+_RESOURCE_EXT = frozenset(
+    "css js mjs map "
+    "png jpg jpeg gif svg webp ico bmp avif tif tiff heic "
+    "woff woff2 ttf eot otf "
+    "mp4 webm mp3 wav ogg oga mov avi mkv m4a m4v flv "
+    "zip gz tgz tar rar 7z bz2 dmg exe pkg deb rpm apk msi".split()
+)
+
+#: region weights (a link inherits the importance of the page landmark it sits in):
+#: article/main content and nav links are what a crawl wants; footer / sidebar
+#: (legal, social, "more from us") links are noise, so they sink.
+_REGION_WEIGHT = {
+    "article": 1.2,
+    "main": 1.0,
+    "nav": 0.8,
+    "header": 0.2,
+    "aside": -0.6,
+    "footer": -1.2,
+}
+
+#: class / id landmark hints, checked (in order) when an ancestor has no landmark
+#: tag or ARIA role -- the first hit classifies the region.
+_REGION_HINTS = (
+    ("footer", "footer"),
+    ("masthead", "header"),
+    ("breadcrumb", "nav"),
+    ("menu", "nav"),
+    ("nav", "nav"),
+    ("sidebar", "aside"),
+)
+
+#: ARIA landmark roles -> region.
+_REGION_ROLES = {
+    "navigation": "nav",
+    "main": "main",
+    "article": "article",
+    "banner": "header",
+    "contentinfo": "footer",
+    "complementary": "aside",
+}
+
+#: call-to-action anchor text -- the "read more" / "continue reading" links the
+#: user specifically wants surfaced (a strong article signal).
+_CTA = (
+    "read more",
+    "read the",
+    "continue reading",
+    "learn more",
+    "view more",
+    "see more",
+    "full story",
+    "read full",
+    "more from",
+    "keep reading",
+)
+
+#: boilerplate anchor text / paths -- legal + housekeeping links that are almost
+#: never worth crawling; they sink to the bottom of the frontier.
+_BOILER = (
+    "privacy",
+    "terms",
+    "cookie",
+    "legal",
+    "accessibility",
+    "gdpr",
+    "do not sell",
+    "sitemap",
+    "trademark",
+)
+_BOILER_PATH = (
+    "/privacy",
+    "/terms",
+    "/legal",
+    "/cookie",
+    "/accessibility",
+    "/gdpr",
+)
+
+#: social / sharing hosts -- off-site widget links (share buttons, follow icons),
+#: not site content.
+_SOCIAL_HOSTS = frozenset(
+    {
+        "twitter.com",
+        "x.com",
+        "facebook.com",
+        "linkedin.com",
+        "instagram.com",
+        "youtube.com",
+        "youtu.be",
+        "pinterest.com",
+        "reddit.com",
+        "tiktok.com",
+        "threads.net",
+        "t.me",
+        "whatsapp.com",
+    }
+)
+
+#: editorial path segments (news / blog / story ...) -- a strong article signal.
+_EDITORIAL = (
+    "/news",
+    "/blog",
+    "/story",
+    "/stories",
+    "/article",
+    "/press",
+    "/post",
+    "/posts",
+    "/insight",
+    "/newsroom",
+)
+
+#: a dated permalink segment (``/2026/09/...``) -- reads like an article URL.
+_DATE_RE = re.compile(r"/(?:19|20)\d\d/")
+
+
+def _ext(path: str) -> str:
+    """The lowercased file extension of a URL path (``""`` if none)."""
+    last = path.rsplit("/", 1)[-1]
+    return last.rsplit(".", 1)[-1].lower() if "." in last else ""
+
+
+def _local_tag(node: Any) -> str:
+    """An lxml element's tag with any namespace stripped, lowercased."""
+    tag = getattr(node, "tag", None)
+    if not isinstance(tag, str):  # comments / PIs have callable tags
+        return ""
+    return tag.rsplit("}", 1)[-1].lower()
 
 
 def _fold_host(host: str) -> str:
@@ -144,18 +278,81 @@ class CrawlBacking(Backing):
         return ranked[: core.width]
 
     def _score(self, core: "Crawl", edge: Edge) -> float:
-        """Best-first relevance: keyword hits in the anchor text + URL (minus a
-        tiny depth penalty to break ties toward shallower pages). With no keywords
-        it degrades to shallowest-first (a breadth-first frontier)."""
-        if not core.keywords:
-            return float(-edge.depth)
-        blob = f"{edge.text} {edge.url}".lower()
-        return sum(blob.count(k) for k in core.keywords) - 0.001 * edge.depth
+        """Best-first relevance: the edge's discovery-time importance (nav / article
+        / "read more" high, footer / legal / social low) plus any keyword hits in
+        the anchor text + URL, minus a tiny depth penalty (ties break toward
+        shallower pages). With no keywords it is importance-first."""
+        base = edge.score - 0.01 * edge.depth
+        if core.keywords:
+            blob = f"{edge.text} {edge.url}".lower()
+            base += sum(blob.count(k) for k in core.keywords)
+        return base
 
-    def _add_edge(self, core: "Crawl", url: str, text: str, depth: int) -> None:
+    def _region(self, el: Any) -> str:
+        """Classify the page landmark an anchor sits in by walking its ancestors --
+        ``article`` / ``main`` / ``nav`` / ``header`` / ``footer`` / ``aside`` (or
+        ``""``) -- from the landmark tag, ARIA ``role``, then a class/id hint. The
+        nearest landmark wins, so a link's importance reflects where it lives."""
+        node, hops = el, 0
+        while node is not None and hops < 25:
+            tag = _local_tag(node)
+            if tag in _REGION_WEIGHT:
+                return tag
+            role = (node.get("role") or "").strip().lower()
+            if role in _REGION_ROLES:
+                return _REGION_ROLES[role]
+            hint = f"{node.get('class') or ''} {node.get('id') or ''}".lower()
+            if hint.strip():
+                for needle, region in _REGION_HINTS:
+                    if needle in hint:
+                        return region
+            node = node.getparent()
+            hops += 1
+        return ""
+
+    def _link_score(self, text: str, url: str, region: str) -> float:
+        """Discovery-time importance of a link: high for article / "read more" /
+        nav links, low for footer / legal / social / icon links. Combines the
+        anchor's region, its text quality, and URL shape into one score -- the
+        frontier is sorted by it so the useful links surface first."""
+        t = " ".join(text.split()).lower()
+        path = _path(url).lower()
+        score = _REGION_WEIGHT.get(region, 0.0)
+
+        if not t:  # an icon / image link -- no text for an LLM to act on
+            score -= 1.0
+        else:
+            words = len(t.split())
+            if 1 <= words <= 12:  # a real label, not a stray paragraph link
+                score += 0.3
+            if any(c in t for c in _CTA):  # "read more" / "continue reading" ...
+                score += 1.2
+            if any(b in t for b in _BOILER):
+                score -= 1.5
+
+        if any(seg in path for seg in _EDITORIAL):
+            score += 0.8
+        if _DATE_RE.search(path):  # dated permalink -- an article URL shape
+            score += 0.4
+        last = path.rstrip("/").rsplit("/", 1)[-1]
+        if "-" in last and len(last) > 8 and "." not in last:  # a content slug
+            score += 0.5
+        if any(b in path for b in _BOILER_PATH):
+            score -= 1.2
+        if _canon_host(url) in _SOCIAL_HOSTS:  # off-site share / follow widget
+            score -= 1.5
+        if path in ("", "/"):  # bare homepage link (nav "home", logo)
+            score -= 0.2
+        return round(score, 3)
+
+    def _add_edge(
+        self, core: "Crawl", url: str, text: str, depth: int, score: float = 0.0
+    ) -> None:
         """Add one discovered URL to the frontier if it is in scope, matches
         include/exclude, and its canonical form has not been seen (so URL variants
-        -- trailing slash, tracking params, www -- are not re-fetched)."""
+        -- trailing slash, tracking params, www -- are not re-fetched). ``score`` is
+        the discovery-time importance kept on the edge (the frontier is sorted by
+        it)."""
         url = url.split("#", 1)[0]
         if not url.startswith(("http://", "https://")):
             return
@@ -170,13 +367,26 @@ class CrawlBacking(Backing):
         if core.exclude is not None and core.exclude in path:
             return
         core._seen.add(key)
-        core.frontier.append(Edge(url=url, text=text, depth=depth))
+        core.frontier.append(Edge(url=url, text=text, depth=depth, score=score))
 
     def _expand(self, core: "Crawl", doc: Any, depth: int) -> None:
-        """Add ``doc``'s anchor links to the frontier (anchor text kept for keyword
-        scoring)."""
+        """Add ``doc``'s anchor links to the frontier -- dropping links to page
+        assets (images / scripts / media ...), and scoring each by importance
+        (region + text + URL shape) so nav / article / "read more" links outrank
+        footer / legal / social ones. Anchor text is kept for keyword scoring."""
         for a in doc.select_all("a[href]"):
-            self._add_edge(core, str(a.attr("href").url), (a.text_content or "").strip(), depth)
+            url = str(a.attr("href").url)
+            if _ext(_path(url)) in _RESOURCE_EXT:  # a resource link, not a page
+                continue
+            text = (a.text_content or "").strip()
+            region = self._region(a._element)
+            self._add_edge(core, url, text, depth, self._link_score(text, url, region))
+        self._sort_frontier(core)
+
+    def _sort_frontier(self, core: "Crawl") -> None:
+        """Keep the frontier sorted by importance (score desc, then shallowest) so
+        the links surfaced to the caller/LLM lead with the useful ones."""
+        core.frontier.sort(key=lambda e: (-e.score, e.depth))
 
     def _expand_xhr(self, core: "Crawl", doc: Any, depth: int) -> None:
         """Add the data-API endpoints a browser render observed (the page's XHR /
@@ -190,7 +400,10 @@ class CrawlBacking(Backing):
             req = e.request
             url = str(req.dispatch("url")) if req is not None else ""
             if url:
-                self._add_edge(core, url, "[xhr]", depth)
+                # a data-API endpoint -- valuable (it's the page's actual data), so
+                # it rides mid-frontier rather than sinking with resource links.
+                self._add_edge(core, url, "[xhr]", depth, 0.5)
+        self._sort_frontier(core)
 
     # -- robots.txt (cached per host) ----------------------------------------
     async def _allowed(self, core: "Crawl", url: str) -> bool:

@@ -182,10 +182,13 @@ def main() -> None:
         # [M2] Crawl: a client-held, scoped traversal used as a context manager.
         #      The client manages the frontier (dedup/scope); the caller steers a
         #      round (crawl.step(select)) or lets it self-drive (auto). Output is an
-        #      LLM-efficient .summary() per page + the unresolved frontier edges.
+        #      LLM-efficient .summary() per page + the unresolved frontier edges --
+        #      resource links dropped, and scored + sorted by importance (nav /
+        #      "read more" / article links high, footer / legal / social low).
         with wc.crawl(f"{base}/feed", auto=True, max_pages=4) as crawl:
             crawl.step()  # one turn: fetch the seed, discover its edges
-            print("frontier:   ", [e.url.replace(base, "") for e in crawl.frontier])
+            print("frontier:   ", [(round(e.score, 2), e.url.replace(base, ""))
+                                    for e in crawl.frontier])
             crawl.run()   # then let it self-drive the rest
             print("crawled:    ", [p.transport.final_url.replace(base, "")
                                     for p in crawl.pages if p.transport])
