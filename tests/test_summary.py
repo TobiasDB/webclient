@@ -143,55 +143,68 @@ def test_runtime_facet_reads_captured_browser_events():
     assert doc.dispatch("summary").runtime is not None
 
 
-def test_spa_detected_from_same_origin_xhr_without_a_known_framework():
-    # a client-composed page with no recognised framework marker (e.g. Adobe Edge
-    # Delivery) is still a SPA: it fetches its own content from its own origin.
-    # Regression: this used to read is_spa=False (only framework/mutations counted).
-    from webclient.core.document import Document
-    from webclient.core.document.live import network_event
-
-    doc = Document(
-        kind="html",
-        url="https://news.acme.com/",
-        content=b"<html><body><div><script src='/scripts/x.js'></script></div></body></html>",
-        status_code=200,
-    )
-    doc._events = [
-        network_event("GET", "https://news.acme.com/blocks/hero.plain.html", "fetch", doc),
-        network_event("GET", "https://news.acme.com/placeholders.json", "fetch", doc),
-        network_event("GET", "https://www.google-analytics.com/g/collect", "xhr", doc),
-    ]
-    r = doc.dispatch("runtime")
-    assert r.framework is None  # no known framework marker
-    assert r.is_spa is True  # ...but two same-origin content fetches -> SPA
-
-
-def test_content_from_xhr_flags_a_page_composed_from_its_own_data():
-    # the strongest, most actionable SPA signal: the page ADDED DOM nodes after
-    # load (phase="load" mutations) AND fetched from its own origin -> the content
-    # comes from those endpoints, so an agent can fetch them directly.
-    from webclient.core.document import Document
-    from webclient.core.document.live import network_event
+def _load_mut(*, in_main=True):
+    # a load-phase "added" mutation (position/count only; the ratio is measured from
+    # net text growth via _render_stats, not from mutations -- so reorganising DOM
+    # doesn't inflate it).
     from webclient.events import DOMUpdateEvent
 
-    doc = Document(
-        kind="html", url="https://news.acme.com/", content=b"<html><body></body></html>",
-        status_code=200,
+    return DOMUpdateEvent(
+        kind="added", detail={"ids": [], "phase": "load", "added": 1, "inMain": in_main}
     )
+
+
+def test_spa_graded_by_net_injected_text_not_raw_xhr_or_reorg():
+    # the new balance: same-origin XHRs ALONE no longer flag a SPA (too greedy), and
+    # merely re-organising the DOM (net text unchanged) is not client rendering.
+    from webclient.core.document import Document
+    from webclient.core.document.live import network_event
+
+    # (a) XHRs + DOM churn but the text was already there at DCL -> NOT a SPA
+    ssr = Document(kind="html", url="https://news.acme.com/",
+                   content=b"<html><body>x</body></html>", status_code=200)
+    ssr._render_stats = {"text": 1000, "dclText": 980}  # only 2% net-new after load
+    ssr._events = [
+        network_event("GET", "https://news.acme.com/a.json", "fetch", ssr),
+        network_event("GET", "https://news.acme.com/b.json", "fetch", ssr),
+        _load_mut(),
+    ]
+    r = ssr.dispatch("runtime")
+    assert r.injected_ratio < 0.4 and r.is_spa is False
+
+    # (b) most of the text built after DCL -> a SPA (no framework marker needed)
+    spa = Document(kind="html", url="https://app.acme.com/",
+                   content=b"<html><body></body></html>", status_code=200)
+    spa._render_stats = {"text": 1000, "dclText": 100}  # 90% net-new after load
+    spa._events = [_load_mut()]
+    r = spa.dispatch("runtime")
+    assert r.injected_ratio >= 0.4 and r.is_spa is True and r.injected_nodes == 1
+
+
+def test_content_from_xhr_needs_main_injection_plus_own_origin_data():
+    # the actionable signal: substantial content injected INTO THE MAIN AREA from the
+    # page's own origin -> an agent can skip the render and hit the endpoints.
+    from webclient.core.document import Document
+    from webclient.core.document.live import network_event
+
+    doc = Document(kind="html", url="https://news.acme.com/",
+                   content=b"<html><body></body></html>", status_code=200)
+    doc._render_stats = {"text": 1000, "dclText": 400}  # 60% net-new after load
     doc._events = [
         network_event("GET", "https://news.acme.com/blocks/hero.plain.html", "fetch", doc),
-        DOMUpdateEvent(kind="added", detail={"ids": ["hero"], "phase": "load"}),
+        _load_mut(in_main=True),
     ]
     r = doc.dispatch("runtime")
-    assert r.content_from_xhr is True and r.is_spa is True
+    assert r.content_from_xhr is True and r.injected_in_main is True and r.is_spa is True
     assert "content from XHR" in str(doc.dispatch("summary"))
 
-    # a page that added nodes on load but only from THIRD-party data is not it.
-    doc2 = Document(kind="html", url="https://blog.acme.com/", content=b"<html></html>",
-                    status_code=200)
+    # same injection but only THIRD-party data -> not content_from_xhr
+    doc2 = Document(kind="html", url="https://blog.acme.com/",
+                    content=b"<html><body></body></html>", status_code=200)
+    doc2._render_stats = {"text": 1000, "dclText": 400}
     doc2._events = [
-        network_event("GET", "https://cdn.ads.example/widget", "fetch", doc2),
-        DOMUpdateEvent(kind="added", detail={"ids": ["ad"], "phase": "load"}),
+        network_event("GET", "https://cdn.ads.example/w", "fetch", doc2),
+        _load_mut(in_main=True),
     ]
     assert doc2.dispatch("runtime").content_from_xhr is False
 

@@ -44,6 +44,9 @@ class PageResult:
     #: DOM-mutation records the page accumulated during the initial load+settle (the
     #: drained observer buffer) -- how the page rewrote its own DOM after navigation.
     mutations: list[dict[str, Any]] = field(default_factory=list)
+    #: the settled page's totals (``text`` chars, ``nodes``) -- the denominators for
+    #: "what fraction of the content was injected after load".
+    dom_stats: dict[str, Any] = field(default_factory=dict)
 
 
 class BrowserClient(Client):
@@ -125,7 +128,14 @@ class BrowserClient(Client):
         for s in scripts:  # drain the load-time observer buffer -> result.mutations
             if s.phase == "drain":
                 drained = await page.evaluate(s.source)
-                if isinstance(drained, list):
+                if isinstance(drained, dict):  # {muts, text, nodes, dclText}
+                    result.mutations.extend(drained.get("muts", []))
+                    result.dom_stats = {
+                        "text": drained.get("text", 0),
+                        "nodes": drained.get("nodes", 0),
+                        "dclText": drained.get("dclText", 0),
+                    }
+                elif isinstance(drained, list):  # back-compat
                     result.mutations.extend(drained)
         for s in scripts:  # load scripts run once, after navigation
             if s.phase == "load":

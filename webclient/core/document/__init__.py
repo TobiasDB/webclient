@@ -61,6 +61,9 @@ class Document(WebCore, IDocument):
     _lease: Any = PrivateAttr(default=None)  # the page's pool lease (live document)
     _keep_alive: bool = PrivateAttr(default=False)  # caller owns the page's lifecycle
     #                                                 (a plan won't auto-release it)
+    _render_stats: dict[str, Any] = PrivateAttr(  # {text, nodes} of the settled render
+        default_factory=dict
+    )
     _row: Any = PrivateAttr(default=None)  # extracted columns (extract/field)
     _surface: Any = PrivateAttr(default=None)  # the core's single eager surface
     _set_cookies: dict[str, str] = PrivateAttr(  # transport-parsed Set-Cookie

@@ -70,14 +70,15 @@ _SPA_MARKERS = (
     "data-section-status",
 )
 
-#: how many *same-origin* content XHR/fetch requests a render must make before the
-#: page is judged client-composed (a Single-Page-App). A server-rendered page ships
-#: its content in the HTML and fetches at most a beacon or two; a client-composed
-#: one (React/Next hydration, Adobe Edge Delivery blocks, …) fetches its own
-#: fragments/data from its own origin -- e.g. news.adobe.com pulls ~9. Third-party
-#: analytics/ad calls don't count (they are cross-origin), so this rarely mislabels
-#: a plain SSR page.
-_SPA_XHR_MIN = 2
+#: SPA thresholds on ``injected_ratio`` (the fraction of the page's TEXT built after
+#: the initial load). A server-rendered page ships its content in the HTML
+#: (ratio ~0, even if it hydrates); a client-rendered shell composes most of it
+#: after load (ratio high). ``_SPA_RATIO`` alone judges a page a SPA; the lower
+#: ``_SPA_MAIN_RATIO`` does too *when* the injected content landed in the main area
+#: AND the data came from the page's own origin (position + provenance). This
+#: replaces the old "any 2 same-origin XHRs -> SPA", which was far too greedy.
+_SPA_RATIO = 0.4
+_SPA_MAIN_RATIO = 0.15
 
 
 def _cdn(h: dict[str, str]) -> str | None:
@@ -272,9 +273,12 @@ class RuntimeBacking(Backing):
 
     provides = frozenset({"runtime"})
     gate = "summary"
-    #: ``content_from_xhr`` is the strongest, most actionable signal: post-load DOM
-    #: additions correlated with same-origin XHR/fetch mean the page composed itself
-    #: from those endpoints -- an agent can skip the render and fetch them directly.
+    #: is_spa is GRADED, not greedy: it fires on a framework marker, a substantial
+    #: ``injected_ratio`` (the fraction of the page's text built after load -- net
+    #: growth over the DOMContentLoaded baseline, so DOM re-org doesn't count), a
+    #: hydration marker, or ``content_from_xhr`` (substantial MAIN-area content from
+    #: the page's own XHR data -- the actionable "skip the render, hit the endpoints"
+    #: signal). All the finer metrics are returned for the caller to threshold itself.
 
     def applies(self, core: "Document") -> bool:
         if core.kind not in ("html", "xml"):
@@ -315,21 +319,38 @@ class RuntimeBacking(Backing):
         same_origin_xhr = sum(
             1 for c in endpoints if (urlparse(c.url).hostname or "").lower() == page_host
         )
-        # the strongest, most actionable signal: the page ADDED DOM nodes after
-        # navigation (phase="load" mutations) AND fetched from its own origin -- i.e.
-        # it composed its content client-side from those endpoints. An agent can then
-        # skip the render and hit the endpoints directly.
-        added_after_load = any(
-            e.kind == "added" and (e.detail or {}).get("phase") == "load"
-            for e in mutations
+        # HOW MUCH content the page built after navigation, and WHERE -- the graded
+        # signals that replace the old too-greedy "any 2 same-origin XHRs" rule.
+        load_added = [
+            e for e in mutations
+            if e.kind == "added" and (e.detail or {}).get("phase") == "load"
+        ]
+        injected_nodes = sum(int((e.detail or {}).get("added", 0)) for e in load_added)
+        injected_in_main = any((e.detail or {}).get("inMain") for e in load_added)
+        # injection = NET text grown past the DOMContentLoaded baseline, so merely
+        # re-organising existing DOM (re-adds nodes but no new text) doesn't count as
+        # client rendering. ratio = net-new text / final text (0 = SSR, ~1 = a shell).
+        stats = core._render_stats or {}
+        total_text = int(stats.get("text", 0)) or len(
+            _norm((core.content or b"").decode("utf-8", "replace"))
         )
-        content_from_xhr = added_after_load and same_origin_xhr >= 1
+        # only measurable with a DOMContentLoaded baseline (a real browser render);
+        # without one (a static fetch / seeded events) there's no injection to score.
+        if stats.get("dclText") is not None and total_text:
+            net_injected = max(0, total_text - int(stats["dclText"]))
+            injected_ratio = round(net_injected / total_text, 3)
+        else:
+            injected_ratio = 0.0
+        # content composed client-side from the page's own data, IN the main area ->
+        # an agent can skip the render and hit the endpoints directly.
+        content_from_xhr = (
+            injected_in_main and same_origin_xhr >= 1 and injected_ratio >= _SPA_MAIN_RATIO
+        )
         is_spa = (
             framework is not None  # a known JS framework / Edge-Delivery marker
-            or content_from_xhr  # rewrote its DOM from its own XHR data (strongest)
-            or bool(mutations)  # DOM changed after the initial render / interaction
+            or injected_ratio >= _SPA_RATIO  # most of the content was built client-side
+            or content_from_xhr  # substantial main-area content from its own XHR data
             or any(m in html for m in _SPA_MARKERS)  # a hydration-root / state blob
-            or same_origin_xhr >= _SPA_XHR_MIN  # composes itself from its own origin
         )
         return Runtime(
             is_spa=is_spa,
@@ -340,6 +361,9 @@ class RuntimeBacking(Backing):
             dynamic_elements=sorted(
                 {f"{e.kind}:{e.selector}" if e.selector else e.kind for e in mutations}
             ),
+            injected_ratio=injected_ratio,
+            injected_nodes=injected_nodes,
+            injected_in_main=injected_in_main,
             content_from_xhr=content_from_xhr,
         )
 

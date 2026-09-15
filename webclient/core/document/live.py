@@ -31,19 +31,47 @@ INIT_JS = """(() => {
   if (window.__wc_installed) return;
   window.__wc_installed = true;
   window.__wc_mutations = [];
+  const MAIN = 'MAIN,ARTICLE,SECTION';
   new MutationObserver((muts) => {
     for (const m of muts) {
-      let ids = []; let n = m.target;
-      while (n && n.nodeType === 1) { if (n.id) ids.push(n.id); n = n.parentElement; }
-      window.__wc_mutations.push({type: m.type, ids: ids,
+      let ids = []; let n = m.target; let inMain = false;
+      while (n && n.nodeType === 1) {
+        if (n.id) ids.push(n.id);
+        if (MAIN.indexOf(n.tagName) >= 0 ||
+            (n.getAttribute && n.getAttribute('role') === 'main')) inMain = true;
+        n = n.parentElement;
+      }
+      window.__wc_mutations.push({type: m.type, ids: ids, inMain: inMain,
         added: m.addedNodes.length, removed: m.removedNodes.length});
     }
   }).observe(document,
              {childList: true, subtree: true, attributes: true, characterData: true});
+  // At DOMContentLoaded (the served HTML parsed), discard the parse mutations and
+  // record the text length THEN -- the baseline. Post-load injection is measured as
+  // NET text GROWTH over it, so re-organising existing DOM (re-adds nodes but adds
+  // no new text) is not mistaken for client-side rendering. (Net growth catches
+  // shell-style SPAs; framework markers catch transform-style ones like AEM Edge,
+  // whose text is replaced rather than grown.)
+  const mark = () => {
+    window.__wc_mutations = [];
+    window.__wc_dcl_text = document.body ? (document.body.innerText || '').length : 0;
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mark, {once: true});
+  } else { mark(); }
 })()"""
 
-#: read + clear the mutation buffer (run after replay to discard load noise).
-DRAIN_JS = "() => { const m = window.__wc_mutations || []; window.__wc_mutations = []; return m; }"
+#: read + clear the mutation buffer AND snapshot the settled page's total text +
+#: element count + the DOMContentLoaded-baseline text (``dclText``) -- the runtime
+#: facet measures injection as the NET text grown past that baseline. Run after
+#: replay to discard load noise; on load-time capture the caller keeps the result
+#: (see ``clients.browser.open``).
+DRAIN_JS = """() => {
+  const m = window.__wc_mutations || []; window.__wc_mutations = [];
+  const t = document.body ? (document.body.innerText || '').length : 0;
+  return {muts: m, text: t, nodes: document.getElementsByTagName('*').length,
+          dclText: window.__wc_dcl_text || 0};
+}"""
 
 _LEVELS = {
     "log": "log",
@@ -62,16 +90,27 @@ def _kind(record: dict[str, Any]) -> str:
     return "removed" if record["removed"] and not record["added"] else "added"
 
 
+def _mutation_event(r: dict[str, Any], doc: Any, *, phase: str | None = None) -> DOMUpdateEvent:
+    """Wrap one raw mutation record into a DOMUpdateEvent, carrying the position /
+    size detail the runtime facet reads (``inMain`` / ``added`` / ``addedText``)."""
+    detail: dict[str, Any] = {
+        "ids": r.get("ids", []),
+        "inMain": bool(r.get("inMain")),
+        "added": int(r.get("added", 0)),
+    }
+    if phase:
+        detail["phase"] = phase
+    return DOMUpdateEvent(kind=cast(Any, _kind(r)), detail=detail, document_id=doc.name)
+
+
 async def drain(doc: Any) -> None:
     """Move any pending DOM mutations off the page onto the document. A short
     settle lets the observer's microtask deliver records from the last action."""
     await doc._page.wait_for_timeout(30)
-    for r in await doc._page.evaluate(DRAIN_JS):
-        doc._events.append(
-            DOMUpdateEvent(
-                kind=cast(Any, _kind(r)), detail={"ids": r["ids"]}, document_id=doc.name
-            )
-        )
+    result = await doc._page.evaluate(DRAIN_JS)
+    muts = result.get("muts", []) if isinstance(result, dict) else result
+    for r in muts:
+        doc._events.append(_mutation_event(r, doc))
 
 
 def console_event(level: str, text: str, doc: Any) -> ConsoleEvent:
@@ -130,17 +169,12 @@ class LiveBacking(Backing):
         for method, url, rtype in result.network:  # XHR/fetch the page issued
             if rtype in ("xhr", "fetch"):
                 core._events.append(network_event(method, url, rtype, core))
-        # DOM mutations the page made during load/settle -- tagged phase="load" so
-        # the runtime facet can tell "the page rewrote its own DOM after navigation"
-        # (a strong SPA signal) from post-interaction mutations.
+        # DOM mutations the page made during load/settle -- tagged phase="load" (with
+        # position/size detail) so the runtime facet can measure how much content the
+        # page composed after navigation, and where.
         for r in getattr(result, "mutations", []):
-            core._events.append(
-                DOMUpdateEvent(
-                    kind=cast(Any, _kind(r)),
-                    detail={"ids": r.get("ids", []), "phase": "load"},
-                    document_id=core.name,
-                )
-            )
+            core._events.append(_mutation_event(r, core, phase="load"))
+        core._render_stats = getattr(result, "dom_stats", {}) or {}
 
     def _loop(self, core: Any) -> Any:
         return core._client.loop()

@@ -125,11 +125,19 @@ class Runtime(BaseModel):
     uses_fetch: bool | None = None
     xhr_endpoints: list[XhrCall] = []
     dynamic_elements: list[str] = []
-    #: the page rewrote its own DOM after navigation using data it fetched from its
-    #: OWN origin -- i.e. the content is composed client-side from ``xhr_endpoints``.
+    #: how the page was built (the finer detail behind ``is_spa``, so a caller can set
+    #: its own threshold): the fraction of the page's text that was injected AFTER the
+    #: initial load (0.0 = fully server-rendered, ~1.0 = a client-rendered shell),
+    #: the count of nodes injected after load, and whether that injected content
+    #: landed in the main content area (position: middle-of-page injection is a
+    #: stronger SPA signal than an edge widget).
+    injected_ratio: float | None = None
+    injected_nodes: int | None = None
+    injected_in_main: bool | None = None
+    #: the page rewrote its MAIN content after navigation using data it fetched from
+    #: its OWN origin -- i.e. the content is composed client-side from ``xhr_endpoints``.
     #: When true, an agent can often **skip rendering the page** and fetch those
-    #: endpoints directly (they are the real data source). The strongest SPA signal:
-    #: post-load DOM mutations correlated with same-origin XHR/fetch.
+    #: endpoints directly (they are the real data source).
     content_from_xhr: bool | None = None
 
 
@@ -250,10 +258,11 @@ class Summary(BaseModel):
                 bits.append("SPA")
             if r.framework:
                 bits.append(f"framework={r.framework}")
+            if r.injected_ratio:
+                where = " in main" if r.injected_in_main else ""
+                bits.append(f"{round(r.injected_ratio * 100)}% content injected{where}")
             if r.xhr_endpoints:
                 bits.append(f"{len(r.xhr_endpoints)} XHR endpoint(s)")
-            if r.dynamic_elements:
-                bits.append(f"{len(r.dynamic_elements)} dynamic element(s)")
             if r.content_from_xhr:
                 bits.append("content from XHR (fetch endpoints directly)")
             if bits:
