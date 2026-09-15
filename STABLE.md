@@ -3,10 +3,10 @@
 The last commit whose full gate is green (`gen_stubs --check`, `mypy --strict`,
 `pyright`, `pytest`, `demo.py`). Roll back here if autonomous work broke something:
 
-    git reset --hard d27fa36d1fec7101b6b881af3fb3736a7caa02a7
+    git reset --hard 835c14ee6ace77c9c6d1ccbba972cf1e514a5f8e
 
-- **commit:** `d27fa36d1fec7101b6b881af3fb3736a7caa02a7`
-- **subject:** Skeleton hardened + SPA origin annotation + search loud fix (366 passed)
+- **commit:** `835c14ee6ace77c9c6d1ccbba972cf1e514a5f8e`
+- **subject:** skeleton exposed (tools/MCP/API/summary) + robust multi-provider search (368 passed)
 - **date:** 2026-09-15
 
 _Updated after each green milestone. 276 passed; verified against ~30 live real-site
