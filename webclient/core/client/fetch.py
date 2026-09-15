@@ -62,13 +62,30 @@ class FetchBacking(Backing):
         return await core.afetch(ref, optional=lenient(optional, error), browser=browser)
 
     async def summary(
-        self, core: "WebClient", url: Any, *include: str, **kw: Any
+        self,
+        core: "WebClient",
+        url: Any,
+        *include: str,
+        browser: "bool | Literal['never', 'auto', 'always', 'probe']" = False,
+        resolve: Any = None,
+        optional: bool = False,
+        error: Any = None,
+        exclude: Any = (),
+        **kw: Any,
     ) -> "Summary":
-        """Resolve ``url`` and project it to a :class:`Summary`. ``include``
-        selects facets (default: all applicable)."""
+        """Resolve ``url`` and project it to a :class:`Summary`. ``include`` selects
+        facets (default: all applicable), ``exclude`` drops some. The resolve knobs
+        mirror :meth:`fetch`: ``browser`` picks the transport tier (``"auto"`` /
+        ``True`` / ``"probe"``), ``resolve`` sets the resiliency policy, and
+        ``optional`` / ``error`` make a miss lenient. Remaining ``**kw`` builds the
+        reference (``method`` / ``params`` / ``headers`` / ``expect`` …)."""
+        from ...errors import lenient
+
         ref = self.ref(core, url, **kw)
-        doc = await core.afetch(ref)
-        return doc.summary(*include)  # typed: Document implements its ops
+        doc = await core.afetch(
+            ref, optional=lenient(optional, error), browser=browser, resolve=resolve
+        )
+        return doc.summary(*include, exclude=exclude)  # typed: Document implements its ops
 
 
 __all__ = ["FetchBacking"]

@@ -44,3 +44,17 @@ def test_eager_ref_is_a_reference_core(site):
         ref = c.ref(site.url_for("/"))
         assert isinstance(ref, Reference)
         assert ref.resolve().ok  # resolve dispatches eagerly to a Document
+
+
+def test_summary_verb_forwards_resolve_args(site):
+    # wc.summary(url, ...) accepts the same resolve knobs as fetch: facets +
+    # exclude, browser/resolve tier, and optional/error leniency.
+    from webclient import RETURN
+
+    with WebClient() as c:
+        s = c.summary(site.url_for("/"), "transport", "structure", exclude="structure")
+        assert s.transport is not None and s.structure is None  # facets + exclude
+        s2 = c.summary(site.url_for("/"), "transport", browser=False)
+        assert s2.transport.ok  # browser= accepted (static tier)
+        miss = c.summary(site.url_for("/nope"), "transport", error=RETURN)
+        assert miss.transport is not None and not miss.transport.ok  # lenient miss
