@@ -348,6 +348,13 @@ class HtmlBacking(Backing):
         self, core: "Document", name: str, *, optional: bool = False, error: Any = None
     ) -> Any:
         if core._missing:
+            # honour the declared type: a link attr is a Reference even on a miss
+            # (an empty, not-ok one whose ``.url`` is "" -- never a Field, so
+            # ``select(..., optional=True).attr("href").url`` can't AttributeError).
+            if name in ("href", "src", "action"):
+                ref = from_url("")
+                ref._client = core._client
+                return ref
             return Field(None, ok=False)
         el = core._element
         value = el.get(name) if el is not None else None

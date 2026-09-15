@@ -96,6 +96,17 @@ def test_optional_is_a_universal_lenient_spelling():
     assert node.attr("data-nope", optional=True).ok is False
 
 
+def test_link_attr_on_a_missing_element_is_a_reference_not_a_field():
+    # E-M1: attr("href") is typed Reference; on a miss it must be an (empty) not-ok
+    # Reference, so `.url` works -- never a Field that would AttributeError on .url.
+    from webclient import Reference
+
+    doc = make_doc()
+    ref = doc.select(".nope", optional=True).attr("href")
+    assert isinstance(ref, Reference) and ref.hostname == ""  # empty, not a Field
+    assert isinstance(ref.url, str)  # .url works (a Field would AttributeError)
+
+
 def test_select_rejects_attribute_and_text_xpath():
     doc = make_doc()
     with pytest.raises(ValueError, match="attr"):

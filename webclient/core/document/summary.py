@@ -333,6 +333,13 @@ class SummaryBacking(Backing):
         self, core: "Document", *include: str, exclude: Any = ()
     ) -> Summary:
         drop = {exclude} if isinstance(exclude, str) else set(exclude)
+        # a requested name must be a known facet or an actual backing op -- a typo
+        # like summary("structrue") is an error, not a silently-dropped section.
+        for name in include:
+            if name not in FACETS and not core.has_op(name):
+                raise LookupError(
+                    f"unknown summary facet/op {name!r}; facets are {FACETS}"
+                )
         want = (set(include) if include else set(FACETS)) - drop
         data: dict[str, Any] = {
             f: core.dispatch(f) for f in FACETS if f in want and core.has_op(f)

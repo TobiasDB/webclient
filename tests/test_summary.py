@@ -105,6 +105,14 @@ def test_summary_includes_arbitrary_backing_methods_as_extra(page):
     assert page.summary().extra == {}
 
 
+def test_summary_rejects_an_unknown_facet_name(page):
+    # a typo is an error, not a silently-dropped section (E-M3).
+    import pytest
+
+    with pytest.raises(LookupError, match="structrue"):
+        page.summary("transport", "structrue")
+
+
 def test_runtime_facet_reads_captured_browser_events():
     # runtime reads DOM/network events a browser render captured -- no browser
     # needed for the projection itself, so we seed the events directly.

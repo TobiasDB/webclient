@@ -99,7 +99,14 @@ class HTTPXClient(Client):
             elapsed=time.monotonic() - start,
             encoding=charset_of(resp.headers.get("content-type")),
         )
-        doc._set_cookies = dict(resp.cookies)  # httpx parses Set-Cookie correctly
+        # Set-Cookie from EVERY hop, not just the final response: an auth flow that
+        # sets its session cookie on a 302 (then lands on the app) would otherwise
+        # be lost. Each response's ``.cookies`` is httpx-parsed (so the Expires
+        # comma is handled); aggregate across the redirect history + the final hop.
+        set_cookies: dict[str, str] = {}
+        for hop in (*resp.history, resp):
+            set_cookies.update(dict(hop.cookies))
+        doc._set_cookies = set_cookies
         if not (200 <= resp.status_code < 300):
             doc.error = error_for(resp.status_code)
         return doc, resp

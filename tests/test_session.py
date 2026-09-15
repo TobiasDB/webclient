@@ -35,6 +35,25 @@ def test_session_cookies_persist_across_fetches(httpserver, wc):
     assert doc.text_content == "cookie=abc123"
 
 
+def test_session_captures_cookie_set_during_a_redirect(httpserver, wc):
+    """R-M5: a cookie set on a 302 (then redirecting to the app) is captured --
+    Set-Cookie from every hop, not just the final response."""
+    httpserver.expect_request("/signin").respond_with_response(
+        Response(
+            "",
+            status=302,
+            headers={
+                "Set-Cookie": "sid=hop-cookie; Path=/",
+                "Location": httpserver.url_for("/home"),
+            },
+        )
+    )
+    httpserver.expect_request("/home").respond_with_data("welcome", content_type="text/html")
+    session = wc.session()
+    session.ref(httpserver.url_for("/signin")).resolve().collect()
+    assert session.cookies.get("sid") == "hop-cookie"  # captured from the 302 hop
+
+
 def test_session_absorbs_cookie_with_dated_expires(httpserver, wc):
     """A cookie whose Expires attribute contains a comma must not be corrupted
     (the old hand-split on ", " broke it)."""
