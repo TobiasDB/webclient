@@ -277,6 +277,7 @@ def create_app(
             keywords=body.get("keywords"),
             include=body.get("include"),
             exclude=body.get("exclude"),
+            facets=body.get("facets"),
         ).run()
 
     def _crawl_response(crawl: Any) -> "dict[str, Any]":

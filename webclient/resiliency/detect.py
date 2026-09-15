@@ -85,6 +85,12 @@ def _visible_text(html: str) -> str:
     return " ".join(_ANYTAG.sub(" ", _TAGS.sub(" ", html)).split())
 
 
+#: statuses that are, on their own, evidence of a bot block / challenge (a bare
+#: 403/429/503 with no vendor fingerprint -- e.g. an origin WAF or a rate-limit
+#: gate). 401 stays out: that is an auth/login wall, not an anti-bot challenge.
+_CHALLENGE_STATUS = frozenset({403, 429, 503})
+
+
 def detect_anti_bot(
     status: int,
     headers: "Mapping[Any, Any]",
@@ -95,11 +101,13 @@ def detect_anti_bot(
     body marker (an interstitial page) counts on its own; the weak markers (a
     header/cookie that vendor sets on *all* its traffic -- e.g. Cloudflare's
     ``cf-ray`` sits on every proxied 200) count only on a blocking status. So a page
-    merely served through a CDN is not mistaken for a block."""
+    merely served through a CDN is not mistaken for a block. Failing a named vendor,
+    a bare block *status* (403/429/503) is itself reported as a generic
+    ``"challenge"`` -- the caller still gets an anti-bot signal to escalate on."""
     h = _lower_map(headers)
     header_blob = " ".join(h.keys()) + " " + " ".join(h.values())
     cookie_blob = " ".join(str(c).lower() for c in cookie_names)
-    blocking = status in (401, 403, 429, 503)
+    blocking = status in _CHALLENGE_STATUS or status == 401
     for vendor, weak_hdrs, weak_cooks, strong_body in _ANTIBOT:
         if any(m in body_low for m in strong_body):
             return vendor  # a challenge / interstitial page -> definite
@@ -108,6 +116,8 @@ def detect_anti_bot(
             or any(c in cookie_blob for c in weak_cooks)
         ):
             return vendor  # the vendor is present on a blocking response
+    if status in _CHALLENGE_STATUS:
+        return "challenge"  # a bare block status: no vendor named, still a block
     return None
 
 

@@ -100,6 +100,17 @@ def test_sitemap_is_an_eager_single_domain_crawl(wc, site):
     assert all("external.example" not in u for u in _urls(sm))
 
 
+def test_crawl_chooses_which_facets_each_page_carries(wc, site):
+    # ``facets`` restricts each page's summary to the named backings.
+    with wc.crawl(
+        site.url_for("/"), auto=True, max_pages=5, facets=["transport"]
+    ) as crawl:
+        crawl.run()
+    assert crawl.pages  # crawled something
+    assert all(p.transport is not None for p in crawl.pages)
+    assert all(p.structure is None and p.metadata is None for p in crawl.pages)
+
+
 def test_context_manager_closes_the_crawl(wc, site):
     with wc.crawl(site.url_for("/")) as crawl:
         assert crawl.status == "running"

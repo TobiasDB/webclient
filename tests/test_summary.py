@@ -95,6 +95,16 @@ def test_summary_unifier_assembles_and_selects_facets(page):
     assert less.transport and less.metadata and less.structure is None
 
 
+def test_summary_includes_arbitrary_backing_methods_as_extra(page):
+    # a name that is not a facet but is a backing op (``title``) is called and
+    # placed under ``extra`` -- the open mechanism a crawl uses to pick backings.
+    s = page.summary("transport", "title")
+    assert s.transport and s.metadata is None  # only the named facet
+    assert s.extra == {"title": "Widgets"}
+    # default (no include) carries no extra section.
+    assert page.summary().extra == {}
+
+
 def test_runtime_facet_reads_captured_browser_events():
     # runtime reads DOM/network events a browser render captured -- no browser
     # needed for the projection itself, so we seed the events directly.

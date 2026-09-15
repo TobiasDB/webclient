@@ -46,6 +46,7 @@ class ICrawl(BaseModel):
     keywords: list[str] = []  # best-first relevance signal (auto mode)
     include: str | None = None  # only follow links whose path contains this
     exclude: str | None = None  # skip links whose path contains this
+    facets: list[str] = []  # which summary backings each page carries ([] = all)
     status: Literal["running", "closed"] = "running"
     # -- live state (the LLM-efficient output) -------------------------------
     pages: list[Summary] = []  # a .summary() per fetched page

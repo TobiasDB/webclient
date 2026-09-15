@@ -29,6 +29,23 @@ def test_datadome_block():
     assert s.anti_bot == "datadome" and s.blocked
 
 
+@pytest.mark.parametrize("status", [403, 429, 503])
+def test_bare_block_status_is_a_generic_challenge(status):
+    # no vendor fingerprint at all -- the status code alone is anti-bot evidence.
+    s = classify(status, HTML, {}, b"nope")
+    assert s.anti_bot == "challenge"
+
+
+def test_401_is_a_login_wall_not_an_anti_bot_challenge():
+    s = classify(401, HTML, {}, b"unauthorized")
+    assert s.anti_bot is None and s.login_wall
+
+
+def test_ordinary_404_is_not_a_challenge():
+    s = classify(404, HTML, {}, b"<html><body>not found, sorry</body></html>")
+    assert s.anti_bot is None
+
+
 def test_spa_shell_needs_browser():
     s = classify(200, HTML, {}, b'<html><body><div id="root"></div><script src="/a.js"></script></body></html>')
     assert s.js_required and s.needs_browser

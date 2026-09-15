@@ -71,7 +71,9 @@ class CrawlBacking(Backing):
             doc = await core._client.afetch(core._client.ref(edge.url), optional=True)
             if not doc.ok:
                 continue
-            core.pages.append(doc.summary())
+            # the crawl decides which backings populate each page's summary
+            # (``facets`` empty -> every applicable facet).
+            core.pages.append(doc.summary(*core.facets))
             if edge.depth < core.max_depth and doc.kind in ("html", "xml"):
                 self._expand(core, doc, edge.depth + 1)
         return core

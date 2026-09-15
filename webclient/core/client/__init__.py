@@ -542,11 +542,14 @@ class WebClient(WebCore, IWebClient):
         keywords: list[str] | None = None,
         include: str | None = None,
         exclude: str | None = None,
+        facets: list[str] | None = None,
     ) -> "Crawl":
         """A scoped site traversal sharing this engine (a :class:`Crawl` core). The
         client manages the frontier (dedup, scope, fetching); the caller steers each
         round (``crawl.step(select)``) or lets it self-drive (``auto=True`` -> the
-        top-``width`` edges best-first by ``keywords``). Use as a context manager."""
+        top-``width`` edges best-first by ``keywords``). Use as a context manager.
+        ``facets`` picks which summary backings each fetched page carries (``None``
+        / empty -> every applicable facet)."""
         from ..crawl import Crawl, Edge
 
         urls = _seed_urls(seeds)
@@ -561,6 +564,7 @@ class WebClient(WebCore, IWebClient):
             keywords=[k.lower() for k in (keywords or [])],
             include=include,
             exclude=exclude,
+            facets=facets or [],
             frontier=[Edge(url=u, depth=0) for u in urls],
         )
         return core.bind(self)

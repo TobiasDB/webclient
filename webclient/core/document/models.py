@@ -161,13 +161,17 @@ class ProbeRecord(BaseModel):
 
 class Summary(BaseModel):
     """A page overview: each facet an optional section (``None`` when not
-    requested / not applicable)."""
+    requested / not applicable). ``extra`` carries any non-facet backing methods
+    the caller asked ``summary()`` to include by name (e.g. ``title``), keyed by
+    op name -- the open extension point (so a crawl can decide exactly which
+    backings populate each page's summary)."""
 
     transport: Transport | None = None
     metadata: Metadata | None = None
     structure: Structure | None = None
     runtime: Runtime | None = None
     probe: Probe | None = None
+    extra: dict[str, Any] = {}
 
 
 class IDocument(BaseModel):

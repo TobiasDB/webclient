@@ -314,7 +314,13 @@ class SummaryBacking(Backing):
     facet sections into a :class:`Summary` (default: every applicable facet). A
     facet whose backing does not apply to this document (e.g. ``metadata`` on
     json, ``runtime`` on a static fetch) is simply left ``None``. Supersedes the
-    old title/markdown digest -- markdown is reachable via ``render('markdown')``."""
+    old title/markdown digest -- markdown is reachable via ``render('markdown')``.
+
+    ``include`` names may reach beyond the fixed facets: any *other* argument-free
+    backing op the document has (e.g. ``title``, ``text_content``) is called and
+    its result placed under ``Summary.extra[name]``. That is how a crawl decides
+    exactly which backings populate each page's summary (directive: crawl chooses
+    the backings; summary is the open mechanism)."""
 
     provides = frozenset({"summary"})
     gate = "summary"
@@ -327,7 +333,17 @@ class SummaryBacking(Backing):
     ) -> Summary:
         drop = {exclude} if isinstance(exclude, str) else set(exclude)
         want = (set(include) if include else set(FACETS)) - drop
-        data = {f: core.dispatch(f) for f in FACETS if f in want and core.has_op(f)}
+        data: dict[str, Any] = {
+            f: core.dispatch(f) for f in FACETS if f in want and core.has_op(f)
+        }
+        # any explicitly-named non-facet op -> the open `extra` section.
+        extra = {
+            name: core.dispatch(name)
+            for name in include
+            if name not in FACETS and name not in drop and core.has_op(name)
+        }
+        if extra:
+            data["extra"] = extra
         return Summary(**data)
 
 
