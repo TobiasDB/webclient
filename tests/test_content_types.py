@@ -98,6 +98,35 @@ def test_fetch_binary_document(httpserver, wc):
         doc.select("a")
 
 
+def test_meta_charset_is_honoured_for_non_utf8(httpserver, wc):
+    # a windows-1251 page declaring its charset only via <meta> (no HTTP charset):
+    # lxml must decode via the meta (bytes handed to the parser), not fall back to
+    # latin-1 mojibake. (R-M4)
+    cyrillic = "привет".encode("windows-1251")  # non-utf8 bytes
+    body = (
+        b'<html><head><meta charset="windows-1251"></head>'
+        b"<body><p>" + cyrillic + b"</p></body></html>"
+    )
+    httpserver.expect_request("/cp").respond_with_data(body, content_type="text/html")
+    doc = wc.fetch(httpserver.url_for("/cp"))
+    assert "привет" in doc.select("p").text_content
+
+
+def test_namespaced_xml_is_parsed_as_xml(httpserver, wc):
+    # an Atom feed (namespaced XML) is parsed with the XML parser, not the HTML
+    # parser -- structure/text preserved, no crash. (R-M3)
+    atom = (
+        b'<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">'
+        b"<entry><title>Hello Atom</title></entry></feed>"
+    )
+    httpserver.expect_request("/atom").respond_with_data(
+        atom, content_type="application/atom+xml"
+    )
+    doc = wc.fetch(httpserver.url_for("/atom"))
+    assert doc.kind == "xml"
+    assert "Hello Atom" in doc.text_content
+
+
 def test_binary_transport_facet_still_works(httpserver, wc):
     # summary's transport facet applies to any kind (metadata/structure do not).
     httpserver.expect_request("/bin").respond_with_data(b"\x00\x01\x02", content_type="application/octet-stream")

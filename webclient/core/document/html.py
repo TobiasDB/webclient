@@ -28,13 +28,25 @@ def _norm(text: str) -> str:
 def tree(core: "Document") -> Any:
     """The parsed lxml root for a document (an element sub-core is its own
     element; otherwise parse ``content`` once and cache it on the core). Shared
-    by ``HtmlBacking`` and the summary facets."""
+    by ``HtmlBacking`` and the summary facets.
+
+    XML (``kind == "xml"``) is parsed with the XML parser (namespaces, tag case
+    and CDATA preserved), not the HTML parser. Both are handed the raw *bytes*, so
+    lxml honours an in-document ``<meta charset>`` / BOM / ``<?xml encoding?>``
+    rather than a pre-decoded string (which would mojibake a non-UTF-8 page)."""
     if core._element is not None:
         return core._element
     if core._tree is None:
-        from lxml import html as _lh
+        from lxml import etree, html as _lh
 
-        core._tree = _lh.fromstring(_decode(core) or "<html></html>")
+        raw = core.content or b""
+        if core.kind == "xml":
+            parsed = etree.fromstring(
+                raw or b"<root/>", parser=etree.XMLParser(recover=True)
+            )
+            core._tree = parsed if parsed is not None else etree.fromstring(b"<root/>")
+        else:
+            core._tree = _lh.fromstring(raw or b"<html></html>")
     return core._tree
 
 
