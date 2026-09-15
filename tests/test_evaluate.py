@@ -188,30 +188,34 @@ def test_follow_links_via_reference_and_param(site, wc):
     assert all(isinstance(r["link"], str) and "/i/" in r["link"] for r in rows)
 
 
-def test_missing_field_is_not_ok_under_the_plan_default(site, wc):
-    base = (
-        ref.resolve()
-        .select_all(".card")
-        .extract(
-            title=doc.select(".title").text_content,
-            oops=doc.select(".nope").text_content,
-        )
-    )
-    rows = rows_of(wc, site, base.project())
-    assert len(rows) == 3 and all(r["oops"] is None for r in rows)
-    kept = rows_of(wc, site, base.filter(doc.field("oops").is_ok()).project())
-    assert kept == []
-
-
-def test_raise_policy_aborts_the_plan(site, wc):
+def test_missing_field_raises_loud_by_default_in_the_engine(site, wc):
+    # loud by default, propagated to the execution engine: a column whose select
+    # misses aborts the extract (naming the selector) -- no silent None.
     with pytest.raises(LookupError, match="nope"):
         rows_of(
             wc,
             site,
             ref.resolve()
             .select_all(".card")
-            .extract(oops=doc.select(".nope", error=RAISE).text_content),
+            .extract(oops=doc.select(".nope").text_content)
+            .project(),
         )
+
+
+def test_error_return_makes_a_missing_field_none(site, wc):
+    # opt out per column with error=RETURN (or optional=True) -> a miss is None.
+    base = (
+        ref.resolve()
+        .select_all(".card")
+        .extract(
+            title=doc.select(".title").text_content,
+            oops=doc.select(".nope", error=RETURN).text_content,
+        )
+    )
+    rows = rows_of(wc, site, base.project())
+    assert len(rows) == 3 and all(r["oops"] is None for r in rows)
+    kept = rows_of(wc, site, base.filter(doc.field("oops").is_ok()).project())
+    assert kept == []
 
 
 def test_when_then_otherwise_and_sibling_field(site, wc):

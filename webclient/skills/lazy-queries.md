@@ -38,14 +38,12 @@ ops below. (`x == "In stock"` records a comparison; `if x == "In stock"` tries t
 - `.select_all("css")` → a collection of every match (an empty match is still a
   collection). `limit=` / `offset=` bound it.
 
-**Values** (on an element):
-- `.text_content` → the element's **text** (a property — no parentheses). This is
-  the *only* way to read text. There is no `text` attribute, so **never**
-  `.attr("text")`.
-- `.attr(name)` → reads the **HTML attribute** literally named `name` (`href`,
-  `src`, `class`, `data-id`, …), not text. `attr("href" | "src" | "action")` → a
-  link (resolvable); any other name → a field whose `.value` is the attribute
-  string. Add `optional=True` for an attribute that may be absent.
+**Values** — `.attr(name)` is the one accessor: "give me `name` from this element".
+- `.attr("text")` → the element's **text**. (`.text_content` is the same thing.)
+- `.attr("html")` → the element's markup.
+- `.attr("href" | "src" | "action")` → a **link** (resolvable / has `.url`).
+- `.attr(other)` → the HTML attribute named `other` (`class`, `data-id`, …), as a
+  field whose `.value` is the string. Add `optional=True` for one that may be absent.
 - `.markdown()` / `.text()` / `.links()` / `.elements()` → rendered forms.
 
 **Navigation:**
@@ -73,20 +71,16 @@ parenthesise each side: `(a) & (b)`.
 - **Records, never runs.** A step returns a new lazy node; nothing evaluates until
   the plan is collected. So the operators above — not `and`/`or`/`not`/`bool()` —
   and no `if`/`for`/`len()` on a lazy value.
-- **Loud by default.** Every op that can miss (`select`, `attr`, …) raises on a
-  miss. Pass `optional=True` (or `error=RETURN`) for a not-ok result you branch on
-  with `.is_ok()` / `.is_empty()`.
+- **Loud by default, everywhere.** Every op that can miss (`select`, `attr`, …)
+  raises on a miss -- and this holds INSIDE `extract` / `filter` too: a column or
+  predicate whose select misses aborts the run (naming the selector), never a silent
+  `None`. Pass `optional=True` (or `error=RETURN`) on that select for a genuinely
+  optional field -> a not-ok result you branch on with `.is_ok()` / `.is_empty()`.
 - **Selection nests and scopes.** A selected element is itself selectable, and a
   sub-query scopes to it: after `.select_all(".item")`, `wq.doc.select(".title")`
   targets the title *within that row*, not the whole page.
-- **Properties vs calls.** `text_content` / `title` are properties — no `()`.
-  `attr(...)`, `select(...)`, `markdown()`, `project()` are calls.
-- **Text is `text_content`, never `attr("text")`.** `.text_content` returns the
-  element's text; `.attr(name)` returns the HTML attribute `name` (there is no
-  `text` attribute — `attr("text")` raises / yields nothing).
-- **`attr` return type.** `attr("href" | "src" | "action")` is a link (has
-  `.resolve()` / `.url`); any other name is a field — its `.value` is the
-  attribute's string.
+- **Properties vs calls.** `attr(...)`, `select(...)`, `markdown()`, `project()` are
+  calls; `text_content` / `title` are properties (no `()`).
 - **`extract` is per-element.** Each column expr is evaluated on the current element
   (`wq.doc`), once per element in the collection.
 - **`project(Model)` is eager-only.** A model class is not part of a portable blob;

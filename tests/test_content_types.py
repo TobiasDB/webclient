@@ -238,7 +238,7 @@ def test_not_operator_evaluates(httpserver, wc):
     kept = (
         wc.fetch(httpserver.url_for("/n"))
         .select_all(".item")
-        .filter(~wq.doc.select(".hide").is_ok())
+        .filter(~wq.doc.select(".hide", optional=True).is_ok())
         .project()
     )
     assert len(kept) == 1  # the first item (no .hide) survived

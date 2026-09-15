@@ -193,6 +193,17 @@ def test_href_whitespace_is_cleaned_into_a_valid_url():
         assert " " not in r.url and "\n" not in r.url
 
 
+def test_attr_is_the_universal_accessor_text_and_html():
+    # attr("text") == text_content (no separate op to remember, no silent miss on a
+    # "text" attribute); attr("html") is the element's markup.
+    doc = make_doc(content=b'<html><body><p class="x">Hi <b>there</b></p></body></html>')
+    p = doc.select(".x")
+    assert p.attr("text").get() == p.text_content == "Hi there"
+    assert "<b>there</b>" in p.attr("html").get()
+    # still resolves a real attribute
+    assert p.attr("class").get() == "x"
+
+
 def test_region_reports_the_landmark_an_element_sits_in():
     page = (
         "<html><body>"

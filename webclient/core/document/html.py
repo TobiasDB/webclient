@@ -710,6 +710,15 @@ class HtmlBacking(Backing):
     def attr(
         self, core: "Document", name: str, *, optional: bool = False, error: Any = None
     ) -> Any:
+        # ``attr`` is the one element accessor: a real HTML attribute, plus the
+        # pseudo-attributes ``"text"`` (the element's text -- same as ``text_content``)
+        # and ``"html"`` (its markup). So "give me X from this node" is always
+        # ``attr("x")`` -- no separate op to remember, and ``attr("text")`` yields text
+        # instead of a silent miss.
+        if name == "text":
+            return Field(self.text_content(core))
+        if name == "html":
+            return Field(None if core._missing else self.render(core, "html"))
         if core._missing:
             # honour the declared type: a link attr is a Reference even on a miss
             # (an empty, not-ok one whose ``.url`` is "" -- never a Field, so

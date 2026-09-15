@@ -381,7 +381,7 @@ def main() -> None:
             .extract(
                 title=wq.doc.select(".title").text_content,
                 link=wq.doc.select("a.link").attr("href"),
-                missing=wq.doc.select(".nope").text_content,
+                missing=wq.doc.select(".nope", error=RETURN).text_content,  # loud by default; opt out
             )
             .extract(
                 name=wq.doc.reference("link").resolve().select("name").attr("value"),

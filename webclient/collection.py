@@ -113,31 +113,31 @@ def _row_of(element: Any, *, create: bool = True) -> dict[str, Any] | None:
 
 async def apply_extract(element: Any, columns: dict[str, Any], client: Any) -> None:
     """Annotate ``element``'s row with the evaluated columns (unwrapped, stored in
-    order so a later column can reference an earlier one). A missing field is
-    ``None`` under RETURN, never an abort. THE one row-extraction implementation --
-    shared by the eager (:meth:`Collection.aextract`) and streaming
-    (``executor._astream_collection``) paths so they cannot diverge."""
-    from .errors import RETURN, default_policy
+    order so a later column can reference an earlier one). Loud by default: a column
+    whose ``select``/``attr`` misses raises (naming the selector) -- mark a genuinely
+    optional field with ``error=RETURN`` (or ``optional=True``) on its select to get
+    ``None`` instead. THE one row-extraction implementation -- shared by the eager
+    (:meth:`Collection.aextract`) and streaming (``executor._astream_collection``)
+    paths so they cannot diverge."""
     from .query.executor import aevaluate
 
     row = _row_of(element)
     if row is None:
         return
-    with default_policy(RETURN):
-        for key, expr in columns.items():
-            row[key] = _raw(await aevaluate(expr, element, client=client))
+    for key, expr in columns.items():
+        row[key] = _raw(await aevaluate(expr, element, client=client))
 
 
 async def survives_filters(element: Any, predicates: Any, client: Any) -> bool:
-    """Whether ``element`` passes every predicate (each evaluated leniently). The
-    one filter implementation, shared by eager and streaming paths."""
-    from .errors import RETURN, default_policy
+    """Whether ``element`` passes every predicate. Loud by default (a predicate that
+    references a missing field raises) -- mark an optional select ``error=RETURN`` /
+    ``optional=True`` to treat a miss as a non-match. The one filter implementation,
+    shared by eager and streaming paths."""
     from .query.executor import aevaluate, truthy
 
-    with default_policy(RETURN):
-        for pred in predicates:
-            if not truthy(await aevaluate(pred, element, client=client)):
-                return False
+    for pred in predicates:
+        if not truthy(await aevaluate(pred, element, client=client)):
+            return False
     return True
 
 
