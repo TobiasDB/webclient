@@ -644,6 +644,7 @@ class WebClient(WebCore, IWebClient):
         summary per page is wasteful at crawl scale; pass ``facets=list(FACETS)``
         for the full summary)."""
         from ..crawl import Crawl, Edge
+        from ..crawl.models import DEFAULT_FACETS
 
         urls = _seed_urls(seeds)
         core = Crawl(
@@ -658,7 +659,7 @@ class WebClient(WebCore, IWebClient):
             keywords=[k.lower() for k in (keywords or [])],
             include=include,
             exclude=exclude,
-            facets=facets or [],
+            facets=list(facets or DEFAULT_FACETS),
             frontier=[Edge(url=u, depth=0) for u in urls],
         )
         return core.bind(self)

@@ -153,6 +153,22 @@ def test_metadata_and_structure_absent_on_json(httpserver):
         assert not doc.has_op("structure")
 
 
+def test_summary_prints_readable_llm_text(page):
+    # print(summary) yields a compact digest of the present facets, not a pydantic
+    # repr -- the form an LLM reads directly.
+    text = str(page.summary())
+    assert "[200 ok]" in text
+    assert "title: Widgets" in text
+    assert "description: The finest widgets." in text
+    assert "lang=en" in text
+    assert "headings: Widgets > Blue > Red" in text
+    assert "form(s)" in text and "post" in text
+    # an empty summary is labelled, not blank.
+    from webclient.summary import Summary
+
+    assert str(Summary()) == "(empty summary)"
+
+
 def test_summary_skeleton_field_is_opt_in(page):
     # skeleton is a typed field, populated only when requested by name (kept out of
     # the default lean summary).

@@ -138,6 +138,24 @@ def test_crawl_canonicalises_urls_for_dedup(wc, httpserver):
     assert len(page_hits) == 1  # the four variants collapsed to one fetch
 
 
+def test_facets_default_lives_on_the_model(wc, site):
+    # the lean default is declared on the model field (not applied deep in step):
+    # a crawl built with no `facets` already carries DEFAULT_FACETS.
+    from webclient.core.crawl.models import DEFAULT_FACETS
+
+    assert Crawl().facets == list(DEFAULT_FACETS)  # bare model
+    assert wc.crawl(site.url_for("/")).facets == list(DEFAULT_FACETS)  # via client
+
+
+def test_crawl_prints_a_readable_digest(wc, site):
+    with wc.crawl(site.url_for("/")) as crawl:
+        crawl.step()
+        text = str(crawl)  # inspect mid-crawl (still running)
+    assert "crawl [running]" in text and "page(s)" in text
+    assert "pages:" in text and "[200]" in text
+    assert "frontier (best first):" in text
+
+
 def test_default_crawl_carries_only_the_lean_facets(wc, site):
     # no `facets` -> the lean DEFAULT_FACETS (transport + metadata), not every
     # facet, so a large crawl does not run structure/runtime/probe per page.

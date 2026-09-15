@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..document.models import Summary
 
@@ -60,11 +60,43 @@ class ICrawl(BaseModel):
     keywords: list[str] = []  # best-first relevance signal (auto mode)
     include: str | None = None  # only follow links whose path contains this
     exclude: str | None = None  # skip links whose path contains this
-    facets: list[str] = []  # which summary backings each page carries ([] = DEFAULT_FACETS)
+    #: which summary backings each fetched page carries. Defaults (here, on the
+    #: model -- not applied deep in ``step``) to the lean ``DEFAULT_FACETS``, since
+    #: a full summary per page is wasteful at crawl scale; pass ``list(FACETS)`` for
+    #: the full summary, or any subset of facet/backing names.
+    facets: list[str] = Field(default_factory=lambda: list(DEFAULT_FACETS))
     status: Literal["running", "closed"] = "running"
     # -- live state (the LLM-efficient output) -------------------------------
     pages: list[Summary] = []  # a .summary() per fetched page
     frontier: list[Edge] = []  # unresolved edges (deduped, in scope)
+
+    def __str__(self) -> str:
+        """An LLM/human-readable digest: status, the pages crawled (status + title),
+        and the top of the scored frontier -- so ``print(crawl)`` is useful without
+        digging through ``.pages`` / ``.frontier`` by hand."""
+        head = (
+            f"crawl [{self.status}] scope={self.scope or '-'} · "
+            f"{len(self.pages)} page(s), {len(self.frontier)} frontier link(s)"
+        )
+        lines = [head]
+        if self.pages:
+            lines.append("pages:")
+            for pg in self.pages[:10]:
+                t = pg.transport
+                url = t.final_url if t else "?"
+                code = t.status_code if t else "?"
+                title = pg.metadata.title if pg.metadata else None
+                lines.append(f"  [{code}] {url}" + (f" — {title}" if title else ""))
+            if len(self.pages) > 10:
+                lines.append(f"  … +{len(self.pages) - 10} more")
+        if self.frontier:
+            lines.append("frontier (best first):")
+            for e in self.frontier[:10]:
+                label = e.text[:38] if e.text else "—"
+                lines.append(f"  {e.score:6.2f}  {label!r:40}  {e.url}")
+            if len(self.frontier) > 10:
+                lines.append(f"  … +{len(self.frontier) - 10} more")
+        return "\n".join(lines)
 
     if TYPE_CHECKING:
         # >>> generated: Crawl interface <<<

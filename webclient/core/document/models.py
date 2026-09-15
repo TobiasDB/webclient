@@ -182,6 +182,95 @@ class Summary(BaseModel):
     skeleton: str | None = None
     extra: dict[str, Any] = {}
 
+    def __str__(self) -> str:
+        """A compact, LLM-readable digest of the present facets -- so
+        ``print(doc.summary())`` yields useful prose, not a pydantic repr. Only the
+        sections that are set are shown; ``model_dump()`` is still there for JSON."""
+        lines: list[str] = []
+        t = self.transport
+        if t:
+            size = (
+                f", {t.size_bytes // 1024}KB"
+                if t.size_bytes and t.size_bytes >= 1024
+                else f", {t.size_bytes}B" if t.size_bytes else ""
+            )
+            lines.append(
+                f"[{t.status_code} {'ok' if t.ok else 'ERR'}] {t.final_url} "
+                f"({t.kind}{size})"
+            )
+            if t.redirect_chain:
+                lines.append(f"redirects: {' -> '.join(t.redirect_chain)}")
+        m = self.metadata
+        if m:
+            if m.title:
+                lines.append(f"title: {m.title}")
+            if m.description:
+                lines.append(f"description: {m.description}")
+            bits = [
+                f"{label}={val}"
+                for label, val in (
+                    ("lang", m.lang),
+                    ("canonical", m.canonical_url),
+                    ("type", m.page_type),
+                )
+                if val
+            ]
+            if bits:
+                lines.append(" · ".join(bits))
+            if m.feeds:
+                lines.append(f"feeds: {', '.join(m.feeds)}")
+        s = self.structure
+        if s:
+            if s.toc:
+                toc = " > ".join(e.text for e in s.toc[:6])
+                lines.append(f"headings: {toc}")
+            parts = [f"{s.links_internal} internal / {s.links_external} external links"]
+            if s.media_img:
+                parts.append(f"{s.media_img} image(s)")
+            if s.forms:
+                forms = ", ".join(
+                    f"{f.method} {f.action or ''}".strip() for f in s.forms
+                )
+                parts.append(f"{len(s.forms)} form(s): {forms}")
+            if s.pagination:
+                parts.append(f"pagination={s.pagination}")
+            lines.append(" · ".join(parts))
+            if s.word_count:
+                lines.append(f"words: {s.word_count} (~{s.reading_time_min} min read)")
+        r = self.runtime
+        if r:
+            bits = []
+            if r.is_spa:
+                bits.append("SPA")
+            if r.framework:
+                bits.append(f"framework={r.framework}")
+            if r.xhr_endpoints:
+                bits.append(f"{len(r.xhr_endpoints)} XHR endpoint(s)")
+            if r.dynamic_elements:
+                bits.append(f"{len(r.dynamic_elements)} dynamic element(s)")
+            if bits:
+                lines.append("runtime: " + " · ".join(bits))
+        p = self.probe
+        if p:
+            bits = []
+            if p.anti_bot:
+                bits.append(f"anti-bot={p.anti_bot}")
+            if p.was_browser_required:
+                bits.append("browser-required")
+            if p.render_gain:
+                bits.append(f"render_gain={p.render_gain}w")
+            if p.paywall:
+                bits.append("paywall")
+            if p.login_wall:
+                bits.append("login-wall")
+            if bits:
+                lines.append("probe: " + " · ".join(bits))
+        for key, val in self.extra.items():
+            lines.append(f"{key}: {val}")
+        if self.skeleton:
+            lines.append("skeleton:\n" + self.skeleton)
+        return "\n".join(lines) or "(empty summary)"
+
 
 class IDocument(BaseModel):
     """A resolved resource's data (the Core Fields), plus (for the checker) the
