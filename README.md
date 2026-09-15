@@ -95,11 +95,12 @@ machinery and return ready-to-use values (markdown / text / links / rows) -- the
 shape a quick script or an LLM tool wants:
 
 ```python
-from webclient.tools import fetch_markdown, fetch_text, links, extract
+from webclient.tools import fetch_markdown, fetch_text, links, page_skeleton, extract
 
 md = fetch_markdown("https://example.com")               # -> str (markdown)
 text = fetch_text("https://example.com")                 # -> str (nav stripped)
 urls = links("https://example.com")                      # -> list[str]
+skel = page_skeleton("https://example.com")              # -> str (selector map)
 rows = extract(                                          # -> list[dict]
     "https://shop.example/",
     ".card",                                             # a CSS selector per row
@@ -107,6 +108,12 @@ rows = extract(                                          # -> list[dict]
     limit=20,
 )
 ```
+
+`wc.search(query)` is robust: it sends a browser `User-Agent` (engines block a
+library one) and falls back across providers, with `browser=True` for the strongest
+anti-bot bypass. The same verbs are exposed as MCP tools and HTTP endpoints (incl.
+`POST /skeleton`), and `summary(url, "skeleton")` puts the selector map on the
+summary's `.skeleton` field.
 
 Each accepts an optional `client=` (defaults to a process-local one; pass your own
 `with WebClient() as wc` for lifecycle control).

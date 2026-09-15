@@ -417,6 +417,21 @@ def create_app(
         wc_: WebClient = app.state.wc
         return _run_verb(lambda: [r.url for r in wc_.fetch(url).render("links")])
 
+    @app.post("/skeleton", response_model=None)
+    def skeleton(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Fetch ``url`` and return its token-lean DOM skeleton (for writing CSS
+        selectors). ``browser`` (e.g. ``"probe"``) renders a JS/SPA page and marks
+        client-injected nodes."""
+        _auth(authorization)
+        url = _verb_url(body)
+        if isinstance(url, JSONResponse):
+            return url
+        wc_: WebClient = app.state.wc
+        browser = body.get("browser", False)
+        return _run_verb(lambda: wc_.fetch(url, browser=browser).skeleton())
+
     @app.post("/summary", response_model=None)
     def summary(
         body: dict[str, Any], authorization: str | None = Header(default=None)

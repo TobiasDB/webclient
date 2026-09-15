@@ -172,7 +172,7 @@ if TYPE_CHECKING:
         async def discover_sitemaps(self, url: Any, *, limit: int = ...) -> "Collection[AsyncReference]": ...  # type: ignore[override]
         async def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always', 'probe']" = ..., optional: bool = ..., error: Any = ..., **kw: Any) -> "AsyncDocument": ...  # type: ignore[override]
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "AsyncReference": ...
-        async def search(self, query: str, *, limit: int = ..., endpoint: str | None = ..., optional: bool = ..., error: Any = ...) -> "list[SearchResult]": ...  # type: ignore[override]
+        async def search(self, query: str, *, limit: int = ..., endpoint: str | None = ..., browser: Any = ..., optional: bool = ..., error: Any = ...) -> "list[SearchResult]": ...  # type: ignore[override]
         async def summary(self, url: Any, *include: str, **kw: Any) -> "Summary": ...  # type: ignore[override]
         # fmt: on
         # >>> end generated <<<

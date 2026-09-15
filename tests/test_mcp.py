@@ -73,3 +73,9 @@ def test_build_server_without_sdk_gives_a_clear_error(wc):
     except ImportError:
         with pytest.raises(ImportError, match="pip install mcp"):
             build_server(wc)
+
+
+def test_skeleton_tool(httpserver, wc):
+    httpserver.expect_request("/p").respond_with_data(PAGE, content_type="text/html")
+    sk = dispatch("skeleton", {"url": httpserver.url_for("/p")}, wc)
+    assert "div.card" in sk and "span.title" in sk

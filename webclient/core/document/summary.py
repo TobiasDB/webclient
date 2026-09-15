@@ -31,6 +31,10 @@ if TYPE_CHECKING:
 
 _HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 
+#: typed Summary fields that a requested include-name maps to directly (rather than
+#: the open ``extra`` dict) -- e.g. ``summary(url, "skeleton")`` sets ``.skeleton``.
+_DIRECT_FIELDS = set(Summary.model_fields) - set(FACETS) - {"extra"}
+
 #: (framework name, a marker substring in the served HTML)
 _FRAMEWORKS = (
     ("next", "__NEXT_DATA__"),
@@ -344,12 +348,16 @@ class SummaryBacking(Backing):
         data: dict[str, Any] = {
             f: core.dispatch(f) for f in FACETS if f in want and core.has_op(f)
         }
-        # any explicitly-named non-facet op -> the open `extra` section.
-        extra = {
-            name: core.dispatch(name)
-            for name in include
-            if name not in FACETS and name not in drop and core.has_op(name)
-        }
+        # a requested non-facet name that is a typed Summary field (e.g. "skeleton")
+        # populates that field; any other backing op goes to the open `extra` section.
+        extra: dict[str, Any] = {}
+        for name in include:
+            if name in FACETS or name in drop or not core.has_op(name):
+                continue
+            if name in _DIRECT_FIELDS:
+                data[name] = core.dispatch(name)
+            else:
+                extra[name] = core.dispatch(name)
         if extra:
             data["extra"] = extra
         return Summary(**data)

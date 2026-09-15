@@ -1,35 +1,38 @@
-"""SearchBacking: the client's ``search`` verb -> structured SearchResult hits.
+"""Robust search: provider fallback, result-shape parsing, ad/junk filtering.
 
-The results page is served locally (a canned DuckDuckGo-shaped document), so the
-test exercises the real fetch + parse path with no network.
+Live engines are exercised elsewhere; here providers point at a local server so
+the fallback + parsing are deterministic.
 """
-
-import asyncio
 
 import pytest
 
-from webclient import AsyncWebClient, SearchResult, WebClient
+from webclient import RETURN, WebClient, WebException
+from webclient.core.client import search as S
 
-# a DDG-shaped results page: three real hits (the third via a DDG redirect link),
-# one non-result row (an ad container with no ``.result__a``) that must be skipped.
-RESULTS_HTML = """
+# a DuckDuckGo-html-shaped results page: two organic hits (redirect-wrapped) and
+# one ad row whose href stays on duckduckgo.com.
+DDG_HTML = """
 <html><body>
-  <div class="result result--ad"><span>Sponsored</span></div>
-  <div class="result">
-    <a class="result__a" href="https://example.com/aeropress">Aeropress Guide</a>
-    <a class="result__snippet">How to brew a great cup with an Aeropress.</a>
-  </div>
-  <div class="result">
-    <a class="result__a" href="https://example.com/grinder">Best Grinders</a>
-    <a class="result__snippet">A roundup of burr grinders for espresso.</a>
-  </div>
-  <div class="result">
-    <a class="result__a"
-       href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fkettle&amp;rut=abc">
-       Gooseneck Kettles</a>
-    <a class="result__snippet">Pouring control for pour-over coffee.</a>
-  </div>
+<div class="result"><a class="result__a"
+  href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa">Title A</a>
+  <a class="result__snippet">Snippet A</a></div>
+<div class="result result--ad"><a class="result__a"
+  href="https://duckduckgo.com/y.js?ad_domain=x">Sponsored</a></div>
+<div class="result"><a class="result__a"
+  href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fb">Title B</a></div>
 </body></html>
+"""
+
+# a DuckDuckGo-lite-shaped page: flat anchors + a parallel snippet list.
+DDG_LITE = """
+<html><body><table>
+<tr><td><a class="result-link"
+  href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fx">X site</a></td></tr>
+<tr><td class="result-snippet">Snippet X</td></tr>
+<tr><td><a class="result-link"
+  href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fy">Y site</a></td></tr>
+<tr><td class="result-snippet">Snippet Y</td></tr>
+</table></body></html>
 """
 
 
@@ -39,64 +42,68 @@ def wc():
         yield client
 
 
-@pytest.fixture
-def search_endpoint(httpserver):
-    httpserver.expect_request("/html/").respond_with_data(
-        RESULTS_HTML, content_type="text/html; charset=utf-8"
+def _provider(name, path, server, mode="container"):
+    row, link, snip = (
+        ("a.result-link", "", ".result-snippet") if mode == "flat"
+        else (".result", ".result__a", ".result__snippet")
     )
-    return httpserver.url_for("/html/")
+    return S._Provider(name, server.url_for(path) + "?q={q}", row, link, snip, mode)
 
 
-def test_search_returns_structured_hits(wc, search_endpoint):
-    hits = wc.search("coffee", endpoint=search_endpoint)
-    assert all(isinstance(h, SearchResult) for h in hits)
-    # the ad row is skipped; the three real results come back in order.
-    assert [h.title for h in hits] == [
-        "Aeropress Guide",
-        "Best Grinders",
-        "Gooseneck Kettles",
-    ]
-    assert [h.rank for h in hits] == [1, 2, 3]
-    first = hits[0]
-    assert first.url == "https://example.com/aeropress"
-    assert first.description == "How to brew a great cup with an Aeropress."
+def test_container_parsing_and_ad_filtering(httpserver, wc):
+    httpserver.expect_request("/p").respond_with_data(DDG_HTML, content_type="text/html")
+    doc = wc.fetch(httpserver.url_for("/p"))
+    hits = S._parse(doc, _provider("p", "/p", httpserver), 10)
+    assert [h.title for h in hits] == ["Title A", "Title B"]        # the ad row dropped
+    assert hits[0].url == "https://example.com/a"                   # redirect unwrapped
+    assert hits[0].description == "Snippet A"
 
 
-def test_search_unwraps_duckduckgo_redirect(wc, search_endpoint):
-    hits = wc.search("coffee", endpoint=search_endpoint)
-    # the redirect link (``/l/?uddg=...``) is unwrapped to its real destination.
-    assert hits[2].url == "https://example.com/kettle"
-
-
-def test_search_respects_limit(wc, search_endpoint):
-    hits = wc.search("coffee", endpoint=search_endpoint, limit=1)
-    assert [h.title for h in hits] == ["Aeropress Guide"]
-
-
-def test_search_is_json_serialisable(wc, search_endpoint):
-    hit = wc.search("coffee", endpoint=search_endpoint)[0]
-    assert hit.model_dump() == {
-        "rank": 1,
-        "title": "Aeropress Guide",
-        "url": "https://example.com/aeropress",
-        "description": "How to brew a great cup with an Aeropress.",
-    }
-
-
-def test_search_lazy_records_and_collects(wc, search_endpoint):
-    hits = wc.lazy.search("coffee", endpoint=search_endpoint).collect()
-    assert [h.title for h in hits] == [
-        "Aeropress Guide",
-        "Best Grinders",
-        "Gooseneck Kettles",
+def test_flat_parsing_pairs_snippets_by_index(httpserver, wc):
+    httpserver.expect_request("/l").respond_with_data(DDG_LITE, content_type="text/html")
+    doc = wc.fetch(httpserver.url_for("/l"))
+    hits = S._parse(doc, _provider("l", "/l", httpserver, "flat"), 10)
+    assert [(h.title, h.url, h.description) for h in hits] == [
+        ("X site", "https://example.com/x", "Snippet X"),
+        ("Y site", "https://example.com/y", "Snippet Y"),
     ]
 
 
-def test_search_async(search_endpoint):
-    async def main():
-        async with AsyncWebClient() as ac:
-            return await ac.search("coffee", endpoint=search_endpoint)
+def test_search_falls_back_when_a_provider_is_blocked(httpserver, wc, monkeypatch):
+    # first provider 503s, second serves results -> search transparently falls over.
+    httpserver.expect_request("/blocked").respond_with_data("no", status=503)
+    httpserver.expect_request("/ok").respond_with_data(DDG_HTML, content_type="text/html")
+    monkeypatch.setattr(S, "_PROVIDERS", (
+        _provider("blocked", "/blocked", httpserver),
+        _provider("ok", "/ok", httpserver),
+    ))
+    hits = wc.search("q", limit=5)
+    assert [h.title for h in hits] == ["Title A", "Title B"]
 
-    hits = asyncio.run(main())
-    assert [h.rank for h in hits] == [1, 2, 3]
-    assert hits[1].url == "https://example.com/grinder"
+
+def test_search_raises_when_all_providers_fail(httpserver, wc, monkeypatch):
+    httpserver.expect_request("/b1").respond_with_data("no", status=503)
+    httpserver.expect_request("/b2").respond_with_data("no", status=429)
+    monkeypatch.setattr(S, "_PROVIDERS", (
+        _provider("b1", "/b1", httpserver), _provider("b2", "/b2", httpserver),
+    ))
+    with pytest.raises(WebException):
+        wc.search("q")
+    assert wc.search("q", optional=True) == []      # opt-in lenient -> []
+    assert wc.search("q", error=RETURN) == []
+
+
+def test_search_sends_a_browser_user_agent(httpserver, wc, monkeypatch):
+    # engines block a library UA -- every search request must carry a browser UA.
+    seen: dict[str, str] = {}
+
+    def handler(request):
+        from werkzeug.wrappers import Response
+
+        seen.update({k.lower(): v for k, v in request.headers.items()})
+        return Response(DDG_HTML, content_type="text/html")
+
+    httpserver.expect_request("/s").respond_with_handler(handler)
+    monkeypatch.setattr(S, "_PROVIDERS", (_provider("s", "/s", httpserver),))
+    wc.search("q")
+    assert "mozilla/5.0" in seen.get("user-agent", "").lower()

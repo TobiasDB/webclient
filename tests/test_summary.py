@@ -151,3 +151,11 @@ def test_metadata_and_structure_absent_on_json(httpserver):
         # metadata/structure gate on an html/xml tree
         assert not doc.has_op("metadata")
         assert not doc.has_op("structure")
+
+
+def test_summary_skeleton_field_is_opt_in(page):
+    # skeleton is a typed field, populated only when requested by name (kept out of
+    # the default lean summary).
+    assert page.summary().skeleton is None
+    s = page.summary("skeleton")
+    assert s.skeleton is not None and "form" in s.skeleton

@@ -176,6 +176,10 @@ class Summary(BaseModel):
     structure: Structure | None = None
     runtime: Runtime | None = None
     probe: Probe | None = None
+    #: the token-lean DOM skeleton (tag#id.class outline for writing selectors).
+    #: Opt-in -- populated only when requested by name: ``summary(url, "skeleton")``
+    #: -- so the default summary stays lean.
+    skeleton: str | None = None
     extra: dict[str, Any] = {}
 
 

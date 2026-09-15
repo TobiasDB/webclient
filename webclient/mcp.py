@@ -68,6 +68,9 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
     def links(a: dict[str, Any]) -> list[str]:
         return [r.url for r in wc().fetch(a["url"]).render("links")]
 
+    def skeleton(a: dict[str, Any]) -> str:
+        return wc().fetch(a["url"], browser=a.get("browser", False)).skeleton()
+
     def summary(a: dict[str, Any]) -> dict[str, Any]:
         facets = a.get("facets") or []
         return wc().fetch(a["url"], browser=a.get("browser", False)).summary(*facets).model_dump()
@@ -106,6 +109,10 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
              _schema(url={**_URL, "_required": True}), text),
         Tool("links", "Fetch a URL and return its outbound link URLs.",
              _schema(url={**_URL, "_required": True}), links),
+        Tool("skeleton", "Fetch a URL and return a token-lean DOM skeleton "
+             "(tag#id.class outline) to write CSS selectors from. Set browser='probe' "
+             "for a JS/SPA page: injected nodes are marked [xhr]/[js] and data APIs listed.",
+             _schema(url={**_URL, "_required": True}, browser={"type": "string"}), skeleton),
         Tool("summary", "Fetch a URL and return a token-lean structured summary. "
              "'facets' picks which sections (transport/metadata/structure/runtime/probe).",
              _schema(url={**_URL, "_required": True},

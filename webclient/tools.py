@@ -42,6 +42,17 @@ def links(url: str, *, client: WebClient | None = None, **kw: Any) -> list[str]:
     return [r.url for r in page.render("links")]
 
 
+def page_skeleton(
+    url: str, *, browser: Any = False, client: WebClient | None = None, **kw: Any
+) -> str:
+    """Fetch ``url`` and return its token-lean DOM skeleton -- a ``tag#id.class``
+    outline an LLM reads to write CSS selectors (bloat removed, uniform siblings
+    collapsed, leaf text hinted). Pass ``browser="probe"`` for a JS/SPA page: the
+    skeleton then marks client-injected nodes ``[xhr]``/``[js]`` and lists the data
+    APIs. ``**kw`` forwards ``max_lines`` / ``text_chars`` / ``legend`` etc."""
+    return _client(client).fetch(url, browser=browser).skeleton(**kw)
+
+
 def extract(
     url: str,
     result: str,
@@ -61,4 +72,4 @@ def extract(
     return rows.extract(**exprs).project()
 
 
-__all__ = ["fetch_markdown", "fetch_text", "links", "extract"]
+__all__ = ["fetch_markdown", "fetch_text", "links", "page_skeleton", "extract"]
