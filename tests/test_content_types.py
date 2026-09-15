@@ -128,6 +128,18 @@ def test_expect_defaults_to_none_and_does_not_misguide(httpserver, wc):
     assert ref.resolve().kind == "json"  # pure sniffing still works
 
 
+def test_mislabelled_json_does_not_crash(httpserver, wc):
+    # a body served as application/json but is actually HTML must degrade, not raise
+    # (R-M7): a lenient caller gets a not-ok selection, not a JSONDecodeError.
+    httpserver.expect_request("/badjson").respond_with_data(
+        b"<html><body>not json at all</body></html>", content_type="application/json"
+    )
+    doc = wc.fetch(httpserver.url_for("/badjson"))
+    assert doc.kind == "json"
+    assert doc.text_content == "null"  # no crash: empty data
+    assert not doc.select("anything", optional=True).ok
+
+
 def test_not_operator_evaluates(httpserver, wc):
     # `~expr` records op "not"; regression: it used to KeyError (500) at execution.
     page = b'<html><body><div class="item">a</div>' \

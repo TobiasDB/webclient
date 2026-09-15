@@ -80,6 +80,21 @@ def test_login_wall_password_field():
     assert classify(200, HTML, {}, body).login_wall
 
 
+def test_login_form_in_header_is_not_a_login_wall():
+    # a content page whose header has a sign-in form must NOT be flagged (R-M8):
+    body = (
+        b"<header><form><input type='password'></form></header>"
+        b"<main>" + b"real article content here " * 80 + b"</main>"
+    )
+    s = classify(200, HTML, {}, body)
+    assert not s.login_wall  # lots of other content -> not a wall
+
+
+def test_dedicated_login_page_is_a_login_wall():
+    body = b"<h1>Sign in</h1><form><input type='password'></form>"
+    assert classify(200, HTML, {}, body).login_wall
+
+
 def test_conservative_no_false_positives():
     # a link to /login and the word "subscribe" must NOT trip login/paywall
     body = b'<a href="/login">Sign in</a> subscribe to our newsletter ' + b"article " * 80

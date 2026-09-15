@@ -498,12 +498,12 @@ class WebClient(WebCore, IWebClient):
         static_words = visible_word_count(static.content) if static.ok else 0
         browser_words = visible_word_count(browser.content)
         gain = max(0, browser_words - static_words)
-        # content the browser recovered: the static page was empty/near-empty, or the
-        # render grew the visible text by a clear margin (guards tiny/noise deltas).
-        content_gated = static.ok and (
-            static_words < 40
-            or (static_words == 0 and browser_words > 0)
-            or (browser_words >= static_words * 1.25 and gain >= 20)
+        # content the browser actually recovered: a real gain in visible words
+        # (>= 20) that is either everything (static was empty) or a clear >=25%
+        # growth. A sparse static page the browser does NOT enrich (gain == 0) is
+        # NOT flagged -- render_gain == 0 must mean "static already carried it".
+        content_gated = static.ok and gain >= 20 and (
+            static_words == 0 or browser_words >= static_words * 1.25
         )
         sp = static._probe  # what the static tier detected (anti-bot / js / walls)
         required = bool(content_gated or not static.ok)

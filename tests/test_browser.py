@@ -153,6 +153,21 @@ def test_probe_mode_flags_js_injected_content(httpserver, wc):
         wc.release(doc)
 
 
+def test_probe_sparse_static_page_is_not_browser_required(httpserver, wc):
+    # R-M2: a genuinely sparse static page the browser does NOT enrich must report
+    # was_browser_required False / render_gain 0 -- not a false positive from a
+    # bare word-count threshold.
+    sparse = "<html><body><main><p>Short login screen.</p></main></body></html>"
+    httpserver.expect_request("/sparse").respond_with_data(sparse, content_type="text/html")
+    doc = wc.fetch(httpserver.url_for("/sparse"), browser="probe")
+    try:
+        p = doc._probe
+        assert p is not None and p.was_browser_required is False
+        assert p.render_gain == 0 and p.reason == "static_sufficient"
+    finally:
+        wc.release(doc)
+
+
 def test_probe_mode_reports_static_is_sufficient(httpserver, wc):
     """A page whose content is already in the static HTML: probe returns it with
     was_browser_required False and render_gain 0 -- 'you don't need a browser'."""

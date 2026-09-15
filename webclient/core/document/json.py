@@ -67,7 +67,10 @@ class JsonBacking(Backing):
         if core._element is not None:
             return core._element  # a selected sub-value
         if core._data is None:
-            core._data = _json.loads(core.content or b"null")
+            try:  # a mislabelled / truncated body must not crash a lenient caller
+                core._data = _json.loads(core.content or b"null")
+            except ValueError:
+                core._data = None  # degrade to "no data" (like html's empty tree)
         return core._data
 
     def select(

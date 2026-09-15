@@ -165,7 +165,11 @@ def classify(
     paywall = status == 402 or (
         "isaccessibleforfree" in low and re.search(r'isaccessibleforfree"?\s*:\s*false', low) is not None
     )
-    login_wall = status == 401 or ('type="password"' in low or "type='password'" in low)
+    # a login WALL, not merely a page that happens to carry a login form in its
+    # header: a 401, or a password field on a login-focused page (little other
+    # visible content). A content page with a header sign-in form is not flagged.
+    has_password = 'type="password"' in low or "type='password'" in low
+    login_wall = status == 401 or (has_password and len(visible) < 500)
 
     return Signals(
         anti_bot=anti_bot,
