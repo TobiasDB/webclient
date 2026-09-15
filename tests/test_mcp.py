@@ -58,6 +58,13 @@ def test_validate_and_run_plan_tools(httpserver, wc):
     assert out == "Aeropress"
 
 
+def test_lazy_query_guide_tool_returns_the_packaged_skill(wc):
+    # the query-syntax skill ships as package data and is pullable as an MCP tool.
+    out = dispatch("lazy_query_guide", {}, wc)
+    assert "name: lazy-web-queries" in out  # skill frontmatter
+    assert "wq.ref.resolve()" in out and ".project()" in out  # the DSL
+
+
 def test_unknown_tool_raises(wc):
     with pytest.raises(KeyError):
         dispatch("nope", {}, wc)

@@ -36,6 +36,7 @@ from .events import (
     NetworkEvent,
     PlanEvent,
 )
+from .guides import lazy_query_guide
 from .query.expr import from_blob, from_plan
 from .core.remote import RemoteWebClientCore
 from .surfaces import (
@@ -91,6 +92,7 @@ __all__ = [
     "from_url",
     "from_plan",
     "from_blob",
+    "lazy_query_guide",
     "default_client",
     "Collection",
     "Field",

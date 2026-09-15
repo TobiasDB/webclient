@@ -103,6 +103,11 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
         context = wc().ref(a["url"]) if a.get("url") else None
         return _serialize(wc().execute(expr, context), {})
 
+    def lazy_query_guide(a: dict[str, Any]) -> str:
+        from .guides import lazy_query_guide as _guide
+
+        return _guide()
+
     return [
         Tool("fetch_markdown", "Fetch a URL and return its content as markdown.",
              _schema(url={**_URL, "_required": True}), markdown),
@@ -144,6 +149,10 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
         Tool("run_plan", "Run a lazy-expression plan (object) or blob (string). Optional "
              "'url' supplies the fetch context. Rebuilt + name-validated before it runs.",
              _schema(plan={"type": "object"}, blob={"type": "string"}, url=_URL), run_plan),
+        Tool("lazy_query_guide", "Return the lazy-query syntax guide -- how to author a "
+             "lazy extraction plan (wq roots, select/extract/filter/project, operators, "
+             "blobs). Read it before writing a plan for validate_plan / run_plan.",
+             _schema(), lazy_query_guide),
     ]
 
 

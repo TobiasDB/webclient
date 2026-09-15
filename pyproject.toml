@@ -33,7 +33,7 @@ include = ["webclient*"]
 # PEP 561: ship the py.typed marker so downstream type checkers use the inline
 # types (the package is mypy --strict + pyright clean).
 [tool.setuptools.package-data]
-webclient = ["py.typed"]
+webclient = ["py.typed", "skills/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
