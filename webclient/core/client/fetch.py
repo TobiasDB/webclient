@@ -48,6 +48,7 @@ class FetchBacking(Backing):
         browser: "bool | Literal['never', 'auto', 'always', 'probe']" = False,
         optional: bool = False,
         error: Any = None,
+        keep_alive: "bool | float" = False,
         **kw: Any,
     ) -> "Document":
         """Resolve ``ref(url)`` into a document -- straight to the client's
@@ -55,11 +56,15 @@ class FetchBacking(Backing):
         ``resolve`` op (``fetch`` IS a resolve). ``browser`` picks the tier
         (``False`` static / ``"auto"`` escalate-if-JS-gated / ``True`` always /
         ``"probe"`` resolve both and compare -- the explicit "do I need a browser"
-        diagnostic). An IO op: the interface bridges it (``dispatch``)."""
+        diagnostic). ``keep_alive`` (browser only) marks the live page caller-owned
+        so a plan won't auto-release it (a number gives a TTL). An IO op: the
+        interface bridges it (``dispatch``)."""
         from ...errors import lenient
 
         ref = self.ref(core, url, **kw)
-        return await core.afetch(ref, optional=lenient(optional, error), browser=browser)
+        return await core.afetch(
+            ref, optional=lenient(optional, error), browser=browser, keep_alive=keep_alive
+        )
 
     async def summary(
         self,

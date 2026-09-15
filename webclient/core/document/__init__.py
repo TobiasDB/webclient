@@ -59,6 +59,8 @@ class Document(WebCore, IDocument):
     _events: list[Any] = PrivateAttr(default_factory=list)  # events routed here
     _page: Any = PrivateAttr(default=None)  # playwright Page (live document)
     _lease: Any = PrivateAttr(default=None)  # the page's pool lease (live document)
+    _keep_alive: bool = PrivateAttr(default=False)  # caller owns the page's lifecycle
+    #                                                 (a plan won't auto-release it)
     _row: Any = PrivateAttr(default=None)  # extracted columns (extract/field)
     _surface: Any = PrivateAttr(default=None)  # the core's single eager surface
     _set_cookies: dict[str, str] = PrivateAttr(  # transport-parsed Set-Cookie

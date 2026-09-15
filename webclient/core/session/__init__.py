@@ -89,6 +89,7 @@ class Session(WebClient):
         optional: bool = False,
         browser: Any = False,
         resolve: Any = None,
+        keep_alive: "bool | float" = False,
     ) -> Any:
         self._guard()
         scoped = ref.model_copy(
@@ -100,7 +101,11 @@ class Session(WebClient):
         scoped._client = self
         scoped._session = self
         doc = await super().afetch(
-            scoped, optional=optional, browser=browser, resolve=resolve
+            scoped,
+            optional=optional,
+            browser=browser,
+            resolve=resolve,
+            keep_alive=keep_alive,
         )
         doc.session_id = self.id
         for event in doc._events:

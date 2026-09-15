@@ -393,6 +393,7 @@ class WebClient(WebCore, IWebClient):
         optional: bool = False,
         browser: Any = False,
         resolve: Any = None,
+        keep_alive: "bool | float" = False,
     ) -> Document:
         """Resolve ``ref`` into a document over a leased transport (http) or a
         browser page. ``browser`` picks the tier: ``False``/``"never"`` = static
@@ -402,7 +403,10 @@ class WebClient(WebCore, IWebClient):
         retriable failure is retried up to ``retries`` times with exp backoff.
         ``resolve`` (a :class:`Resolve` bundle) overrides the client's own policy
         for this fetch -- its rate/retry/proxy concerns are declared to a downstream
-        proxy service, and its ``retry.max`` bounds the local retry loop."""
+        proxy service, and its ``retry.max`` bounds the local retry loop.
+        ``keep_alive`` marks a browser page the CALLER owns (a plan won't
+        auto-release it); a number keeps it with a TTL (auto-released after N
+        seconds as a safety net)."""
         import asyncio
 
         pol = resolve if resolve is not None else self.resolve
@@ -423,7 +427,7 @@ class WebClient(WebCore, IWebClient):
                 raise WebException(cast(WebError, doc.error), document=doc)
             return doc
         if mode == "always":
-            return await self._alive(ref)
+            return await self._alive(ref, keep_alive=keep_alive)
         if mode == "probe":
             return await self._probe_compare(ref)
         # declare the resolve policy (rate/retry/proxy) to a downstream proxy
@@ -457,7 +461,7 @@ class WebClient(WebCore, IWebClient):
             if resp is not None:  # keep the static hop's navigation/network events
                 self._capture(doc, ref, resp)
             return await self._escalate_to_browser(
-                ref, signals, list(doc._events), doc.content
+                ref, signals, list(doc._events), doc.content, keep_alive=keep_alive
             )
         if resp is not None:  # emit navigation/network events for the final doc
             self._capture(doc, ref, resp)
@@ -494,13 +498,15 @@ class WebClient(WebCore, IWebClient):
         signals: "Signals",
         static_events: "list[Any] | None" = None,
         static_html: "bytes | None" = None,
+        *,
+        keep_alive: "bool | float" = False,
     ) -> Document:
         """The static tier said this page is JS-gated; render it in a browser and
         record the two-tier trail on the resulting document (the ``probe`` facet).
         The static hop's events are carried onto the browser doc so ``doc.events``
         keeps the full trail (both tiers); the static HTML is kept so ``skeleton()``
         can mark server-initial vs client-injected nodes."""
-        doc = await self._alive(ref)
+        doc = await self._alive(ref, keep_alive=keep_alive)
         doc._static_html = static_html
         if static_events:
             doc._events = [*static_events, *doc._events]
@@ -742,7 +748,11 @@ class WebClient(WebCore, IWebClient):
         return scripts
 
     async def _alive(
-        self, ref: Reference, replay: list[dict[str, Any]] | None = None
+        self,
+        ref: Reference,
+        replay: list[dict[str, Any]] | None = None,
+        *,
+        keep_alive: "bool | float" = False,
     ) -> Document:
         lease = await self.pool.lease("page")
         browser = cast(Any, lease.client)  # the leased BrowserClient (subclass)
@@ -766,6 +776,9 @@ class WebClient(WebCore, IWebClient):
             doc._client = self
             doc._page = browser.page
             doc._lease = lease
+            doc._keep_alive = bool(keep_alive)  # caller owns the lifecycle if set
+            if isinstance(keep_alive, (int, float)) and not isinstance(keep_alive, bool):
+                self._expire_page(doc, float(keep_alive))  # TTL safety-net release
             # the read-side of the resiliency ladder: this document needed a real
             # browser (P0 records the fact; later phases fill the rest of the trail).
             doc._probe = ProbeRecord(
@@ -819,6 +832,22 @@ class WebClient(WebCore, IWebClient):
             await self.pool.release(doc._lease)
             doc._lease = None
             doc._page = None
+
+    def _expire_page(self, doc: Document, ttl: float) -> None:
+        """Schedule a TTL safety-net release of a kept-alive page: after ``ttl``
+        seconds, release it if the caller hasn't already (``_arelease`` is
+        idempotent). Runs on the engine loop (``_alive`` is on it), so a forgotten
+        keep-alive page can't leak its lease forever."""
+        import asyncio
+
+        async def _expire() -> None:
+            try:
+                await asyncio.sleep(ttl)
+                await self._arelease(doc)
+            except asyncio.CancelledError:  # client closing -> loop drains us
+                pass
+
+        asyncio.ensure_future(_expire())
 
     # -- naming / recovery ---------------------------------------------------
     def _register(self, doc: Document, ref: Reference) -> None:

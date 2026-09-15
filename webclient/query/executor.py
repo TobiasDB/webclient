@@ -16,12 +16,21 @@ from __future__ import annotations
 
 import asyncio
 import operator
+from contextvars import ContextVar
 from typing import Any, AsyncIterator, Awaitable, Callable, cast
 
 from .expr import Expr
 from .plan import Arg, Step
 
 DEFAULT_FANOUT = 8
+
+#: the live (browser-page) documents a running plan resolved, collected so the plan
+#: releases their page leases when it finishes -- a plan has no handle to
+#: ``release(doc)``, so an unreleased browser page would leak its pool lease. The
+#: outermost ``aevaluate`` owns the list (a mutable object shared with fan-out child
+#: tasks via the copied context); a ``keep_alive`` doc is never collected -- the
+#: caller owns it. ``None`` means "not inside a plan run".
+_PLAN_LIVE: "ContextVar[list[Any] | None]" = ContextVar("plan_live", default=None)
 
 #: sentinel: a streamed element dropped by a filter predicate
 _DROP = object()
@@ -95,14 +104,31 @@ def truthy(value: Any) -> bool:
 
 
 async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> Any:
-    """Evaluate ``expr`` against ``context`` (async). A non-Expr value is itself."""
+    """Evaluate ``expr`` against ``context`` (async). A non-Expr value is itself.
+    The outermost call scopes live-page collection: any browser page a plan step
+    resolves (without ``keep_alive``) is released when the plan finishes, so a plan
+    -- which has no ``release(doc)`` handle -- can't leak page leases."""
     if not isinstance(expr, Expr):
         return expr
-    client = client or expr._client or getattr(context, "_client", None)
-    if isinstance(context, Expr):  # an Expr context (wc.ref(url)) runs first
-        context = await aevaluate(context, client=client)
-    value = _start(expr._plan, context, client)
-    return await _arun(value, expr._plan.steps, 0, context, client)
+    outer = _PLAN_LIVE.get() is None
+    token = _PLAN_LIVE.set([]) if outer else None
+    try:
+        client = client or expr._client or getattr(context, "_client", None)
+        if isinstance(context, Expr):  # an Expr context (wc.ref(url)) runs first
+            context = await aevaluate(context, client=client)
+        value = _start(expr._plan, context, client)
+        return await _arun(value, expr._plan.steps, 0, context, client)
+    finally:
+        if outer and token is not None:
+            live = _PLAN_LIVE.get() or []
+            _PLAN_LIVE.reset(token)
+            for doc in live:  # return each plan-owned browser page to the pool
+                client_ = getattr(doc, "_client", None)
+                if client_ is not None:
+                    try:
+                        await client_._arelease(doc)
+                    except Exception:
+                        pass
 
 
 async def _arun(
@@ -179,7 +205,15 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
     if _iscoro(result):  # an IO op (resolve): await, then wrap the core it yields
         from ..surfaces import wrap
 
-        return wrap(await result)
+        core = await result
+        reg = _PLAN_LIVE.get()  # collect a plan-resolved browser page for release
+        if (
+            reg is not None
+            and getattr(core, "_page", None) is not None
+            and not getattr(core, "_keep_alive", False)
+        ):
+            reg.append(core)
+        return wrap(core)
     return result
 
 

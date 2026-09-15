@@ -302,3 +302,39 @@ def test_execute_plan_with_browser_always_selects_on_engine_loop(httpserver, wc)
         .project()
     )
     assert wc.execute(rows, wc.ref(url)) == [{"t": "A"}, {"t": "B"}]
+
+
+def test_plan_auto_releases_browser_pages(httpserver, wc):
+    # a plan has no release(doc) handle, so wc.execute must return the browser
+    # pages it resolved to the pool when it finishes (no lease leak).
+    from webclient import wq
+
+    httpserver.expect_request("/r").respond_with_data(
+        '<html><body><h1 id="h">Hi</h1></body></html>', content_type="text/html"
+    )
+    url = httpserver.url_for("/r")
+    before = wc.pool._held.get("page", 0)
+    for _ in range(3):
+        wc.execute(wq.ref.resolve(browser="always").select("#h").text_content, wc.ref(url))
+    assert wc.pool._held.get("page", 0) == before  # every plan page released
+
+
+def test_keep_alive_page_is_caller_owned(httpserver, wc):
+    # keep_alive marks the page caller-owned: it survives (a plan wouldn't release
+    # it) until the caller releases it. A numeric keep_alive adds a TTL safety net.
+    import time
+
+    httpserver.expect_request("/k").respond_with_data(
+        "<html><body>x</body></html>", content_type="text/html"
+    )
+    url = httpserver.url_for("/k")
+
+    doc = wc.fetch(url, browser=True, keep_alive=True)
+    assert doc._page is not None and doc._keep_alive is True
+    wc.release(doc)
+    assert doc._page is None
+
+    ttl_doc = wc.fetch(url, browser=True, keep_alive=0.5)
+    assert ttl_doc._page is not None
+    time.sleep(1.0)
+    assert ttl_doc._page is None  # TTL released it

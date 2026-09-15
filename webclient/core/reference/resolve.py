@@ -25,10 +25,17 @@ class ResolveBacking(Backing):
         browser: "bool | Literal['never', 'auto', 'always', 'probe']" = False,
         optional: bool = False,
         error: Any = None,
+        keep_alive: "bool | float" = False,
     ) -> "Document":
+        """Resolve into a document. ``keep_alive`` (browser only) marks the live page
+        as caller-owned so a plan won't auto-release it -- release it yourself with
+        ``release(doc)``, or pass a number of seconds for a TTL auto-release."""
         from ...errors import lenient
 
         target = core._session or core._client  # bound (a default by _bridge_io)
         return await target.afetch(
-            core, optional=lenient(optional, error), browser=browser
+            core,
+            optional=lenient(optional, error),
+            browser=browser,
+            keep_alive=keep_alive,
         )
