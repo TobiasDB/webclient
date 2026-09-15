@@ -272,6 +272,9 @@ class RuntimeBacking(Backing):
 
     provides = frozenset({"runtime"})
     gate = "summary"
+    #: ``content_from_xhr`` is the strongest, most actionable signal: post-load DOM
+    #: additions correlated with same-origin XHR/fetch mean the page composed itself
+    #: from those endpoints -- an agent can skip the render and fetch them directly.
 
     def applies(self, core: "Document") -> bool:
         if core.kind not in ("html", "xml"):
@@ -312,9 +315,19 @@ class RuntimeBacking(Backing):
         same_origin_xhr = sum(
             1 for c in endpoints if (urlparse(c.url).hostname or "").lower() == page_host
         )
+        # the strongest, most actionable signal: the page ADDED DOM nodes after
+        # navigation (phase="load" mutations) AND fetched from its own origin -- i.e.
+        # it composed its content client-side from those endpoints. An agent can then
+        # skip the render and hit the endpoints directly.
+        added_after_load = any(
+            e.kind == "added" and (e.detail or {}).get("phase") == "load"
+            for e in mutations
+        )
+        content_from_xhr = added_after_load and same_origin_xhr >= 1
         is_spa = (
             framework is not None  # a known JS framework / Edge-Delivery marker
-            or bool(mutations)  # DOM changed after the initial render
+            or content_from_xhr  # rewrote its DOM from its own XHR data (strongest)
+            or bool(mutations)  # DOM changed after the initial render / interaction
             or any(m in html for m in _SPA_MARKERS)  # a hydration-root / state blob
             or same_origin_xhr >= _SPA_XHR_MIN  # composes itself from its own origin
         )
@@ -327,6 +340,7 @@ class RuntimeBacking(Backing):
             dynamic_elements=sorted(
                 {f"{e.kind}:{e.selector}" if e.selector else e.kind for e in mutations}
             ),
+            content_from_xhr=content_from_xhr,
         )
 
 

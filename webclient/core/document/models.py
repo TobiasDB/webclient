@@ -125,6 +125,12 @@ class Runtime(BaseModel):
     uses_fetch: bool | None = None
     xhr_endpoints: list[XhrCall] = []
     dynamic_elements: list[str] = []
+    #: the page rewrote its own DOM after navigation using data it fetched from its
+    #: OWN origin -- i.e. the content is composed client-side from ``xhr_endpoints``.
+    #: When true, an agent can often **skip rendering the page** and fetch those
+    #: endpoints directly (they are the real data source). The strongest SPA signal:
+    #: post-load DOM mutations correlated with same-origin XHR/fetch.
+    content_from_xhr: bool | None = None
 
 
 class Probe(BaseModel):
@@ -248,6 +254,8 @@ class Summary(BaseModel):
                 bits.append(f"{len(r.xhr_endpoints)} XHR endpoint(s)")
             if r.dynamic_elements:
                 bits.append(f"{len(r.dynamic_elements)} dynamic element(s)")
+            if r.content_from_xhr:
+                bits.append("content from XHR (fetch endpoints directly)")
             if bits:
                 lines.append("runtime: " + " · ".join(bits))
         p = self.probe

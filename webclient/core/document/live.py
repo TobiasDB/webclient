@@ -115,7 +115,7 @@ class LiveBacking(Backing):
         return core._page is not None
 
     def on_load(self, core: Any, result: Any) -> None:
-        """Wrap the load-time console/network the client captured (a
+        """Wrap the load-time console/network/DOM-mutations the client captured (a
         ``clients.PageResult``) into events on the document -- the client hands
         back raw facts and fires this; the backing owns the shaping."""
         for level, text in result.console:
@@ -123,6 +123,17 @@ class LiveBacking(Backing):
         for method, url, rtype in result.network:  # XHR/fetch the page issued
             if rtype in ("xhr", "fetch"):
                 core._events.append(network_event(method, url, rtype, core))
+        # DOM mutations the page made during load/settle -- tagged phase="load" so
+        # the runtime facet can tell "the page rewrote its own DOM after navigation"
+        # (a strong SPA signal) from post-interaction mutations.
+        for r in getattr(result, "mutations", []):
+            core._events.append(
+                DOMUpdateEvent(
+                    kind=cast(Any, _kind(r)),
+                    detail={"ids": r.get("ids", []), "phase": "load"},
+                    document_id=core.name,
+                )
+            )
 
     def _loop(self, core: Any) -> Any:
         return core._client.loop()
@@ -323,6 +334,9 @@ class LiveBacking(Backing):
             e
             for e in core._events
             if isinstance(e, DOMUpdateEvent)
+            # load-time composition is a document-level SPA signal, not an
+            # interaction on this element -- exclude it from per-element narrowing.
+            and e.detail.get("phase") != "load"
             and (nid is None or nid in e.detail.get("ids", []))
         ]
         return sub

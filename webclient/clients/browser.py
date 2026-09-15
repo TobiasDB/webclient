@@ -41,6 +41,9 @@ class PageResult:
     network: list[tuple[str, str, str]] = field(  # (method, url, resource_type)
         default_factory=list
     )
+    #: DOM-mutation records the page accumulated during the initial load+settle (the
+    #: drained observer buffer) -- how the page rewrote its own DOM after navigation.
+    mutations: list[dict[str, Any]] = field(default_factory=list)
 
 
 class BrowserClient(Client):
@@ -113,11 +116,17 @@ class BrowserClient(Client):
         await page.goto(url, wait_until="domcontentloaded")
         if wait_stable:  # let JS/lazy content load before snapshotting
             await self._wait_stable(page)
-        # snapshot the settled console/network (replay-time noise is discarded,
-        # like the drained DOM mutations)
+        # snapshot the settled console/network + the DOM mutations the page made
+        # during load/settle (drained now, before any replay, so ``mutations`` is
+        # the load-time rewrite -- how the page composed its own DOM).
         result = PageResult(
             page.url, (await page.content()).encode(), list(console), list(network)
         )
+        for s in scripts:  # drain the load-time observer buffer -> result.mutations
+            if s.phase == "drain":
+                drained = await page.evaluate(s.source)
+                if isinstance(drained, list):
+                    result.mutations.extend(drained)
         for s in scripts:  # load scripts run once, after navigation
             if s.phase == "load":
                 await page.evaluate(s.source)

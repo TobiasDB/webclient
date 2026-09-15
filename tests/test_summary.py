@@ -166,6 +166,36 @@ def test_spa_detected_from_same_origin_xhr_without_a_known_framework():
     assert r.is_spa is True  # ...but two same-origin content fetches -> SPA
 
 
+def test_content_from_xhr_flags_a_page_composed_from_its_own_data():
+    # the strongest, most actionable SPA signal: the page ADDED DOM nodes after
+    # load (phase="load" mutations) AND fetched from its own origin -> the content
+    # comes from those endpoints, so an agent can fetch them directly.
+    from webclient.core.document import Document
+    from webclient.core.document.live import network_event
+    from webclient.events import DOMUpdateEvent
+
+    doc = Document(
+        kind="html", url="https://news.acme.com/", content=b"<html><body></body></html>",
+        status_code=200,
+    )
+    doc._events = [
+        network_event("GET", "https://news.acme.com/blocks/hero.plain.html", "fetch", doc),
+        DOMUpdateEvent(kind="added", detail={"ids": ["hero"], "phase": "load"}),
+    ]
+    r = doc.dispatch("runtime")
+    assert r.content_from_xhr is True and r.is_spa is True
+    assert "content from XHR" in str(doc.dispatch("summary"))
+
+    # a page that added nodes on load but only from THIRD-party data is not it.
+    doc2 = Document(kind="html", url="https://blog.acme.com/", content=b"<html></html>",
+                    status_code=200)
+    doc2._events = [
+        network_event("GET", "https://cdn.ads.example/widget", "fetch", doc2),
+        DOMUpdateEvent(kind="added", detail={"ids": ["ad"], "phase": "load"}),
+    ]
+    assert doc2.dispatch("runtime").content_from_xhr is False
+
+
 def test_third_party_only_xhr_does_not_flag_a_static_page_as_spa():
     # a server-rendered page whose only XHR/fetch calls are third-party analytics
     # is NOT a SPA (cross-origin beacons don't imply client composition).
