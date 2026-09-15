@@ -17,6 +17,13 @@ _SENTINEL = object()
 class EngineLoop:
     def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()
+        #: set once ``stop()`` begins tearing the loop down, BEFORE the drain. A
+        #: cross-thread ``run`` that raced past the ``closed`` check would
+        #: otherwise submit a coroutine onto a loop that is about to stop running
+        #: and then block forever (``timeout=None``) on a result that never
+        #: arrives. A stopping loop is a closed loop for the purpose of accepting
+        #: new blocking work.
+        self._stopping = False
         self._thread = threading.Thread(
             target=self._main, name="webclient-engine", daemon=True
         )
@@ -50,7 +57,7 @@ class EngineLoop:
                 "sync facade method called from the engine loop thread -- "
                 "bus handlers must not call facade methods"
             )
-        if self.closed:
+        if self.closed or self._stopping:
             coro.close()
             raise RuntimeError("engine loop is stopped (WebClient closed?)")
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
@@ -170,16 +177,29 @@ class EngineLoop:
 
     def stop(self) -> None:
         if not self.closed:
+            # Refuse new blocking work from other threads before we start
+            # tearing down, so a racing ``run`` cannot strand a coroutine on the
+            # stopping loop (see ``_stopping``).
+            self._stopping = True
             # Cancel every outstanding task and let the loop settle them so
             # none is "destroyed while pending" when the loop closes.
             done = threading.Event()
 
             async def _drain() -> None:
                 current = asyncio.current_task()
-                pending = [t for t in asyncio.all_tasks() if t is not current]
-                for task in pending:
-                    task.cancel()
-                if pending:
+                # Drain in rounds until nothing but ourselves is left: cancelling
+                # a task can run a ``finally`` that schedules NEW tasks (a lease
+                # release, a re-fetch), and a cross-thread submit can land a task
+                # after an earlier round's snapshot; a single pass would strand
+                # those and they would be "destroyed while pending" once the loop
+                # closes. Bounded so a task that reschedules itself forever cannot
+                # wedge shutdown.
+                for _ in range(1000):
+                    pending = [t for t in asyncio.all_tasks() if t is not current]
+                    if not pending:
+                        break
+                    for task in pending:
+                        task.cancel()
                     await asyncio.gather(*pending, return_exceptions=True)
                 self._loop.stop()
                 done.set()
