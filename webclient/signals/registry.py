@@ -46,6 +46,7 @@ class Detector:
     name: str
     stage: str
     fn: DetectorFn
+    contra: bool = False  # CONTRA evidence: its Hit REDUCES the flag instead of raising it
 
 
 @dataclass
@@ -59,11 +60,13 @@ DETECTORS: list[Detector] = []
 FLAGS: dict[str, FlagSpec] = {}
 
 
-def detector(*, flag: str, name: str, stage: "Stage") -> Callable[[DetectorFn], DetectorFn]:
+def detector(*, flag: str, name: str, stage: "Stage", contra: bool = False) -> Callable[[DetectorFn], DetectorFn]:
     """Register ``fn`` as a detector feeding ``flag`` from ``stage``. ``fn(ctx)``
-    returns a :class:`Hit` when the evidence is present, else ``None``."""
+    returns a :class:`Hit` when the evidence is present, else ``None``. ``contra=True``
+    makes it CONTRA evidence -- its Hit lowers the flag's confidence (e.g. "the dataset is
+    already in the served HTML" pulling ``spa`` down) rather than raising it."""
     def wrap(fn: DetectorFn) -> DetectorFn:
-        DETECTORS.append(Detector(flag=flag, name=name, stage=stage, fn=fn))
+        DETECTORS.append(Detector(flag=flag, name=name, stage=stage, fn=fn, contra=contra))
         return fn
     return wrap
 
@@ -85,11 +88,17 @@ def _combine(confidences: "list[float]") -> float:
 
 
 def build_flag(name: str, signals: "list[Signal]", *, remedy: str | None = None, value: Any = None) -> "Flag":
-    """Roll signals up into a flag: confidence = noisy-OR; ``present`` at the
-    threshold; ``remedy`` applies only once present."""
+    """Roll signals up into a flag: POSITIVE evidence combines by noisy-OR; each CONTRA
+    signal then multiplies the confidence DOWN by ``(1 - its confidence)`` (so a strong
+    contra can pull a flag below the present threshold). ``present`` at the threshold;
+    ``remedy`` applies only once present."""
     from ..core.document.models import Flag
 
-    conf = _combine([s.confidence for s in signals])
+    conf = _combine([s.confidence for s in signals if not s.contra])
+    for s in signals:  # contra evidence reduces the confidence
+        if s.contra:
+            conf *= 1.0 - min(1.0, max(0.0, s.confidence))
+    conf = round(conf, 3)
     present = conf >= _PRESENT
     return Flag(
         name=name, present=present, confidence=conf, signals=list(signals),
@@ -109,7 +118,7 @@ def run(ctx: Context) -> "list[Signal]":
         if hit is not None and hit.confidence > 0.0:
             out.append(Signal(
                 name=d.name, flag=d.flag, stage=cast(Any, d.stage),
-                confidence=hit.confidence, reason=hit.reason, value=hit.value,
+                confidence=hit.confidence, contra=d.contra, reason=hit.reason, value=hit.value,
             ))
     return out
 

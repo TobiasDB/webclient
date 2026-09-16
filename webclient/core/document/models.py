@@ -151,6 +151,7 @@ class Signal(BaseModel):
     flag: str = ""  # the flag it feeds, e.g. "spa" / "anti_bot_triggered"
     stage: Stage = "static"
     confidence: float = 0.0  # 0-1: how strongly this evidence indicates the flag
+    contra: bool = False  # CONTRA evidence: reduces the flag's confidence instead of raising it
     reason: str = ""  # human/LLM-readable evidence
     value: Any = None  # the salient metric / endpoint / label
 

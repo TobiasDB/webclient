@@ -69,6 +69,21 @@ def test_is_data_endpoint_tells_content_apis_from_analytics():
     assert not _is_data_endpoint("https://cdn.example.com/logo.png")              # an asset
 
 
+def test_contra_evidence_pulls_a_flag_below_present():
+    # negative/contra evidence: a framework-marked page that already server-renders its
+    # content is NOT a client shell -- the static_content_present CONTRA detector lowers spa
+    # below the present threshold, so we don't needlessly escalate an SSR page to a browser.
+    ssr = (b"<html><head><script>window.__NEXT_DATA__={}</script></head><body>"
+           + b"<p>real server-rendered text </p>" * 400 + b"</body></html>")
+    f = flags_from_response(200, {"content-type": "text/html"}, {}, ssr)
+    assert not f["spa"].present  # a positive marker fired, but contra pulled it down
+    assert any(s.contra for s in f["spa"].signals)  # the contra evidence is recorded on the flag
+
+    # an EMPTY shell with the same marker keeps spa present (contra doesn't fire)
+    shell = b"<html><head><script>window.__NEXT_DATA__={}</script></head><body><div id=__next></div></body></html>"
+    assert flags_from_response(200, {"content-type": "text/html"}, {}, shell)["spa"].present
+
+
 def test_signals_package_imports_without_lxml_or_a_browser():
     # the detection package is isolated: importable + runnable with the native deps
     # unavailable, so a remote/thin context can read flags too.

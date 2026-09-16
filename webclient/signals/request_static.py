@@ -138,6 +138,16 @@ def _hydration_state_blob(ctx: Context) -> Hit | None:
     return Hit(0.5, "a serialized initial-state blob") if any(m in ctx.text for m in _HYDRATION_BLOBS) else None
 
 
+@detector(flag="spa", name="static_content_present", stage="static", contra=True)
+def _static_content_present(ctx: Context) -> Hit | None:
+    # CONTRA evidence: a big, already-populated static body argues AGAINST a client-rendered
+    # shell -- even a framework-marked page that server-renders its content is scrapeable
+    # without JS, so we shouldn't escalate it to a browser on a lone framework marker.
+    if ctx.is_html and len(ctx.visible) > 2000:
+        return Hit(0.6, f"{len(ctx.visible)} chars of content already in the served HTML")
+    return None
+
+
 # -- anti-bot -----------------------------------------------------------------
 
 
