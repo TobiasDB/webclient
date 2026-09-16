@@ -11,6 +11,7 @@ domain -- clean layering.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
@@ -320,58 +321,46 @@ class BrowserClient(Client):
         await self.page.close()
 
 
-#: a small pool of realistic desktop identities to randomise a page's fingerprint
-#: over (user-agent + viewport + locale + timezone), so repeated renders don't share
-#: one obvious automation fingerprint.
+#: a small pool of realistic, INTERNALLY CONSISTENT desktop identities: the UA, platform,
+#: WebGL vendor/renderer, core count and viewport all agree for that OS (an inconsistent
+#: fingerprint -- Windows UA + Linux platform + Mac GPU -- is itself a strong bot tell).
+#: ``{major}`` is filled from the ACTUAL launched-engine version so UA and engine match.
+#: (For a large, always-current set of REAL fingerprints, a dataset like browserforge could
+#: back this pool -- see the note in the review; kept dependency-free here.)
 _FINGERPRINTS: tuple[dict[str, Any], ...] = (
-    # ``{major}`` is filled from the ACTUAL launched-browser version so the UA matches the
-    # engine (a UA/engine mismatch is itself a bot tell).
     {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like "
-     "Gecko) Chrome/{major}.0.0.0 Safari/537.36", "vw": 1920, "vh": 1080,
-     "locale": "en-US", "tz": "America/New_York"},
+     "Gecko) Chrome/{major}.0.0.0 Safari/537.36", "platform": "Win32", "cores": 16,
+     "mem": 8, "vw": 1920, "vh": 1080, "locale": "en-US", "tz": "America/New_York",
+     "gpu_vendor": "Google Inc. (NVIDIA)",
+     "gpu_renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)"},
     {"ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, "
-     "like Gecko) Chrome/{major}.0.0.0 Safari/537.36", "vw": 1512, "vh": 982,
-     "locale": "en-GB", "tz": "Europe/London"},
+     "like Gecko) Chrome/{major}.0.0.0 Safari/537.36", "platform": "MacIntel", "cores": 10,
+     "mem": 8, "vw": 1512, "vh": 982, "locale": "en-GB", "tz": "Europe/London",
+     "gpu_vendor": "Google Inc. (Apple)",
+     "gpu_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"},
     {"ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-     "Chrome/{major}.0.0.0 Safari/537.36", "vw": 1680, "vh": 1050,
-     "locale": "en-US", "tz": "America/Chicago"},
-    {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like "
-     "Gecko) Chrome/{major}.0.0.0 Safari/537.36", "vw": 1536, "vh": 864,
-     "locale": "en-CA", "tz": "America/Toronto"},
+     "Chrome/{major}.0.0.0 Safari/537.36", "platform": "Linux x86_64", "cores": 8,
+     "mem": 8, "vw": 1680, "vh": 1050, "locale": "en-US", "tz": "America/Chicago",
+     "gpu_vendor": "Google Inc. (Intel)",
+     "gpu_renderer": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL 4.6)"},
 )
+#: the DEFAULT identity for plain stealth (no random fingerprint): the Linux one, coherent
+#: with this host and the bundled engine -- and it never leaks ``HeadlessChrome`` in the UA.
+_DEFAULT_FP = _FINGERPRINTS[2]
 
-#: the UA applied whenever stealth is on but no random fingerprint is requested -- so a
-#: default stealth render never leaks the headless build's ``HeadlessChrome/...`` token. The
-#: platform is honest (matches the host) and ``{major}`` matches the real engine version.
-_STEALTH_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-               "Chrome/{major}.0.0.0 Safari/537.36")
-
-#: injected before every navigation on a stealth context: mask the obvious headless /
-#: automation tells so a routine render isn't trivially fingerprinted as a bot.
-_STEALTH_JS = """(() => {
+#: static automation-tell masks (identity-independent) -- injected on every stealth context.
+_STEALTH_BASE = """(() => {
   const def = (o, p, v) => { try { Object.defineProperty(o, p, {get: () => v}); } catch (e) {} };
   def(navigator, 'webdriver', undefined);
   def(navigator, 'languages', ['en-US', 'en']);
   def(navigator, 'plugins', [1, 2, 3, 4, 5]);
-  def(navigator, 'hardwareConcurrency', 8);
-  def(navigator, 'deviceMemory', 8);
   try { window.chrome = window.chrome || {runtime: {}, app: {}, csi: () => {}, loadTimes: () => {}}; } catch (e) {}
-  // permissions.query for 'notifications' shouldn't reveal the headless 'denied'/prompt tell
   try {
     const q = window.navigator.permissions && window.navigator.permissions.query;
     if (q) window.navigator.permissions.query = (p) =>
       p && p.name === 'notifications'
         ? Promise.resolve({state: Notification.permission})
         : q(p);
-  } catch (e) {}
-  // spoof the WebGL vendor/renderer to a common real GPU instead of 'Google SwiftShader'
-  try {
-    const gp = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function (p) {
-      if (p === 37445) return 'Intel Inc.';                 // UNMASKED_VENDOR_WEBGL
-      if (p === 37446) return 'Intel Iris OpenGL Engine';   // UNMASKED_RENDERER_WEBGL
-      return gp.call(this, p);
-    };
   } catch (e) {}
 })()"""
 
@@ -380,6 +369,26 @@ _STEALTH_ARGS = (
     "--disable-blink-features=AutomationControlled",
     "--disable-features=IsolateOrigins,site-per-process",
 )
+
+
+def _identity_js(fp: "dict[str, Any]") -> str:
+    """The stealth init script for ONE identity: the fingerprint's platform / core-count /
+    memory / WebGL vendor+renderer, so those spoofed knobs agree with its UA. Injected
+    SEPARATELY from _STEALTH_BASE (two IIFEs in one script would hit JS ASI and mis-parse)."""
+    return (
+        "(() => { const def=(o,p,v)=>{try{Object.defineProperty(o,p,{get:()=>v});}catch(e){}};"
+        "def(navigator,'platform'," + json.dumps(fp["platform"]) + ");"
+        "def(navigator,'hardwareConcurrency'," + str(int(fp["cores"])) + ");"
+        "def(navigator,'deviceMemory'," + str(int(fp["mem"])) + ");"
+        "const spoof=(proto)=>{ if(!proto) return; const gp=proto.getParameter;"
+        "proto.getParameter=function(p){"
+        "if(p===37445)return " + json.dumps(fp["gpu_vendor"]) + ";"       # UNMASKED_VENDOR_WEBGL
+        "if(p===37446)return " + json.dumps(fp["gpu_renderer"]) + ";"     # UNMASKED_RENDERER_WEBGL
+        "return gp.call(this,p);};};"
+        "try{spoof(window.WebGLRenderingContext&&WebGLRenderingContext.prototype);"
+        "spoof(window.WebGL2RenderingContext&&WebGL2RenderingContext.prototype);}catch(e){}"
+        "})()"
+    )
 
 
 def _random_fingerprint() -> "dict[str, Any]":
@@ -431,19 +440,21 @@ class BrowserFactory(ClientFactory):
     async def create(self) -> BrowserClient:
         browser = await self._browser_()
         opts: dict[str, Any] = {}
-        if self.fingerprint:  # a fresh randomised identity per page
-            fp = _random_fingerprint()
+        # one COHERENT identity: a random one per page when fingerprinting, else the default
+        # (which still fixes the HeadlessChrome UA leak). Everything -- UA, viewport, locale,
+        # timezone, and the injected platform/WebGL below -- comes from that single identity.
+        fp = _random_fingerprint() if self.fingerprint else _DEFAULT_FP
+        if self.stealth or self.fingerprint:
             opts = {
                 "user_agent": fp["ua"].format(major=self._major),
                 "viewport": {"width": fp["vw"], "height": fp["vh"]},
                 "locale": fp["locale"],
                 "timezone_id": fp["tz"],
             }
-        elif self.stealth:  # no random identity, but still never leak HeadlessChrome in the UA
-            opts = {"user_agent": _STEALTH_UA.format(major=self._major)}
         context = await browser.new_context(**opts)
         if self.stealth:
-            await context.add_init_script(_STEALTH_JS)
+            await context.add_init_script(_STEALTH_BASE)      # identity-independent masks
+            await context.add_init_script(_identity_js(fp))   # THIS identity's platform/GPU/cores
         self._contexts.append(context)
         return BrowserClient(await context.new_page())
 

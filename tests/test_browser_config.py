@@ -60,3 +60,22 @@ def test_http2_protocol_error_escalates_to_a_browser():
         wc._escalate_to_browser = fake_browser  # type: ignore[method-assign]
         doc = wc.fetch("https://x.co/", browser="auto", optional=True)
     assert doc is sentinel  # escalated, not the errored static doc
+
+
+def test_stealth_fingerprints_are_internally_consistent():
+    # each identity's UA / platform / WebGL / cores agree (an inconsistent fingerprint --
+    # Windows UA + Linux platform + Mac GPU -- is itself a bot tell), and the injected
+    # identity script carries those same values.
+    from webclient.clients.browser import _DEFAULT_FP, _FINGERPRINTS, _identity_js
+
+    for fp in _FINGERPRINTS:
+        ua = fp["ua"]
+        if "Windows" in ua:
+            assert fp["platform"] == "Win32" and "NVIDIA" in fp["gpu_renderer"]
+        elif "Macintosh" in ua:
+            assert fp["platform"] == "MacIntel" and "Apple" in fp["gpu_renderer"]
+        else:
+            assert "Linux" in ua and fp["platform"] == "Linux x86_64" and "Intel" in fp["gpu_renderer"]
+        js = _identity_js(fp)  # the injected script uses this identity's own values
+        assert fp["platform"] in js and fp["gpu_vendor"] in js and str(fp["cores"]) in js
+    assert _DEFAULT_FP["platform"] == "Linux x86_64"  # default identity is coherent with the host
