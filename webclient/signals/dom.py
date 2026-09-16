@@ -9,11 +9,14 @@ method on it -- so importing this module stays remote-safe.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlparse
 
 from .context import Context, norm
 from .registry import Hit, detector, flag
+
+if TYPE_CHECKING:
+    from ..core.document.models import Form, Signal
 
 _SPA_RATIO = 0.4  # injected-text share that alone marks a SPA
 _SPA_MAIN_RATIO = 0.15  # lower bar when the injection is main-area + same-origin XHR
@@ -74,7 +77,7 @@ def _xhr_composed(ctx: Context) -> Hit | None:
 # -- pagination (tree) --------------------------------------------------------
 
 
-def _pagination_value(signals: Any, ctx: Context) -> Any:
+def _pagination_value(signals: "list[Signal]", ctx: Context) -> Any:
     return next((s.value for s in signals if s.value), None)
 
 
@@ -120,7 +123,7 @@ def _numbered_sequence(ctx: Context) -> Hit | None:
 # -- forms (tree) -------------------------------------------------------------
 
 
-def _forms_value(signals: Any, ctx: Context) -> Any:
+def _forms_value(signals: "list[Signal]", ctx: Context) -> "list[Form] | None":
     if ctx.tree is None:
         return None
     from ..core.document.models import Form
@@ -150,7 +153,7 @@ def _form_element(ctx: Context) -> Hit | None:
 # -- buttons (tree) -----------------------------------------------------------
 
 
-def _buttons_value(signals: Any, ctx: Context) -> Any:
+def _buttons_value(signals: "list[Signal]", ctx: Context) -> list[str] | None:
     if ctx.tree is None:
         return None
     btns = ctx.tree.cssselect('button, input[type="submit"], input[type="button"]')

@@ -10,10 +10,13 @@ tree-based signals live in :mod:`.dom` (facet-only).
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING
 
 from .context import Context
 from .registry import Hit, detector, flag
+
+if TYPE_CHECKING:
+    from ..core.document.models import Signal
 
 _SPA_SHELL = re.compile(
     r'<(?:div|main|app-root|#document)[^>]*\bid=["\'](?:root|app|__next|__nuxt)["\']'
@@ -73,9 +76,9 @@ def _vendor_interstitial(low: str) -> str | None:
 # -- flags --------------------------------------------------------------------
 
 
-def _spa_endpoints(signals: Any, ctx: Context) -> Any:
-    """The same-origin XHR/fetch endpoints (duck-typed off the events, so this stays
-    pure). Empty on a request/static context; filled by the facet's browser events."""
+def _spa_endpoints(signals: "list[Signal]", ctx: Context) -> list[str] | None:
+    """Same-origin XHR/fetch endpoints, duck-typed off the events so this stays pure.
+    Empty on a request/static context; filled by the facet's browser events."""
     eps: list[str] = []
     for e in ctx.events:
         if getattr(e, "resource_type", None) in ("xhr", "fetch"):
@@ -88,13 +91,13 @@ def _spa_endpoints(signals: Any, ctx: Context) -> Any:
     return eps or None
 
 
-def _antibot_remedy(signals: Any, ctx: Context) -> str | None:
+def _antibot_remedy(signals: "list[Signal]", ctx: Context) -> str | None:
     # a named vendor -> a stealth browser; a bare block -> a fresh proxy exit.
     named = any(s.name in ("challenge_interstitial", "vendor_on_block") for s in signals)
     return "stealth" if named else "proxy"
 
 
-def _antibot_value(signals: Any, ctx: Context) -> Any:
+def _antibot_value(signals: "list[Signal]", ctx: Context) -> str | None:
     return next((s.value for s in signals if isinstance(s.value, str)), None)
 
 

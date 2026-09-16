@@ -118,10 +118,10 @@ def flags(ctx: Context) -> "dict[str, Flag]":
     """Every registered flag, built from the signals that fired for ``ctx``. A flag
     with no evidence is present=False (a total surface -- never an error)."""
     signals = run(ctx)
-    by: dict[str, list[Any]] = {}
+    by: dict[str, list[Signal]] = {}
     for s in signals:
         by.setdefault(s.flag, []).append(s)
-    out: dict[str, Any] = {}
+    out: dict[str, Flag] = {}
     for name, spec in FLAGS.items():
         group = by.get(name, [])
         remedy = spec.remedy(group, ctx) if callable(spec.remedy) else spec.remedy

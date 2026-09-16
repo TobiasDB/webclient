@@ -18,6 +18,7 @@ facet's typed return values); this package imports them lazily to avoid a cycle.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from . import request_static as _request_static  # noqa: F401  (registers pure detectors)
@@ -47,10 +48,10 @@ def framework(html: str) -> "str | None":
 
 def flags_from_response(
     status: int,
-    headers: Any,
-    cookies: Any,
-    body: Any,
-    redirect_chain: Any = (),
+    headers: "Mapping[Any, Any] | Iterable[tuple[Any, Any]]",
+    cookies: "Iterable[str] | Mapping[str, Any]",
+    body: "bytes | str | None",
+    redirect_chain: "Iterable[str]" = (),
     **facet: Any,
 ) -> "dict[str, Flag]":
     """The flags of a raw response -- build a :class:`Context` and run the registry.
