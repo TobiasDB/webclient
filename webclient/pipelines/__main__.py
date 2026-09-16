@@ -1,12 +1,15 @@
-"""``python -m webclient.pipelines`` -- run the onboarding pipeline from the CLI.
+"""The ``onboard`` CLI -- run the onboarding pipeline over one brief and N companies.
 
-Give it a reusable brief (a markdown file) and one or more companies; it searches,
-crawls, evaluates and authors a tested lazy query for each, printing the result and
-the LLM spend. The model comes from ``--model`` / ``ANTHROPIC_API_KEY`` (or any
-Messages-API ``--base-url``); web search uses the optional ``ddgs`` package.
+    onboard <brief> <company> [<company> ...] [options]
+    onboard product-catalogue Acme Globex Initech --budget 1.00 -v
 
-    python -m webclient.pipelines --brief briefs/product_catalogue.md \
-        --company "Acme" --company "Globex" --budget 1.00 -v
+``<brief>`` is a reusable brief: a path to a markdown file, or the name of a packaged
+brief under ``webclient/pipelines/briefs`` (e.g. ``product-catalogue``). It searches,
+crawls, evaluates and authors a tested query for each company, printing the source,
+the query and the spend. The model comes from ``--model`` / ``ANTHROPIC_API_KEY`` (or
+any Messages-API ``--base-url``); web search uses the optional ``ddgs`` package.
+
+Also runnable as ``python -m webclient.pipelines``.
 """
 
 from __future__ import annotations
@@ -14,11 +17,37 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from importlib.resources import files
+from pathlib import Path
 from typing import Sequence
 
 from ..surfaces import WebClient
 from .llm import Budget, LlmClient
 from .onboarding import Brief, OnboardingResult, ddg_search, onboard
+
+
+def _load_brief(arg: str) -> Brief:
+    """Resolve ``<brief>``: a path to a markdown file, else a packaged brief by name
+    (``webclient/pipelines/briefs/<name>.md``; ``-`` and ``_`` interchangeable)."""
+    path = Path(arg)
+    if path.is_file():
+        return Brief.load(str(path))
+    for name in {arg, arg.replace("-", "_"), arg.replace("_", "-")}:
+        res = files("webclient.pipelines").joinpath(f"briefs/{name}.md")
+        if res.is_file():
+            return Brief.from_markdown(res.read_text(encoding="utf-8"))
+    raise SystemExit(
+        f"no brief {arg!r}: not a file, and no packaged briefs/{arg}.md. "
+        "Available: " + ", ".join(_packaged_briefs()) or "(none)"
+    )
+
+
+def _packaged_briefs() -> "list[str]":
+    try:
+        root = files("webclient.pipelines").joinpath("briefs")
+        return sorted(p.name[:-3] for p in root.iterdir() if p.name.endswith(".md"))
+    except Exception:
+        return []
 
 
 def _print_result(result: OnboardingResult, *, show_steps: bool) -> None:
@@ -41,12 +70,14 @@ def _print_result(result: OnboardingResult, *, show_steps: bool) -> None:
 
 
 def main(argv: "Sequence[str] | None" = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m webclient.pipelines")
-    parser.add_argument("--brief", required=True, help="path to a brief markdown file")
-    parser.add_argument(
-        "--company", action="append", default=[], metavar="NAME",
-        help="a company to onboard (repeatable)",
+    parser = argparse.ArgumentParser(
+        prog="onboard",
+        description="Onboard companies for a dataset brief.",
+        epilog="e.g. onboard product-catalogue Acme Globex --budget 1.00 -v",
     )
+    parser.add_argument("brief", help="a brief markdown file, or a packaged brief name")
+    parser.add_argument("companies", nargs="+", metavar="company",
+                        help="one or more companies to onboard")
     parser.add_argument("--model", default=None, help="LLM model id (else the default)")
     parser.add_argument("--base-url", default=None, help="a Messages-API base URL")
     parser.add_argument("--budget", type=float, default=None, metavar="USD",
@@ -62,11 +93,9 @@ def main(argv: "Sequence[str] | None" = None) -> int:
     )
     logging.basicConfig(level=level, format="%(message)s")
 
-    if not args.company:
-        parser.error("give at least one --company")
-    brief = Brief.load(args.brief)
+    brief = _load_brief(args.brief)
     print(f"brief: {brief.title or brief.name or args.brief} "
-          f"({len(brief.fields)} field[s]) -> {len(args.company)} company(ies)")
+          f"({len(brief.fields)} field[s]) -> {len(args.companies)} company(ies)")
 
     kwargs: dict[str, object] = {}
     if args.model:
@@ -78,7 +107,7 @@ def main(argv: "Sequence[str] | None" = None) -> int:
         if not llm.auth:
             parser.error("no API key -- set ANTHROPIC_API_KEY (or point --base-url at a gateway)")
         results = onboard(
-            args.company, brief, wc=wc, llm=llm, search=ddg_search,
+            args.companies, brief, wc=wc, llm=llm, search=ddg_search,
             max_pages=args.max_pages, browser=not args.no_browser, budget=budget,
         )
     for result in results:

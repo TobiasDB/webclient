@@ -443,17 +443,20 @@ def test_model_price_includes_cache_read_and_write_costs():
     assert hourly.cache_write_usd_per_mtok == pytest.approx(10.0)
 
 
-def test_cli_parses_and_errors_without_a_key(monkeypatch, tmp_path):
-    # the CLI loads the brief and wires the run; without an API key it errors cleanly
-    # (SystemExit) rather than trying to call a model.
-    from webclient.pipelines.__main__ import main
+def test_cli_positional_args_and_brief_by_name(monkeypatch, tmp_path):
+    # the CLI is `onboard <brief> <company>...`: a brief path OR a packaged name, then
+    # one or more companies. Without an API key it errors cleanly (SystemExit).
+    from webclient.pipelines.__main__ import _load_brief, main
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     brief = tmp_path / "b.md"
     brief.write_text("---\nname: t\nschema:\n  - name: the name\n---\nA dataset.\n")
 
-    with pytest.raises(SystemExit):
-        main(["--brief", str(brief), "--company", "Acme"])
+    with pytest.raises(SystemExit):  # brief path + a company, no key -> clean exit
+        main([str(brief), "Acme", "Globex"])
+    with pytest.raises(SystemExit):  # no company at all is an argparse error
+        main([str(brief)])
 
-    with pytest.raises(SystemExit):  # no --company is also an error
-        main(["--brief", str(brief)])
+    # a packaged brief resolves by name (with - / _ interchangeable)
+    assert _load_brief("ir-news").name == "ir-news"
+    assert _load_brief("product_catalogue").fields  # the shipped example
