@@ -165,7 +165,9 @@ def test_element_text_is_whitespace_normalized():
     el = make_doc().select(".card .title")
     assert el.text_content == "First Card"
     assert isinstance(el, Document) and el.kind == "html"
-    assert el.content.startswith(b"<h2")  # element bytes
+    # a selected element's markup is serialised on demand via html() (its .content --
+    # the raw response bytes -- is empty; the element isn't a fetched response).
+    assert el.html().startswith("<h2")
 
 
 def test_element_select_is_scoped_to_element():

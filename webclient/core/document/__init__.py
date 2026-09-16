@@ -103,21 +103,18 @@ class Document(WebCore, IDocument):
         this one -- a ``None`` node means the selection missed (a not-ok, empty
         sub-document). The core owns this construction so a selection backing
         (html / json) never hand-wires a sub-core's internals (client, root, the
-        shared event store, the missing flag): it just hands over the node."""
-        content = b""
-        if node is not None and not isinstance(node, (str, int, float, bool, list, dict)):
-            try:
-                from lxml import html as _lh
+        shared event store, the missing flag): it just hands over the node.
 
-                content = _lh.tostring(node)  # the element's own bytes
-            except Exception:
-                content = b""
+        The element's ``content`` bytes are NOT serialised here -- every op reads the
+        live ``_element`` directly (``select``/``attr``/``text_content`` via ``_tree``),
+        and ``html()`` serialises on demand. Eagerly ``tostring``-ing each selected node
+        was the crawl/query hot path's dominant allocation (profiled), for bytes almost
+        nothing consumes."""
         sub = Document(
             url=self.url,
             final_url=self.final_url,
             kind=self.kind,
             status_code=self.status_code,
-            content=content,
         )
         sub.root = self.name or self.root
         sub._client = self._client

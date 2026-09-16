@@ -621,6 +621,10 @@ class HtmlBacking(Backing):
 
     def render(self, core: "Document", format: str, **options: Any) -> Any:
         if format == "html":
+            if core._element is not None:  # a selected element: serialise it on demand
+                from lxml import html as _lh
+
+                return _lh.tostring(core._element, encoding="unicode")
             return _html_text(core, core.content or b"")  # graceful on a bogus charset
         root = self._tree(core)
         if format == "links":
