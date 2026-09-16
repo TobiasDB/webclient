@@ -278,3 +278,31 @@ def test_annotate_origin_can_be_disabled():
 
 def _first_line_for(out: str, needle: str) -> str:
     return next(l for l in out.splitlines() if needle in l)
+
+
+# -- json / xml skeletons -----------------------------------------------------
+
+
+def test_json_skeleton_shows_paths_and_types():
+    # a JSON/API document gets a shape outline (keys + types, arrays as [N] with the
+    # element shape) so an LLM can write dotted-path queries against it.
+    doc = Document(
+        content=b'{"results":[{"id":1,"name":"Aeropress"},{"id":2,"name":"Grinder"}],"total":2}',
+        kind="json",
+        status_code=200,
+    )
+    out = doc.skeleton()
+    assert "results: [2]" in out  # the array with its length
+    assert "name: string" in out and "id: number" in out  # the element's shape
+    assert "total: number" in out
+
+
+def test_xml_skeleton_uses_the_dom_outline():
+    # XML is parsed as a tree, so the DOM skeleton already outlines it.
+    doc = Document(
+        content=b"<catalog><item><name>Aeropress</name></item></catalog>",
+        kind="xml",
+        status_code=200,
+    )
+    out = doc.skeleton()
+    assert "<item>" in out and "<name>" in out and '"Aeropress"' in out
