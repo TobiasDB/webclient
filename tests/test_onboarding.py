@@ -141,6 +141,21 @@ def test_onboard_company_reports_when_no_seeds(site):
     assert not result.ok and result.reason == "no search seeds"
 
 
+def test_recency_note_flags_missing_current_year_data():
+    import datetime
+
+    from webclient.pipelines.onboarding import _recency_note
+
+    news = Brief(description="ir news", fields=["title", "date"])
+    yr = datetime.date.today().year
+    stale = [{"title": "x", "date": f"December 18, {yr - 1}"}]
+    note = _recency_note(stale, news)
+    assert "MISSING" in note and "INCOMPLETE" in note  # newest is last year -> incomplete
+    fresh = [{"title": "y", "date": f"March 1, {yr}"}]
+    assert "present" in _recency_note(fresh, news)  # newest is this year -> ok
+    assert _recency_note([{"name": "a"}], Brief(description="p", fields=["name"])) == ""  # no date field
+
+
 def test_seeds_for_company_drops_look_alike_companies():
     from webclient.pipelines.onboarding import Seed, _seeds_for_company
 

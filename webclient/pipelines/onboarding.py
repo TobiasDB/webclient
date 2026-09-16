@@ -1540,6 +1540,37 @@ def review_select(result: OnboardingResult, artifacts: _RunArtifacts, brief: Bri
     return _review_from_json("select", data)
 
 
+def _recency_note(rows: "list[Any]", brief: Brief) -> str:
+    """A completeness signal for DATED datasets: the newest year present vs the current
+    year. If a date field exists and the newest item predates this year, the most-recent
+    data is probably MISSING (often client-rendered / behind a tab we didn't capture) --
+    exactly the "141 historic rows, no current year" trap. Empty when the brief carries no
+    date field or no year could be read."""
+    import datetime
+    import re
+
+    date_cols = [f.split(".")[0] for f in brief.fields
+                 if any(w in f.lower() for w in ("date", "publish", "time", "year"))]
+    if not date_cols:
+        return ""
+    years: list[int] = []
+    for r in rows:
+        if isinstance(r, dict):
+            for c in date_cols:
+                v = r.get(c)
+                if isinstance(v, str):
+                    years += [int(m.group()) for m in re.finditer(r"\b(?:19|20)\d{2}\b", v)]
+    if not years:
+        return ""
+    newest, today = max(years), datetime.date.today()
+    if newest < today.year:
+        return (f"RECENCY CHECK: today is {today.isoformat()}, but the newest item is dated {newest} "
+                f"-- about {today.year - newest} year(s) of more recent items appear to be MISSING. "
+                "For a current/ongoing dataset this means the extraction is INCOMPLETE (the recent "
+                "data is likely loaded client-side or behind a tab/filter that was not captured).")
+    return f"RECENCY CHECK: the newest item is dated {newest} (the current year), so recent data is present."
+
+
 def review_query(result: OnboardingResult, artifacts: _RunArtifacts, brief: Brief, *, llm: LLM) -> "Review | None":
     """Grade the authored query: does the output table hold data matching the brief, are
     the selectors targeting the relevant parts of the page, and do they capture ALL the
@@ -1551,11 +1582,13 @@ def review_query(result: OnboardingResult, artifacts: _RunArtifacts, brief: Brie
     skeleton = _clip(doc.skeleton(max_lines=_FULL_SKELETON), _MAX_SKELETON_CHARS, "skeleton",
                      kind=("json" if doc.kind == "json" else "html")) if (doc is not None and doc.ok) else "(unavailable)"
     sample = json.dumps(list(q.sample)[:8], default=str, indent=2)
+    recency = _recency_note(list(q.sample), brief)  # is the MOST-RECENT data present?
     data = _ask_json(llm, render_prompt(
         "review_query",
         description=brief.description, fields_line=_fields_line(brief),
         query=q.describe, row_count=str(q.row_count), tested=str(q.tested),
         sample=_clip(sample, _MAX_LISTING_CHARS, "sample rows"),
+        recency=recency or "(no date field to check recency)",
         skeleton=skeleton,
     ))
     return _review_from_json("query", data)
