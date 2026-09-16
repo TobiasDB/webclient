@@ -278,6 +278,14 @@ class BrowserClient(Client):
                 await loc.click()
             elif step["op"] == "write":
                 await loc.fill(args.get("text", "") or "")
+        if replay:  # the replayed interactions mutated the DOM AFTER the snapshot
+            # above -> re-capture so ``result.content`` is the POST-replay page. A
+            # reload must reproduce the recorded state for the HTML-surface ops
+            # (text_content / html / markdown / skeleton / facets), which read the
+            # captured content -- not the pre-replay shell. A short settle mirrors the
+            # live-interaction ``drain`` so replay-triggered async updates land.
+            await page.wait_for_timeout(30)
+            result.content = (await page.content()).encode()
         for s in scripts:  # drain scripts clear buffers after replay (result ignored)
             if s.phase == "drain":
                 await page.evaluate(s.source)

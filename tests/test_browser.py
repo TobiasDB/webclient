@@ -122,6 +122,11 @@ def test_reload_reproduces_state(httpserver, wc):
     try:
         assert fresh.select(".added", error=RETURN).ok
         assert fresh.select("#out").text_content == "Bob"
+        # the reloaded doc's HTML-surface ops (which read the captured content, not
+        # the live page) must also reflect the replayed state -- the snapshot is
+        # taken AFTER replay, not the pre-replay shell.
+        assert "added-one" in fresh.text_content
+        assert "added-one" in fresh.html()
     finally:
         wc.release(fresh)
 
