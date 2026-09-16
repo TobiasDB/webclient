@@ -93,3 +93,18 @@ def test_streamed_plan_over_many_browser_pages_completes(fake_wc, httpserver):
     rows = list(fake_wc.execute(plan, col, stream=True))
     assert sorted(rows) == [200] * n
     assert fake_wc.pool._held.get("page", 0) == 0
+
+
+def test_fanout_width_is_bounded_by_the_page_pool_for_browser_branches(fake_wc):
+    # a fan-out whose branches each lease a browser page is capped at the PAGE pool
+    # (2 here), not the http width (10) -- so it doesn't schedule 10 tasks that queue
+    # behind the smaller page semaphore. A static branch keeps the http width.
+    from webclient.query.executor import _fanout_limit
+
+    browser_steps = wq.doc.resolve(browser=True).status_code._plan.steps
+    static_steps = wq.doc.resolve().status_code._plan.steps
+    auto_steps = wq.doc.resolve(browser="auto").status_code._plan.steps
+    assert _fanout_limit(fake_wc, browser_steps) == 2  # bounded by the page pool
+    assert _fanout_limit(fake_wc, static_steps) == 10  # http width
+    assert _fanout_limit(fake_wc, auto_steps) == 10  # auto isn't a definite page lease
+    assert _fanout_limit(fake_wc, None) == 10  # no steps -> http width

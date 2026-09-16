@@ -74,10 +74,35 @@ def _iscoro(value: Any) -> bool:
     return asyncio.iscoroutine(value)
 
 
-def _fanout_limit(client: Any) -> int:
+def _leases_pages(steps: "list[Step] | None") -> bool:
+    """Whether running ``steps`` per fan-out element leases a browser page -- i.e.
+    the branch contains a ``resolve``/``fetch`` that goes straight to a browser
+    (``browser=True`` / ``"always"``). ``"auto"`` is not counted: it usually stays
+    static, and if it does escalate the per-element release + page semaphore still
+    bound it -- so a browser fan-out is capped without slowing the common static one."""
+    for i, s in enumerate(steps or ()):
+        if s.kind == "get" and s.name in ("resolve", "fetch"):
+            nxt = steps[i + 1] if steps and i + 1 < len(steps) else None
+            if nxt is not None and nxt.kind == "call":
+                arg = nxt.kwargs.get("browser")
+                if arg is not None and arg.value in (True, "always"):
+                    return True
+    return False
+
+
+def _fanout_limit(client: Any, steps: "list[Step] | None" = None) -> int:
+    """The width of a fan-out: the http concurrency by default, but bounded by the
+    PAGE pool when the branches each lease a browser page -- otherwise the fan-out
+    schedules ``http`` (10) branches that queue behind the smaller page semaphore
+    (over-subscription: harmless since the per-element release drains them, but it
+    inflates ``waiting`` and holds idle tasks). ``steps`` is the per-element plan."""
     pool = getattr(client, "_pool", None)
     limits = getattr(pool, "_limits", None) if pool is not None else None
-    return cast(int, (limits or {}).get("http", DEFAULT_FANOUT))
+    limits = limits or {}
+    http = cast(int, limits.get("http", DEFAULT_FANOUT))
+    if _leases_pages(steps):
+        return min(http, cast(int, limits.get("page", http)))
+    return http
 
 
 def truthy(value: Any) -> bool:
@@ -182,7 +207,7 @@ async def _arun(
             results = await fan_out(
                 list(value),
                 _per_element(lambda el: _arun(el, rest, 0, el, client)),
-                limit=_fanout_limit(client),
+                limit=_fanout_limit(client, rest),
             )
             if results and all(isinstance(r, WebCore) for r in results):
                 return Collection(results, client=client, root=value.root)
@@ -425,7 +450,7 @@ async def _astream_collection(
             return value.get() if isinstance(value, Field) else value
 
     async for result in fan_out_stream(
-        items, _per_element(process), limit=_fanout_limit(client)
+        items, _per_element(process), limit=_fanout_limit(client, shaping)
     ):
         if result is not _DROP:
             yield result
