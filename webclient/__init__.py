@@ -16,6 +16,7 @@ from .core.reference.models import (
     RetryPolicy,
 )
 from .core.web_core import Backing, WebCore
+from .settings import LlmSettings, Settings
 from .errors import (
     RAISE,
     RETURN,
@@ -92,6 +93,8 @@ __all__ = [
     "DEFAULT_WAIT",
     "AUTO",
     "Backing",
+    "Settings",
+    "LlmSettings",
     "WebCore",
     "HtmlBacking",
     "JsonBacking",
