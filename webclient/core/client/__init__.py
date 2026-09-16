@@ -13,7 +13,7 @@ differs.
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
 
 from pydantic import PrivateAttr
 
@@ -42,7 +42,7 @@ from .models import IWebClient
 from .sitemap import SitemapBacking
 
 if TYPE_CHECKING:
-    from ..crawl import Crawl
+    from ..crawl import Crawl, CrawlConfig, CrawlState
     from ..session import Session
     from ...surfaces.lazy import LazyWebClient
 
@@ -621,6 +621,8 @@ class WebClient(WebCore, IWebClient):
         self,
         seeds: Any,
         *,
+        config: "CrawlConfig | None" = None,
+        resume: "CrawlState | None" = None,
         scope: str | None = None,
         auto: bool = True,
         width: int = 10,
@@ -628,54 +630,59 @@ class WebClient(WebCore, IWebClient):
         max_pages: int = 50,
         max_frontier: int = 10000,
         same_origin: bool = True,
-        obey_robots: bool = True,
-        browser: bool = True,
-        resolve: Any = None,
-        keywords: list[str] | None = None,
+        allow_subdomains: bool = True,
+        allow_domains: list[str] | None = None,
+        deny_domains: list[str] | None = None,
+        allow_countries: list[str] | None = None,
+        deny_countries: list[str] | None = None,
         include: str | None = None,
         exclude: str | None = None,
+        include_xhr: bool = True,
+        keywords: list[str] | None = None,
+        obey_robots: bool = True,
+        browser: "bool | Literal['never', 'auto', 'always']" = "auto",
+        resolve: Any = None,
+        retain: "Literal['projection', 'document']" = "projection",
+        project: Any = None,
     ) -> "Crawl":
-        """A scoped site traversal sharing this engine (a :class:`Crawl` core). The
-        client manages the frontier (dedup, scope, fetching); use it as a context
-        manager and read ``.pages`` (the resolved Documents -- extract whatever you
-        want per page: ``doc.title`` / ``doc.flags()`` / ``doc.extract(...)``) and
-        ``.frontier`` (the scored :class:`Edge` links).
+        """A scoped site traversal sharing this engine (a :class:`Crawl` core). Drive it
+        with ``crawl.run()`` (batch → read ``.pages``) or ``crawl.step(select)`` (one
+        round; ``select`` may be frontier edges/URLs or brand-new URLs to fetch next).
 
-        Defaults are tuned for the common "map this site" case:
+        ``.pages`` holds a lean :class:`PageCard` per page by default (url / kind /
+        title / description / flags / the tier it was fetched at) -- enough to rebuild a
+        Reference; pass ``retain="document"`` (or a ``project`` callable) to keep more.
 
-        * ``auto=True`` -- self-drive: each ``step`` / ``run`` expands the top-``width``
-          frontier edges best-first (by ``keywords`` when given, else by the
-          importance score). Pass ``auto=False`` to hand-step the frontier yourself.
-        * ``browser=True`` -- render every page, so JS/lazy-loaded links and content
-          are seen and the page's XHR/data-API calls are captured into the frontier.
-          Most sites today are JS-heavy, and a static crawl silently misses their
-          links. Needs Playwright; pass ``browser=False`` for a pure-static crawl
-          (much faster, no render) when you know the site is server-rendered.
+        Tune it with the typed keyword args, or pass a whole :class:`CrawlConfig`
+        (``config=`` then wins over the kwargs). ``browser="auto"`` (default) fetches
+        static first and renders only pages whose flags say a browser is needed -- the
+        best of both worlds; ``resume=`` a prior ``crawl.state()`` continues where it
+        stopped. See :class:`CrawlConfig` for scope/country/domain filters, scoring
+        weights, and the frontier cap."""
+        from ..crawl import Crawl, CrawlConfig, Edge
 
-        ``max_frontier`` hard-caps the number of unresolved edges kept (best-scored
-        survive) -- a crawl fetches at most ``max_pages`` pages, but each page can
-        discover hundreds of in-scope links, so this bounds the frontier's growth.
+        if resume is not None:  # continue a prior crawl from its saved state
+            crawl = Crawl(
+                config=config or resume.config, scope=scope or resume.scope,
+                frontier=list(resume.frontier), history=list(resume.history),
+            ).bind(self)
+            crawl._seen |= set(resume.seen)
+            return crawl
 
-        ``resolve`` (a :class:`Resolve` bundle) sets the resiliency policy the crawl
-        fetches under -- retry / rate / proxy / anti-bot (e.g. ``Resolve.auto()`` or
-        a proxy pool); ``None`` inherits this client's own ``resolve``."""
-        from ..crawl import Crawl, Edge
-
+        cfg = config or CrawlConfig(
+            max_pages=max_pages, max_depth=depth, width=width, max_frontier=max_frontier,
+            same_origin=same_origin, allow_subdomains=allow_subdomains,
+            allow_domains=allow_domains or [], deny_domains=deny_domains or [],
+            allow_countries=allow_countries or [], deny_countries=deny_countries or [],
+            include=include, exclude=exclude, include_xhr=include_xhr,
+            keywords=[k.lower() for k in (keywords or [])], obey_robots=obey_robots,
+            browser=browser, resolve=resolve,
+            order="best-first" if auto else "manual", retain=retain, project=project,
+        )
         urls = _seed_urls(seeds)
         return Crawl(
+            config=cfg,
             scope=scope or (from_url(urls[0]).hostname if urls else ""),
-            auto=auto,
-            width=width,
-            max_depth=depth,
-            max_pages=max_pages,
-            max_frontier=max_frontier,
-            same_origin=same_origin,
-            obey_robots=obey_robots,
-            browser=browser,
-            resolve=resolve,
-            keywords=[k.lower() for k in (keywords or [])],
-            include=include,
-            exclude=exclude,
             frontier=[Edge(url=u, depth=0) for u in urls],
         ).bind(self)
 
@@ -690,25 +697,21 @@ class WebClient(WebCore, IWebClient):
         browser: bool = False,
         resolve: Any = None,
     ) -> "Crawl":
-        """Map a site: an eager, single-domain :meth:`crawl` in auto mode, run to
-        completion -- HEAVY (fetches up to ``max_pages`` pages). Returns the finished
-        crawl -- the retained ``Document`` per page in ``.pages`` plus the unresolved
-        ``.frontier`` edges. (For just the list of sitemap URLs, use the cheap
-        :meth:`discover_sitemaps` instead -- ``sitemap`` runs a crawl.) ``use_sitemap_xml``
-        (default on) first discovers the site's real ``sitemap.xml`` URLs
-        (:meth:`discover_sitemaps`) and seeds the frontier with them, so a declared sitemap
-        is honoured; it still link-crawls to fill in whatever the sitemap omits.
+        """Map a site: an eager, single-domain :meth:`crawl` run to completion -- HEAVY
+        (fetches up to ``max_pages`` pages). Returns the finished crawl (a
+        :class:`PageCard` per page in ``.pages`` + the unresolved ``.frontier``). For
+        just the sitemap URLs, use the cheap :meth:`discover_sitemaps` instead.
+        ``use_sitemap_xml`` (default on) seeds the frontier with the site's declared
+        ``sitemap.xml`` URLs, then link-crawls to fill in whatever it omits.
 
-        Unlike :meth:`crawl`, ``browser`` defaults **off** here: mapping up to
-        ``max_pages`` pages with a render each is prohibitively slow, and URL
-        discovery rarely needs JS. Pass ``browser=True`` to render anyway;
-        ``resolve`` sets the fetch policy as in :meth:`crawl`."""
+        Unlike :meth:`crawl`, ``browser`` defaults **off**: rendering up to ``max_pages``
+        pages is prohibitively slow and URL discovery rarely needs JS."""
         seeds: list[Any] = [url]
         if use_sitemap_xml:
             discovered = self.dispatch("discover_sitemaps", url)
             seeds += [r.url for r in discovered]
         return self.crawl(
-            seeds, auto=True, depth=depth, width=width, max_pages=max_pages,
+            seeds, depth=depth, width=width, max_pages=max_pages,
             browser=browser, resolve=resolve,
         ).run()
 

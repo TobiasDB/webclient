@@ -332,15 +332,8 @@ def crawl_from_seeds(
 def select_candidates(crawl: Any, brief: Brief, *, llm: LLM) -> list[Candidate]:
     """Rank the crawled pages into must / should / could-evaluate candidates by
     scrapability + likely relevance to the dataset."""
-    pages = []
-    for p in crawl.pages:
-        pages.append(
-            {
-                "url": p.final_url or p.url,
-                "title": p.title,
-                "flags": [f.name for f in p.flags()],
-            }
-        )
+    # crawl.pages are lean PageCards by default (url / title / flags already projected)
+    pages = [{"url": p.final_url or p.url, "title": p.title, "flags": p.flags} for p in crawl.pages]
     if not pages:
         return []
     rows = _ask_json(

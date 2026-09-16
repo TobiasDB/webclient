@@ -1,11 +1,12 @@
 """CrawlBacking: the site-traversal ops for a :class:`Crawl` core.
 
-``step`` fetches one round of the frontier (the caller's selection, or -- in auto
-mode -- the top-``width`` edges best-first by keyword relevance), summarises each
-page, and expands the frontier with its in-scope, deduped, robots-allowed links.
-``run`` auto-drives ``step`` to completion. Built ON the interface -- the owning
-client's ``afetch`` for transport, the document's ``select_all``/``attr`` for link
-discovery -- so a crawl is one backing over existing cores.
+``step`` fetches one round: the caller's selection (frontier edges, their URLs, OR
+brand-new URLs), or -- in best-first order -- the top-``width`` scored edges. Each
+fetched page is retained (a lean :class:`PageCard` projection, or the whole Document
+under ``retain="document"``) and its in-scope, deduped, robots-allowed links expand
+the frontier. ``run`` drives ``step`` to completion. Built ON the interface -- the
+client's ``afetch`` for transport, the document's ``select_all``/``attr``/facets for
+discovery + projection -- so a crawl is one backing over existing cores.
 """
 
 from __future__ import annotations
@@ -21,42 +22,43 @@ from .canon import (  # URL canon / scope / scoring vocabulary (pure helpers)
     _CTA,
     _DATE_RE,
     _EDITORIAL,
-    _KEYWORD_WEIGHT,
     _REGION_WEIGHT,
     _RESOURCE_EXT,
     _SOCIAL_HOSTS,
     _canon,
     _canon_host,
+    _cctld,
     _ext,
     _is_paginated,
     _path,
     _registrable,
+    _url_entropy,
 )
-from .models import Edge
+from .models import Edge, PageCard
 
 if TYPE_CHECKING:
     from urllib.robotparser import RobotFileParser
 
+    from ..document import Document
     from . import Crawl
 
 
 class CrawlBacking(Backing):
-    """The traversal ops: ``step`` (one round), ``run`` (auto to completion), and
-    the ``done`` predicate. Both fetch, so they are IO ops (the interface bridges
-    them onto the client's sync/async dispatcher)."""
+    """The traversal ops: ``step`` (one round), ``run`` (to completion), and the
+    ``done`` predicate. ``step``/``run`` fetch, so they are IO ops (the interface
+    bridges them onto the client's sync/async dispatcher)."""
 
     provides = frozenset({"step", "run"})
     props = frozenset({"done"})
-    io = frozenset({"step", "run"})  # both fetch -- the interface bridges them
+    io = frozenset({"step", "run"})
     gate = "ok"
 
     def done(self, core: "Crawl") -> bool:
-        """Whether the crawl is finished: closed, the frontier is empty, or the
-        page budget is spent."""
+        """Finished: closed, the frontier is empty, or the page budget is spent."""
         return (
             core.status == "closed"
             or not core.frontier
-            or len(core.pages) >= core.max_pages
+            or len(core.pages) >= core.config.max_pages
         )
 
     async def aexit(self, core: "Crawl", *exc: Any) -> None:
@@ -66,181 +68,203 @@ class CrawlBacking(Backing):
     async def step(
         self, core: "Crawl", select: "list[Edge] | list[str] | None" = None
     ) -> "Crawl":
-        """Fetch one round. ``select`` (a subset of ``frontier`` -- edges or their
-        URLs) chooses which edges to expand; ``None`` takes the top-``width`` edges
-        best-first (by keyword relevance in auto mode, else shallowest-first). Each
-        fetched page is retained (as a Document) in ``pages`` and its links added to
-        ``frontier``. Returns the crawl (so ``crawl.step()`` chains/reads).
+        """Fetch one round. ``select`` is a subset of the frontier (edges or URLs) OR
+        brand-new URLs to fetch next (any not in the frontier are added, bypassing the
+        scope filters -- an explicit ask wins); ``None`` takes the top-``width`` scored
+        edges in best-first order, or nothing in ``manual`` order. Each fetched page is
+        retained per ``config.retain`` and its links expand the frontier.
 
-        A per-crawl lock serialises rounds: the frontier-claim + page-budget +
-        expansion of one round runs atomically, so concurrently-awaited steps
-        (async mode) can't each claim the full remaining budget and blow past
-        ``max_pages`` -- each sees the previous round's appended pages first."""
+        A per-crawl lock serialises rounds so the frontier-claim + budget + expansion
+        is atomic -- concurrently-awaited steps can't each claim the full budget."""
         async with self._lock(core):
             chosen = self._select(core, select)
-            # only take (and remove from the frontier) what the page budget allows,
-            # so a nearly-full budget doesn't silently discard the un-fetched chosen
-            # edges -- they stay in the frontier for the next step.
-            room = max(0, core.max_pages - len(core.pages))
+            room = max(0, core.config.max_pages - len(core.pages))
             to_fetch = chosen[:room]
             taken = {e.url for e in to_fetch}
             core.frontier = [e for e in core.frontier if e.url not in taken]
             for edge in to_fetch:
-                if core.obey_robots and not await self._allowed(core, edge.url):
+                if core.config.obey_robots and not await self._allowed(core, edge.url):
                     continue
                 doc = await core._client.afetch(
                     core._client.ref(edge.url),
                     optional=True,
-                    browser=core.browser,
-                    resolve=core.resolve,
+                    browser=core.config.browser,
+                    resolve=core.config.resolve,
                 )
+                core.history.append(edge)  # the audit + resume trail (every edge taken)
                 if not doc.ok:
                     continue
                 # expand the frontier BEFORE releasing the page (needs the DOM), then
-                # free the browser page -- its content is retained on the Document, so
-                # the crawl keeps the whole doc (extract facets/content from it later).
-                if edge.depth < core.max_depth and doc.kind in ("html", "xml"):
+                # project + free it -- content is retained on the Document either way.
+                if edge.depth < core.config.max_depth and doc.kind in ("html", "xml"):
                     self._expand(core, doc, edge.depth + 1)
-                if core.browser and edge.depth < core.max_depth:
+                if core.config.include_xhr and edge.depth < core.config.max_depth:
                     self._expand_xhr(core, doc, edge.depth + 1)
-                if core.browser:  # captured the render + its XHR events; free the page
-                    await core._client._arelease(doc)  # (content kept; select in-memory)
-                core.pages.append(doc)
+                page = self._retain(core, doc)  # project while the page is still live
+                if getattr(doc, "_page", None) is not None:
+                    await core._client._arelease(doc)
+                core.pages.append(page)
             return core
 
-    def _lock(self, core: "Crawl") -> "asyncio.Lock":
-        """The crawl's step lock, created lazily on its running loop. The check +
-        assign is synchronous (no await), so even the first two concurrent steps
-        agree on one lock rather than each minting its own."""
-        if core._step_lock is None:
-            core._step_lock = asyncio.Lock()
-        return cast("asyncio.Lock", core._step_lock)
-
     async def run(self, core: "Crawl") -> "Crawl":
-        """Auto-drive: ``step`` (top-``width`` best-first) each round until
-        ``done``. Returns the finished crawl."""
+        """Drive ``step`` to completion (the batch drain of the crawl)."""
         while not self.done(core):
             await self.step(core)
         return core
 
-    # -- frontier selection + scoring ----------------------------------------
+    def _lock(self, core: "Crawl") -> "asyncio.Lock":
+        """The crawl's step lock, created lazily on its running loop (the sync check +
+        assign means even the first two concurrent steps share one lock)."""
+        if core._step_lock is None:
+            core._step_lock = asyncio.Lock()
+        return cast("asyncio.Lock", core._step_lock)
+
+    # -- retention ------------------------------------------------------------
+    def _retain(self, core: "Crawl", doc: "Document") -> Any:
+        """What to keep for a fetched page: the whole Document (``retain="document"``),
+        a custom ``config.project(doc)``, or the default lean :class:`PageCard`."""
+        if core.config.retain == "document":
+            return doc
+        if core.config.project is not None:
+            return core.config.project(doc)
+        return self._card(doc)
+
+    def _card(self, doc: "Document") -> PageCard:
+        """The default page descriptor -- enough to understand the page and rebuild a
+        Reference, without keeping the whole Document. Read while the page is live."""
+        t = doc.transport()
+        desc = doc.metadata().description if doc.has_op("metadata") else None
+        flags = [f.name for f in doc.flags()] if doc.has_op("flags") else []
+        title = doc.title if doc.has_op("title") else None
+        return PageCard(
+            url=doc.url, final_url=doc.final_url, kind=doc.kind,
+            status_code=doc.status_code, title=title, description=desc, flags=flags,
+            final_tier=t.final_tier, escalation=t.escalation,
+        )
+
+    # -- frontier selection + scoring -----------------------------------------
     def _select(self, core: "Crawl", select: Any) -> "list[Edge]":
         if select is not None:
-            wanted = {s.url if isinstance(s, Edge) else str(s) for s in select}
-            return [e for e in core.frontier if e.url in wanted]
+            wanted = [s.url if isinstance(s, Edge) else str(s) for s in select]
+            existing = {e.url for e in core.frontier}
+            for u in wanted:  # brand-new URLs the caller supplied: add them (forced)
+                if u not in existing:
+                    self._add_edge(core, u, "", 0, 0.0, force=True)
+            want = set(wanted)
+            return [e for e in core.frontier if e.url in want]
+        if core.config.order == "manual":
+            return []  # manual: a bare step() fetches nothing -- the caller selects
         ranked = sorted(core.frontier, key=lambda e: self._score(core, e), reverse=True)
-        return ranked[: core.width]
+        return ranked[: core.config.width]
 
     def _score(self, core: "Crawl", edge: Edge) -> float:
-        """Best-first relevance: the edge's discovery-time importance (nav / article
-        / "read more" high, footer / legal / social low) plus any keyword hits in
-        the anchor text + URL, minus a tiny depth penalty (ties break toward
-        shallower pages). With no keywords it is importance-first."""
-        base = edge.score - 0.01 * edge.depth
-        if core.keywords:
-            blob = f"{edge.text} {edge.url}".lower()
-            hits = sum(blob.count(k) for k in core.keywords)
-            base += _KEYWORD_WEIGHT * hits  # an explicit keyword match dominates
-        return base
+        """Best-first ordering: the edge's discovery-time score minus a depth penalty
+        (ties break toward shallower pages)."""
+        return edge.score - core.config.scoring.depth * edge.depth
 
-    def _link_score(self, text: str, url: str, region: str) -> float:
-        """Discovery-time importance of a link: high for article / "read more" /
-        nav links, low for footer / legal / social / icon links. Combines the
-        anchor's region, its text quality, and URL shape into one score -- the
-        frontier is sorted by it so the useful links surface first."""
+    def _link_score(self, core: "Crawl", text: str, url: str, region: str) -> float:
+        """A weighted metric score for a discovered link (weights on
+        ``config.scoring``): keyword matches (anchor + URL), on-page prominence (the
+        region landmark -- the available proxy for the host element's position/size,
+        since true pixel size needs a layout), an editorial URL shape, minus URL
+        length + path-entropy penalties and legal/social/pagination boilerplate."""
+        w = core.config.scoring
         t = " ".join(text.split()).lower()
         path = _path(url).lower()
-        score = _REGION_WEIGHT.get(region, 0.0)
+        score = w.prominence * _REGION_WEIGHT.get(region, 0.0)
 
-        if not t:  # an icon / image link -- no text for an LLM to act on
-            score -= 1.0
-        else:
-            words = len(t.split())
-            if 1 <= words <= 12:  # a real label, not a stray paragraph link
-                score += 0.3
-            if any(c in t for c in _CTA):  # "read more" / "continue reading" ...
-                score += 1.2
-            if _BOILER_RE.search(t):  # whole-word legal/housekeeping text
-                score -= 1.0
+        if core.config.keywords:
+            blob = f"{t} {path}"
+            score += w.keyword * sum(blob.count(k.lower()) for k in core.config.keywords)
 
         if any(seg in path for seg in _EDITORIAL):
-            score += 0.8
-        if _DATE_RE.search(path):  # dated permalink -- an article URL shape
-            score += 0.4
+            score += w.editorial
+        if _DATE_RE.search(path):
+            score += w.editorial * 0.5
         last = path.rstrip("/").rsplit("/", 1)[-1]
         if "-" in last and len(last) > 8 and "." not in last:  # a content slug
-            score += 0.5
-        if _BOILER_PATH_RE.search(path):  # a terminal legal path segment
-            score -= 1.2
-        if _canon_host(url) in _SOCIAL_HOSTS:  # off-site share / follow widget
-            score -= 1.5
-        if path in ("", "/"):  # bare homepage link (nav "home", logo)
-            score -= 0.2
-        if _is_paginated(url):  # a later listing page -- low value, and there are many
-            score -= 0.8
+            score += w.editorial * 0.6
+
+        if not t:  # an icon / image link -- no label to act on
+            score -= w.prominence
+        elif any(c in t for c in _CTA):  # "read more" / "continue reading" ...
+            score += w.keyword * 0.4
+        if t and _BOILER_RE.search(t):
+            score -= w.boiler
+
+        score -= w.url_length * max(0.0, (len(url) - 60) / 10)
+        score -= w.url_entropy * max(0.0, _url_entropy(url) - 3.5)
+        if _BOILER_PATH_RE.search(path):
+            score -= w.boiler
+        if _canon_host(url) in _SOCIAL_HOSTS:
+            score -= w.boiler * 1.2
+        if _is_paginated(url):
+            score -= w.boiler * 0.6
         return round(score, 3)
 
+    # -- frontier growth ------------------------------------------------------
+    def _in_scope(self, core: "Crawl", url: str) -> bool:
+        """Whether ``url`` may enter the frontier under the config's scope rules --
+        domain allow/deny, country (ccTLD) allow/deny, same-origin + subdomains, and
+        the include/exclude path filters."""
+        cfg = core.config
+        host = (urlparse(url).hostname or "").lower()
+        reg = _registrable(host)
+        if reg in cfg.deny_domains:
+            return False
+        cc = _cctld(host)
+        if cc and cc in cfg.deny_countries:
+            return False
+        if cfg.allow_countries and cc not in cfg.allow_countries:
+            return False
+        on_site = reg == _registrable(core.scope) or reg in cfg.allow_domains
+        if not cfg.allow_subdomains and host != core.scope.lower():
+            on_site = on_site and host == core.scope.lower()
+        if cfg.same_origin and not on_site:
+            return False
+        path = _path(url)
+        if cfg.include is not None and cfg.include not in path:
+            return False
+        if cfg.exclude is not None and cfg.exclude in path:
+            return False
+        return True
+
     def _add_edge(
-        self, core: "Crawl", url: str, text: str, depth: int, score: float = 0.0
+        self, core: "Crawl", url: str, text: str, depth: int, score: float = 0.0,
+        *, force: bool = False,
     ) -> None:
-        """Add one discovered URL to the frontier if it is in scope, matches
-        include/exclude, and its canonical form has not been seen (so URL variants
-        -- trailing slash, tracking params, www -- are not re-fetched). ``score`` is
-        the discovery-time importance kept on the edge (the frontier is sorted by
-        it)."""
+        """Add one discovered URL to the frontier if unseen and (unless ``force``) in
+        scope. ``force`` is for caller-supplied URLs in ``step`` -- an explicit ask
+        bypasses the scope filters but still dedups by canonical key."""
         url = url.split("#", 1)[0]
         if not url.startswith(("http://", "https://")):
             return
-        try:  # skip an unfetchable URL (a bad/out-of-range port) -- from_url would raise
-            urlsplit(url).port
+        try:
+            urlsplit(url).port  # skip an unfetchable URL (bad/out-of-range port)
         except ValueError:
             return
         key = _canon(url)
         if key in core._seen:
             return
-        # scope: same registrable domain (eTLD+1), so subdomains of the same site
-        # (news./blog./www.) are in scope but a different domain is not.
-        if core.same_origin and _registrable(urlparse(url).hostname or "") != _registrable(
-            core.scope
-        ):
-            return
-        path = _path(url)
-        if core.include is not None and core.include not in path:
-            return
-        if core.exclude is not None and core.exclude in path:
+        if not force and not self._in_scope(core, url):
             return
         core._seen.add(key)
         core.frontier.append(Edge(url=url, text=text, depth=depth, score=score))
 
     def _expand(self, core: "Crawl", doc: Any, depth: int) -> None:
-        """Add ``doc``'s anchor links to the frontier -- dropping links to page
-        assets (images / scripts / media ...), and scoring each by importance
-        (region + text + URL shape) so nav / article / "read more" links outrank
-        footer / legal / social ones. Anchor text is kept for keyword scoring."""
+        """Add ``doc``'s anchor links to the frontier -- dropping page-asset links and
+        scoring each by the metric scorer -- then re-sort/cap the frontier."""
         for a in doc.select_all("a[href]"):
             url = str(a.attr("href").url)
             if _ext(_path(url)) in _RESOURCE_EXT:  # a resource link, not a page
                 continue
             text = (a.text_content or "").strip()
-            region = a.region  # the document's landmark op (nav / main / footer ...)
-            self._add_edge(core, url, text, depth, self._link_score(text, url, region))
+            self._add_edge(core, url, text, depth, self._link_score(core, text, url, a.region))
         self._sort_frontier(core)
 
-    def _sort_frontier(self, core: "Crawl") -> None:
-        """Keep the frontier sorted by importance (score desc, then shallowest) so
-        the links surfaced to the caller/LLM lead with the useful ones -- and hard-
-        capped at ``max_frontier``, dropping the lowest-scored tail. A crawl fetches
-        at most ``max_pages`` pages but each page can discover hundreds of in-scope
-        links, so without this the frontier grows unbounded (memory) even on a small
-        page budget; the cap keeps the best edges and bounds the rest."""
-        core.frontier.sort(key=lambda e: (-e.score, e.depth))
-        if len(core.frontier) > core.max_frontier:
-            del core.frontier[core.max_frontier :]
-
     def _expand_xhr(self, core: "Crawl", doc: Any, depth: int) -> None:
-        """Add the data-API endpoints a browser render observed (the page's XHR /
-        fetch calls) to the frontier -- so a crawl using the browser covers the
-        JSON APIs behind the page, not only its anchor links."""
+        """Add the data-API endpoints a browser render observed (its XHR/fetch calls)
+        to the frontier, so a browser crawl covers the JSON APIs behind the page."""
         from ...models import NetworkEvent
 
         for e in doc.events_of(NetworkEvent):
@@ -248,13 +272,19 @@ class CrawlBacking(Backing):
                 continue
             req = e.request
             url = str(req.dispatch("url")) if req is not None else ""
-            if url:
-                # a data-API endpoint -- valuable (it's the page's actual data), so
-                # it rides mid-frontier rather than sinking with resource links.
+            if url:  # a data-API endpoint -- rides mid-frontier, not sunk as a resource
                 self._add_edge(core, url, "[xhr]", depth, 0.5)
         self._sort_frontier(core)
 
-    # -- robots.txt (cached per host) ----------------------------------------
+    def _sort_frontier(self, core: "Crawl") -> None:
+        """Keep the frontier best-first (score desc, then shallowest) and hard-capped
+        at ``config.max_frontier`` -- a small page budget can still discover hundreds of
+        links per page, so the cap bounds memory while keeping the best edges."""
+        core.frontier.sort(key=lambda e: (-e.score, e.depth))
+        if len(core.frontier) > core.config.max_frontier:
+            del core.frontier[core.config.max_frontier :]
+
+    # -- robots.txt (cached per host) -----------------------------------------
     async def _allowed(self, core: "Crawl", url: str) -> bool:
         host = _canon_host(url)
         if host not in core._robots:  # load this host's robots.txt once
@@ -269,7 +299,7 @@ class CrawlBacking(Backing):
         doc = await core._client.afetch(
             core._client.ref(f"{p.scheme}://{p.netloc}/robots.txt"),
             optional=True,
-            resolve=core.resolve,
+            resolve=core.config.resolve,
         )
         if not doc.ok or not doc.content:
             return None

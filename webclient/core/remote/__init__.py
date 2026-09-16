@@ -200,46 +200,29 @@ class RemoteWebClientCore(WebClient):
         )
         return core.bind(self)
 
-    def crawl(
-        self,
-        seeds: Any,
-        *,
-        scope: str | None = None,
-        auto: bool = True,
-        width: int = 10,
-        depth: int = 3,
-        max_pages: int = 50,
-        max_frontier: int = 10000,
-        same_origin: bool = True,
-        obey_robots: bool = True,
-        browser: bool = True,
-        resolve: Any = None,
-        keywords: list[str] | None = None,
-        include: str | None = None,
-        exclude: str | None = None,
-    ) -> "Crawl":
-        """A remote crawl runs to completion server-side (one round-trip) and
-        returns a finished :class:`Crawl`. ``auto`` (always on server-side) and
-        ``scope`` (derived from the seed host) are accepted for signature parity
-        with the local client but not sent -- use a local client for turn-based
-        steering. ``browser`` (default on, as locally) and ``resolve`` (a policy
-        bundle) are sent so the server renders / fetches under the same policy."""
+    def crawl(self, seeds: Any, **kwargs: Any) -> "Crawl":
+        """A remote crawl runs to completion server-side (one round-trip) and returns a
+        finished :class:`Crawl`. It accepts the local ``crawl`` keyword args for parity
+        but runs whole -- turn-based ``step`` is a local-client feature. The common wire
+        knobs (budget / scope / browser / resolve / keywords) are forwarded to the
+        service; a full ``config=`` beyond them is a local-only convenience for now."""
         urls = _seed_urls(seeds)
+        resolve = kwargs.get("resolve")
         return self._remote_crawl(
             "/crawl",
             {
                 "url": urls[0] if urls else "",
-                "width": width,
-                "depth": depth,
-                "max_pages": max_pages,
-                "max_frontier": max_frontier,
-                "same_origin": same_origin,
-                "obey_robots": obey_robots,
-                "browser": browser,
+                "width": kwargs.get("width", 10),
+                "depth": kwargs.get("depth", 3),
+                "max_pages": kwargs.get("max_pages", 50),
+                "max_frontier": kwargs.get("max_frontier", 10000),
+                "same_origin": kwargs.get("same_origin", True),
+                "obey_robots": kwargs.get("obey_robots", True),
+                "browser": kwargs.get("browser", "auto"),
                 "resolve": resolve.model_dump() if resolve is not None else None,
-                "keywords": keywords,
-                "include": include,
-                "exclude": exclude,
+                "keywords": kwargs.get("keywords"),
+                "include": kwargs.get("include"),
+                "exclude": kwargs.get("exclude"),
             },
         )
 

@@ -301,23 +301,22 @@ def create_app(
         ).run()
 
     def _crawl_response(crawl: Any) -> "dict[str, Any]":
-        """The crawl result over the wire: a lean per-page record (url / status /
-        kind / title -- a Document can't cross HTTP, so its content stays server-
-        side) plus the unresolved frontier edges. The frontier is capped to ``width``
-        (best-first) so a large crawl doesn't flood the client (``frontier_total`` is
-        the true count)."""
-        def page(doc: Any) -> dict[str, Any]:
+        """The crawl result over the wire: a lean per-page record (the crawl's default
+        :class:`PageCard` projection -- url / status / kind / title) plus the unresolved
+        frontier edges, capped to ``width`` (best-first) so a large crawl doesn't flood
+        the client (``frontier_total`` is the true count)."""
+        def page(card: Any) -> dict[str, Any]:
             return {
-                "url": doc.final_url or doc.url,
-                "status": doc.status_code,
-                "kind": doc.kind,
-                "title": doc.title if doc.has_op("title") else None,
+                "url": card.final_url or card.url,
+                "status": card.status_code,
+                "kind": card.kind,
+                "title": card.title,
             }
 
         return {
             "pages": [page(p) for p in crawl.pages],
             "urls": [p.final_url or p.url for p in crawl.pages],
-            "frontier": [e.model_dump() for e in crawl.frontier[: crawl.width]],
+            "frontier": [e.model_dump() for e in crawl.frontier[: crawl.config.width]],
             "frontier_total": len(crawl.frontier),
             "done": crawl.done,
         }

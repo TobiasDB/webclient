@@ -184,6 +184,27 @@ def _ext(path: str) -> str:
     return last.rsplit(".", 1)[-1].lower() if "." in last else ""
 
 
+def _url_entropy(url: str) -> float:
+    """Shannon entropy (bits/char) of the URL path -- high for opaque / hashed /
+    tracking URLs (a random-looking slug), low for readable ones. A scorer signal."""
+    import math
+    from collections import Counter
+
+    path = _path(url)
+    if not path:
+        return 0.0
+    n = len(path)
+    return -sum((c / n) * math.log2(c / n) for c in Counter(path).values())
+
+
+def _cctld(host: str) -> str | None:
+    """The 2-letter country-code TLD of a host (``"uk"`` for ``bbc.co.uk``), or
+    ``None`` for a gTLD / IP. Used by the crawl's country allow/deny filters."""
+    labels = host.lower().split(".")
+    tld = labels[-1] if labels else ""
+    return tld if len(tld) == 2 and tld.isalpha() else None
+
+
 # --------------------------------------------------------------------------- #
 # Link-scoring vocabulary (the tuned constants the frontier's importance score
 # reads; the score FUNCTION lives on the Backing, which has the receiver).

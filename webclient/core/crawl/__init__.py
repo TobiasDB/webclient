@@ -1,17 +1,17 @@
 """Crawl: a stateful, scoped site traversal -- the client holds it, like a session.
 
-Created by ``WebClient.crawl(seeds, ...)`` (and ``sitemap(url)``), used as a
-context manager::
+Created by ``WebClient.crawl(seeds, ...)`` (and ``sitemap(url)``). Drive it two ways
+over the one step-engine::
 
     with wc.crawl("https://site", keywords=["pricing"]) as crawl:
-        while not crawl.done and len(crawl.pages) < 20:
-            picks = [e for e in crawl.frontier if "docs" in e.url]  # LLM/user steers
-            crawl.step(picks)                                        # client fetches
+        crawl.run()                     # batch: drive to completion, read .pages
+        # or manual:  crawl.step(picks) / crawl.step([new_url])   (one round)
 
-The client MANAGES the frontier (dedup, scope, fetching) but DEFERS the round
-selection to the caller; ``auto=True`` self-drives best-first instead. Its Core
-Fields + ops come from the ``ICrawl`` model/interface it inherits (:mod:`.models`);
-behaviour is the :class:`~.backing.CrawlBacking`.
+The client MANAGES the frontier (dedup, scope, fetching); ``config.order`` decides
+whether a bare round self-drives best-first or waits for the caller's selection.
+State + config come from the ``ICrawl`` model (:mod:`.models`); behaviour is the
+:class:`~.backing.CrawlBacking`. ``.pages`` holds a lean :class:`PageCard` per page by
+default (``config.retain="document"`` keeps the whole Document).
 """
 
 from __future__ import annotations
@@ -21,18 +21,19 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from pydantic import PrivateAttr
 
 from ..web_core import Backing, WebCore
+from .models import CrawlConfig, CrawlState, Edge, ICrawl, PageCard  # noqa: F401  (re-exported)
+
 from .backing import CrawlBacking
-from .models import Edge, ICrawl  # noqa: F401  (Edge re-exported)
 
 if TYPE_CHECKING:
     from ..client import WebClient
 
 
 class Crawl(WebCore, ICrawl):
-    """A scoped site traversal. State (frontier / pages / options) is the
-    ``ICrawl`` model it inherits; this core adds the client binding and the
-    dedup/robots machinery. A context manager (``with wc.crawl(...) as crawl``);
-    its ops (``step`` / ``run`` / ``done``) are the ``CrawlBacking``."""
+    """A scoped site traversal. State (frontier / pages / config) is the ``ICrawl``
+    model it inherits; this core adds the client binding, the dedup/robots machinery,
+    and ``state()`` (a resumable snapshot). A context manager; its ops (``step`` /
+    ``run`` / ``done``) are the ``CrawlBacking``."""
 
     _client: "WebClient" = PrivateAttr(default=None)  # type: ignore[assignment]
     _seen: set[str] = PrivateAttr(default_factory=set)  # dedup ledger (canonical urls)
@@ -64,5 +65,13 @@ class Crawl(WebCore, ICrawl):
         self._seen = seen
         return self
 
+    def state(self) -> CrawlState:
+        """A resumable snapshot: config + the unresolved frontier + the seen ledger +
+        the edges taken. Pass it back as ``wc.crawl(seeds, resume=state)`` to continue."""
+        return CrawlState(
+            config=self.config, scope=self.scope, frontier=list(self.frontier),
+            seen=sorted(self._seen), history=list(self.history),
+        )
 
-__all__ = ["Crawl", "Edge", "ICrawl"]
+
+__all__ = ["Crawl", "Edge", "PageCard", "CrawlConfig", "CrawlState", "ICrawl"]

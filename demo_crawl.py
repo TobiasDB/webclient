@@ -112,9 +112,8 @@ def main() -> None:
             f"{base}/", auto=True, keywords=["pricing"], width=2, max_pages=5
         ) as crawl:
             crawl.run()
-            for p in crawl.pages:
-                title = p.metadata().title if p.has_op("metadata") else None
-                print("  page:     ", _purl(p, base), "|", title)
+            for p in crawl.pages:  # .pages are lean PageCards (already projected)
+                print("  page:     ", _purl(p, base), "|", p.title, "| flags", p.flags)
 
         # -- 3. Sitemap: an eager, single-domain map ----------------------------
         print("\n== sitemap (eager single-domain crawl) ==")

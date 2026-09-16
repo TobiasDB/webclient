@@ -121,17 +121,23 @@ def test_sitemap_is_an_eager_single_domain_crawl(wc, site):
     assert all("external.example" not in u for u in _urls(sm))
 
 
-def test_crawl_pages_are_documents_you_extract_from(wc, site):
-    # a crawl keeps the resolved Documents (not a projected summary): extract any
-    # facet / content per page as an expression.
+def test_crawl_pages_are_page_cards_by_default(wc, site):
+    # by default a crawl retains a lean PageCard per page (enough to rebuild a
+    # Reference), not the whole Document.
     from webclient import Document
+    from webclient.core.crawl import PageCard
 
-    with wc.crawl(site.url_for("/"), auto=True, max_pages=5, browser=False) as crawl:
+    with wc.crawl(site.url_for("/"), max_pages=5, browser=False) as crawl:
         crawl.run()
-    assert crawl.pages and all(isinstance(p, Document) for p in crawl.pages)
-    seed = crawl.pages[0]
-    assert seed.transport().kind == "html"  # facet ops still work on the doc
-    assert isinstance(seed.markdown(), str)  # and content is retained
+    assert crawl.pages and all(isinstance(p, PageCard) for p in crawl.pages)
+    card = crawl.pages[0]
+    assert card.kind == "html" and card.url and card.final_tier == "static"
+
+    # retain="document" keeps the whole Document for later select/extract/interact
+    with wc.crawl(site.url_for("/"), max_pages=1, browser=False, retain="document") as docs:
+        docs.run()
+    assert all(isinstance(p, Document) for p in docs.pages)
+    assert docs.pages[0].transport().kind == "html" and isinstance(docs.pages[0].markdown(), str)
 
 
 def test_crawl_dedups_seed_variants(wc, site):
@@ -161,14 +167,14 @@ def test_crawl_canonicalises_urls_for_dedup(wc, httpserver):
     assert len(page_hits) == 1  # the four variants collapsed to one fetch
 
 
-def test_crawl_defaults_to_auto_and_browser(wc, site):
-    # the common case is "map this site": self-driving (auto) with a browser render
-    # so JS links load. Both are on by default.
+def test_crawl_defaults_to_best_first_and_browser_auto(wc, site):
+    # the common case is "map this site": best-first ordering + browser="auto" (render
+    # only pages whose flags need it -- best of both worlds). Both are the defaults.
     crawl = wc.crawl(site.url_for("/"))
-    assert crawl.auto is True and crawl.browser is True
-    # opt-outs are honoured.
+    assert crawl.config.order == "best-first" and crawl.config.browser == "auto"
+    # opt-outs are honoured (auto=False -> manual ordering; browser=False -> static).
     static = wc.crawl(site.url_for("/"), auto=False, browser=False)
-    assert static.auto is False and static.browser is False
+    assert static.config.order == "manual" and static.config.browser is False
 
 
 def test_crawl_accepts_a_resolve_policy(wc, site):
@@ -178,7 +184,7 @@ def test_crawl_accepts_a_resolve_policy(wc, site):
 
     pol = Resolve.auto()
     crawl = wc.crawl(site.url_for("/"), browser=False, resolve=pol)
-    assert crawl.resolve == pol
+    assert crawl.config.resolve == pol
     with crawl:  # and a static crawl under a policy still runs offline
         crawl.step()
     assert crawl.pages
@@ -320,8 +326,9 @@ def test_paginated_links_are_scored_down(wc, scored_site):
     from webclient.core.crawl.backing import CrawlBacking
 
     b = CrawlBacking()
-    fresh = b._link_score("Big story", "https://s.ex/news/big-story", "main")
-    page3 = b._link_score("Older posts", "https://s.ex/news?page=3", "main")
+    core = wc.crawl("https://s.ex/", browser=False)  # a Crawl core carries the scorer weights
+    fresh = b._link_score(core, "Big story", "https://s.ex/news/big-story", "main")
+    page3 = b._link_score(core, "Older posts", "https://s.ex/news?page=3", "main")
     assert page3 < fresh  # a later listing page sinks below fresh content
 
 
@@ -389,39 +396,32 @@ def test_frontier_scores_and_sorts_useful_links_first(wc, scored_site):
 
 
 def test_keyword_match_dominates_importance_score(wc, scored_site):
-    # a keyword the caller passed must outrank the importance heuristic: even a
-    # low-importance footer link that matches the keyword beats a high-importance
-    # article link that does not (regression guard -- importance must not swamp
-    # the explicit steering signal).
-    from webclient.core.crawl.backing import CrawlBacking
-
-    b = CrawlBacking()
+    # a keyword the caller passed must outrank the importance heuristic: a low-
+    # importance footer link that matches the keyword outscores a high-importance
+    # article link that doesn't. The keyword bonus is folded into the edge score at
+    # discovery, so best-first ordering surfaces the match first.
     with wc.crawl(scored_site.url_for("/"), keywords=["privacy"], browser=False) as crawl:
         crawl.step()
         by_path = {_path_of(e.url): e for e in crawl.frontier}
         privacy = by_path["/privacy"]  # keyword match, footer (low importance)
-        article = by_path["/news/2026/09/big-announcement-today"]  # high importance
-        assert privacy.score < 0 < article.score  # importance disagrees...
-        # ...but best-first selection puts the keyword match ahead.
-        assert b._score(crawl, privacy) > b._score(crawl, article)
+        article = by_path["/news/2026/09/big-announcement-today"]  # high importance, no match
+        assert privacy.score > article.score  # the explicit keyword steer dominates
 
 
-def test_link_score_ranks_by_region_text_and_url_shape():
-    # the scorer itself: a "read more" article link in <main> beats a footer legal
-    # link beats a social widget beats a bare icon link.
+def test_link_score_ranks_by_region_text_and_url_shape(wc):
+    # the scorer itself: a "read more" article link in <main> beats a nav link, both
+    # beat a footer legal link and a social widget and a bare icon link.
     from webclient.core.crawl.backing import CrawlBacking
 
     b = CrawlBacking()
-    read_more = b._link_score(
-        "Read more", "https://s.example/news/2026/09/the-big-story", "main"
-    )
-    nav = b._link_score("Products", "https://s.example/products", "nav")
-    legal = b._link_score("Privacy Policy", "https://s.example/privacy", "footer")
-    social = b._link_score("", "https://twitter.com/acme", "footer")
-    icon = b._link_score("", "https://s.example/x", "footer")
-    assert read_more > nav > 0
-    assert legal < 0 and social < legal  # social widget is the worst
-    assert icon < 0
+    core = wc.crawl("https://s.example/", browser=False)  # carries the scorer weights
+    read_more = b._link_score(core, "Read more", "https://s.example/news/2026/09/the-big-story", "main")
+    nav = b._link_score(core, "Products", "https://s.example/products", "nav")
+    legal = b._link_score(core, "Privacy Policy", "https://s.example/privacy", "footer")
+    social = b._link_score(core, "", "https://twitter.com/acme", "footer")
+    icon = b._link_score(core, "", "https://s.example/x", "footer")
+    assert read_more > nav > 0  # article + nav are useful
+    assert legal < 0 and social < 0 and icon < 0  # footer legal / social / icon sink
 
 
 def _path_of(url: str) -> str:
