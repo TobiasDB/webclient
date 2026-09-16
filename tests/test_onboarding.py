@@ -126,6 +126,11 @@ def test_onboard_company_finds_and_queries_the_dataset(site):
     assert rows[0]["price"] == "$10"
     assert [r["name"] for r in plan_rows] == ["Widget", "Sprocket", "Cog"]  # plan == blob
 
+    # richer logging: the run left a readable step trace on the result
+    assert result.steps and any("query authored" in s for s in result.steps)
+    assert any("crawled" in s for s in result.steps)
+    assert result.cost_usd == 0.0  # the stub llm carries no cost
+
 
 def test_onboard_company_reports_when_no_seeds(site):
     def search(query, k):
@@ -436,3 +441,19 @@ def test_model_price_includes_cache_read_and_write_costs():
     # an explicit override (e.g. a 1-hour cache at 2x write) is possible
     hourly = ModelPrice.of(5.0, 25.0, cache_write_mult=2.0)
     assert hourly.cache_write_usd_per_mtok == pytest.approx(10.0)
+
+
+def test_cli_parses_and_errors_without_a_key(monkeypatch, tmp_path):
+    # the CLI loads the brief and wires the run; without an API key it errors cleanly
+    # (SystemExit) rather than trying to call a model.
+    from webclient.pipelines.__main__ import main
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    brief = tmp_path / "b.md"
+    brief.write_text("---\nname: t\nschema:\n  - name: the name\n---\nA dataset.\n")
+
+    with pytest.raises(SystemExit):
+        main(["--brief", str(brief), "--company", "Acme"])
+
+    with pytest.raises(SystemExit):  # no --company is also an error
+        main(["--brief", str(brief)])

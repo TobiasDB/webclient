@@ -35,9 +35,15 @@ so the whole pipeline runs offline against a stub model + a local server in test
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Callable, Literal, Sequence
 
 from pydantic import BaseModel
+
+#: the pipeline's logger. Stages log progress here (seeds, crawl, candidates, the
+#: evaluation, the query, spend); a CLI or app sets the level / handler. Each line is
+#: also appended to ``OnboardingResult.steps`` for a programmatic trace.
+log = logging.getLogger("webclient.pipelines.onboarding")
 
 from ..core.document.models import Flag
 from ..core.reference.models import (
@@ -314,6 +320,16 @@ class OnboardingResult(BaseModel):
     reference: Any = None  # the lazy Reference (a core; not re-validated by pydantic)
     resolve: Resolve | None = None
     query: QueryArtifact | None = None
+    steps: list[str] = []  # a human-readable trace of the run (also logged)
+    cost_usd: float = 0.0  # LLM spend for this company (when an LlmClient was used)
+
+
+def _trace(result: OnboardingResult, message: str, *args: Any) -> None:
+    """Log one pipeline step at INFO and append it to the result's ``steps`` trace, so a
+    run is observable live (logging) and after the fact (``result.steps``)."""
+    rendered = message % args if args else message
+    result.steps.append(rendered)
+    log.info("%s: %s", result.company, rendered)
 
 
 # --------------------------------------------------------------------------- #
@@ -857,17 +873,21 @@ def _onboard_company(
     max_pages: int,
     browser: bool,
 ) -> OnboardingResult:
+    _trace(result, "searching the web for seeds")
     seeds = search_web(brief, company, search=search, llm=llm)
     if not seeds:
         result.reason = "no search seeds"
         return result
+    _trace(result, "%d seed(s); crawling for the dataset", len(seeds))
     crawl = crawl_from_seeds(
         seeds, brief, wc=wc, llm=llm, max_pages=max_pages, browser=browser
     )
+    _trace(result, "crawled %d page(s), %d failed", len(crawl.pages), len(crawl.failures))
     candidates = select_candidates(crawl, brief, llm=llm)
     if not candidates:
         result.reason = "no candidate pages"
         return result
+    _trace(result, "%d candidate(s); evaluating best-first", len(candidates))
     evaluation = evaluate_candidates(
         candidates, brief, wc=wc, llm=llm, browser=_mode(browser)
     )
@@ -876,6 +896,10 @@ def _onboard_company(
         result.evaluation = evaluation
         return result
     result.evaluation = evaluation
+    _trace(
+        result, "chose %s (queryable=%s, scrapability=%d)",
+        evaluation.url, evaluation.is_queryable, evaluation.scrapability,
+    )
     # -- the flag-driven decision cascade for the chosen source, in order ----------
     # (1) reference: the data API if the SPA is backed by one, else the page URL.
     result.reference = write_reference(evaluation, wc=wc)
@@ -888,13 +912,22 @@ def _onboard_company(
         return result
     # (3) resolve policy: spa -> browser, anti_bot_triggered -> proxy/stealth.
     result.resolve = write_resolve(list(flags.values()))
+    fired = [n for n, f in flags.items() if f.present]
+    _trace(result, "flags fired: %s; authoring the query", ", ".join(fired) or "none")
     # (4) query: authored from the skeleton, told to page when the source paginates.
     result.query = write_query(
         query_url, brief, wc=wc, llm=llm, browser=_mode(browser),
         paginated=evaluation.has_pagination,
     )
+    if isinstance(llm, LlmClient):
+        result.cost_usd = llm.spent_usd
     result.ok = result.query is not None
     result.reason = "" if result.ok else "could not author a query"
+    if result.query is not None:
+        _trace(
+            result, "query authored (tested=%s, %d row[s]); spent $%.4f",
+            result.query.tested, result.query.row_count, result.cost_usd,
+        )
     return result
 
 
