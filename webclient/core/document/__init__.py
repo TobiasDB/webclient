@@ -28,6 +28,7 @@ from .transport import TransportBacking
 from .metadata import MetadataBacking
 from .structure import StructureBacking
 from .flags import FlagsBacking
+from .regex import RegexBacking
 
 if TYPE_CHECKING:
     from ...surfaces.lazy import LazyDocument
@@ -88,6 +89,7 @@ class Document(WebCore, IDocument):
         MetadataBacking(),
         StructureBacking(),
         FlagsBacking(),
+        RegexBacking(),
     )
 
     @property
