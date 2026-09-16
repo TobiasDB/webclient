@@ -34,6 +34,9 @@ include = ["webclient*"]
 # types (the package is mypy --strict + pyright clean).
 [tool.setuptools.package-data]
 webclient = ["py.typed", "skills/*.md"]
+# The onboarding pipeline's prompts ship as package data (loaded via
+# importlib.resources from webclient.pipelines.prompts).
+"webclient.pipelines.prompts" = ["*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
