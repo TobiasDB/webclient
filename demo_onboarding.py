@@ -9,7 +9,18 @@ query for the best one. Here the model and web search are SCRIPTED stubs and the
     env/bin/python demo_onboarding.py
 
 In production you inject a real ``llm(prompt)->str`` (a Claude call) and a real
-``search`` (e.g. ``pipelines.ddg_search``).
+``search`` (e.g. ``pipelines.ddg_search``). Wiring a real, budgeted LLM client is a
+one-liner -- the pipeline's injection point is unchanged::
+
+    from webclient.pipelines import LlmClient, Budget, onboard_company
+
+    llm = LlmClient(model="claude-opus-5", auth="sk-ant-...")  # reads env if omitted
+    result = onboard_company(
+        "Acme", brief, wc=wc, llm=llm, search=ddg_search,
+        budget=Budget(max_usd=2.00),  # cap the run; ok=False if the cap is hit
+    )
+
+This demo keeps the SCRIPTED stub below so it runs offline with no API key.
 """
 
 from __future__ import annotations

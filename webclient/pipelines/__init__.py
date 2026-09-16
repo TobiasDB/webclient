@@ -8,6 +8,14 @@ they stay testable offline with a stub model.
 
 from __future__ import annotations
 
+from .llm import (
+    Budget,
+    BudgetExceeded,
+    LlmClient,
+    ModelPrice,
+    Usage,
+    price_for,
+)
 from .onboarding import (
     Brief,
     Candidate,
@@ -27,6 +35,7 @@ from .onboarding import (
     write_reference,
     write_resolve,
 )
+from .prompts import render_prompt
 
 __all__ = [
     "Brief",
@@ -46,4 +55,12 @@ __all__ = [
     "write_query",
     "onboard_company",
     "onboard",
+    # LLM client + budget
+    "LlmClient",
+    "Budget",
+    "BudgetExceeded",
+    "Usage",
+    "ModelPrice",
+    "price_for",
+    "render_prompt",
 ]

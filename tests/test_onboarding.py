@@ -4,16 +4,23 @@ authored query actually extracts the dataset when run."""
 
 import json
 
+import httpx
 import pytest
 
 from webclient import WebClient, from_blob, wq
 from webclient.core.document.models import Flag
 from webclient.pipelines import (
     Brief,
+    Budget,
+    BudgetExceeded,
     Candidate,
+    LlmClient,
     SearchHit,
+    Usage,
     evaluate_candidate,
     onboard_company,
+    price_for,
+    render_prompt,
     write_resolve,
 )
 
@@ -158,3 +165,128 @@ def test_evaluate_drops_a_login_walled_candidate(httpserver):
         )
     assert not ev.dataset_present and ev.verdict == "login required"
     assert "login_required" in ev.flags
+
+
+# --------------------------------------------------------------------------- #
+# Prompts-as-data: the templates load and render with the right variables.
+# --------------------------------------------------------------------------- #
+
+
+def test_prompt_templates_load_and_render():
+    # every prompt file loads and renders; the routing substrings the pipeline (and
+    # the scripted stub llm) rely on survive the move to data.
+    assert "web-search query" in render_prompt(
+        "search_query", company="Acme", description="products", fields_line=""
+    )
+    assert "frontier links" in render_prompt(
+        "pick_edges", description="d", fields_line="", listing="0. http://x"
+    )
+    assert "crawled pages" in render_prompt(
+        "select_candidates", description="d", fields_line="", pages_json="[]"
+    )
+    ev = render_prompt(
+        "evaluate_candidate", description="d", fields_line=" Target fields: a.",
+        candidate_url="http://c", flag_map_json="{}", endpoints_json="[]", skeleton="SKEL",
+    )
+    assert "Assess this page" in ev and "http://c" in ev and "SKEL" in ev
+    wq_prompt = render_prompt(
+        "write_query", guide="GUIDE-TEXT", description="d", fields_line="",
+        pager="", skeleton="SKEL",
+    )
+    assert "query DSL" in wq_prompt and "portable blob" in wq_prompt
+    assert wq_prompt.startswith("GUIDE-TEXT")
+
+
+def test_render_prompt_requires_every_placeholder():
+    # a missing variable fails loudly rather than shipping a half-filled prompt.
+    with pytest.raises(KeyError):
+        render_prompt("search_query", company="Acme")  # no description / fields_line
+
+
+# --------------------------------------------------------------------------- #
+# LlmClient: parses a mocked Messages API response, accumulates cost, no network.
+# --------------------------------------------------------------------------- #
+
+
+def _mock_messages_transport(captured=None, *, in_tok=1000, out_tok=1000):
+    """An httpx.MockTransport standing in for the Anthropic Messages API."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if captured is not None:
+            captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "content": [
+                    {"type": "text", "text": "acme products widgets"},
+                    {"type": "text", "text": "!"},  # multiple text blocks concatenate
+                ],
+                "usage": {"input_tokens": in_tok, "output_tokens": out_tok},
+            },
+        )
+
+    return httpx.MockTransport(handler)
+
+
+def test_llm_client_parses_response_and_accumulates_cost():
+    captured: list[httpx.Request] = []
+    client = LlmClient(
+        model="claude-opus-5",
+        auth="test-key",
+        transport=_mock_messages_transport(captured),
+    )
+
+    text = client("write a query")
+    assert text == "acme products widgets!"  # both text blocks joined
+    assert client.last_usage == Usage(input_tokens=1000, output_tokens=1000)
+
+    per_call = Usage(input_tokens=1000, output_tokens=1000).cost_usd(price_for("claude-opus-5"))
+    assert per_call == pytest.approx((1000 * 5.0 + 1000 * 25.0) / 1_000_000)
+    assert client.spent_usd == pytest.approx(per_call)
+
+    client("and another")  # running spend accumulates across calls
+    assert client.spent_usd == pytest.approx(2 * per_call)
+    assert client.budget.calls == 2
+
+    # it really spoke the Messages API shape, offline, with the auth header set.
+    req = captured[0]
+    assert req.url.path == "/v1/messages" and req.headers["x-api-key"] == "test-key"
+    body = json.loads(req.content)
+    assert body["model"] == "claude-opus-5" and body["messages"][0]["content"] == "write a query"
+
+
+def test_budget_exceeded_fires_when_cap_is_crossed():
+    per_call = Usage(input_tokens=1000, output_tokens=1000).cost_usd(price_for("claude-opus-5"))
+    client = LlmClient(
+        auth="test-key",
+        transport=_mock_messages_transport(),
+        budget=Budget(max_usd=per_call),  # room for exactly one call
+    )
+
+    client("first call fits the budget")  # charges the budget up to the cap
+    with pytest.raises(BudgetExceeded) as exc:
+        client("second call is over the cap")
+    assert exc.value.spent_usd == pytest.approx(per_call)
+    assert exc.value.limit_usd == pytest.approx(per_call)
+
+
+def test_onboard_company_reports_a_blown_budget(site):
+    # a real LlmClient (mocked transport, no network) as the injected llm, capped so
+    # the budget trips mid-pipeline -> the run surfaces it gracefully, not by crashing.
+    per_call = Usage(input_tokens=1000, output_tokens=1000).cost_usd(price_for("claude-opus-5"))
+
+    def search(query, k):
+        return [SearchHit(url=site.url_for("/"), title="Acme", snippet="widgets")]
+
+    client = LlmClient(
+        auth="test-key",
+        transport=_mock_messages_transport(),
+        budget=Budget(max_usd=per_call),  # the second LLM call will trip
+    )
+    with WebClient() as wc:
+        result = onboard_company(
+            "Acme", Brief(description="the company's products"),
+            wc=wc, llm=client, search=search, browser=False,
+        )
+    assert not result.ok
+    assert result.reason == "llm budget exceeded"
+    assert client.spent_usd == pytest.approx(per_call)  # stopped at the cap

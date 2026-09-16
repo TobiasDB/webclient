@@ -49,6 +49,8 @@ from ..core.reference.models import (
 from ..guides import lazy_query_guide
 from ..query.expr import from_blob
 from ..surfaces import Reference, WebClient
+from .llm import Budget, BudgetExceeded, LlmClient
+from .prompts import render_prompt
 
 #: the model: a prompt in, its completion text out. Inject any client (a Claude call,
 #: a local model, or a stub in tests). Kept deliberately minimal.
@@ -247,9 +249,12 @@ def search_web(
     query = f"{company} {brief.description}".strip()
     if llm is not None:
         crafted = llm(
-            "Write a single web-search query (no quotes, no prose) that would find "
-            f"the following for the company '{company}': {brief.description}."
-            f"{_fields_line(brief)}"
+            render_prompt(
+                "search_query",
+                company=company,
+                description=brief.description,
+                fields_line=_fields_line(brief),
+            )
         ).strip().splitlines()
         if crafted and crafted[0].strip():
             query = crafted[0].strip()
@@ -274,15 +279,12 @@ def _pick_edges(llm: LLM, brief: Brief, frontier: Sequence[Any]) -> list[str]:
     )
     picked = _ask_json(
         llm,
-        "You are crawling a company site to reach this dataset: "
-        f"{brief.description}.{_fields_line(brief)}\n"
-        "From the frontier links below, choose the ones worth fetching next. Prefer "
-        "links that lead to a single queryable source of the WHOLE dataset (an API, a "
-        "data/export endpoint, a full listing) over a page that shows only a slice. "
-        "Follow pagination ('next', page N) when the dataset spans pages. Ignore "
-        "nav chrome, legal, and social links.\n\n"
-        f"{listing}\n\n"
-        'Reply with only a JSON array of the chosen link numbers, e.g. [0, 3, 4].',
+        render_prompt(
+            "pick_edges",
+            description=brief.description,
+            fields_line=_fields_line(brief),
+            listing=listing,
+        ),
     )
     if not isinstance(picked, list):
         return []
@@ -343,14 +345,12 @@ def select_candidates(crawl: Any, brief: Brief, *, llm: LLM) -> list[Candidate]:
         return []
     rows = _ask_json(
         llm,
-        f"We want to scrape this dataset: {brief.description}.{_fields_line(brief)}\n"
-        "Here are the crawled pages (with detected flags like 'spa' = JS-rendered, "
-        "'pagination' = spans pages, 'login_required' = gated):\n"
-        f"{json.dumps(pages, indent=0)}\n\n"
-        "Pick the pages worth evaluating as the source to scrape. For each, give its "
-        '"url", a "kind" ("api" | "page" | "spa"), a "tier" ("must" | "should" | '
-        '"could") by how likely+scrapeable it is, and a short "note". '
-        "Reply with only a JSON array of such objects.",
+        render_prompt(
+            "select_candidates",
+            description=brief.description,
+            fields_line=_fields_line(brief),
+            pages_json=json.dumps(pages, indent=0),
+        ),
     )
     out: list[Candidate] = []
     for r in rows if isinstance(rows, list) else []:
@@ -394,18 +394,15 @@ def evaluate_candidate(
     interactive = flags["forms"].present or flags["buttons"].present
     parsed = _ask_json(
         llm,
-        f"Dataset wanted: {brief.description}.{_fields_line(brief)}\n"
-        f"Candidate URL: {candidate.url}\n"
-        f"Detected flags (name: confidence): {json.dumps(flag_map)}\n"
-        f"Observed data endpoints (XHR/fetch): {json.dumps(endpoints)}\n"
-        f"Page skeleton:\n{skeleton}\n\n"
-        "Assess this page as the source to scrape and reply with only a JSON object "
-        'with keys: "dataset_present" (bool), "is_queryable" (bool: is there an API/'
-        'endpoint serving the WHOLE dataset?), "sort_order" (str|null), '
-        '"completeness" ("full"|"partial"|"unknown"), "has_pagination" (bool), '
-        '"has_filters" (bool), "dataset_is_subset" (bool: is our ask a subset of '
-        'what is here?), "mostly_unstructured" (bool), "drilldown_links" (bool), '
-        '"scrapability" (int 0-10), "verdict" (one short sentence).',
+        render_prompt(
+            "evaluate_candidate",
+            description=brief.description,
+            fields_line=_fields_line(brief),
+            candidate_url=candidate.url,
+            flag_map_json=json.dumps(flag_map),
+            endpoints_json=json.dumps(endpoints),
+            skeleton=skeleton,
+        ),
     )
     data: dict[str, Any] = dict(parsed) if isinstance(parsed, dict) else {"verdict": "could not evaluate"}
     # the flags are ground truth for structure -> they win over the model's guesses.
@@ -484,16 +481,13 @@ def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False) -> st
         '(a rel="next" anchor) as a field named "next" so the caller can follow it.'
         if paginated else ""
     )
-    return (
-        f"{lazy_query_guide()}\n\n"
-        "----\n"
-        "Using ONLY the query DSL above, write a lazy web query that extracts this "
-        f"dataset from the page: {brief.description}.{_fields_line(brief)}{pager}\n"
-        "Base your CSS selectors on this page skeleton:\n"
-        f"{skeleton}\n\n"
-        "Author the query rooted at wq.ref.resolve(), select the repeating records, "
-        "extract the target fields, and end with .project(). Reply with ONLY the "
-        "query's portable blob from expr.to_blob() -- a single JSON object, nothing else."
+    return render_prompt(
+        "write_query",
+        guide=lazy_query_guide(),
+        description=brief.description,
+        fields_line=_fields_line(brief),
+        pager=pager,
+        skeleton=skeleton,
     )
 
 
@@ -538,10 +532,43 @@ def onboard_company(
     search: SearchFn,
     max_pages: int = 20,
     browser: bool = True,
+    budget: Budget | None = None,
 ) -> OnboardingResult:
     """Run the whole pipeline for one company: search -> crawl -> select -> evaluate
-    -> write the reference, resolve, and query for the best source found."""
+    -> write the reference, resolve, and query for the best source found.
+
+    Pass a :class:`~webclient.pipelines.llm.Budget` to cap LLM spend for this run: when
+    an :class:`~webclient.pipelines.llm.LlmClient` is the injected ``llm`` the budget is
+    attached to it, and if the cap is hit mid-pipeline the run stops and reports
+    ``ok=False`` / ``reason="llm budget exceeded"`` instead of raising to the caller.
+    """
     result = OnboardingResult(company=company, brief=brief)
+    # Thread the cap into an LlmClient so its per-call spend is enforced. A plain
+    # callable llm (e.g. a test stub) carries no cost, so there is nothing to cap.
+    if budget is not None and isinstance(llm, LlmClient):
+        llm.budget = budget
+    try:
+        return _onboard_company(
+            company, brief, result,
+            wc=wc, llm=llm, search=search, max_pages=max_pages, browser=browser,
+        )
+    except BudgetExceeded:
+        result.ok = False
+        result.reason = "llm budget exceeded"
+        return result
+
+
+def _onboard_company(
+    company: str,
+    brief: Brief,
+    result: OnboardingResult,
+    *,
+    wc: WebClient,
+    llm: LLM,
+    search: SearchFn,
+    max_pages: int,
+    browser: bool,
+) -> OnboardingResult:
     seeds = search_web(brief, company, search=search, llm=llm)
     if not seeds:
         result.reason = "no search seeds"
@@ -592,11 +619,16 @@ def onboard(
     search: SearchFn,
     max_pages: int = 20,
     browser: bool = True,
+    budget: Budget | None = None,
 ) -> list[OnboardingResult]:
-    """Onboard several companies for the same brief (sequentially, one crawl each)."""
+    """Onboard several companies for the same brief (sequentially, one crawl each).
+
+    A shared ``budget`` caps LLM spend across the WHOLE run: once it is exhausted the
+    remaining companies report ``ok=False`` / ``reason="llm budget exceeded"``."""
     return [
         onboard_company(
-            c, brief, wc=wc, llm=llm, search=search, max_pages=max_pages, browser=browser
+            c, brief, wc=wc, llm=llm, search=search, max_pages=max_pages,
+            browser=browser, budget=budget,
         )
         for c in companies
     ]
