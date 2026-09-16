@@ -70,13 +70,74 @@ def _mode(browser: bool) -> BrowserMode:
 # --------------------------------------------------------------------------- #
 
 
-class Brief(BaseModel):
-    """What dataset we want to onboard. ``description`` is the free-text ask (e.g.
-    "the company's product catalogue"); ``fields`` are the columns each record
-    should carry, when known (they steer the query author)."""
+def _parse_frontmatter(text: str) -> "tuple[dict[str, Any], str]":
+    """A tiny YAML-frontmatter reader (no dependency): a leading ``---`` block of
+    ``key: value`` scalars and ``key:`` + indented ``- item`` lists, then the body.
+    Returns ``(front, body)``; no frontmatter -> ``({}, text)``."""
+    if not text.lstrip().startswith("---"):
+        return {}, text
+    rest = text.lstrip()[3:].lstrip("\n")
+    end = rest.find("\n---")
+    if end == -1:
+        return {}, text
+    block, body = rest[:end], rest[end + 4 :].lstrip("\n")
+    front: dict[str, Any] = {}
+    key: str | None = None
+    for raw in block.splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        if raw.lstrip().startswith("- ") and key is not None:  # a list item
+            front.setdefault(key, [])
+            if isinstance(front[key], list):
+                front[key].append(raw.split("- ", 1)[1].strip().strip("'\""))
+        elif ":" in raw and not raw.startswith(" "):
+            k, _, v = raw.partition(":")
+            key = k.strip()
+            v = v.strip().strip("'\"")
+            front[key] = v if v else []  # a value, or an empty list to be filled
+    return front, body
 
-    description: str
-    fields: list[str] = []
+
+class Brief(BaseModel):
+    """What dataset we want to onboard -- a reusable spec, loadable from a markdown
+    file with YAML frontmatter (:meth:`from_markdown` / :meth:`load`). ``description``
+    is the free-text ask (the markdown body); ``fields`` are the columns each record
+    should carry (they steer the query author); ``look`` / ``ignore`` are path/URL
+    hints (where the dataset likely lives, what to skip) that steer the crawl and the
+    candidate ranking; ``name`` / ``title`` identify the brief."""
+
+    description: str = ""
+    fields: list[str] = []  # the target schema -- record columns (names, or "name: type")
+    name: str = ""  # a short slug id (e.g. "product-catalogue")
+    title: str = ""  # a human title
+    look: list[str] = []  # path/URL fragments where the dataset likely lives (/products, /api)
+    ignore: list[str] = []  # path/URL fragments to skip (/blog, /careers, /legal)
+
+    @classmethod
+    def from_markdown(cls, text: str) -> "Brief":
+        """Build a :class:`Brief` from a markdown document: YAML frontmatter (``name`` /
+        ``title`` / ``schema`` or ``fields`` / ``look`` / ``ignore`` / ``description``)
+        over a body that becomes ``description`` when the frontmatter omits it."""
+        front, body = _parse_frontmatter(text)
+
+        def as_list(v: Any) -> list[str]:
+            return [str(x) for x in v] if isinstance(v, list) else ([str(v)] if v else [])
+
+        return cls(
+            description=str(front.get("description") or body).strip(),
+            fields=as_list(front.get("schema") or front.get("fields")),
+            name=str(front.get("name") or ""),
+            title=str(front.get("title") or ""),
+            look=as_list(front.get("look")),
+            ignore=as_list(front.get("ignore")),
+        )
+
+    @classmethod
+    def load(cls, path: str) -> "Brief":
+        """Load a reusable brief from a markdown file (see :meth:`from_markdown`)."""
+        from pathlib import Path
+
+        return cls.from_markdown(Path(path).read_text(encoding="utf-8"))
 
 
 class SearchHit(BaseModel):
@@ -192,7 +253,17 @@ def _ask_json(llm: LLM, prompt: str) -> Any:
 
 
 def _fields_line(brief: Brief) -> str:
-    return f" Target fields: {', '.join(brief.fields)}." if brief.fields else ""
+    """The brief's hints as one appended line for any prompt: the target schema plus
+    the ``look`` / ``ignore`` path hints, so every stage sees where to look and what to
+    skip. Empty when the brief carries none."""
+    parts: list[str] = []
+    if brief.fields:
+        parts.append(f"Target fields: {', '.join(brief.fields)}.")
+    if brief.look:
+        parts.append(f"Prefer sources under: {', '.join(brief.look)}.")
+    if brief.ignore:
+        parts.append(f"Ignore anything under: {', '.join(brief.ignore)}.")
+    return (" " + " ".join(parts)) if parts else ""
 
 
 #: the flags the pipeline reads to decide how to fetch, resolve and query a source.
@@ -270,6 +341,49 @@ def search_web(
 # --------------------------------------------------------------------------- #
 
 
+def _frontier_key(url: str) -> "tuple[str, str, frozenset[str]]":
+    """A dedup key that collapses a paginated set and repeated calls to one API: the
+    host + the path with any ``/page/N`` segment stripped + the set of query-param
+    KEYS (ignoring their values). So ``?page=1`` / ``?page=2`` and ``/list/page/3``
+    collapse to one, while distinct resources (``/item/1`` vs ``/item/2``) stay apart."""
+    import re
+    from urllib.parse import parse_qsl, urlsplit
+
+    parts = urlsplit(url)
+    path = re.sub(r"/(?:page|p)/\d+", "", parts.path).rstrip("/") or "/"
+    # ignore pagination params so ?page=1 / ?page=2 / /page/3 all collapse together
+    keys = frozenset(
+        k for k, _ in parse_qsl(parts.query) if k.lower() not in _PAGE_PARAMS
+    )
+    return (parts.netloc, path, keys)
+
+
+#: query params that only page/window a result set (not a distinct resource).
+_PAGE_PARAMS = {
+    "page", "p", "pg", "pagenum", "offset", "start", "limit", "per_page", "cursor",
+}
+
+
+def _filter_frontier(edges: Sequence[Any], brief: Brief) -> list[Any]:
+    """Prune the frontier before the model spends a pick on it: drop edges whose path
+    matches a brief ``ignore`` hint, then collapse paginated URL sets and repeated
+    similar-API calls to one representative each (keeping the first -- the frontier is
+    already best-first). Keeps the model's choices, and the crawl, from wasting budget
+    on many versions of the same thing."""
+    kept: list[Any] = []
+    seen: set[tuple[str, str, frozenset[str]]] = set()
+    for e in edges:
+        path = e.url.lower()
+        if any(h and h.lower() in path for h in brief.ignore):
+            continue
+        key = _frontier_key(e.url)
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(e)
+    return kept
+
+
 def _pick_edges(llm: LLM, brief: Brief, frontier: Sequence[Any]) -> list[str]:
     """Ask the model which frontier edges to expand next -- the ones most likely to
     reach the dataset, preferring a queryable source (an API over the whole dataset)
@@ -317,7 +431,9 @@ def crawl_from_seeds(
     for _ in range(rounds):
         if not crawl.frontier or len(crawl.pages) >= max_pages:
             break
-        picks = _pick_edges(llm, brief, list(crawl.frontier))
+        # prune paginated/similar-API duplicates + ignored paths before the model picks
+        candidates = _filter_frontier(list(crawl.frontier), brief)
+        picks = _pick_edges(llm, brief, candidates)
         if not picks:
             break
         crawl.step(picks)

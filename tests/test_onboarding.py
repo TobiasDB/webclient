@@ -290,3 +290,49 @@ def test_onboard_company_reports_a_blown_budget(site):
     assert not result.ok
     assert result.reason == "llm budget exceeded"
     assert client.spent_usd == pytest.approx(per_call)  # stopped at the cap
+
+
+def test_brief_loads_from_markdown_frontmatter():
+    from webclient.pipelines.onboarding import Brief
+
+    md = """---
+name: product-catalogue
+title: Product Catalogue
+schema:
+  - name
+  - price
+look:
+  - /products
+  - /api
+ignore:
+  - /blog
+---
+The company's full product catalogue: every product with name and price.
+Prefer a queryable API over a paginated listing.
+"""
+    brief = Brief.from_markdown(md)
+    assert brief.name == "product-catalogue" and brief.title == "Product Catalogue"
+    assert brief.fields == ["name", "price"]
+    assert brief.look == ["/products", "/api"] and brief.ignore == ["/blog"]
+    assert brief.description.startswith("The company's full product catalogue")
+
+
+def test_filter_frontier_collapses_pagination_and_similar_apis():
+    from webclient.core.crawl import Edge
+    from webclient.pipelines.onboarding import Brief, _filter_frontier
+
+    brief = Brief(description="products", ignore=["/blog"])
+    edges = [
+        Edge(url="https://x.co/list?page=1"),
+        Edge(url="https://x.co/list?page=2"),   # same API, different value -> collapsed
+        Edge(url="https://x.co/list/page/3"),   # paginated path -> collapsed
+        Edge(url="https://x.co/item/1"),        # distinct resource -> kept
+        Edge(url="https://x.co/item/2"),        # distinct resource -> kept
+        Edge(url="https://x.co/blog/post"),     # ignored hint -> dropped
+    ]
+    kept = [e.url for e in _filter_frontier(edges, brief)]
+    assert kept == [
+        "https://x.co/list?page=1",
+        "https://x.co/item/1",
+        "https://x.co/item/2",
+    ]
