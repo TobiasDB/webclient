@@ -141,6 +141,58 @@ def test_onboard_company_reports_when_no_seeds(site):
     assert not result.ok and result.reason == "no search seeds"
 
 
+def test_seeds_for_company_drops_look_alike_companies():
+    from webclient.pipelines.onboarding import Seed, _seeds_for_company
+
+    seeds = [
+        Seed(url="https://www.squarepoint-capital.com/", title="Squarepoint Capital"),
+        Seed(url="https://squareup.com/", title="Square — run your business"),
+        Seed(url="https://en.wikipedia.org/wiki/Squarepoint", title="Squarepoint Capital – Wikipedia"),
+    ]
+
+    def llm(prompt):
+        assert "Squarepoint" in prompt  # the exact company is named
+        return '{"belong": [0, 2], "note": "excluded Square (squareup.com)"}'
+
+    kept = _seeds_for_company(seeds, "Squarepoint", Brief(description="ir news"), llm)
+    assert [s.url for s in kept] == [
+        "https://www.squarepoint-capital.com/", "https://en.wikipedia.org/wiki/Squarepoint",
+    ]
+
+
+def test_seeds_for_company_fails_open_without_a_usable_judgement():
+    from webclient.pipelines.onboarding import Seed, _seeds_for_company
+
+    seeds = [Seed(url="https://a/"), Seed(url="https://b/")]
+    # a model that returns nothing usable, or no model at all -> keep every seed (never
+    # silently drop them all on a bad reply)
+    assert len(_seeds_for_company(seeds, "X", Brief(description="d"), lambda p: "{}")) == 2
+    assert len(_seeds_for_company(seeds, "X", Brief(description="d"), None)) == 2
+
+
+def test_search_web_retries_stricter_when_all_seeds_are_the_wrong_company():
+    from webclient.pipelines.onboarding import search_web
+
+    calls = {"n": 0}
+
+    def search(query, k):
+        calls["n"] += 1
+        if calls["n"] == 1:  # the first query pulls the look-alike company
+            return [SearchHit(url="https://squareup.com/", title="Square")]
+        return [SearchHit(url="https://squarepoint.com/", title="Squarepoint Capital")]
+
+    def llm(prompt):
+        if "web-search query" in prompt:  # craft (and, on retry, disambiguate) the query
+            return "squarepoint capital official" if "DIFFERENT company" in prompt else "squarepoint"
+        if "belong" in prompt:  # verify: the right one belongs only in the second set
+            return '{"belong": [0]}' if "https://squarepoint.com" in prompt else '{"belong": []}'
+        return "{}"
+
+    seeds = search_web(Brief(description="ir news"), "Squarepoint", search=search, llm=llm)
+    assert calls["n"] == 2  # it retried the search with a stricter query
+    assert [s.url for s in seeds] == ["https://squarepoint.com/"]
+
+
 def test_write_resolve_maps_flags_to_policy():
     # the flags deterministically choose the transport policy for the source.
     spa = write_resolve([Flag(name="spa", present=True, remedy="browser")])

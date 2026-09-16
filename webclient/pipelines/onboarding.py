@@ -670,6 +670,52 @@ def ddg_search(query: str, k: int = 6) -> "list[SearchHit]":
     ]
 
 
+#: appended to the search-query prompt on a retry, when the first results were a look-alike
+_DISAMBIGUATE = (
+    "\n\nThe previous search returned a DIFFERENT company with a similar name, not this one."
+    " Rewrite the query so it is UNAMBIGUOUS for this exact company -- add a distinguishing"
+    " word (its industry, headquarters, 'official', or a term from the description)."
+)
+
+
+def _search_query(brief: Brief, company: str, llm: "LLM | None", *, disambiguate: bool = False) -> str:
+    """The web-search query for ``company`` -- the model crafts a sharper one (told to
+    disambiguate a look-alike name on a retry); falls back to ``"<company> <brief>"``."""
+    query = f"{company} {brief.description}".strip()
+    if llm is not None:
+        prompt = render_prompt(
+            "search_query", company=company, description=brief.description,
+            fields_line=_fields_line(brief),
+        ) + (_DISAMBIGUATE if disambiguate else "")
+        crafted = llm(prompt).strip().splitlines()
+        if crafted and crafted[0].strip():
+            query = crafted[0].strip()
+    return query
+
+
+def _seeds_for_company(seeds: "list[Seed]", company: str, brief: Brief, llm: "LLM | None") -> "list[Seed]":
+    """Keep only the seeds that actually belong to ``company`` -- the model rejects
+    look-alike companies with a similar name (``Square`` when we asked for ``Squarepoint``),
+    unrelated orgs and aggregators. Fails OPEN: if the model gives no usable judgement, all
+    seeds are kept (never silently drop everything on a bad reply)."""
+    if llm is None or not seeds:
+        return list(seeds)
+    listing = "\n".join(f"{i}. {s.url}  [{s.title}]  {s.why}"[:300] for i, s in enumerate(seeds))
+    data = _ask_json(llm, render_prompt(
+        "verify_seeds", company=company, description=brief.description,
+        seeds=_clip(listing, _MAX_LISTING_CHARS, "seed results"),
+    ))
+    belong = data.get("belong") if isinstance(data, dict) else None
+    if not isinstance(belong, list):
+        return list(seeds)  # fail open -- no usable judgement
+    keep = {i for i in belong if isinstance(i, int)}
+    kept = [s for i, s in enumerate(seeds) if i in keep]
+    for i, s in enumerate(seeds):
+        if i not in keep:
+            log.info("    dropped off-company seed: %s [%s]", s.url, s.title)
+    return kept
+
+
 def search_web(
     brief: Brief,
     company: str,
@@ -679,25 +725,21 @@ def search_web(
     llm: LLM | None = None,
 ) -> list[Seed]:
     """Seed URLs for ``company`` + ``brief``. The query is ``"<company> <brief>"`` by
-    default; pass ``llm`` to have the model craft a sharper search query first."""
-    query = f"{company} {brief.description}".strip()
-    if llm is not None:
-        crafted = llm(
-            render_prompt(
-                "search_query",
-                company=company,
-                description=brief.description,
-                fields_line=_fields_line(brief),
-            )
-        ).strip().splitlines()
-        if crafted and crafted[0].strip():
-            query = crafted[0].strip()
-    log.info("    search query: %r", query)  # the (LLM-crafted or default) term used
-    return [
-        Seed(url=h.url, title=h.title, why=h.snippet)
-        for h in search(query, k)
-        if h.url
-    ]
+    default; pass ``llm`` to craft a sharper query AND to verify each result really belongs
+    to ``company`` (dropping look-alike companies with a similar name). If the whole first
+    result set is the wrong company, the search retries ONCE with a disambiguating query."""
+    for attempt in range(2):
+        query = _search_query(brief, company, llm, disambiguate=(attempt > 0))
+        log.info("    search query: %r", query)
+        seeds = [Seed(url=h.url, title=h.title, why=h.snippet) for h in search(query, k) if h.url]
+        kept = _seeds_for_company(seeds, company, brief, llm)
+        if kept:
+            if len(kept) < len(seeds):
+                log.info("    %d/%d result(s) belong to %s", len(kept), len(seeds), company)
+            return kept
+        if seeds:  # results came back but none were this company -- try a stricter query
+            log.info("    no result belongs to %s -- retrying the search, stricter", company)
+    return []
 
 
 # --------------------------------------------------------------------------- #
