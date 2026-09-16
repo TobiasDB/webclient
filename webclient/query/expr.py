@@ -11,9 +11,14 @@ are cast to (see ``scripts.gen_stubs``); at runtime every value in a chain is an
 
 from __future__ import annotations
 
-from typing import Any, NoReturn, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Iterator, NoReturn, TypeVar, cast
 
 from .plan import _CTX, FUNCTIONS, ROOTS, Arg, Plan, Step
+
+if TYPE_CHECKING:
+    import ast
+
+    from ..core.web_core import WebCore
 
 T = TypeVar("T")
 
@@ -30,6 +35,9 @@ class Expr:
 
     __slots__ = ("_plan", "_client", "_context")
     _plan: Plan  # declared so mypy reads these, not the recording __getattr__
+    #: usually the bound WebClient, but the remote-dispatch path
+    #: (``WebCore._remote_root``) can hand in any WebCore as a fallback -- kept
+    #: Any to match that real breadth rather than overclaiming WebClient.
     _client: Any
     _context: Any  # a materialised surface this recorder is bound to (doc.lazy)
 
@@ -104,7 +112,7 @@ class Expr:
     def __len__(self) -> int:
         return self._coerce("length")
 
-    def __iter__(self) -> Any:
+    def __iter__(self) -> "Iterator[Any]":
         return self._coerce("iterator")
 
     # -- evaluation ----------------------------------------------------------
@@ -173,7 +181,7 @@ def lazy(cls: type[T], *, plan: Plan | None = None, client: Any = None) -> T:
     return cast(T, Expr(plan or Plan(root=cls.__name__), client))
 
 
-def lazy_root(core: Any) -> "Expr":
+def lazy_root(core: "WebCore") -> "Expr":
     """A lazy recorder rooted at a materialised surface ``core`` -- exposed as its
     ``.lazy`` property (see ``WebCore.lazy``).
 
@@ -228,7 +236,7 @@ def _init_ast_maps() -> None:
     _BIN_OPS.update({ast.BitAnd: "and", ast.BitOr: "or"})
 
 
-def _literal(node: Any) -> Any:
+def _literal(node: "ast.expr") -> Any:
     import ast
 
     try:
@@ -237,12 +245,12 @@ def _literal(node: Any) -> Any:
         return _SENTINEL
 
 
-def _node_arg(node: Any) -> Arg:
+def _node_arg(node: "ast.expr") -> Arg:
     lit = _literal(node)
     return Arg(value=lit) if lit is not _SENTINEL else Arg(plan=_node_plan(node))
 
 
-def _node_plan(node: Any) -> Plan:
+def _node_plan(node: "ast.expr") -> Plan:
     """Translate one AST node of a ``describe()`` expression into a Plan."""
     import ast
 
@@ -273,7 +281,7 @@ def _node_plan(node: Any) -> Plan:
     raise ValueError(f"cannot interpret plan expression node {type(node).__name__}")
 
 
-def _call_plan(node: Any) -> Plan:
+def _call_plan(node: "ast.Call") -> Plan:
     import ast
 
     args = [_node_arg(a) for a in node.args]

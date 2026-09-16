@@ -18,10 +18,17 @@ import asyncio
 import operator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from typing import Any, AsyncIterator, Awaitable, Callable, cast
+from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, TypeVar, cast
 
 from .expr import Expr
-from .plan import Arg, Step
+from .plan import Arg, Plan, Step
+
+if TYPE_CHECKING:
+    from ..collection import Collection
+    from ..core.document import Document
+
+X = TypeVar("X")  # an item fan_out/fan_out_stream iterates
+Y = TypeVar("Y")  # what fn(item) resolves to
 
 DEFAULT_FANOUT = 8
 
@@ -31,7 +38,7 @@ DEFAULT_FANOUT = 8
 #: outermost ``aevaluate`` owns the list (a mutable object shared with fan-out child
 #: tasks via the copied context); a ``keep_alive`` doc is never collected -- the
 #: caller owns it. ``None`` means "not inside a plan run".
-_PLAN_LIVE: "ContextVar[list[Any] | None]" = ContextVar("plan_live", default=None)
+_PLAN_LIVE: "ContextVar[list[Document] | None]" = ContextVar("plan_live", default=None)
 
 #: sentinel: a streamed element dropped by a filter predicate
 _DROP = object()
@@ -120,7 +127,7 @@ def truthy(value: Any) -> bool:
 # -- async core --------------------------------------------------------------
 
 
-async def _release_pages(live: "list[Any]") -> None:
+async def _release_pages(live: "list[Document]") -> None:
     """Return each plan-owned browser page in ``live`` to the pool. ``_arelease`` is
     idempotent (a page already released -- e.g. an auto-escalated one -- is a no-op),
     so this is safe to call for every collected page."""
@@ -290,7 +297,7 @@ async def _aarg(arg: Arg, context: Any, client: Any) -> Any:
     return await aevaluate(Expr(arg.plan, client), context, client=client)
 
 
-def _start(plan: Any, context: Any, client: Any) -> Any:
+def _start(plan: "Plan", context: Any, client: Any) -> Any:
     """The value a plan starts from: the bound client (WebClient root, whose
     authoring verbs the walk dispatches), a reconstructed Reference (source
     plan), or the passed context (doc/ref/field roots)."""
@@ -409,7 +416,7 @@ def _parse_shaping(steps: list[Step], client: Any) -> list[tuple[str, Any]]:
 
 
 async def _astream_collection(
-    base: Any, shaping: list[Step], client: Any
+    base: "Collection[Any]", shaping: list[Step], client: Any
 ) -> AsyncIterator[Any]:
     """Stream the final fan-out of ``base`` under ``shaping`` as elements
     complete. Rows (``...project()``) or per-element op results are yielded the
@@ -495,8 +502,8 @@ def _note_siblings(first: BaseException, siblings: list[BaseException]) -> None:
 
 
 async def fan_out(
-    items: list[Any], fn: Callable[[Any], Awaitable[Any]], *, limit: int
-) -> list[Any]:
+    items: list[X], fn: Callable[[X], Awaitable[Y]], *, limit: int
+) -> list[Y]:
     """Run ``fn`` over ``items`` with at most ``limit`` in flight, results in
     input order. A failing task cancels its siblings and raises the first
     failure; any sibling failures are surfaced on that exception as a note."""
@@ -515,12 +522,12 @@ async def fan_out(
         leaves = _flatten_exceptions(group_exc)
         _note_siblings(leaves[0], leaves[1:])
         raise leaves[0] from None
-    return results
+    return cast("list[Y]", results)
 
 
 async def fan_out_stream(
-    items: list[Any], fn: Callable[[Any], Awaitable[Any]], *, limit: int
-) -> AsyncIterator[Any]:
+    items: list[X], fn: Callable[[X], Awaitable[Y]], *, limit: int
+) -> AsyncIterator[Y]:
     """Run ``fn`` over ``items`` with at most ``limit`` in flight, yielding each
     result the moment it completes (order is completion order, not input order).
     A failing task raises its error and cancels the rest; abandoning the iterator
@@ -531,7 +538,7 @@ async def fan_out_stream(
     sem = asyncio.Semaphore(max(min(limit, n), 1))
     queue: asyncio.Queue[tuple[bool, Any]] = asyncio.Queue()
 
-    async def run(item: Any) -> None:
+    async def run(item: X) -> None:
         async with sem:
             try:
                 await queue.put((True, await fn(item)))
