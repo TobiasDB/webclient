@@ -5,4 +5,4 @@ Using ONLY the query syntax above, write a query that extracts this dataset from
 Base your CSS selectors on this page skeleton:
 $skeleton
 
-Root the query at wq.doc, select the repeating records with .select_all(...), extract the target fields into columns (nesting a sub-extract per nested schema branch), and end with .project(). Reply with ONLY the query's portable blob from expr.to_blob() -- a single JSON object, nothing else.
+Your query MUST have all three parts: (1) select the repeating records with .select_all("<row selector>") -- this is REQUIRED, without it the query extracts nothing; (2) .extract(col=..., ...) each target field (nesting a sub-extract per nested schema branch); (3) end with .project(). Root it at wq.doc; do NOT write a fetch/resolve/reference -- only the extraction. Reply with ONLY the query code -- the wq.doc... chain itself, written exactly as in the guide, nothing else (no blob, no prose, no code fence).

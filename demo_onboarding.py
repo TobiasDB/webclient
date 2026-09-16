@@ -83,7 +83,7 @@ def serve() -> str:
     return f"http://127.0.0.1:{server.server_port}"
 
 
-def make_stubs(base: str, blob: str):
+def make_stubs(base: str, code: str):
     """A scripted search + model for the offline demo (prod injects the real ones)."""
     def search(query: str, k: int) -> list[SearchHit]:
         return [SearchHit(url=f"{base}/", title="Acme Robotics", snippet="widgets")]
@@ -104,8 +104,8 @@ def make_stubs(base: str, blob: str):
             return json.dumps({"dataset_present": True, "is_queryable": True,
                                "completeness": "full", "has_pagination": False,
                                "scrapability": 9, "verdict": "a full product list"})
-        if "query DSL" in prompt or "portable blob" in prompt:
-            return f"```json\n{blob}\n```"
+        if "query code" in prompt or "write a query" in prompt:
+            return f"```python\n{code}\n```"  # the model WRITES the query; the pipeline evals it
         return "{}"
 
     return search, llm
@@ -118,14 +118,14 @@ def out(label: str, value: Any) -> None:
 def main() -> None:
     base = serve()
     brief = Brief(description="the company's products", fields=["name", "price"])
-    # the query the scripted model will "author" (prod: the LLM writes it from the skeleton)
-    blob = (
-        wq.ref.resolve().select_all(".product")
-        .extract(name=wq.doc.select(".name").text_content,
-                 price=wq.doc.select(".price").text_content)
-        .project().to_blob()
+    # the query code the scripted model will "author" (prod: the LLM writes it from the
+    # skeleton, as a wq.doc chain, and the pipeline evals it -- loading it as written)
+    code = (
+        'wq.doc.select_all(".product").extract('
+        'name=wq.doc.select(".name").text_content, '
+        'price=wq.doc.select(".price").text_content).project()'
     )
-    search, llm = make_stubs(base, blob)
+    search, llm = make_stubs(base, code)
 
     with WebClient() as wc:
         print("BRIEF:", brief.description, "| fields:", brief.fields, "\n")

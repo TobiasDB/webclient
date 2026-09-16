@@ -55,17 +55,14 @@ def site(httpserver):
 def test_onboard_company_finds_and_queries_the_dataset(site):
     products_url = site.url_for("/products")
 
-    # the query the model is expected to author for this page (built here so the stub
-    # can hand back its blob -- in production the LLM writes this from the skeleton).
-    expected = (
-        wq.doc.select_all(".product")  # document-rooted: the caller supplies the doc
-        .extract(
-            name=wq.doc.select(".name").text_content,
-            price=wq.doc.select(".price").text_content,
-        )
-        .project()
+    # the query the model is expected to author for this page. In production the model
+    # WRITES this query code; the pipeline evals it (loads it as written) rather than
+    # asking the model to hand-serialize a blob.
+    code = (
+        'wq.doc.select_all(".product").extract('
+        'name=wq.doc.select(".name").text_content, '
+        'price=wq.doc.select(".price").text_content).project()'
     )
-    blob = expected.to_blob()
 
     def search(query, k):  # a stub SearchFn: seed at the company home page
         assert "widget" in query.lower() or "product" in query.lower()
@@ -95,8 +92,8 @@ def test_onboard_company_finds_and_queries_the_dataset(site):
                     "verdict": "a full product list",
                 }
             )
-        if "query DSL" in prompt or "portable blob" in prompt:
-            return f"here is the query:\n```json\n{blob}\n```"
+        if "query code" in prompt or "write a query" in prompt:
+            return f"here is the query:\n{code}"
         return "{}"
 
     with WebClient() as wc:
@@ -205,7 +202,7 @@ def test_prompt_templates_load_and_render():
         "write_query", guide="GUIDE-TEXT", description="d", fields_line="",
         pager="", skeleton="SKEL",
     )
-    assert "query syntax" in wq_prompt and "portable blob" in wq_prompt
+    assert "query syntax" in wq_prompt and "query code" in wq_prompt
     assert wq_prompt.startswith("GUIDE-TEXT")
 
 
@@ -747,8 +744,8 @@ def test_write_query_retries_an_unprojected_query_with_feedback(httpserver):
         "<main>" + "".join(f'<div class="r"><span class="n">P{i}</span></div>' for i in range(3)) + "</main>",
         content_type="text/html",
     )
-    unprojected = wq.doc.select_all(".r").to_blob()
-    projected = wq.doc.select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project().to_blob()
+    unprojected = 'wq.doc.select_all(".r")'  # written code, no project -> 0 data rows
+    projected = 'wq.doc.select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project()'
     replies = iter([unprojected, projected])
     prompts: list[str] = []
 
@@ -761,7 +758,10 @@ def test_write_query_retries_an_unprojected_query_with_feedback(httpserver):
                           wc=wc, llm=llm, browser="never", retries=1)
     assert art is not None and art.tested and art.row_count == 3
     assert all(isinstance(r, dict) for r in art.sample)  # data, not element objects
-    assert len(prompts) == 2 and "extracted 0 data rows" in prompts[1]  # feedback given
+    # the retry got a concrete, human-readable hint: the record selector matched but no
+    # fields came out (it never projected)
+    assert len(prompts) == 2
+    assert 'matched 3 record(s)' in prompts[1] and ".project()" in prompts[1]
 
 
 def test_output_query_is_self_contained_and_executable(httpserver):
@@ -818,3 +818,107 @@ def test_docs_pages_are_hard_banned_from_the_crawl():
     ]
     kept = [e.url for e in _filter_frontier(edges, Brief(description="items"))]
     assert kept == ["https://x.co/products", "https://x.co/api/v1/items.json"]
+
+
+def test_write_query_rejects_a_query_with_no_selection(httpserver):
+    # a query with no select_all/select can't extract -- it must not be accepted (this
+    # was producing `reference(url).resolve()` with nothing after, and 0 rows as success).
+    from webclient import wq
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/p").respond_with_data(
+        '<main><div class="r"><span class="n">A</span></div></main>', content_type="text/html",
+    )
+    # first: a degenerate query (just the doc root); then a proper one -- written as code
+    replies = iter(["wq.doc",
+                    'wq.doc.select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project()'])
+    prompts: list[str] = []
+
+    def llm(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(replies)
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/p"), Brief(description="rows"),
+                          wc=wc, llm=llm, browser="never", retries=1)
+    assert art is not None and art.row_count == 1  # accepted the projecting query
+    assert ".select_all(" in art.describe  # the executable has the selection
+    assert "NO selection" in prompts[1]  # the model was told to add one
+
+
+def test_write_query_hint_names_a_wrong_record_selector(httpserver):
+    # when the record selector matches NOTHING, the retry feedback says so in plain words
+    # (wrong record selector), not a generic "0 rows" -- so the model can fix the selector.
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/p").respond_with_data(
+        '<main><div class="r"><span class="n">A</span></div></main>', content_type="text/html",
+    )
+    # first selects a class that does not exist (0 matches); then the right one
+    replies = iter([
+        'wq.doc.select_all(".nope").extract(n=wq.doc.select(".n").attr("text")).project()',
+        'wq.doc.select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project()',
+    ])
+    prompts: list[str] = []
+
+    def llm(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(replies)
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/p"), Brief(description="rows"),
+                          wc=wc, llm=llm, browser="never", retries=1)
+    assert art is not None and art.row_count == 1  # recovered on the retry
+    assert 'matched NO elements' in prompts[1] and '".nope"' in prompts[1]  # named the culprit
+
+
+def test_parse_query_loads_written_code_and_falls_back_to_a_blob():
+    # the model WRITES the query as a wq.doc chain; we eval it (load it as written). A
+    # code fence / preamble is tolerated, a raw to_blob() blob is still accepted, and a
+    # reply that is neither a wq chain nor a blob raises (so write_query retries).
+    from webclient import wq
+    from webclient.pipelines.onboarding import _parse_query
+
+    code = 'wq.doc.select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project()'
+    want = "Document.select_all('.r').extract(n=Document.select('.n').attr('text')).project()"
+    assert _parse_query(code).explain() == want
+    assert _parse_query(f"here is the query:\n```python\n{code}\n```").explain() == want  # fenced + prose
+    assert _parse_query("query = " + code).explain() == want  # leading assignment dropped
+    blob = wq.doc.select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project().to_blob()
+    assert _parse_query(blob).explain() == want  # raw-blob fallback still works
+    with pytest.raises(Exception):
+        _parse_query("just some prose, not a query")
+
+
+def test_zero_row_query_is_not_a_success(site):
+    # a query that runs but extracts 0 rows -> ok is False with a clear reason (no more
+    # "0 rows considered a success").
+    products_url = site.url_for("/products")
+
+    def llm(prompt: str) -> str:
+        from webclient import wq
+        if "web-search query" in prompt:
+            return "acme products"
+        if "frontier links" in prompt:
+            for line in prompt.splitlines():
+                s = line.strip()
+                if s[:1].isdigit() and "/products" in s:
+                    return f'[{s.split(".", 1)[0]}]'
+            return "[]"
+        if "crawled pages" in prompt:
+            return json.dumps([{"url": products_url, "kind": "page", "tier": "must"}])
+        if "Assess this page" in prompt:
+            return json.dumps({"dataset_present": True, "is_queryable": True, "scrapability": 8, "verdict": "list"})
+        if "query code" in prompt or "write a query" in prompt:
+            # a query that selects a class that does not exist -> 0 rows
+            return 'wq.doc.select_all(".does-not-exist").extract(x=wq.doc.attr("text")).project()'
+        return "{}"
+
+    def search(q, k):
+        return [SearchHit(url=site.url_for("/"), title="Acme")]
+
+    with WebClient() as wc:
+        result = onboard_company("Acme", Brief(description="products"),
+                                 wc=wc, llm=llm, search=search, browser=False)
+    assert result.query is not None and result.query.row_count == 0
+    assert not result.ok and result.reason == "authored query extracted 0 rows"

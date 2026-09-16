@@ -1021,6 +1021,90 @@ def _reroot(expr: Any, url: str) -> Any:
     )
 
 
+def _query_code(reply: str) -> str:
+    """The query EXPRESSION from the model's reply: strip any code fence / prose and start
+    at the first ``wq.`` so a leading ``query =`` assignment or preamble is dropped, and cut
+    a trailing code fence (a model that wraps the code in ``` despite the ask)."""
+    t = _strip_fences(reply)
+    i = t.find("wq.")
+    if i != -1:
+        t = t[i:]
+    fence = t.find("```")  # a trailing fence when prose preceded the opening one
+    if fence != -1:
+        t = t[:fence]
+    return t.strip()
+
+
+def _parse_query(reply: str) -> Any:
+    """Load the model's query. The model WRITES it as a ``wq.doc`` chain -- exactly as the
+    guide documents -- and we evaluate that code into an ``Expr``, loading it as written
+    rather than asking the model to hand-serialize a ``to_blob()`` JSON (which it gets
+    wrong -- e.g. dropping the ``select_all`` so the query extracts nothing). A raw blob is
+    still accepted as a fallback. The eval namespace is just ``wq`` with no builtins: the
+    DSL records lazily, so building the query does no IO and reaches nothing but the DSL."""
+    from ..query.expr import Expr
+
+    code = _query_code(reply)
+    if code.startswith("wq."):
+        expr = eval(code, {"__builtins__": {}, "wq": wq})  # noqa: S307 - our DSL, restricted ns
+        if not isinstance(expr, Expr):
+            raise TypeError(f"query is a {type(expr).__name__}, not a wq.doc chain")
+        return expr
+    return from_blob(_json_blob(reply))  # fallback: the model returned a raw blob
+
+
+def _row_selector(expr: Any) -> "str | None":
+    """The CSS/selector string the query selects its repeating record with -- the argument
+    of the first ``select``/``select_all``. Used to diagnose a 0-row query: if this
+    selector matches nothing on the page, the row selector itself is wrong."""
+    steps = list(expr._plan.steps)
+    for i, s in enumerate(steps):
+        if s.kind == "get" and s.name in ("select", "select_all"):
+            nxt = steps[i + 1] if i + 1 < len(steps) else None
+            if nxt is not None and nxt.kind == "call" and nxt.args:
+                return getattr(nxt.args[0], "value", None)
+    return None
+
+
+def _selector_match_count(sel: "str | None", doc: Any) -> "int | None":
+    """How many elements ``sel`` matches on the fetched ``doc`` (``None`` if it can't be
+    probed). Lets the feedback tell the model whether its ROW selector is wrong (0 matches)
+    or whether the record matches but the FIELD extraction is (matches, but no data)."""
+    if not sel or not doc.ok:
+        return None
+    try:
+        probe = wq.doc.select_all(sel).extract(_=wq.doc.attr("text")).project()
+        return len(_data_rows(probe.collect(doc)))
+    except Exception:  # noqa: BLE001 - a selector the engine can't run -> unknown
+        return None
+
+
+def _no_rows_hint(expr: Any, doc: Any) -> str:
+    """A human-readable, actionable hint for why a query extracted 0 rows: either the ROW
+    selector matched nothing (wrong record selector) or it matched records but no fields
+    came out (wrong field selectors / missing ``.project()``). Guides the retry."""
+    sel = _row_selector(expr)
+    n = _selector_match_count(sel, doc)
+    if n == 0:
+        return (
+            f'Your record selector "{sel}" matched NO elements on this page, so nothing was'
+            " extracted. Look again at the skeleton and pick a selector that matches ONE"
+            " element per record (a repeated tag/class you can see in the skeleton)."
+        )
+    if n:
+        return (
+            f'Your record selector "{sel}" matched {n} record(s), but none of your fields'
+            " produced a value -- your .extract(...) FIELD selectors do not match anything"
+            " inside a record, or you did not .project(). Re-check each field selector"
+            " against the skeleton (they are relative to the record), and END with .project()."
+        )
+    return (
+        "Your query ran but extracted 0 data rows: it MUST .select_all(<record selector>),"
+        " pull each field with .extract(col=...), and END with .project() so it returns"
+        " data rows -- not selected elements. Re-check your selectors against the skeleton."
+    )
+
+
 def _test_query(expr: Any, doc: Any) -> "tuple[bool, list[Any]]":
     """Run the authored query against the fetched source ``doc`` to prove it loads and
     actually EXTRACTS the dataset. The query is the document-level extraction
@@ -1059,7 +1143,7 @@ def write_query(
     llm: LLM,
     browser: BrowserMode = "auto",
     paginated: bool = False,
-    retries: int = 1,
+    retries: int = 4,
     extra_urls: Sequence[str] = (),
     resolve: "Resolve | None" = None,
 ) -> QueryArtifact | None:
@@ -1079,14 +1163,26 @@ def write_query(
     ask = prompt
     for _ in range(retries + 1):
         try:
-            blob = _json_blob(llm(ask))
+            reply = llm(ask)
         except LlmError as exc:  # a bad-request / exhausted-retry API error
             log.warning("query authoring LLM call failed: %s", exc)
             break
         try:
-            expr = from_blob(blob)
-        except Exception:  # noqa: BLE001 - any malformed blob -> retry with feedback
-            ask = prompt + "\n\nYour previous reply was not a valid query blob. Reply with ONLY the blob from expr.to_blob()."
+            expr = _parse_query(reply)  # load the written wq.doc chain (or a raw blob)
+        except Exception:  # noqa: BLE001 - unparsable query code -> retry with feedback
+            ask = prompt + "\n\nYour previous reply was not a valid query. Reply with ONLY the query code -- a single wq.doc... chain, nothing else."
+            continue
+        # a real extraction MUST select the records -- a query with no select_all/select
+        # can't extract anything (it would wrap to `reference(url).resolve()` with nothing
+        # after). Reject it before it can look like a 0-row "success".
+        ops = {s.name for s in expr._plan.steps if s.kind == "get"}
+        if not ({"select", "select_all"} & ops):
+            log.info("    query has no selection -- retrying with feedback")
+            ask = (
+                prompt + "\n\nYour previous query had NO selection so it extracts nothing."
+                " You MUST select the repeating record with .select_all(...), pull each"
+                " field with .extract(col=...), and END with .project(). Re-write it."
+            )
             continue
         tested, rows = _test_query(expr, doc) if doc.ok else (False, [])
         exe = _executable_query(expr, candidate_url, resolve)  # self-contained + runnable
@@ -1102,16 +1198,11 @@ def write_query(
         if tested and rows:
             return art  # a query that actually extracts DATA rows -- accept it
         best = best or art  # keep the first rebuildable one as a fallback
-        # ran but extracted nothing: usually a query that selected elements without
-        # projecting, or the wrong selector -- tell the model so it can fix it.
-        log.info("    query ran but extracted 0 rows -- retrying with feedback")
-        ask = (
-            prompt + "\n\nYour previous query RAN but extracted 0 data rows"
-            + f" ({expr.explain()}). It probably selected elements without extracting: it"
-            " MUST select the repeating record with .select_all(...), pull each field with"
-            " .extract(col=...), and END with .project() so it returns data rows -- not"
-            " select elements. Re-write it."
-        )
+        # ran but extracted nothing: diagnose WHY (wrong record selector vs. wrong field
+        # selectors / no project) and hand the model a concrete, human-readable hint.
+        hint = _no_rows_hint(expr, doc)
+        log.info("    query ran but extracted 0 rows -- retrying with feedback: %s", hint)
+        ask = prompt + f"\n\nYour previous query was:\n{expr.explain()}\n\n{hint}"
     return best
 
 
@@ -1223,13 +1314,18 @@ def _onboard_company(
     )
     if isinstance(llm, LlmClient):
         result.cost_usd = llm.spent_usd
-    result.ok = result.query is not None
-    result.reason = "" if result.ok else "could not author a query"
-    if result.query is not None:
-        note(
-            "query authored (tested=%s, %d row[s])",
-            result.query.tested, result.query.row_count,
-        )
+    # a real success EXTRACTS data: a query that ran but produced 0 rows is not ok
+    # (it selected nothing / didn't project / hit the wrong source).
+    q = result.query
+    result.ok = q is not None and q.row_count > 0
+    if result.ok:
+        result.reason = ""
+    elif q is not None:
+        result.reason = "authored query extracted 0 rows"
+    else:
+        result.reason = "could not author a query"
+    if q is not None:
+        note("query authored (tested=%s, %d row[s])", q.tested, q.row_count)
     return result
 
 
