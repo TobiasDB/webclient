@@ -10,12 +10,14 @@ from __future__ import annotations
 from importlib.resources import files
 from typing import Any
 
-#: the query-relevant document ops an authored query uses, in a teaching order. The
-#: reference text for each is pulled LIVE from its docstring (so the guide can never
-#: drift from the surface); anything here that no longer exists is simply skipped.
+#: the query ops an authored query uses, in a teaching order. The reference text for
+#: each is pulled LIVE from its docstring (so the guide can never drift from the
+#: surface); anything here that no longer exists is simply skipped. ``text_content`` is
+#: deliberately omitted -- ``attr("text")`` is the single way to read text, so the
+#: query author is never faced with two ways to do the same thing.
 _QUERY_OPS: tuple[str, ...] = (
-    "select", "select_all", "attr", "text_content", "html", "markdown", "text",
-    "links", "regex", "regex_all", "skeleton", "is_ok", "is_empty",
+    "select", "select_all", "attr", "regex", "regex_all", "html", "links",
+    "skeleton", "is_ok", "is_empty",
 )
 #: the collection-shaping ops (hand-written on ``Collection``).
 _COLLECTION_OPS: tuple[str, ...] = ("extract", "filter", "project", "limit")
@@ -60,19 +62,19 @@ def _lazy_op_reference() -> str:
     backings = [type(b) for b in Document.BACKINGS]
     doc_docs = _op_docs(_QUERY_OPS, backings)
     coll_docs = _op_docs(_COLLECTION_OPS, [Collection])
-    lines = ["On a page or element (a `wq.doc` chain):"]
+    lines = ["On the page or a selected element (a `wq.doc` chain):"]
     lines += [f"- `.{op}` — {doc_docs[op]}" for op in _QUERY_OPS if op in doc_docs]
-    lines.append("\nOn a `select_all` collection (shaping rows):")
+    lines.append("\nOn a `select_all` set of records (shaping rows):")
     lines += [f"- `.{op}` — {coll_docs[op]}" for op in _COLLECTION_OPS if op in coll_docs]
     return "\n".join(lines)
 
 
 def lazy_query_guide() -> str:
-    """The "writing lazy web queries" skill: the query-syntax reference (the ``wq.doc``
-    root, select/extract/filter/project, operators, blobs) an LLM needs to author a
-    lazy extraction plan against a DOCUMENT. The op reference is generated live from
-    the document/collection surfaces' docstrings, so it never drifts. Query syntax
-    only -- fetching/rendering/resolving are the caller's job."""
+    """The web-query skill an LLM uses to turn a target schema + a page skeleton into a
+    query (``wq.doc`` root, select/extract/filter/project/regex, durable CSS selectors,
+    worked examples). The op reference is generated live from the document/collection
+    surfaces' docstrings, so it never drifts. Query syntax only -- fetching/resolving
+    are the caller's job."""
     body = _skill("lazy-queries")
     if _MARKER in body:
         body = body.replace(_MARKER, _lazy_op_reference())

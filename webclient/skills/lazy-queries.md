@@ -1,184 +1,178 @@
 ---
-name: lazy-web-queries
+name: web-queries
 description: >-
-  Spec and examples for authoring a lazy extraction query — a plan that pulls
-  structured data out of ONE web document. Covers the whole DSL: the `wq.doc` root,
-  select/select_all/attr/text_content/regex, extract/filter/project, the operators,
-  and portable blobs. You author only the query over the document; the caller
-  fetches, resolves and runs it.
+  How to write a web query that extracts structured data from a page: the query
+  syntax, how to write durable CSS selectors, how to turn a target schema into a
+  query, and worked skeleton -> schema -> query examples.
 ---
 
-# Lazy web queries — spec & examples
+# Writing a web query
 
-A **query** is a *plan*: a recorded chain of steps over a document. Building it runs
-nothing; the plan executes only when the caller collects it against a page. You write
-one thing — the extraction over the document — starting from `wq.doc`. Fetching,
-rendering and resolving are already done for you: the query is handed the document.
+A query extracts structured data from one page. You write it against `wq.doc` — the
+page — and it returns a list of rows. Build it in three moves:
 
-## The one rule
+1. **Pick the repeating record** with `.select_all("<row selector>")` — one match per
+   row of the dataset.
+2. **Pull each field** with `.extract(col=…, …)`; each column is a `wq.doc.select(…)`
+   into that row.
+3. **Finish with `.project()`** to get a list of dict rows.
 
-**A lazy value records, it does not run.** Never use Python control words on one —
-no `and` / `or` / `not`, no `bool()`, `len()`, `if`, or `for`. Use the operators and
-ops below. (`x == "In stock"` records a comparison; `if x == "In stock"` tries to
-*run* the recording and fails.)
+Inside `extract`, `wq.doc` is the **current row**; at the top of the chain it is the
+**whole page**.
 
-## Root
-
-You build from one root:
-
-| root | is |
-|---|---|
-| `wq.doc` | the current document — the **whole page** at the top of the chain, and the **current row** inside `extract` / `filter` |
-| `wq.field("col")` | the value of a column already extracted (reference it in a later column or a filter) |
-| `wq.reference("col")` | a column that holds a link, to follow with `.resolve()` inside `extract` |
-
-Do **not** write `wq.ref`, `.resolve()` on the page, or anything about fetching /
-browsers — the caller supplies the resolved document. `.resolve()` appears only to
-follow a link you extracted (`wq.reference(...)`), never at the start.
-
-## Op reference (generated from the live surface)
+## Op reference
 
 <!-- OP-REFERENCE -->
 
-`.attr("text")` is the same as `.text_content`; `.attr("href"|"src"|"action")` gives a
-link (has `.url`, resolvable); `.attr(other)` gives that HTML attribute as a field.
+`.attr("text")` gives an element's text; `.attr("href"|"src")` gives a link (has
+`.url`); `.attr("data-…")` gives that HTML attribute. `.regex(pattern)` pulls a
+substring out of an element's text (`group=1` for the first capture group).
 
-## Operators (symbols, never keywords)
+## Syntax rules
 
-Comparison: `==` `!=` `<` `<=` `>` `>=`. Logic: `&` (and) `|` (or) `~` (not) —
-parenthesise each side: `(a) & (b)`.
+- **Conditions use symbols, not words.** In a `filter`, compare with `==` `!=` `<`
+  `<=` `>` `>=` and combine with `&` (and) `|` (or) `~` (not), parenthesising each
+  side: `(a) & (b)`. Never use `and` / `or` / `not` / `if` / `for` / `len()`.
+- **A miss is an error.** `select` / `attr` raise if they match nothing — which is
+  what you want for a required field. For a field that is genuinely sometimes absent,
+  pass `optional=True` and branch on it with `.is_ok()` / `.is_empty()`.
+- **Calls vs the whole chain.** `select(...)`, `attr(...)`, `regex(...)`, `project()`
+  take `()`; end every query with `.project()`.
 
-## Behaviour
+## Turning a schema into a query
 
-- **Records, never runs.** A step returns a new lazy node; nothing evaluates until
-  the plan is collected. So use the operators above — not `and`/`or`/`not`/`bool()`,
-  and no `if`/`for`/`len()` on a lazy value.
-- **Loud by default, everywhere.** Every op that can miss (`select`, `attr`, …)
-  raises on a miss — INSIDE `extract` / `filter` too: a column or predicate whose
-  select misses aborts the run (naming the selector), never a silent `None`. Pass
-  `optional=True` (or `error=RETURN`) on that select for a genuinely optional field
-  → a not-ok result you branch on with `.is_ok()` / `.is_empty()`.
-- **Selection nests and scopes.** A selected element is itself selectable, and a
-  sub-query scopes to it: after `.select_all(".item")`, `wq.doc.select(".title")`
-  targets the title *within that row*, not the whole page.
-- **Properties vs calls.** `select(...)`, `attr(...)`, `regex(...)`, `project()` are
-  calls; `text_content` is a property (no `()`).
-- **`extract` is per-element.** Each column expr is evaluated on the current element
-  (`wq.doc`), once per element in the collection.
-- **Nest a sub-`extract` for a structured field.** A column whose value is itself
-  `wq.doc.select(...).extract(...).project()` produces nested JSON (e.g. a `price`
-  object with `value` / `unit`).
-- **`regex` splits a messy string.** `wq.doc.select(".price").regex(r"[\d.]+")` pulls
-  the number out; `group=1` picks a capture group.
-- **`project(Model)` is eager-only.** A model class is not part of a portable blob;
-  project to dict rows in a blob and validate into a model after the plan runs.
+You are given a target **schema** — the fields each record should carry, sometimes
+nested, each with a short description. Map it mechanically:
 
-## Choosing stable selectors
+- **The row** → `.select_all("<selector for the repeating record>")` (find the
+  container that appears once per record in the skeleton).
+- **A flat field** → a column `name=wq.doc.select("<selector>").attr("text")`. Use the
+  description to pick the selector and the accessor: a link field → `.attr("href")`; a
+  code/attribute field → `.attr("data-…")`; plain text → `.attr("text")`.
+- **A numeric / split field** → `.regex(...)` on the element's text to pull just the
+  number or unit.
+- **A nested field** (has children) → the column is a **sub-`extract`**:
+  `price=wq.doc.select(".price").extract(value=…, unit=…).project()`, so the output
+  JSON nests exactly like the schema.
 
-A selector is only as good as it is durable — pages get re-styled and re-ordered.
-Prefer hooks that describe *what* a node is over *where* it sits or how it looks.
+## Writing durable CSS selectors
+
+A selector is only as good as it is stable — pages get restyled and reordered. Prefer
+hooks that say *what* a node is over *where* it sits or how it looks.
 
 Prefer, best first:
-1. **Purpose-built test/id hooks:** `#id`, `[data-testid=…]`, `[data-test=…]`,
-   `[data-qa=…]` — added for automation, rarely change.
+1. **Test/id hooks:** `#id`, `[data-testid=…]`, `[data-qa=…]` — rarely change.
 2. **Semantic attributes / microdata:** `[itemprop=price]`, `[role=…]`,
-   `[aria-label=…]`, `[name=…]`, and semantic elements (`article`, `nav`, `time`).
-3. **Meaningful, human-named classes:** `.product-card`, `.price`, `.byline` —
-   names that describe content, not styling.
+   `[aria-label=…]`, and semantic elements (`article`, `nav`, `time`).
+3. **Meaningful classes:** `.product-card`, `.price` — names that describe content.
 
-Avoid — these break on any redesign:
-- **Hashed / generated classes:** `.css-1a2b3c`, `.sc-bdVaJa`. Match the stable part:
-  `[class*="price"]`.
-- **Utility classes:** `.mt-4`, `.flex` (Tailwind & co.) — layout, not content.
-- **Deep positional chains:** `div > div:nth-child(3) > span` — one inserted `<div>`
-  and it's wrong.
+Avoid:
+- **Hashed / utility classes:** `.css-1a2b3c`, `.mt-4`, `.flex` — match the stable part
+  instead: `[class*="price"]`.
+- **Deep positional chains:** `div > div:nth-child(3) > span` — one inserted node and
+  it breaks.
 - **Tag-only selectors:** `span`, `a` — too broad.
 
 Techniques:
-- **Anchor on a stable ancestor, then a semantic leaf:** `.product-card .price`.
-- **Attribute *contains* for partial-stable classes:** `[class*="teaser"]`,
+- **Anchor on a stable container, then a semantic leaf:** `.product-card .price`.
+- **Attribute *contains* for partly-stable classes:** `[class*="teaser"]`,
   `[href*="/product/"]`.
-- **XPath when you must match on text:** `//button[normalize-space()="Add to cart"]`.
-- **Verify breadth:** a `select_all` should match exactly the set you mean.
+- **XPath to match on text:** `//button[normalize-space()="Add to cart"]`.
+- **Check breadth:** a `select_all` should match exactly the records you mean.
 
-## Examples
+## Worked examples
 
-All queries start at `wq.doc` (the page) — no fetch, no resolve.
+### 1. A flat listing
 
-Rows → list of dicts:
+Skeleton:
+```
+<ul class="products">
+  <li class="product">
+    <span class="name">…</span>
+    <span class="price">…</span>
+    <a class="detail" href="…">…</a>
+```
+Schema:
+```
+- name — the product's display name
+- price — the listed price
+- url — a link to the product page
+```
+Query:
 ```python
-(
-    wq.doc.select_all(".product")
-    .extract(
-        name=wq.doc.select(".name").text_content,
-        url=wq.doc.select("a").attr("href"),
-    )
-    .project()
-)
+wq.doc.select_all("li.product").extract(
+    name=wq.doc.select(".name").attr("text"),
+    price=wq.doc.select(".price").attr("text"),
+    url=wq.doc.select("a.detail").attr("href"),
+).project()
 ```
 
-A structured (nested) field — a `price` object via a sub-`extract` + `regex`:
+### 2. A nested field (structured price) with regex
+
+Skeleton:
+```
+<div class="card" data-sku="…">
+  <h3 class="title">…</h3>
+  <div class="price">30 $ / 1TB</div>
+```
+Schema:
+```
+- name — the product name
+- sku — the product code
+- price — the price object
+  - value — the numeric amount only
+  - unit — the currency or unit
+  - modifiers — any qualifier (e.g. per 1TB)
+```
+Query:
 ```python
-(
-    wq.doc.select_all(".product")
-    .extract(
-        name=wq.doc.select(".name").text_content,
-        price=wq.doc.select(".price").extract(
-            value=wq.doc.regex(r"[\d.]+"),
-            unit=wq.doc.regex(r"[\d.]+\s*(\S+)", group=1),
-        ).project(),
-    )
-    .project()
-)
+wq.doc.select_all(".card").extract(
+    name=wq.doc.select(".title").attr("text"),
+    sku=wq.doc.select(".card").attr("data-sku"),
+    price=wq.doc.select(".price").extract(
+        value=wq.doc.regex(r"[\d.]+"),
+        unit=wq.doc.regex(r"[\d.]+\s*(\S+)", group=1),
+        modifiers=wq.doc.regex(r"/\s*(.+)$", group=1),
+    ).project(),
+).project()
 ```
 
-Filter — keep in-stock rows (reference an extracted column with `wq.field`):
+### 3. A JSON / API document (same syntax, dotted paths)
+
+Skeleton:
+```
+{
+  results: [12]
+    id: number
+    name: string
+    inStock: bool
+```
+Schema:
+```
+- id — the record id
+- name — the record name
+```
+Query:
 ```python
-(
-    wq.doc.select_all(".product")
-    .extract(
-        name=wq.doc.select(".name").text_content,
-        in_stock=wq.doc.select(".status").text_content == "In stock",
-    )
-    .filter(wq.field("in_stock"))
-    .project()
-)
+wq.doc.select_all("results").extract(
+    id=wq.doc.select("id").attr("text"),
+    name=wq.doc.select("name").attr("text"),
+).project()
 ```
 
-Filter — keep rows WITHOUT a `.sold-out` badge (optional select + `~` + `is_ok`):
-```python
-(
-    wq.doc.select_all(".product")
-    .filter(~wq.doc.select(".sold-out", optional=True).is_ok())
-    .project()
-)
-```
+### 4. Filtering — drop rows with a sold-out badge
 
-Follow a link you extracted (`wq.reference` follows a column holding a link — the one
-place `.resolve()` is used):
-```python
-(
-    wq.doc.select_all(".product")
-    .extract(link=wq.doc.select("a").attr("href"))
-    .extract(detail=wq.doc.reference("link").resolve().select("h1").text_content)
-    .project()
-)
+Skeleton:
 ```
-
-A JSON / API document — the same DSL over dotted paths (`skeleton` shows them):
-```python
-(
-    wq.doc.select_all("results")
-    .extract(
-        name=wq.doc.select("name").text_content,
-        price=wq.doc.select("price").text_content,
-    )
-    .project()
-)
+<div class="product">
+  <span class="name">…</span>
+  <span class="sold-out">Sold out</span>   ← only on some rows
 ```
-
-Serialise / inspect a plan:
+Query:
 ```python
-plan.to_blob()    # -> a compact JSON string, portable and safe to store or send
-plan.explain()    # -> "Document.select_all('.product').extract(...).project()"
+wq.doc.select_all(".product").filter(
+    ~wq.doc.select(".sold-out", optional=True).is_ok()
+).extract(
+    name=wq.doc.select(".name").attr("text"),
+).project()
 ```

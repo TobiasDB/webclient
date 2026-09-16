@@ -727,7 +727,7 @@ def write_resolve(flags: Sequence[Flag]) -> Resolve:
 
 def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False) -> str:
     # Deliberately narrow: the packaged query spec + the skeleton + the ask. Nothing
-    # about fetching, resolving, or running -- only CSS selectors and the query DSL.
+    # about fetching, resolving, or running -- only CSS selectors and the query syntax.
     pager = (
         "\nThe dataset spans multiple pages: also extract the next-page link "
         '(a rel="next" anchor) as a field named "next" so the caller can follow it.'

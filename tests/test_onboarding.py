@@ -205,7 +205,7 @@ def test_prompt_templates_load_and_render():
         "write_query", guide="GUIDE-TEXT", description="d", fields_line="",
         pager="", skeleton="SKEL",
     )
-    assert "query DSL" in wq_prompt and "portable blob" in wq_prompt
+    assert "query syntax" in wq_prompt and "portable blob" in wq_prompt
     assert wq_prompt.startswith("GUIDE-TEXT")
 
 

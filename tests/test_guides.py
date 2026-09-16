@@ -1,5 +1,6 @@
-"""The lazy-query guide: its op reference is generated live from the document /
-collection surfaces' docstrings, so it can't drift from what the ops do."""
+"""The web-query guide: its op reference is generated live from the document /
+collection surfaces' docstrings, it teaches schema -> query, and it carries none of
+the "lazy / doesn't run" framing (the author just writes a query)."""
 
 from webclient.guides import lazy_query_guide
 
@@ -16,16 +17,27 @@ def test_op_reference_is_generated_from_live_docstrings():
     assert "- `.extract`" in guide and "- `.filter`" in guide and "- `.project`" in guide
 
 
-def test_guide_is_document_rooted_not_ref_resolve():
-    # queries are the document-level extraction; the caller owns fetch/resolve, so the
-    # guide teaches wq.doc and never wq.ref.resolve() as a starting point.
+def test_text_content_is_omitted_to_avoid_ambiguity():
+    # attr("text") is the single way to read text; text_content is deliberately not in
+    # the op reference so the author is never faced with two ways to do one thing.
     guide = lazy_query_guide()
+    assert "text_content" not in guide
+    assert '.attr("text")' in guide
+
+
+def test_guide_is_document_rooted_and_free_of_meta_framing():
+    guide = lazy_query_guide().lower()
     assert "wq.doc.select_all" in guide
     assert "wq.ref.resolve()" not in guide
+    # no "lazy / records / doesn't run" framing -- it's just how to write a query
+    for word in ("lazy", "records, it does not run", "nothing evaluates"):
+        assert word not in guide
 
 
-def test_new_document_op_would_appear_in_the_guide():
-    # a regression guard for "generated from docstrings": if a query op is added to the
-    # allow-list, its docstring must surface. `text_content` is a property op, proving
-    # props are picked up too.
-    assert "- `.text_content` — The element's visible text" in lazy_query_guide()
+def test_guide_shows_schema_to_query_worked_examples():
+    guide = lazy_query_guide()
+    assert "Turning a schema into a query" in guide
+    assert "Worked examples" in guide
+    # a worked example pairs a skeleton + schema with the resulting query
+    assert "Skeleton:" in guide and "Schema:" in guide and "Query:" in guide
+    assert ".select_all(" in guide and ".project()" in guide
