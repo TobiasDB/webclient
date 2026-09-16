@@ -14,9 +14,9 @@ ignore:
   - marketing, product, careers, blog and support pages
   - SEC filings and financial statements (that is a different dataset)
 crawl:
-  - max_pages: 25
-  - depth: 3
-  - browser: auto
+  max_pages: 25
+  depth: 3
+  browser: auto
 ---
 The company's investor-relations news feed: every press release / news item it has
 published to investors, each with a headline, publication date, a link to the full

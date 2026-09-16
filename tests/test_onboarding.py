@@ -320,9 +320,9 @@ look:
 ignore:
   - blog, careers and legal pages
 crawl:
-  - max_pages: 30
-  - depth: 2
-  - browser: false
+  max_pages: 30
+  depth: 2
+  browser: false
 ---
 The company's full product catalogue.
 """
@@ -333,7 +333,7 @@ The company's full product catalogue.
     assert brief.descriptions["price.value"] == "the numeric amount"
     # look/ignore are natural-language guides, not URL fragments
     assert brief.look == ["product and pricing listing pages"]
-    # crawl block configures the pipeline (coerced to int/bool)
+    # crawl block is a native YAML mapping (int/bool typed by yaml)
     assert brief.crawl == {"max_pages": 30, "depth": 2, "browser": False}
     assert brief.description.startswith("The company's full product catalogue")
 

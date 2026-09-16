@@ -15,9 +15,9 @@ look:
 ignore:
   - blog, news, careers, legal and support pages
 crawl:
-  - max_pages: 30
-  - depth: 2
-  - browser: false
+  max_pages: 30
+  depth: 2
+  browser: false
 ---
 The company's full product catalogue: every product it sells, each with a name,
 SKU, a link to its detail page, and a structured price (value, unit and any

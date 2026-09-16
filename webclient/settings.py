@@ -1,33 +1,30 @@
-"""One place for the useful configurable options -- a pydantic :class:`Settings`
-that composes the transport / browser / resiliency / LLM config the client and the
-pipeline already use, loadable from the environment and buildable into a configured
-``WebClient`` / ``LlmClient``.
+"""One place for the useful configurable options -- a :class:`Settings` (a
+``pydantic_settings.BaseSettings``) composing the transport / browser / resiliency /
+LLM config the client and the pipeline already use, loaded from the environment and
+buildable into a configured ``WebClient`` / ``LlmClient``.
 
-    settings = Settings.from_env()          # WEBCLIENT_* env vars
+    settings = Settings()                   # reads WEBCLIENT_* env vars
     wc = settings.client()                  # a configured WebClient
     llm = settings.llm_client()             # a configured LlmClient (auth from env)
 
-Kept dependency-free (a plain ``BaseModel`` + an explicit env reader) rather than
-pulling in ``pydantic-settings``; the config sub-models (``BrowserConfig`` /
-``Resolve``) are the very ones the client already takes.
+Env vars are ``WEBCLIENT_``-prefixed; nested fields use a ``__`` delimiter --
+``WEBCLIENT_TIMEOUT``, ``WEBCLIENT_BROWSER__HEADLESS``, ``WEBCLIENT_LLM__MODEL``,
+``WEBCLIENT_LLM__BUDGET_USD``. The config sub-models (``BrowserConfig`` / ``Resolve``)
+are the very ones the client already takes.
 """
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .core.reference.models import BrowserConfig, Resolve
 
 if TYPE_CHECKING:
     from .pipelines.llm import LlmClient
     from .surfaces import WebClient
-
-
-def _env_bool(value: str) -> bool:
-    return value.strip().lower() in ("1", "true", "yes", "on")
 
 
 class LlmSettings(BaseModel):
@@ -39,13 +36,19 @@ class LlmSettings(BaseModel):
     budget_usd: float | None = None  # cap total spend; None = uncapped
 
 
-class Settings(BaseModel):
+class Settings(BaseSettings):
     """Every useful knob in one object: transport (timeout / retries / politeness /
     SSRF guard / headers), the resiliency ``resolve`` bundle, the ``browser`` launch
-    config, and the ``llm`` config. Build it explicitly, or with :meth:`from_env`;
-    turn it into a configured :meth:`client` / :meth:`llm_client`."""
+    config, and the ``llm`` config. Constructing it reads the ``WEBCLIENT_*``
+    environment (init kwargs win); turn it into a configured :meth:`client` /
+    :meth:`llm_client`."""
 
-    model_config = {"arbitrary_types_allowed": True}
+    model_config = SettingsConfigDict(
+        env_prefix="WEBCLIENT_",
+        env_nested_delimiter="__",
+        arbitrary_types_allowed=True,
+        extra="ignore",
+    )
 
     # -- transport / client --------------------------------------------------
     timeout: float = 30.0
@@ -60,47 +63,10 @@ class Settings(BaseModel):
     llm: LlmSettings = LlmSettings()
 
     @classmethod
-    def from_env(cls, prefix: str = "WEBCLIENT_", env: "dict[str, str] | None" = None) -> "Settings":
-        """Build from environment variables (``WEBCLIENT_*`` by default): ``TIMEOUT``,
-        ``RETRIES``, ``RETRY_BACKOFF``, ``MIN_INTERVAL``, ``BLOCK_PRIVATE_HOSTS``;
-        ``BROWSER_HEADLESS`` / ``BROWSER_STEALTH`` / ``BROWSER_FINGERPRINT``;
-        ``LLM_MODEL`` / ``LLM_BASE_URL`` / ``LLM_MAX_TOKENS`` / ``LLM_BUDGET_USD``.
-        Anything unset keeps its default. (The LLM API key stays in
-        ``ANTHROPIC_API_KEY`` -- it is not part of Settings.)"""
-        e = os.environ if env is None else env
-
-        def get(name: str) -> str | None:
-            return e.get(prefix + name)
-
-        s = cls()
-        if (v := get("TIMEOUT")) is not None:
-            s.timeout = float(v)
-        if (v := get("RETRIES")) is not None:
-            s.retries = int(v)
-        if (v := get("RETRY_BACKOFF")) is not None:
-            s.retry_backoff = float(v)
-        if (v := get("MIN_INTERVAL")) is not None:
-            s.min_interval = float(v)
-        if (v := get("BLOCK_PRIVATE_HOSTS")) is not None:
-            s.block_private_hosts = _env_bool(v)
-        bkw: dict[str, Any] = {}
-        if (v := get("BROWSER_HEADLESS")) is not None:
-            bkw["headless"] = _env_bool(v)
-        if (v := get("BROWSER_STEALTH")) is not None:
-            bkw["stealth"] = _env_bool(v)
-        if (v := get("BROWSER_FINGERPRINT")) is not None:
-            bkw["fingerprint"] = _env_bool(v)
-        if bkw:
-            s.browser = s.browser.model_copy(update=bkw)
-        if (v := get("LLM_MODEL")) is not None:
-            s.llm.model = v
-        if (v := get("LLM_BASE_URL")) is not None:
-            s.llm.base_url = v
-        if (v := get("LLM_MAX_TOKENS")) is not None:
-            s.llm.max_tokens = int(v)
-        if (v := get("LLM_BUDGET_USD")) is not None:
-            s.llm.budget_usd = float(v)
-        return s
+    def from_env(cls) -> "Settings":
+        """The environment-loaded settings (an alias for ``Settings()``, which reads
+        ``WEBCLIENT_*`` itself)."""
+        return cls()
 
     # -- builders ------------------------------------------------------------
     def client(self, **overrides: Any) -> "WebClient":

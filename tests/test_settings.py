@@ -10,23 +10,27 @@ def test_defaults_and_composition():
     assert isinstance(s.llm, LlmSettings) and s.llm.budget_usd is None
 
 
-def test_from_env_reads_the_prefixed_vars():
-    s = Settings.from_env(env={
+def test_from_env_reads_the_prefixed_vars(monkeypatch):
+    for k, v in {
         "WEBCLIENT_TIMEOUT": "12.5",
         "WEBCLIENT_RETRIES": "3",
         "WEBCLIENT_BLOCK_PRIVATE_HOSTS": "true",
-        "WEBCLIENT_BROWSER_HEADLESS": "false",
-        "WEBCLIENT_BROWSER_FINGERPRINT": "on",
-        "WEBCLIENT_LLM_MODEL": "claude-sonnet-5",
-        "WEBCLIENT_LLM_BUDGET_USD": "2.50",
-    })
+        "WEBCLIENT_BROWSER__HEADLESS": "false",  # nested via the __ delimiter
+        "WEBCLIENT_BROWSER__FINGERPRINT": "on",
+        "WEBCLIENT_LLM__MODEL": "claude-sonnet-5",
+        "WEBCLIENT_LLM__BUDGET_USD": "2.50",
+    }.items():
+        monkeypatch.setenv(k, v)
+    s = Settings()  # reads the environment
     assert s.timeout == 12.5 and s.retries == 3 and s.block_private_hosts
     assert s.browser.headless is False and s.browser.fingerprint and s.browser.stealth
     assert s.llm.model == "claude-sonnet-5" and s.llm.budget_usd == 2.50
 
 
-def test_builds_a_configured_client():
-    s = Settings.from_env(env={"WEBCLIENT_TIMEOUT": "7", "WEBCLIENT_BROWSER_HEADLESS": "false"})
+def test_builds_a_configured_client(monkeypatch):
+    monkeypatch.setenv("WEBCLIENT_TIMEOUT", "7")
+    monkeypatch.setenv("WEBCLIENT_BROWSER__HEADLESS", "false")
+    s = Settings()
     with s.client() as wc:
         assert isinstance(wc, WebClient)
         assert wc.timeout == 7.0

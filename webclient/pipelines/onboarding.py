@@ -77,9 +77,10 @@ def _mode(browser: bool) -> BrowserMode:
 
 
 def _parse_frontmatter(text: str) -> "tuple[dict[str, Any], str]":
-    """A tiny YAML-frontmatter reader (no dependency): a leading ``---`` block of
-    ``key: value`` scalars and ``key:`` + indented ``- item`` lists, then the body.
-    Returns ``(front, body)``; no frontmatter -> ``({}, text)``."""
+    """Split a ``---`` YAML frontmatter block from the markdown body and parse it with
+    ``yaml.safe_load``. Returns ``(front, body)``; no frontmatter -> ``({}, text)``."""
+    import yaml
+
     if not text.lstrip().startswith("---"):
         return {}, text
     rest = text.lstrip()[3:].lstrip("\n")
@@ -87,50 +88,27 @@ def _parse_frontmatter(text: str) -> "tuple[dict[str, Any], str]":
     if end == -1:
         return {}, text
     block, body = rest[:end], rest[end + 4 :].lstrip("\n")
-    front: dict[str, Any] = {}
-    key: str | None = None
-    for raw in block.splitlines():
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        if raw.lstrip().startswith("- ") and key is not None:  # a list item
-            front.setdefault(key, [])
-            if isinstance(front[key], list):
-                front[key].append(raw.split("- ", 1)[1].strip().strip("'\""))
-        elif ":" in raw and not raw.startswith(" "):
-            k, _, v = raw.partition(":")
-            key = k.strip()
-            v = v.strip().strip("'\"")
-            front[key] = v if v else []  # a value, or an empty list to be filled
-    return front, body
+    front = yaml.safe_load(block) or {}
+    return (front if isinstance(front, dict) else {}), body
 
 
-def _coerce(v: str) -> Any:
-    """A frontmatter scalar to its natural type: an int / float / bool where it reads
-    as one, else the string."""
-    low = v.strip().lower()
-    if low in ("true", "false"):
-        return low == "true"
-    if low in ("null", "none", "~", ""):
-        return None
-    try:
-        return int(v)
-    except ValueError:
-        pass
-    try:
-        return float(v)
-    except ValueError:
-        return v.strip()
-
-
-def _kv_items(items: "list[str]") -> "dict[str, Any]":
-    """Parse ``["max_pages: 30", "browser: false"]`` -> ``{"max_pages": 30, "browser":
-    False}`` -- the ``key: value`` list items a frontmatter block carries."""
-    out: dict[str, Any] = {}
-    for item in items:
-        key, sep, value = item.partition(":")
-        if sep:
-            out[key.strip()] = _coerce(value)
-    return out
+def _parse_schema(schema: Any) -> "tuple[list[str], dict[str, str]]":
+    """Interpret a frontmatter ``schema`` into ``(fields, descriptions)``. Each item is
+    a dotted field path, either a bare string (``name``) or a one-key mapping carrying
+    its description (``{name: the display name}``); dotted paths nest."""
+    fields: list[str] = []
+    descriptions: dict[str, str] = {}
+    for item in schema if isinstance(schema, list) else ([schema] if schema else []):
+        if isinstance(item, dict):
+            for path, desc in item.items():
+                path = str(path).strip()
+                if path:
+                    fields.append(path)
+                    if desc:
+                        descriptions[path] = str(desc).strip()
+        elif item:
+            fields.append(str(item).strip())
+    return fields, descriptions
 
 
 class SchemaField(BaseModel):
@@ -164,27 +142,18 @@ class Brief(BaseModel):
 
     @classmethod
     def from_markdown(cls, text: str) -> "Brief":
-        """Build a :class:`Brief` from a markdown document. Frontmatter keys: ``name`` /
-        ``title``; ``schema`` (a list of ``path: description`` items -- dotted paths
-        nest, the text is that field's description); ``look`` / ``ignore`` (NL guide
-        lines); ``crawl`` (a list of ``key: value`` pipeline crawl overrides);
-        ``description`` (else the body). Extra list items without a ``:`` are treated as
-        bare field names."""
+        """Build a :class:`Brief` from a markdown document with YAML frontmatter. Keys:
+        ``name`` / ``title``; ``schema`` (a list of ``path: description`` items -- dotted
+        paths nest, the text is that field's description; a bare string is a field with
+        no description); ``look`` / ``ignore`` (NL guide lines); ``crawl`` (a mapping of
+        pipeline crawl overrides -- ``max_pages`` / ``depth`` / ``rounds`` / ``browser``);
+        ``description`` (else the body)."""
         front, body = _parse_frontmatter(text)
 
         def as_list(v: Any) -> list[str]:
             return [str(x) for x in v] if isinstance(v, list) else ([str(v)] if v else [])
 
-        fields: list[str] = []
-        descriptions: dict[str, str] = {}
-        for item in as_list(front.get("schema") or front.get("fields")):
-            path, sep, desc = item.partition(":")
-            path = path.strip()
-            if path:
-                fields.append(path)
-                if sep and desc.strip():
-                    descriptions[path] = desc.strip()
-
+        fields, descriptions = _parse_schema(front.get("schema") or front.get("fields"))
         crawl = front.get("crawl")
         return cls(
             description=str(front.get("description") or body).strip(),
@@ -194,7 +163,7 @@ class Brief(BaseModel):
             title=str(front.get("title") or ""),
             look=as_list(front.get("look")),
             ignore=as_list(front.get("ignore")),
-            crawl=_kv_items(crawl) if isinstance(crawl, list) else {},
+            crawl=crawl if isinstance(crawl, dict) else {},
         )
 
     @classmethod
@@ -563,7 +532,7 @@ def crawl_from_seeds(
     cfg = brief.crawl
     max_pages = int(cfg.get("max_pages", max_pages))
     rounds = int(cfg.get("rounds", rounds))
-    browser = bool(cfg.get("browser", browser))
+    browser = cfg.get("browser", browser)  # bool or a tier ("auto"/"always"/"never")
     depth = int(cfg.get("depth", 3))
     seed_urls = [s.url for s in seeds if s.url]
     crawl = wc.crawl(
