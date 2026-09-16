@@ -638,7 +638,7 @@ class WebClient(WebCore, IWebClient):
         """A scoped site traversal sharing this engine (a :class:`Crawl` core). The
         client manages the frontier (dedup, scope, fetching); use it as a context
         manager and read ``.pages`` (the resolved Documents -- extract whatever you
-        want per page: ``doc.title`` / ``doc.signals()`` / ``doc.extract(...)``) and
+        want per page: ``doc.title`` / ``doc.flags()`` / ``doc.extract(...)``) and
         ``.frontier`` (the scored :class:`Edge` links).
 
         Defaults are tuned for the common "map this site" case:
