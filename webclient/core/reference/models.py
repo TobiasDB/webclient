@@ -161,6 +161,10 @@ class BrowserConfig(BaseModel, frozen=True):
     fresh identity per page, and the ``auto`` ladder's last anti-bot fallback)."""
 
     engine: str = "chromium"
+    #: Playwright browser channel: ``None`` uses the bundled Chromium; ``"chrome"`` drives
+    #: the machine's installed Google Chrome (the latest stable, and less bot-detectable
+    #: than headless Chromium) -- set it when Chrome is installed.
+    channel: str | None = None
     headless: bool = True
     stealth: bool = True
     fingerprint: bool = False

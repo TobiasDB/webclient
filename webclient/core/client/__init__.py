@@ -252,7 +252,8 @@ class WebClient(WebCore, IWebClient):
             {
                 "http": HTTPXFactory(),
                 "page": BrowserFactory(
-                    headless=bc.headless, stealth=bc.stealth, fingerprint=bc.fingerprint
+                    headless=bc.headless, stealth=bc.stealth, fingerprint=bc.fingerprint,
+                    channel=bc.channel,
                 ),
             },
             limits={"http": bc.pool_http, "page": bc.pool_pages},

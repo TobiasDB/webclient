@@ -313,30 +313,53 @@ class BrowserClient(Client):
 #: one obvious automation fingerprint.
 _FINGERPRINTS: tuple[dict[str, Any], ...] = (
     {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like "
-     "Gecko) Chrome/125.0.0.0 Safari/537.36", "vw": 1920, "vh": 1080,
+     "Gecko) Chrome/140.0.0.0 Safari/537.36", "vw": 1920, "vh": 1080,
      "locale": "en-US", "tz": "America/New_York"},
     {"ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, "
-     "like Gecko) Chrome/125.0.0.0 Safari/537.36", "vw": 1512, "vh": 982,
+     "like Gecko) Chrome/140.0.0.0 Safari/537.36", "vw": 1512, "vh": 982,
      "locale": "en-GB", "tz": "Europe/London"},
     {"ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-     "Chrome/124.0.0.0 Safari/537.36", "vw": 1680, "vh": 1050,
+     "Chrome/139.0.0.0 Safari/537.36", "vw": 1680, "vh": 1050,
      "locale": "en-US", "tz": "America/Chicago"},
     {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like "
-     "Gecko) Chrome/124.0.0.0 Safari/537.36", "vw": 1536, "vh": 864,
+     "Gecko) Chrome/139.0.0.0 Safari/537.36", "vw": 1536, "vh": 864,
      "locale": "en-CA", "tz": "America/Toronto"},
 )
 
 #: injected before every navigation on a stealth context: mask the obvious headless /
 #: automation tells so a routine render isn't trivially fingerprinted as a bot.
 _STEALTH_JS = """(() => {
-  try { Object.defineProperty(navigator, 'webdriver', {get: () => undefined}); } catch (e) {}
-  try { Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']}); } catch (e) {}
-  try { Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]}); } catch (e) {}
-  try { window.chrome = window.chrome || {runtime: {}}; } catch (e) {}
+  const def = (o, p, v) => { try { Object.defineProperty(o, p, {get: () => v}); } catch (e) {} };
+  def(navigator, 'webdriver', undefined);
+  def(navigator, 'languages', ['en-US', 'en']);
+  def(navigator, 'plugins', [1, 2, 3, 4, 5]);
+  def(navigator, 'hardwareConcurrency', 8);
+  def(navigator, 'deviceMemory', 8);
+  try { window.chrome = window.chrome || {runtime: {}, app: {}, csi: () => {}, loadTimes: () => {}}; } catch (e) {}
+  // permissions.query for 'notifications' shouldn't reveal the headless 'denied'/prompt tell
+  try {
+    const q = window.navigator.permissions && window.navigator.permissions.query;
+    if (q) window.navigator.permissions.query = (p) =>
+      p && p.name === 'notifications'
+        ? Promise.resolve({state: Notification.permission})
+        : q(p);
+  } catch (e) {}
+  // spoof the WebGL vendor/renderer to a common real GPU instead of 'Google SwiftShader'
+  try {
+    const gp = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function (p) {
+      if (p === 37445) return 'Intel Inc.';                 // UNMASKED_VENDOR_WEBGL
+      if (p === 37446) return 'Intel Iris OpenGL Engine';   // UNMASKED_RENDERER_WEBGL
+      return gp.call(this, p);
+    };
+  } catch (e) {}
 })()"""
 
 #: chromium launch flags that drop the loudest automation signals.
-_STEALTH_ARGS = ("--disable-blink-features=AutomationControlled",)
+_STEALTH_ARGS = (
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=IsolateOrigins,site-per-process",
+)
 
 
 def _random_fingerprint() -> "dict[str, Any]":
@@ -355,11 +378,13 @@ class BrowserFactory(ClientFactory):
     kind = "page"
 
     def __init__(
-        self, *, headless: bool = True, stealth: bool = True, fingerprint: bool = False
+        self, *, headless: bool = True, stealth: bool = True, fingerprint: bool = False,
+        channel: "str | None" = None,
     ) -> None:
         self.headless = headless
         self.stealth = stealth
         self.fingerprint = fingerprint
+        self.channel = channel  # None = bundled chromium; "chrome" = installed Google Chrome
         self._pw: Any = None
         self._browser: Any = None
         self._contexts: list[Any] = []
@@ -369,10 +394,13 @@ class BrowserFactory(ClientFactory):
             from playwright.async_api import async_playwright
 
             self._pw = await async_playwright().start()
-            self._browser = await self._pw.chromium.launch(
-                headless=self.headless,
-                args=list(_STEALTH_ARGS) if self.stealth else [],
-            )
+            launch: dict[str, Any] = {
+                "headless": self.headless,
+                "args": list(_STEALTH_ARGS) if self.stealth else [],
+            }
+            if self.channel:  # drive real Google Chrome (latest stable) instead of chromium
+                launch["channel"] = self.channel
+            self._browser = await self._pw.chromium.launch(**launch)
         return self._browser
 
     async def create(self) -> BrowserClient:
