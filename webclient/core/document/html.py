@@ -21,6 +21,9 @@ _HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 _SKIP = {"script", "style"}
 _NOISE = "script, style, nav, aside, footer, header"
 _MAIN = "main, article, [role=main], #content, #main"
+_BARE_TAG = re.compile(r"^[A-Za-z_][\w-]*$")  # a lone element-name selector (no combinators)
+_ASCII_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_ASCII_LOWER = "abcdefghijklmnopqrstuvwxyz"
 
 
 def _norm(text: str) -> str:
@@ -735,7 +738,17 @@ class HtmlBacking(Backing):
             selector = "." + selector
         if selector.startswith("/") or selector.startswith("./"):
             return list(root.xpath(selector))
-        return list(root.cssselect(selector))
+        matches = list(root.cssselect(selector))
+        if not matches and core.kind == "xml" and _BARE_TAG.match(selector.strip()):
+            # XML element names are case-SENSITIVE, but scrapers (and LLMs) lowercase them and
+            # RSS/Atom feeds spell them pubDate/lastBuildDate/... . When an exact match found
+            # nothing, fall back to a case-insensitive local-name match for a bare tag so a
+            # lowercased field tag still resolves (local-name() also ignores any ns prefix).
+            tag = selector.strip().lower()
+            matches = list(root.xpath(
+                f".//*[translate(local-name(),{_ASCII_UPPER!r},{_ASCII_LOWER!r})=$t]", t=tag,
+            ))
+        return matches
 
     def select(
         self,

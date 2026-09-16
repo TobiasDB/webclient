@@ -158,6 +158,23 @@ def test_json_select_and_attr_value():
     assert doc.select("items[1].n").text_content == "2"
 
 
+def test_xml_element_select_is_case_insensitive_fallback():
+    # XML tag names are case-sensitive, but scrapers/LLMs lowercase them and RSS/Atom feeds
+    # spell them pubDate/lastBuildDate/... . A lowercased bare tag must still resolve.
+    rss = (b"<?xml version='1.0'?><rss><channel>"
+           b"<item><title>A</title><pubDate>Mon, 01 Sep 2026</pubDate><guid>g-1</guid></item>"
+           b"<item><title>B</title><pubDate>Tue, 02 Sep 2026</pubDate><guid>g-2</guid></item>"
+           b"</channel></rss>")
+    doc = make_doc(kind="xml", content=rss)
+    items = doc.select_all("item")
+    assert len(items) == 2
+    # exact case AND lowercased both resolve the mixed-case <pubDate>
+    assert items[0].select("pubDate").attr("text").get() == "Mon, 01 Sep 2026"
+    assert items[0].select("pubdate").attr("text").get() == "Mon, 01 Sep 2026"
+    # a genuinely absent tag still misses (the fallback doesn't invent matches)
+    assert not items[0].select("author", optional=True).ok
+
+
 def test_as_json_reparses_an_injected_json_island():
     # data injected into the page as a <script type=application/json> blob, not as DOM:
     # select the script, .as_json() reparses its text into a JSON document, then dotted-path.
