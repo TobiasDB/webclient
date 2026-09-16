@@ -20,9 +20,10 @@ from ..client import WebClient
 from ..reference import Reference
 
 if TYPE_CHECKING:
-    from ...clients import ClientPool
+    from ...clients import ClientPool, WaitConfig
     from ...events import EventBus
     from ..client.loop import EngineLoop
+    from ..document import Document
 
 
 class Session(WebClient):
@@ -90,8 +91,8 @@ class Session(WebClient):
         browser: Any = False,
         resolve: Any = None,
         keep_alive: "bool | float" = False,
-        wait: Any = None,
-    ) -> Any:
+        wait: "WaitConfig | None" = None,
+    ) -> "Document":
         self._guard()
         scoped = ref.model_copy(
             update={
@@ -115,14 +116,14 @@ class Session(WebClient):
         self._absorb(doc)
         return doc
 
-    def _absorb(self, doc: Any) -> None:
+    def _absorb(self, doc: "Document") -> None:
         """Merge the response's Set-Cookie into the session identity. Uses the
         transport-parsed cookies (httpx's cookiejar), not a hand-split of the
         collapsed header -- which corrupted values whose ``Expires`` attribute
         contains a comma (``Expires=Wed, 21 Oct ...``)."""
         self.cookies.update(doc._set_cookies)
 
-    def document(self, name: str) -> Any:
+    def document(self, name: str) -> "Document | None":
         """Recover a document from THIS session's scope only."""
         from ..document import Document
 

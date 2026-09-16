@@ -10,7 +10,7 @@ is the value leaf (``get`` + ``is_ok``/``is_empty`` + comparisons + truthiness).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, Iterator, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, Iterable, Iterator, TypeVar, cast, overload
 
 # covariant: Field/Collection/Lazy only ever *produce* T (iterate/index/get/collect),
 # never consume it, so ``Collection[AsyncDocument]`` is a ``Collection[Document]``
@@ -19,6 +19,8 @@ T = TypeVar("T", covariant=True)
 M = TypeVar("M")  # a row model (e.g. a pydantic BaseModel) for project(model)
 
 if TYPE_CHECKING:
+    from .core.client import WebClient
+    from .core.client.loop import EngineLoop
     from .surfaces import Document, Reference
 
 
@@ -111,7 +113,7 @@ def _row_of(element: Any, *, create: bool = True) -> dict[str, Any] | None:
     return cast("dict[str, Any] | None", core._row)
 
 
-async def apply_extract(element: Any, columns: dict[str, Any], client: Any) -> None:
+async def apply_extract(element: Any, columns: dict[str, Any], client: "WebClient | None") -> None:
     """Annotate ``element``'s row with the evaluated columns (unwrapped, stored in
     order so a later column can reference an earlier one). Loud by default: a column
     whose ``select``/``attr`` misses raises (naming the selector) -- mark a genuinely
@@ -128,7 +130,7 @@ async def apply_extract(element: Any, columns: dict[str, Any], client: Any) -> N
         row[key] = _raw(await aevaluate(expr, element, client=client))
 
 
-async def survives_filters(element: Any, predicates: Any, client: Any) -> bool:
+async def survives_filters(element: Any, predicates: "Iterable[Any]", client: "WebClient | None") -> bool:
     """Whether ``element`` passes every predicate. Loud by default (a predicate that
     references a missing field raises) -- mark an optional select ``error=RETURN`` /
     ``optional=True`` to treat a miss as a non-match. The one filter implementation,
@@ -148,7 +150,7 @@ class Collection(Generic[T]):
     __slots__ = ("_items", "_client", "name", "root")
 
     def __init__(
-        self, items: list[Any] | None = None, *, client: Any = None, root: str = ""
+        self, items: list[Any] | None = None, *, client: "WebClient | None" = None, root: str = ""
     ) -> None:
         self._items = items or []
         self._client = client
@@ -218,7 +220,7 @@ class Collection(Generic[T]):
             return fan
 
     # -- row shaping ----------------------------------------------------------
-    def _loop(self) -> Any:
+    def _loop(self) -> "EngineLoop":
         from .core.client import default_client
 
         return (self._client or default_client()).loop()
@@ -254,11 +256,11 @@ class Collection(Generic[T]):
 
     def extract(self, **exprs: Any) -> "Collection[T]":
         """Eager form of :meth:`aextract` (bridged onto the engine loop)."""
-        return cast("Collection[T]", self._loop().run(self.aextract(**exprs)))
+        return self._loop().run(self.aextract(**exprs))
 
     def filter(self, *predicates: Any) -> "Collection[T]":
         """Eager form of :meth:`afilter` (bridged onto the engine loop)."""
-        return cast("Collection[T]", self._loop().run(self.afilter(*predicates)))
+        return self._loop().run(self.afilter(*predicates))
 
     def documents(self, column: str) -> "Collection[Any]":
         """Flatten a column whose values are Collections/lists of documents
@@ -279,14 +281,11 @@ class Collection(Generic[T]):
     def project(self, model: type[M]) -> list[M]: ...
 
     def project(self, model: type[M] | None = None) -> list[Any]:
-        """Materialise as a plain list: each element's extracted row if it has
-        one, else the element itself. Row values are cleaned to plain data -- a
-        ``Reference`` column (e.g. from ``attr("href")``) becomes its **URL string**,
-        and a ``Field`` its value -- so rows are JSON/DataFrame-ready. Pass ``model``
-        (e.g. a pydantic model) to validate each row into it -- a schema-guided,
-        typed result. Eager only: a model class is not part of the serialisable plan,
-        so call it on a materialised Collection
-        (``...extract(...).collect().project(Model)``)."""
+        """Materialise as a plain list: each element's extracted row (cleaned to
+        plain data -- a ``Reference`` column becomes its URL string, a ``Field`` its
+        value), or the element itself if it has no row. ``model`` validates each row
+        into it. Eager only -- a model class isn't part of the serialisable plan, so
+        call this on a materialised Collection (``...extract(...).collect().project(Model)``)."""
         out: list[Any] = []
         for el in self._items:
             row = _row_of(el, create=False)
