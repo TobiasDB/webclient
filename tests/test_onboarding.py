@@ -188,7 +188,7 @@ def test_prompt_templates_load_and_render():
         "search_query", company="Acme", description="products", fields_line=""
     )
     assert "frontier links" in render_prompt(
-        "pick_edges", description="d", fields_line="", listing="0. http://x"
+        "pick_edges", company="Acme", description="d", fields_line="", listing="0. http://x"
     )
     assert "crawled pages" in render_prompt(
         "select_candidates", description="d", fields_line="", pages_json="[]"
@@ -916,6 +916,28 @@ def test_write_query_hint_names_a_wrong_record_selector(httpserver):
                           wc=wc, llm=llm, browser="never", retries=1)
     assert art is not None and art.row_count == 1  # recovered on the retry
     assert 'matched NO elements' in prompts[1] and '".nope"' in prompts[1]  # named the culprit
+
+
+def test_frontier_sticks_to_the_company_domains():
+    from webclient.core.crawl import Edge
+    from webclient.pipelines.onboarding import Seed, _filter_frontier, _seed_domains
+
+    seeds = [Seed(url="https://www.adobe.com/investor-relations.html"),
+             Seed(url="https://news.adobe.com/")]
+    domains = _seed_domains(seeds)
+    assert domains == {"adobe.com"}  # www / news / milo all collapse to adobe.com
+
+    edges = [
+        Edge(url="https://www.adobe.com/investor-relations/investor-news.html"),
+        Edge(url="https://milo.adobe.com/tools/caas"),          # same company (adobe.com)
+        Edge(url="https://www.microsoft.com/investor-relations"),  # a DIFFERENT company
+        Edge(url="https://competitor.example/news"),              # unrelated
+    ]
+    kept = [e.url for e in _filter_frontier(edges, Brief(description="ir news"), allow_domains=domains)]
+    assert kept == [
+        "https://www.adobe.com/investor-relations/investor-news.html",
+        "https://milo.adobe.com/tools/caas",
+    ]  # only the company's own domains survive
 
 
 def test_crawl_evaluates_seeds_before_fetching_them(httpserver):

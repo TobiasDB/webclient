@@ -55,6 +55,52 @@ nested, each with a short description. Map it mechanically:
   `price=wq.doc.select(".price").extract(value=…, unit=…).project()`, so the output
   JSON nests exactly like the schema.
 
+### When records have no wrapper (flat sibling runs)
+
+Some lists have **no element that wraps each record** — the fields sit side by side as
+sibling elements, often split by a separator. A press-release list is the classic case:
+a `<p>` with the title link, then a *separate* sibling `<p>` with the date, then an
+`<hr>`, repeating:
+
+```
+<p><a href="…/adobe-to-acquire-semrush">Adobe to Acquire Semrush</a></p>
+<p>November 19, 2025</p>
+<hr>
+<p><a href="…">next title</a></p>
+<p>next date</p>
+```
+
+There is no `.news-item` to select, and the date is **outside** the title element, so a
+plain `select_all("p")` splits every record in two. Handle it in two moves:
+
+- **Pick the record by its distinguishing child**, with `:has(...)`: the record is the
+  paragraph that contains the link → `select_all("p:has(a)")`. (Attribute selectors are
+  not allowed *inside* `:has()` — write `:has(a)`, not `:has(a[href])`.)
+- **Reach a following-sibling field** with the adjacent-sibling combinator from
+  `:scope` — the current record: `date = wq.doc.select(":scope + p").attr("text")`
+  reads the very next `<p>`. (Only the `:scope + …` form works; a bare `+ p` is a syntax
+  error.) Mark it `optional=True` if it is not always present.
+
+```python
+wq.doc.select_all("p:has(a)").extract(
+    title=wq.doc.select("a").attr("text"),
+    url=wq.doc.select("a").attr("href"),
+    date=wq.doc.select(":scope + p", optional=True).attr("text"),
+).project()
+```
+
+If the run is polluted by other anchored paragraphs (nav, tools, footer), narrow the
+record selector to the ones you mean. The cleanest way is an **XPath that matches on the
+link target**, since attribute matching is not allowed inside CSS `:has()`:
+
+```python
+wq.doc.select_all("//p[a[contains(@href, '/news/')]]").extract(
+    title=wq.doc.select("a").attr("text"),
+    url=wq.doc.select("a").attr("href"),
+    date=wq.doc.select(":scope + p", optional=True).attr("text"),
+).project()
+```
+
 ## Writing durable CSS selectors
 
 A selector is only as good as it is stable — pages get restyled and reordered. Prefer

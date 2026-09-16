@@ -712,15 +712,39 @@ def _is_docs_url(url: str) -> bool:
     return any(hint in path for hint in _DOCS_HINTS)
 
 
-def _filter_frontier(edges: Sequence[Any], brief: Brief) -> list[Any]:
-    """Prune the frontier before the model spends a pick on it: HARD-BAN documentation
-    pages (:func:`_is_docs_url` -- they are never a dataset), then collapse paginated URL
-    sets and repeated similar-API calls to one representative each (keeping the first --
-    the frontier is already best-first). ``look`` / ``ignore`` stay natural-language
-    guides the model applies; this filter is purely structural."""
+def _reg_domain(url: str) -> str:
+    """The registrable domain (eTLD+1) of ``url`` -- the identity we bind the crawl to,
+    so ``news.adobe.com`` / ``www.adobe.com`` / ``milo.adobe.com`` all read as ``adobe.com``."""
+    from urllib.parse import urlsplit
+
+    from ..core.crawl.canon import _registrable
+
+    return _registrable((urlsplit(url).hostname or "").lower())
+
+
+def _seed_domains(seeds: Sequence[Seed]) -> "set[str]":
+    """The registrable domains the search surfaced for THIS company -- the company's web
+    footprint. The crawl is kept inside it so it can't wander onto a different company's
+    site discovered mid-crawl (the search query was ``"<company> <brief>"``, so the seed
+    domains are the company's own)."""
+    return {d for s in seeds if s.url and (d := _reg_domain(s.url))}
+
+
+def _filter_frontier(
+    edges: Sequence[Any], brief: Brief, *, allow_domains: "frozenset[str] | set[str]" = frozenset()
+) -> list[Any]:
+    """Prune the frontier before the model spends a pick on it: keep only the company's
+    own domains (``allow_domains`` -- so it can't drift onto an unrelated company), HARD-BAN
+    documentation pages (:func:`_is_docs_url` -- never a dataset), then collapse paginated
+    URL sets and repeated similar-API calls to one representative each (keeping the first --
+    the frontier is already best-first). ``look`` / ``ignore`` stay natural-language guides
+    the model applies; this filter is purely structural."""
     kept: list[Any] = []
     seen: set[tuple[str, str, frozenset[str]]] = set()
     for e in edges:
+        if allow_domains and _reg_domain(e.url) not in allow_domains:
+            log.debug("off-company URL dropped from the frontier: %s", e.url)
+            continue
         if _is_docs_url(e.url):
             log.debug("banned docs URL from the frontier: %s", e.url)
             continue
@@ -732,10 +756,12 @@ def _filter_frontier(edges: Sequence[Any], brief: Brief) -> list[Any]:
     return kept
 
 
-def _pick_edges(llm: LLM, brief: Brief, frontier: Sequence[Any]) -> list[str]:
+def _pick_edges(llm: LLM, brief: Brief, frontier: Sequence[Any], *, company: str = "") -> list[str]:
     """Ask the model which frontier edges to expand next -- the ones most likely to
     reach the dataset, preferring a queryable source (an API over the whole dataset)
-    to a page that lists only part of it, and following pagination when it must."""
+    to a page that lists only part of it, and following pagination when it must.
+    ``company`` is named so the model stays on that company's pages and skips any that
+    belong to a different organisation."""
     listing = _clip(
         "\n".join(f"{i}. {e.url}   (link text: {e.text!r})" for i, e in enumerate(frontier)),
         _MAX_LISTING_CHARS, "frontier listing",
@@ -744,6 +770,7 @@ def _pick_edges(llm: LLM, brief: Brief, frontier: Sequence[Any]) -> list[str]:
         llm,
         render_prompt(
             "pick_edges",
+            company=company or "the company",
             description=brief.description,
             fields_line=_fields_line(brief),
             listing=listing,
@@ -770,6 +797,7 @@ def crawl_from_seeds(
     *,
     wc: WebClient,
     llm: LLM,
+    company: str = "",
     max_pages: int = 20,
     rounds: int = 4,
     browser: bool = True,
@@ -778,16 +806,25 @@ def crawl_from_seeds(
     the model pick which discovered edges to expand (favouring a queryable source),
     up to ``rounds`` rounds or ``max_pages`` pages. Returns the finished ``Crawl``
     (read ``.pages`` for the retained Documents). The brief's ``crawl`` block overrides
-    ``max_pages`` / ``rounds`` / ``depth`` / ``browser`` per dataset."""
+    ``max_pages`` / ``rounds`` / ``depth`` / ``browser`` per dataset. The crawl is bound
+    to the company's own domains (the seed footprint) so it can't wander onto a different
+    company's site."""
     cfg = brief.crawl
     max_pages = int(cfg.get("max_pages", max_pages))
     rounds = int(cfg.get("rounds", rounds))
     browser = cfg.get("browser", browser)  # bool or a tier ("auto"/"always"/"never")
     depth = int(cfg.get("depth", 3))
     seed_urls = [s.url for s in seeds if s.url]
+    domains = _seed_domains(seeds)  # the company's web footprint -- the crawl stays inside it
+    # The seed URLs the search surfaced, printed BEFORE the model filters/picks them.
+    log.info("    %d seed URL(s) for %s (domains: %s):",
+             len(seed_urls), company or "the company", ", ".join(sorted(domains)) or "?")
+    for s in seeds:
+        if s.url:
+            log.info("      seed %s%s", s.url, f"  — {s.title}" if s.title else "")
     crawl = wc.crawl(
         seed_urls, auto=False, browser=browser, max_pages=max_pages, depth=depth,
-        obey_robots=False,
+        obey_robots=False, allow_domains=sorted(domains),
     )
     seen_pages = seen_fails = 0
     # The seeds sit in the frontier UNFETCHED: round 0 lets the model evaluate the seeds
@@ -798,11 +835,11 @@ def crawl_from_seeds(
     for round_i in range(rounds + 1):
         if not crawl.frontier or len(crawl.pages) >= max_pages:
             break
-        # collapse paginated/similar-API duplicates + ban docs pages before a pick
-        candidates = _filter_frontier(list(crawl.frontier), brief)
+        # keep to the company's domains, collapse paginated/similar-API dups, ban docs pages
+        candidates = _filter_frontier(list(crawl.frontier), brief, allow_domains=domains)
         if not candidates:
             break
-        picks = _pick_edges(llm, brief, candidates)
+        picks = _pick_edges(llm, brief, candidates, company=company)
         if not picks and round_i == 0:
             log.info("    model picked no seeds -- fetching the filtered seeds")
             picks = [e.url for e in candidates]
@@ -1330,7 +1367,7 @@ def _onboard_company(
         return result
     note("%d seed(s); crawling for the dataset", len(seeds))
     crawl = crawl_from_seeds(
-        seeds, brief, wc=wc, llm=llm, max_pages=max_pages, browser=browser
+        seeds, brief, wc=wc, llm=llm, company=company, max_pages=max_pages, browser=browser
     )
     note("crawled %d page(s), %d failed", len(crawl.pages), len(crawl.failures))
     candidates = select_candidates(crawl, brief, llm=llm)

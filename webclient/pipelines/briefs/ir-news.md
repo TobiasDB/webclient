@@ -5,8 +5,8 @@ schema:
   - title: the headline of the news item / press release
   - date: the publication date (as shown on the page)
   - url: a link to the full item
-  - category: the item's tag or category, if shown (e.g. Earnings, Product)
-  - summary: a one-line teaser or summary, when present
+  - category?: the item's tag or category, if shown (e.g. Earnings, Product)
+  - summary?: a one-line teaser or summary, when present
 look:
   - the investor relations (IR) section, press releases and news / newsroom pages
   - a press-release or news data API / RSS feed if one is exposed
