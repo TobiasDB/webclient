@@ -37,34 +37,61 @@ ANTHROPIC_VERSION = "2023-06-01"
 # --------------------------------------------------------------------------- #
 
 
+# Anthropic prompt-cache pricing, relative to the base input price: a cache WRITE
+# costs ~1.25x input (a 5-minute cache), a cache READ ~0.10x. Kept as the defaults
+# ``ModelPrice.of`` fills in, so an explicit per-model / per-TTL override is possible.
+_CACHE_WRITE_MULT = 1.25
+_CACHE_READ_MULT = 0.10
+
+
 @dataclass(frozen=True)
 class ModelPrice:
-    """USD price per 1,000,000 tokens, split by direction."""
+    """USD price per 1,000,000 tokens, one field per billed direction: base ``input`` /
+    ``output`` plus prompt-cache ``cache_write`` (writing tokens into the cache) and
+    ``cache_read`` (reading a cache hit, much cheaper). Build it with :meth:`of` to
+    derive the cache prices from the input price, or set all four explicitly."""
 
     input_usd_per_mtok: float
     output_usd_per_mtok: float
+    cache_write_usd_per_mtok: float
+    cache_read_usd_per_mtok: float
+
+    @classmethod
+    def of(
+        cls,
+        input_usd_per_mtok: float,
+        output_usd_per_mtok: float,
+        *,
+        cache_write_mult: float = _CACHE_WRITE_MULT,
+        cache_read_mult: float = _CACHE_READ_MULT,
+    ) -> "ModelPrice":
+        """A price with the cache write/read derived from the input price (the usual
+        Anthropic ratios); pass the multipliers to override (e.g. a 1-hour cache)."""
+        return cls(
+            input_usd_per_mtok,
+            output_usd_per_mtok,
+            input_usd_per_mtok * cache_write_mult,
+            input_usd_per_mtok * cache_read_mult,
+        )
 
 
-#: Per-model USD prices per 1M tokens (input, output), sourced from the packaged
-#: ``claude-api`` skill (2026-06). Unknown models fall back to :data:`_FALLBACK_PRICE`.
+#: Per-model USD prices per 1M tokens (input, output, + derived cache write/read),
+#: sourced from the packaged ``claude-api`` skill (2026-06). Unknown models fall back
+#: to :data:`_FALLBACK_PRICE`.
 PRICING: dict[str, ModelPrice] = {
-    "claude-fable-5-1": ModelPrice(10.0, 50.0),
-    "claude-fable-5": ModelPrice(10.0, 50.0),
-    "claude-opus-5": ModelPrice(5.0, 25.0),
-    "claude-opus-4-8": ModelPrice(5.0, 25.0),
-    "claude-opus-4-7": ModelPrice(5.0, 25.0),
-    "claude-opus-4-6": ModelPrice(5.0, 25.0),
-    "claude-sonnet-5": ModelPrice(2.0, 10.0),
-    "claude-sonnet-4-6": ModelPrice(3.0, 15.0),
-    "claude-haiku-4-5": ModelPrice(1.0, 5.0),
+    "claude-fable-5-1": ModelPrice.of(10.0, 50.0),
+    "claude-fable-5": ModelPrice.of(10.0, 50.0),
+    "claude-opus-5": ModelPrice.of(5.0, 25.0),
+    "claude-opus-4-8": ModelPrice.of(5.0, 25.0),
+    "claude-opus-4-7": ModelPrice.of(5.0, 25.0),
+    "claude-opus-4-6": ModelPrice.of(5.0, 25.0),
+    "claude-sonnet-5": ModelPrice.of(2.0, 10.0),
+    "claude-sonnet-4-6": ModelPrice.of(3.0, 15.0),
+    "claude-haiku-4-5": ModelPrice.of(1.0, 5.0),
 }
 #: Used when a model id is not in :data:`PRICING` (assume Opus-tier so we never
 #: under-count spend against a budget).
-_FALLBACK_PRICE = ModelPrice(5.0, 25.0)
-
-# Cache multipliers relative to the input price (Anthropic prompt caching).
-_CACHE_WRITE_MULT = 1.25
-_CACHE_READ_MULT = 0.10
+_FALLBACK_PRICE = ModelPrice.of(5.0, 25.0)
 
 
 def price_for(model: str) -> ModelPrice:
@@ -95,12 +122,13 @@ class Usage:
         )
 
     def cost_usd(self, price: ModelPrice) -> float:
-        """This usage priced in USD, cached tokens included at their reduced rate."""
+        """This usage priced in USD -- base input/output plus the cache write/read
+        tokens at their own per-model rates."""
         mtok = 1_000_000.0
         return (
             self.input_tokens * price.input_usd_per_mtok
-            + self.cache_write_tokens * price.input_usd_per_mtok * _CACHE_WRITE_MULT
-            + self.cache_read_tokens * price.input_usd_per_mtok * _CACHE_READ_MULT
+            + self.cache_write_tokens * price.cache_write_usd_per_mtok
+            + self.cache_read_tokens * price.cache_read_usd_per_mtok
             + self.output_tokens * price.output_usd_per_mtok
         ) / mtok
 
@@ -141,6 +169,8 @@ class Budget:
     calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
     def ensure(self) -> None:
         """Raise :class:`BudgetExceeded` if the cap has already been reached."""
@@ -154,6 +184,8 @@ class Budget:
         self.calls += 1
         self.input_tokens += usage.input_tokens
         self.output_tokens += usage.output_tokens
+        self.cache_read_tokens += usage.cache_read_tokens
+        self.cache_write_tokens += usage.cache_write_tokens
         return cost
 
     @property

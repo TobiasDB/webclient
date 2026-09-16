@@ -415,3 +415,24 @@ def test_query_runs_across_multiple_base_urls(httpserver):
     with WebClient() as wc:
         rows = run_query(art, wc=wc)
     assert [r["name"] for r in rows] == ["Cloud A", "Cloud B", "OnPrem X"]  # unioned
+
+
+def test_model_price_includes_cache_read_and_write_costs():
+    from webclient.pipelines import Usage
+    from webclient.pipelines.llm import ModelPrice, price_for
+
+    price = price_for("claude-opus-5")  # input 5, output 25 per MTok
+    # cache write ~1.25x input, cache read ~0.10x input -- first-class fields now
+    assert price.cache_write_usd_per_mtok == pytest.approx(6.25)
+    assert price.cache_read_usd_per_mtok == pytest.approx(0.5)
+
+    usage = Usage(
+        input_tokens=1000, output_tokens=2000,
+        cache_write_tokens=4000, cache_read_tokens=8000,
+    )
+    expected = (1000 * 5.0 + 2000 * 25.0 + 4000 * 6.25 + 8000 * 0.5) / 1_000_000
+    assert usage.cost_usd(price) == pytest.approx(expected)
+
+    # an explicit override (e.g. a 1-hour cache at 2x write) is possible
+    hourly = ModelPrice.of(5.0, 25.0, cache_write_mult=2.0)
+    assert hourly.cache_write_usd_per_mtok == pytest.approx(10.0)
