@@ -77,6 +77,23 @@ def _mode(browser: bool) -> BrowserMode:
 #: it into a 400 "prompt too long".
 _FULL_SKELETON = 4000
 
+#: hard CHARACTER budgets for the big, page-derived prompt inputs (~4 chars/token), so
+#: no single prompt can grow past the model's context and 400 as "prompt too long".
+#: A clipped input keeps its head (the page's structure / the top-ranked links) and
+#: notes what was dropped.
+_MAX_SKELETON_CHARS = 16_000   # ~4k tokens -- plenty to read a page's structure
+_MAX_LISTING_CHARS = 6_000     # the frontier listing for pick_edges
+_MAX_PAGES_CHARS = 10_000      # the crawled-pages JSON for select_candidates
+
+
+def _clip(text: str, max_chars: int, what: str = "input") -> str:
+    """Keep ``text`` within ``max_chars`` -- head-truncate with a note -- so a huge page
+    can't blow the prompt. Logs at debug when it trims."""
+    if len(text) <= max_chars:
+        return text
+    log.debug("clipped %s: %d -> %d chars", what, len(text), max_chars)
+    return text[:max_chars] + f"\n… [truncated {len(text) - max_chars} more chars of the {what}]"
+
 
 # --------------------------------------------------------------------------- #
 # Artifacts (the typed things that flow between stages).
@@ -457,6 +474,7 @@ def _ask_json(llm: LLM, prompt: str, *, retries: int = 1) -> Any:
     ``retries`` times. ``None`` if it still can't produce valid JSON."""
     ask = prompt
     for attempt in range(retries + 1):
+        log.debug("LLM prompt ~%d tokens", len(ask) // 4)
         try:
             reply = llm(ask)
         except LlmError as exc:  # a bad-request / exhausted-retry API error -- don't crash
@@ -625,8 +643,9 @@ def _pick_edges(llm: LLM, brief: Brief, frontier: Sequence[Any]) -> list[str]:
     """Ask the model which frontier edges to expand next -- the ones most likely to
     reach the dataset, preferring a queryable source (an API over the whole dataset)
     to a page that lists only part of it, and following pagination when it must."""
-    listing = "\n".join(
-        f"{i}. {e.url}   (link text: {e.text!r})" for i, e in enumerate(frontier)
+    listing = _clip(
+        "\n".join(f"{i}. {e.url}   (link text: {e.text!r})" for i, e in enumerate(frontier)),
+        _MAX_LISTING_CHARS, "frontier listing",
     )
     picked = _ask_json(
         llm,
@@ -721,7 +740,7 @@ def select_candidates(crawl: Any, brief: Brief, *, llm: LLM) -> list[Candidate]:
             "select_candidates",
             description=brief.description,
             fields_line=_fields_line(brief),
-            pages_json=json.dumps(pages, indent=0),
+            pages_json=_clip(json.dumps(pages, indent=0), _MAX_PAGES_CHARS, "pages list"),
         ),
     )
     out: list[Candidate] = []
@@ -760,7 +779,7 @@ def evaluate_candidate(
     # a login wall blocks the dataset -- no query reaches it; drop the candidate early.
     if flags["login_required"].present:
         return CandidateEval(url=candidate.url, verdict="login required", flags=flag_map)
-    skeleton = doc.skeleton(max_lines=_FULL_SKELETON)  # the whole page structure
+    skeleton = _clip(doc.skeleton(max_lines=_FULL_SKELETON), _MAX_SKELETON_CHARS, "skeleton")
     endpoints = [c.url for c in doc.xhr_endpoints()]
     spa = flags["spa"]
     # if a SPA is backed by same-origin XHR endpoints, the API is the real source --
@@ -938,7 +957,7 @@ def write_query(
     against (a dataset spread across distinct URLs) -- recorded on ``base_urls`` for
     :func:`run_query` to union."""
     doc = wc.fetch(candidate_url, browser=browser, optional=True)
-    skeleton = doc.skeleton(max_lines=_FULL_SKELETON) if doc.ok else ""
+    skeleton = _clip(doc.skeleton(max_lines=_FULL_SKELETON), _MAX_SKELETON_CHARS, "skeleton") if doc.ok else ""
     prompt = _query_prompt(brief, skeleton, paginated=paginated)
     bases = [candidate_url, *extra_urls]
     best: QueryArtifact | None = None

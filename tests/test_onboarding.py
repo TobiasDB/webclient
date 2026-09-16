@@ -659,3 +659,42 @@ def test_ask_json_survives_an_llm_error():
         raise LlmError(400, "prompt is too long")
 
     assert _ask_json(boom, "give me json") is None  # doesn't crash the pipeline
+
+
+def test_clip_bounds_and_notes_truncation():
+    from webclient.pipelines.onboarding import _clip
+
+    assert _clip("short", 100, "x") == "short"  # under budget: unchanged
+    out = _clip("y" * 500, 100, "skeleton")
+    assert out.startswith("y" * 100) and "truncated" in out and "skeleton" in out
+
+
+def test_evaluate_clips_a_huge_page_skeleton(httpserver):
+    # a giant page must not blow the prompt: the skeleton is clipped to the char budget.
+    from webclient.pipelines.onboarding import _MAX_SKELETON_CHARS
+
+    # distinct per-row structure so the skeleton's identical-sibling merge can't shrink
+    # it -- forcing it past the char budget (a repetitive real listing stays tiny).
+    rows = "".join(
+        f'<section class="prod-{i}" data-x="{i}"><h3 class="n-{i}">P{i}</h3>'
+        f'<span class="p-{i}">v{i}</span></section>' for i in range(3000)
+    )
+    httpserver.expect_request("/big").respond_with_data(
+        f"<main>{rows}</main>", content_type="text/html"
+    )
+    captured: dict[str, str] = {}
+
+    def llm(prompt: str) -> str:
+        if "Assess this page" in prompt:
+            captured["eval"] = prompt
+            return '{"dataset_present": true, "scrapability": 5, "verdict": "ok"}'
+        return "{}"
+
+    with WebClient() as wc:
+        evaluate_candidate(
+            Candidate(url=httpserver.url_for("/big")),
+            Brief(description="products"), wc=wc, llm=llm, browser="never",
+        )
+    assert "truncated" in captured["eval"]  # the big skeleton was clipped
+    # the prompt is bounded (skeleton budget + the fixed prompt scaffolding)
+    assert len(captured["eval"]) < _MAX_SKELETON_CHARS + 4000
