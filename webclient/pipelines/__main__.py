@@ -63,6 +63,8 @@ def main(argv: "Sequence[str] | None" = None) -> int:
     parser.add_argument("--base-url", default=None, help="a Messages-API base URL")
     parser.add_argument("--budget", type=float, default=None, metavar="USD",
                         help="cap total LLM spend across the run")
+    parser.add_argument("--rate", type=float, default=0.0, metavar="SECS",
+                        help="rate-limit the LLM: min seconds between calls")
     parser.add_argument("--max-pages", type=int, default=20, help="crawl page budget")
     parser.add_argument("--no-browser", action="store_true", help="static-only crawl")
     parser.add_argument("-v", "--verbose", action="count", default=0,
@@ -80,7 +82,7 @@ def main(argv: "Sequence[str] | None" = None) -> int:
     print(f"brief: {brief.title or brief.name or args.brief} "
           f"({len(brief.fields)} field[s]) -> {len(args.companies)} company(ies)")
 
-    kwargs: dict[str, object] = {}
+    kwargs: dict[str, object] = {"min_interval": args.rate}
     if args.model:
         kwargs["model"] = args.model
     if args.base_url:

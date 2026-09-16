@@ -587,3 +587,75 @@ def test_pick_edges_accepts_reasons_and_bare_indices():
     # bare indices still work (robustness)
     picks = _pick_edges(lambda p: "[0, 2]", Brief(description="d"), frontier)
     assert picks == ["https://x/a", "https://x/c"]
+
+
+def _ok_response() -> "httpx.Response":
+    return httpx.Response(200, json={
+        "content": [{"type": "text", "text": "ok"}],
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    })
+
+
+def test_llm_retries_a_500_then_succeeds():
+    from webclient.pipelines.llm import LlmClient
+
+    calls = {"n": 0}
+
+    def handler(req: "httpx.Request") -> "httpx.Response":
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(500, json={"error": {"type": "overloaded", "message": "retry"}})
+        return _ok_response()
+
+    client = LlmClient(model="claude-opus-5", auth="k", retry_backoff=0.0,
+                       transport=httpx.MockTransport(handler))
+    assert client("hi") == "ok" and calls["n"] == 2  # retried once, then 200
+
+
+def test_llm_surfaces_a_400_with_the_api_message():
+    from webclient.pipelines.llm import LlmClient, LlmError
+
+    def handler(req: "httpx.Request") -> "httpx.Response":
+        return httpx.Response(400, json={
+            "error": {"type": "invalid_request_error", "message": "prompt is too long: 300000 tokens"}
+        })
+
+    client = LlmClient(model="claude-opus-5", auth="k",
+                       transport=httpx.MockTransport(handler))
+    with pytest.raises(LlmError) as exc:
+        client("hi")
+    assert exc.value.status_code == 400 and "too long" in exc.value.message
+
+
+def test_llm_gives_up_after_max_retries():
+    from webclient.pipelines.llm import LlmClient, LlmError
+
+    def handler(req: "httpx.Request") -> "httpx.Response":
+        return httpx.Response(529, json={"error": {"type": "overloaded", "message": "busy"}})
+
+    client = LlmClient(model="claude-opus-5", auth="k", max_retries=2, retry_backoff=0.0,
+                       transport=httpx.MockTransport(handler))
+    with pytest.raises(LlmError):
+        client("hi")
+
+
+def test_min_interval_rate_limits(monkeypatch):
+    from webclient.pipelines import llm as llm_mod
+
+    slept: list[float] = []
+    monkeypatch.setattr(llm_mod.time, "sleep", lambda s: slept.append(s))
+    client = llm_mod.LlmClient(model="claude-opus-5", auth="k", min_interval=0.5,
+                               transport=httpx.MockTransport(lambda r: _ok_response()))
+    client("a")
+    client("b")  # the second call must wait out the interval
+    assert any(0.0 < s <= 0.5 for s in slept)
+
+
+def test_ask_json_survives_an_llm_error():
+    from webclient.pipelines.llm import LlmError
+    from webclient.pipelines.onboarding import _ask_json
+
+    def boom(prompt: str) -> str:
+        raise LlmError(400, "prompt is too long")
+
+    assert _ask_json(boom, "give me json") is None  # doesn't crash the pipeline

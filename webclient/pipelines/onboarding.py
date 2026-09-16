@@ -55,7 +55,7 @@ from ..core.reference.models import (
 from ..guides import lazy_query_guide
 from ..query.expr import from_blob
 from ..surfaces import Reference, WebClient
-from .llm import Budget, BudgetExceeded, LlmClient
+from .llm import Budget, BudgetExceeded, LlmClient, LlmError
 from .prompts import render_prompt
 
 #: the model: a prompt in, its completion text out. Inject any client (a Claude call,
@@ -71,9 +71,11 @@ def _mode(browser: bool) -> BrowserMode:
     return "auto" if browser else "never"
 
 
-#: the skeleton line budget for evaluation + query authoring -- effectively the WHOLE
-#: page structure (the model needs every record/field, not a truncated head).
-_FULL_SKELETON = 100_000
+#: the skeleton line budget for evaluation + query authoring -- generous enough to be
+#: the WHOLE structure of essentially any real page (the model needs every record /
+#: field), while staying well inside the model's context so an enormous page can't blow
+#: it into a 400 "prompt too long".
+_FULL_SKELETON = 4000
 
 
 # --------------------------------------------------------------------------- #
@@ -455,7 +457,11 @@ def _ask_json(llm: LLM, prompt: str, *, retries: int = 1) -> Any:
     ``retries`` times. ``None`` if it still can't produce valid JSON."""
     ask = prompt
     for attempt in range(retries + 1):
-        reply = llm(ask)
+        try:
+            reply = llm(ask)
+        except LlmError as exc:  # a bad-request / exhausted-retry API error -- don't crash
+            log.warning("LLM call failed: %s -- skipping this step", exc)
+            return None
         try:
             return json.loads(_json_blob(reply))
         except (json.JSONDecodeError, ValueError) as exc:
@@ -937,7 +943,11 @@ def write_query(
     bases = [candidate_url, *extra_urls]
     best: QueryArtifact | None = None
     for _ in range(retries + 1):
-        blob = _json_blob(llm(prompt))
+        try:
+            blob = _json_blob(llm(prompt))
+        except LlmError as exc:  # a bad-request / exhausted-retry API error
+            log.warning("query authoring LLM call failed: %s", exc)
+            break
         try:
             expr = from_blob(blob)
         except Exception:  # noqa: BLE001 - any malformed blob -> retry / give up

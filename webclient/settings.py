@@ -36,6 +36,8 @@ class LlmSettings(BaseModel):
     base_url: str | None = None  # any Messages-API endpoint; None = Anthropic
     max_tokens: int = 4096
     budget_usd: float | None = None  # cap total spend; None = uncapped
+    min_interval: float = 0.0  # client-side rate limit: min seconds between LLM calls
+    max_retries: int = 4  # retry a 429 / 5xx / 529 with backoff
     #: per-model price overrides (prices change) -- merged over the default table when
     #: building the client, e.g. ``{"claude-opus-5": ModelPrice.of(6, 30)}``.
     pricing: dict[str, Any] = {}
@@ -103,6 +105,8 @@ class Settings(BaseSettings):
             "auth": auth,
             "budget": Budget(max_usd=self.llm.budget_usd),
             "pricing": {**PRICING, **self.llm.pricing},  # price overrides win
+            "min_interval": self.llm.min_interval,  # rate limit
+            "max_retries": self.llm.max_retries,
         }
         kwargs.update(overrides)
         return LlmClient(**kwargs)

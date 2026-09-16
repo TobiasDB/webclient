@@ -19,10 +19,37 @@ network is touched -- see ``tests/test_onboarding.py``.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+
+#: statuses worth retrying: rate limit (429), transient server / overload errors.
+_RETRIABLE_STATUS = frozenset({429, 500, 502, 503, 504, 529})
+
+
+def _error_message(resp: "httpx.Response") -> str:
+    """The API's error message (Anthropic sends ``{"error": {"type", "message"}}``),
+    falling back to the raw body -- so a 400 tells you WHY (prompt too long, etc.)."""
+    try:
+        err = resp.json().get("error") or {}
+        msg = err.get("message") or ""
+        return f"{err.get('type', '')}: {msg}".strip(": ") or resp.text[:300]
+    except Exception:
+        return resp.text[:300]
+
+
+class LlmError(RuntimeError):
+    """A non-retriable (or retry-exhausted) LLM API error. Carries the HTTP
+    ``status_code`` and the API's ``message`` -- a 400 usually says WHY (e.g. the
+    prompt is too long), so it is surfaced rather than swallowed."""
+
+    def __init__(self, status_code: int, message: str) -> None:
+        self.status_code = status_code
+        self.message = message
+        super().__init__(f"LLM API {status_code}: {message}")
+
 
 #: The Anthropic Messages API, the default provider.
 DEFAULT_BASE_URL = "https://api.anthropic.com"
@@ -221,6 +248,13 @@ class LlmClient:
     system: str | None = None
     timeout: float = 60.0
     budget: Budget = field(default_factory=Budget)
+    #: retry a rate-limited (429) / transient server (5xx / 529) response this many
+    #: times, with exponential backoff (and honouring a ``Retry-After`` header).
+    max_retries: int = 4
+    retry_backoff: float = 1.0  # base seconds, doubled each attempt
+    #: a client-side rate limit: minimum seconds between requests (0 = none). Set it
+    #: (or ``rpm``) to stay under the provider's limit instead of racking up 429s.
+    min_interval: float = 0.0
     #: the price table this client charges against -- a copy of :data:`PRICING` by
     #: default, so a caller can override a model's price when it changes (prices are
     #: config, not a constant): ``LlmClient(pricing={**PRICING, "claude-opus-5":
@@ -231,6 +265,7 @@ class LlmClient:
     anthropic_version: str = ANTHROPIC_VERSION
     #: The token usage of the most recent call (``None`` before the first).
     last_usage: Usage | None = field(default=None, init=False)
+    _last_call: float = field(default=0.0, init=False)  # for the min_interval rate limit
 
     def price(self) -> ModelPrice:
         """This client's price for its model (from :attr:`pricing`, Opus-tier fallback)."""
@@ -249,12 +284,22 @@ class LlmClient:
     # -- the LLM protocol: a prompt in, its completion text out ---------------- #
 
     def __call__(self, prompt: str) -> str:
-        """Complete ``prompt`` -- charging the budget and enforcing its cap."""
+        """Complete ``prompt`` -- rate-limited, retried on a 429/5xx, budget-charged and
+        budget-capped. A non-retriable error (e.g. a 400 for too-long a prompt) raises
+        :class:`LlmError` carrying the API's message."""
         self.budget.ensure()  # stop before spending past the cap
         text, usage = self._complete(prompt)
         self.last_usage = usage
         self.budget.charge(usage, self.price())
         return text
+
+    def _pace(self) -> None:
+        """Enforce the ``min_interval`` rate limit -- sleep so requests are spaced."""
+        if self.min_interval > 0:
+            wait = self._last_call + self.min_interval - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+        self._last_call = time.monotonic()
 
     def _complete(self, prompt: str) -> tuple[str, Usage]:
         payload: dict[str, Any] = {
@@ -271,10 +316,42 @@ class LlmClient:
         if self.auth:
             headers["x-api-key"] = self.auth
         assert self.http_client is not None  # set in __post_init__
-        resp = self.http_client.post(
-            f"{self.base_url}/v1/messages", json=payload, headers=headers
-        )
-        resp.raise_for_status()
+
+        last: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            self._pace()  # rate limit before every attempt
+            try:
+                resp = self.http_client.post(
+                    f"{self.base_url}/v1/messages", json=payload, headers=headers
+                )
+            except httpx.TransportError as exc:  # a dropped/refused connection -- retry
+                last = exc
+                if attempt < self.max_retries:
+                    time.sleep(self._backoff(attempt))
+                    continue
+                raise LlmError(0, f"transport error: {exc}") from exc
+            if 200 <= resp.status_code < 300:
+                return self._parse(resp)
+            # a retriable status (429 / 5xx / 529): back off (honour Retry-After) + retry
+            if resp.status_code in _RETRIABLE_STATUS and attempt < self.max_retries:
+                time.sleep(self._retry_after(resp) or self._backoff(attempt))
+                continue
+            # non-retriable (e.g. 400 bad request) or retries exhausted -- surface it
+            raise LlmError(resp.status_code, _error_message(resp))
+        raise LlmError(0, f"exhausted retries: {last}")  # pragma: no cover
+
+    def _backoff(self, attempt: int) -> float:
+        return self.retry_backoff * (2.0**attempt)
+
+    @staticmethod
+    def _retry_after(resp: "httpx.Response") -> float | None:
+        value = resp.headers.get("retry-after")
+        try:
+            return min(float(value), 60.0) if value else None
+        except ValueError:
+            return None
+
+    def _parse(self, resp: "httpx.Response") -> tuple[str, Usage]:
         data: dict[str, Any] = resp.json()
         text = "".join(
             str(block.get("text", ""))
@@ -306,6 +383,7 @@ __all__ = [
     "LlmClient",
     "Budget",
     "BudgetExceeded",
+    "LlmError",
     "Usage",
     "ModelPrice",
     "PRICING",
