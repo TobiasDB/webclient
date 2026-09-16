@@ -152,6 +152,25 @@ class BrowserPolicy(BaseModel, frozen=True):
         return cls(when="auto")
 
 
+class BrowserConfig(BaseModel, frozen=True):
+    """How the client's browser is launched (a Core Field on the client). ``stealth``
+    is ON by default -- the browser masks the obvious automation signals
+    (``navigator.webdriver`` etc.) so a routine render isn't trivially flagged.
+    ``headless`` can be turned off to drive a visible browser; ``fingerprint``
+    randomises each page's user-agent / viewport / locale / timezone from a pool (a
+    fresh identity per page, and the ``auto`` ladder's last anti-bot fallback)."""
+
+    engine: str = "chromium"
+    headless: bool = True
+    stealth: bool = True
+    fingerprint: bool = False
+
+    @classmethod
+    def auto(cls) -> "BrowserConfig":
+        """The hardened variant: stealth + a randomised fingerprint per page."""
+        return cls(stealth=True, fingerprint=True)
+
+
 class Resolve(BaseModel, frozen=True):
     """The policy bundle threaded through a fetch: one policy per concern. A Core
     Field default on the client/session; per-call overridable. ``retry``/``rate``
@@ -214,6 +233,7 @@ __all__ = [
     "ProxyPolicy",
     "AntiBotPolicy",
     "BrowserPolicy",
+    "BrowserConfig",
     "Resolve",
     "AUTO",
     "resolve_policy",

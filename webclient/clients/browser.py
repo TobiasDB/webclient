@@ -295,35 +295,96 @@ class BrowserClient(Client):
         await self.page.close()
 
 
+#: a small pool of realistic desktop identities to randomise a page's fingerprint
+#: over (user-agent + viewport + locale + timezone), so repeated renders don't share
+#: one obvious automation fingerprint.
+_FINGERPRINTS: tuple[dict[str, Any], ...] = (
+    {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like "
+     "Gecko) Chrome/125.0.0.0 Safari/537.36", "vw": 1920, "vh": 1080,
+     "locale": "en-US", "tz": "America/New_York"},
+    {"ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, "
+     "like Gecko) Chrome/125.0.0.0 Safari/537.36", "vw": 1512, "vh": 982,
+     "locale": "en-GB", "tz": "Europe/London"},
+    {"ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+     "Chrome/124.0.0.0 Safari/537.36", "vw": 1680, "vh": 1050,
+     "locale": "en-US", "tz": "America/Chicago"},
+    {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like "
+     "Gecko) Chrome/124.0.0.0 Safari/537.36", "vw": 1536, "vh": 864,
+     "locale": "en-CA", "tz": "America/Toronto"},
+)
+
+#: injected before every navigation on a stealth context: mask the obvious headless /
+#: automation tells so a routine render isn't trivially fingerprinted as a bot.
+_STEALTH_JS = """(() => {
+  try { Object.defineProperty(navigator, 'webdriver', {get: () => undefined}); } catch (e) {}
+  try { Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']}); } catch (e) {}
+  try { Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]}); } catch (e) {}
+  try { window.chrome = window.chrome || {runtime: {}}; } catch (e) {}
+})()"""
+
+#: chromium launch flags that drop the loudest automation signals.
+_STEALTH_ARGS = ("--disable-blink-features=AutomationControlled",)
+
+
+def _random_fingerprint() -> "dict[str, Any]":
+    import random
+
+    return random.choice(_FINGERPRINTS)
+
+
 class BrowserFactory(ClientFactory):
-    """Owns one lazily-launched browser; each ``create`` opens a fresh (blank)
-    page. Script injection is per-navigation (``BrowserClient.open``), not baked
-    into the factory, so the scripts can come from the core's backings."""
+    """Owns one lazily-launched browser; each ``create`` opens a fresh page in its own
+    context. ``stealth`` (on by default) masks the obvious automation tells (launch
+    flags + an init script); ``fingerprint`` gives each context a random identity
+    (user-agent / viewport / locale / timezone). Script injection for the DOM capture
+    is still per-navigation (``BrowserClient.open``) from the core's backings."""
 
     kind = "page"
 
-    def __init__(self, *, headless: bool = True) -> None:
+    def __init__(
+        self, *, headless: bool = True, stealth: bool = True, fingerprint: bool = False
+    ) -> None:
         self.headless = headless
+        self.stealth = stealth
+        self.fingerprint = fingerprint
         self._pw: Any = None
         self._browser: Any = None
+        self._contexts: list[Any] = []
 
     async def _browser_(self) -> Any:
         if self._browser is None:
             from playwright.async_api import async_playwright
 
             self._pw = await async_playwright().start()
-            self._browser = await self._pw.chromium.launch(headless=self.headless)
+            self._browser = await self._pw.chromium.launch(
+                headless=self.headless,
+                args=list(_STEALTH_ARGS) if self.stealth else [],
+            )
         return self._browser
 
     async def create(self) -> BrowserClient:
         browser = await self._browser_()
-        return BrowserClient(await browser.new_page())
+        opts: dict[str, Any] = {}
+        if self.fingerprint:  # a fresh randomised identity per page
+            fp = _random_fingerprint()
+            opts = {
+                "user_agent": fp["ua"],
+                "viewport": {"width": fp["vw"], "height": fp["vh"]},
+                "locale": fp["locale"],
+                "timezone_id": fp["tz"],
+            }
+        context = await browser.new_context(**opts)
+        if self.stealth:
+            await context.add_init_script(_STEALTH_JS)
+        self._contexts.append(context)
+        return BrowserClient(await context.new_page())
 
     async def aclose(self) -> None:
         if self._browser is not None:
             await self._browser.close()
             await self._pw.stop()
             self._browser = self._pw = None
+            self._contexts.clear()
 
 
 __all__ = [

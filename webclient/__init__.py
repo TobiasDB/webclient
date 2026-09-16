@@ -8,6 +8,7 @@ from .core.document import Element, HtmlBacking, JsonBacking
 from .core.reference.models import (
     AUTO,
     AntiBotPolicy,
+    BrowserConfig,
     BrowserPolicy,
     ProxyPolicy,
     RatePolicy,
@@ -84,6 +85,7 @@ __all__ = [
     "RatePolicy",
     "ProxyPolicy",
     "AntiBotPolicy",
+    "BrowserConfig",
     "BrowserPolicy",
     "WaitConfig",
     "WaitEvent",

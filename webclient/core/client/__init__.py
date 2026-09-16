@@ -50,6 +50,24 @@ if TYPE_CHECKING:
 _MODES = ("never", "auto", "always")
 
 
+#: transport-error fingerprints that usually mean a server refused a suspected bot at
+#: the protocol layer (before any response) -- read as an anti-bot trigger under ``auto``.
+_BOT_BLOCK_HINTS = (
+    "http2", "http/2", "protocol error", "connection reset", "server disconnected",
+    "connection closed", "econnreset",
+)
+
+
+def _looks_like_bot_block(error: Any) -> bool:
+    """Whether a transport ``error`` looks like a protocol-level anti-bot block (an
+    HTTP/2 protocol error, a reset/dropped connection) -- worth escalating rather than
+    surfacing, since a real browser stack often gets through."""
+    if error is None:
+        return False
+    msg = (getattr(error, "message", "") or "").lower()
+    return any(hint in msg for hint in _BOT_BLOCK_HINTS)
+
+
 def _browser_mode(browser: Any) -> str:
     """Normalise the ``browser`` kwarg to a tier: ``"never"`` (static only),
     ``"auto"`` (static first, escalate on the response's signals), or ``"always"``
@@ -229,8 +247,14 @@ class WebClient(WebCore, IWebClient):
         """Build the transport pool eagerly (cheap -- no browser launch until a
         page is leased) so it is never lazily created from two threads at once.
         Sessions override this to share the parent's pool."""
+        bc = self.browser_config
         self._pool = ClientPool(
-            {"http": HTTPXFactory(), "page": BrowserFactory()},
+            {
+                "http": HTTPXFactory(),
+                "page": BrowserFactory(
+                    headless=bc.headless, stealth=bc.stealth, fingerprint=bc.fingerprint
+                ),
+            },
             limits={"http": 10, "page": 4},
         )
 
@@ -481,6 +505,16 @@ class WebClient(WebCore, IWebClient):
             doc, resp = await self._afetch_once(ref, headers)
         self._register(doc, ref)
         doc._tiers = ["static"]
+        # A protocol-level failure (e.g. ERR_HTTP2_PROTOCOL_ERROR / a reset connection)
+        # is a common anti-bot tell -- the server drops a client it dislikes before any
+        # response. Under ``auto`` treat it as an anti-bot trigger and escalate to a
+        # (stealth, and fingerprinted when configured) browser, whose real TLS/HTTP2
+        # stack often clears it. Its own failure then surfaces normally.
+        if mode == "auto" and _looks_like_bot_block(doc.error):
+            return await self._escalate_to_browser(
+                ref, list(doc._events), doc.content,
+                tiers=["static", "browser"], keep_alive=keep_alive, wait=wait,
+            )
         flags = self._observe(doc, resp)
         # browser="auto": a FLAG-driven escalation ladder. Read the request+static
         # flags; a login wall fails (no transport fixes credentials), an anti-bot

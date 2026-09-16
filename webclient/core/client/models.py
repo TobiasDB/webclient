@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from ..reference.models import Resolve
+from ..reference.models import BrowserConfig, Resolve
 
 if TYPE_CHECKING:
     from ...clients import WaitConfig  # noqa: F401  (fetch wait strategy)
@@ -74,6 +74,10 @@ class IWebClient(BaseModel):
     # declared to a downstream proxy service as X-WebClient-* request headers
     # (the service is assumed to exist and enforce the network-level parts).
     resolve: Resolve | None = None
+    #: how this client's browser is launched (headless / stealth / fingerprint). Stealth
+    #: is on by default; pass ``BrowserConfig(headless=False)`` to drive a visible
+    #: browser or ``BrowserConfig.auto()`` for a randomised fingerprint per page.
+    browser_config: BrowserConfig = BrowserConfig()
 
     if TYPE_CHECKING:
         # >>> generated: WebClient interface <<<
