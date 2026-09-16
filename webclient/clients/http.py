@@ -3,11 +3,15 @@ sniffing helpers that go with it."""
 
 from __future__ import annotations
 
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import httpx
 
 from .base import Client, ClientFactory
+
+if TYPE_CHECKING:
+    from ..core.document import Document
+    from ..core.reference import Reference
 
 
 class HTTPXClient(Client):
@@ -24,7 +28,7 @@ class HTTPXClient(Client):
 
     async def send(
         self,
-        ref: Any,
+        ref: "Reference",
         *,
         headers: dict[str, str],
         cookies: dict[str, str],
@@ -54,12 +58,12 @@ class HTTPXClient(Client):
 
     async def fetch(
         self,
-        ref: Any,
+        ref: "Reference",
         *,
         headers: dict[str, str],
         cookies: dict[str, str],
         timeout: float,
-    ) -> "tuple[Any, httpx.Response | None]":
+    ) -> "tuple[Document, httpx.Response | None]":
         """Fetch ``ref`` into a ``(Document, response)`` -- the http client's
         whole job: perform the request, interpret the response (sniff kind /
         charset, capture Set-Cookie) and shape it into a document. Never raises: a
