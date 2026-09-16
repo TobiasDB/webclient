@@ -232,10 +232,20 @@ class BrowserClient(Client):
         for s in scripts:  # init scripts must be installed before navigation
             if s.phase == "init":
                 await page.add_init_script(s.source)
+        # named handlers so we can REMOVE them at the end -- a page can be reused from the
+        # pool, and re-adding anonymous listeners each open() would pile up and multiply the
+        # console/network events (which feed SPA detection).
         console: list[tuple[str, str]] = []
-        page.on("console", lambda m: console.append((m.type, m.text)))
         network: list[tuple[str, str, str]] = []
-        page.on("request", lambda r: network.append((r.method, r.url, r.resource_type)))
+
+        def _on_console(m: Any) -> None:
+            console.append((m.type, m.text))
+
+        def _on_request(r: Any) -> None:
+            network.append((r.method, r.url, r.resource_type))
+
+        page.on("console", _on_console)
+        page.on("request", _on_request)
         # the main-document Response -- the REAL status/headers of the navigation
         # (Playwright hands it back from ``goto``). ``None`` for a non-HTTP nav.
         response = await page.goto(url, wait_until="domcontentloaded")
@@ -302,6 +312,8 @@ class BrowserClient(Client):
         for s in scripts:  # drain scripts clear buffers after replay (result ignored)
             if s.phase == "drain":
                 await page.evaluate(s.source)
+        page.remove_listener("console", _on_console)  # don't accumulate on a reused page
+        page.remove_listener("request", _on_request)
         return result
 
     async def aclose(self) -> None:
@@ -312,19 +324,27 @@ class BrowserClient(Client):
 #: over (user-agent + viewport + locale + timezone), so repeated renders don't share
 #: one obvious automation fingerprint.
 _FINGERPRINTS: tuple[dict[str, Any], ...] = (
+    # ``{major}`` is filled from the ACTUAL launched-browser version so the UA matches the
+    # engine (a UA/engine mismatch is itself a bot tell).
     {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like "
-     "Gecko) Chrome/140.0.0.0 Safari/537.36", "vw": 1920, "vh": 1080,
+     "Gecko) Chrome/{major}.0.0.0 Safari/537.36", "vw": 1920, "vh": 1080,
      "locale": "en-US", "tz": "America/New_York"},
     {"ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, "
-     "like Gecko) Chrome/140.0.0.0 Safari/537.36", "vw": 1512, "vh": 982,
+     "like Gecko) Chrome/{major}.0.0.0 Safari/537.36", "vw": 1512, "vh": 982,
      "locale": "en-GB", "tz": "Europe/London"},
     {"ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-     "Chrome/139.0.0.0 Safari/537.36", "vw": 1680, "vh": 1050,
+     "Chrome/{major}.0.0.0 Safari/537.36", "vw": 1680, "vh": 1050,
      "locale": "en-US", "tz": "America/Chicago"},
     {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like "
-     "Gecko) Chrome/139.0.0.0 Safari/537.36", "vw": 1536, "vh": 864,
+     "Gecko) Chrome/{major}.0.0.0 Safari/537.36", "vw": 1536, "vh": 864,
      "locale": "en-CA", "tz": "America/Toronto"},
 )
+
+#: the UA applied whenever stealth is on but no random fingerprint is requested -- so a
+#: default stealth render never leaks the headless build's ``HeadlessChrome/...`` token. The
+#: platform is honest (matches the host) and ``{major}`` matches the real engine version.
+_STEALTH_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+               "Chrome/{major}.0.0.0 Safari/537.36")
 
 #: injected before every navigation on a stealth context: mask the obvious headless /
 #: automation tells so a routine render isn't trivially fingerprinted as a bot.
@@ -387,6 +407,7 @@ class BrowserFactory(ClientFactory):
         self.channel = channel  # None = bundled chromium; "chrome" = installed Google Chrome
         self._pw: Any = None
         self._browser: Any = None
+        self._major = "141"  # the real engine major version, read on first launch
         self._contexts: list[Any] = []
 
     async def _browser_(self) -> Any:
@@ -401,6 +422,10 @@ class BrowserFactory(ClientFactory):
             if self.channel:  # drive real Google Chrome (latest stable) instead of chromium
                 launch["channel"] = self.channel
             self._browser = await self._pw.chromium.launch(**launch)
+            try:  # match the spoofed UA version to the ACTUAL engine
+                self._major = (self._browser.version or "").split(".")[0] or self._major
+            except Exception:  # pragma: no cover - version unavailable
+                pass
         return self._browser
 
     async def create(self) -> BrowserClient:
@@ -409,11 +434,13 @@ class BrowserFactory(ClientFactory):
         if self.fingerprint:  # a fresh randomised identity per page
             fp = _random_fingerprint()
             opts = {
-                "user_agent": fp["ua"],
+                "user_agent": fp["ua"].format(major=self._major),
                 "viewport": {"width": fp["vw"], "height": fp["vh"]},
                 "locale": fp["locale"],
                 "timezone_id": fp["tz"],
             }
+        elif self.stealth:  # no random identity, but still never leak HeadlessChrome in the UA
+            opts = {"user_agent": _STEALTH_UA.format(major=self._major)}
         context = await browser.new_context(**opts)
         if self.stealth:
             await context.add_init_script(_STEALTH_JS)
