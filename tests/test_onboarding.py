@@ -377,3 +377,27 @@ def test_nested_extract_outputs_nested_json():
         ).project(),
     ).project()
     assert row == {"name": "A", "price": {"value": "30", "unit": "$"}}
+
+
+def test_query_runs_across_multiple_base_urls(httpserver):
+    # a dataset split across distinct URLs (not pagination): one authored query runs
+    # against every base_url and run_query unions the rows.
+    from webclient.pipelines import run_query
+    from webclient.pipelines.onboarding import QueryArtifact
+
+    for path, items in (("/cloud", ["Cloud A", "Cloud B"]), ("/onprem", ["OnPrem X"])):
+        html = "".join(f'<div class="product"><span class="name">{n}</span></div>' for n in items)
+        httpserver.expect_request(path).respond_with_data(
+            f"<main>{html}</main>", content_type="text/html"
+        )
+    query = (
+        wq.ref.resolve().select_all(".product")
+        .extract(name=wq.doc.select(".name").text_content).project()
+    )
+    art = QueryArtifact(
+        blob=query.to_blob(), describe=query.explain(),
+        base_urls=[httpserver.url_for("/cloud"), httpserver.url_for("/onprem")],
+    )
+    with WebClient() as wc:
+        rows = run_query(art, wc=wc)
+    assert [r["name"] for r in rows] == ["Cloud A", "Cloud B", "OnPrem X"]  # unioned

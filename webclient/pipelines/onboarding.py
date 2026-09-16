@@ -221,6 +221,11 @@ class QueryArtifact(BaseModel):
     tested: bool = False  # did it run against the source without error?
     row_count: int = 0  # how many rows it produced when tested
     sample: list[str] = []  # up to 3 produced rows (stringified), for a sanity check
+    #: the source URLs this one query runs against, unioned. Usually one, but a dataset
+    #: split across distinct URLs (e.g. /products/cloud + /products/onprem -- NOT
+    #: pagination) lists them all; :func:`run_query` resolves the query per base and
+    #: concatenates the rows.
+    base_urls: list[str] = []
 
 
 class OnboardingResult(BaseModel):
@@ -662,6 +667,21 @@ def _test_query(expr: Any, context: Any) -> "tuple[bool, list[Any]]":
     return True, rows
 
 
+def run_query(artifact: QueryArtifact, *, wc: WebClient) -> list[Any]:
+    """Run an authored query against ALL its ``base_urls`` and concatenate the rows --
+    so a dataset split across distinct URLs (``/products/cloud`` + ``/products/onprem``)
+    comes back as one list. Reloads the query from its blob and resolves it per base."""
+    expr = from_blob(artifact.blob)
+    out: list[Any] = []
+    for url in artifact.base_urls or []:
+        try:
+            result = expr.collect(wc.ref(url))
+        except Exception:  # noqa: BLE001 - a base that fails contributes nothing
+            continue
+        out.extend(list(result) if result is not None else [])
+    return out
+
+
 def write_query(
     candidate_url: str,
     brief: Brief,
@@ -671,16 +691,20 @@ def write_query(
     browser: BrowserMode = "auto",
     paginated: bool = False,
     retries: int = 1,
+    extra_urls: Sequence[str] = (),
 ) -> QueryArtifact | None:
     """Have the model author a lazy query for the dataset from the page skeleton, then
     reload it (``from_blob``) AND run it against the source to confirm it extracts rows.
     Retries on an invalid or empty query, preferring one that actually produces rows;
     returns the best :class:`QueryArtifact` (with its plan + a tested row sample), or
     ``None`` if none rebuilt. ``paginated`` tells the author to also capture the
-    next-page link."""
+    next-page link. ``extra_urls`` are further base URLs the SAME query also runs
+    against (a dataset spread across distinct URLs) -- recorded on ``base_urls`` for
+    :func:`run_query` to union."""
     doc = wc.fetch(candidate_url, browser=browser, optional=True)
     skeleton = doc.skeleton(max_lines=90) if doc.ok else ""
     prompt = _query_prompt(brief, skeleton, paginated=paginated)
+    bases = [candidate_url, *extra_urls]
     best: QueryArtifact | None = None
     for _ in range(retries + 1):
         blob = _json_blob(llm(prompt))
@@ -696,6 +720,7 @@ def write_query(
             tested=tested,
             row_count=len(rows),
             sample=[str(r)[:200] for r in rows[:3]],
+            base_urls=bases,
         )
         if tested and rows:
             return art  # a query that actually extracts rows -- accept it
