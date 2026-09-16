@@ -88,9 +88,8 @@ def main(argv: "Sequence[str] | None" = None) -> int:
                         help="-v shows pipeline steps, -vv adds debug")
     args = parser.parse_args(argv)
 
-    level = logging.WARNING if not args.verbose else (
-        logging.INFO if args.verbose == 1 else logging.DEBUG
-    )
+    # progress always prints (INFO); -v adds debug detail
+    level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=level, format="%(message)s")
 
     brief = _load_brief(args.brief)

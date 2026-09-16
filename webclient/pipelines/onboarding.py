@@ -71,6 +71,11 @@ def _mode(browser: bool) -> BrowserMode:
     return "auto" if browser else "never"
 
 
+#: the skeleton line budget for evaluation + query authoring -- effectively the WHOLE
+#: page structure (the model needs every record/field, not a truncated head).
+_FULL_SKELETON = 100_000
+
+
 # --------------------------------------------------------------------------- #
 # Artifacts (the typed things that flow between stages).
 # --------------------------------------------------------------------------- #
@@ -293,12 +298,26 @@ class OnboardingResult(BaseModel):
     cost_usd: float = 0.0  # LLM spend for this company (when an LlmClient was used)
 
 
+def _ensure_logging() -> None:
+    """Make the pipeline's progress ALWAYS visible: if nothing has configured logging
+    (no handler on our logger or the root), attach a plain stderr handler at INFO. A
+    host that has set up logging keeps full control -- we add nothing then."""
+    if log.handlers or logging.getLogger().handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
+
 def _trace(result: OnboardingResult, message: str, *args: Any) -> None:
-    """Log one pipeline step at INFO and append it to the result's ``steps`` trace, so a
-    run is observable live (logging) and after the fact (``result.steps``)."""
+    """Emit one pipeline step -- always printed (see :func:`_ensure_logging`) -- and
+    append it to the result's ``steps`` trace, prefixed with the running LLM spend so
+    the cost is visible as it accrues."""
     rendered = message % args if args else message
     result.steps.append(rendered)
-    log.info("%s: %s", result.company, rendered)
+    log.info("[$%.4f] %s: %s", result.cost_usd, result.company, rendered)
 
 
 # --------------------------------------------------------------------------- #
@@ -336,12 +355,25 @@ def _json_blob(text: str) -> str:
     return t[start:]
 
 
-def _ask_json(llm: LLM, prompt: str) -> Any:
-    """Run ``llm`` and parse a JSON value from its reply; ``None`` on unparseable."""
-    try:
-        return json.loads(_json_blob(llm(prompt)))
-    except (json.JSONDecodeError, ValueError):
-        return None
+def _ask_json(llm: LLM, prompt: str, *, retries: int = 1) -> Any:
+    """Run ``llm`` and parse a JSON value from its reply. On a decode error, retry --
+    handing the model its own bad output + the parser error so it can fix it -- up to
+    ``retries`` times. ``None`` if it still can't produce valid JSON."""
+    ask = prompt
+    for attempt in range(retries + 1):
+        reply = llm(ask)
+        try:
+            return json.loads(_json_blob(reply))
+        except (json.JSONDecodeError, ValueError) as exc:
+            if attempt == retries:
+                log.warning("LLM reply was not valid JSON after %d tr[y|ies]", attempt + 1)
+                return None
+            ask = (
+                f"{prompt}\n\n---\nYour previous reply could not be parsed as JSON: "
+                f"{exc}. Here is what you sent:\n{reply[:800]}\n\nReply again with ONLY "
+                "valid JSON -- no prose, no code fences."
+            )
+    return None
 
 
 def _schema_outline(fields: "list[SchemaField]", indent: int = 0) -> str:
@@ -539,7 +571,9 @@ def crawl_from_seeds(
         seed_urls, auto=False, browser=browser, max_pages=max_pages, depth=depth,
         obey_robots=False,
     )
+    seen_pages = seen_fails = 0
     crawl.step(seed_urls)  # round 0: fetch the seeds, discover their edges
+    seen_pages, seen_fails = _log_crawl_progress(crawl, seen_pages, seen_fails)
     for _ in range(rounds):
         if not crawl.frontier or len(crawl.pages) >= max_pages:
             break
@@ -549,7 +583,18 @@ def crawl_from_seeds(
         if not picks:
             break
         crawl.step(picks)
+        seen_pages, seen_fails = _log_crawl_progress(crawl, seen_pages, seen_fails)
     return crawl
+
+
+def _log_crawl_progress(crawl: Any, seen_pages: int, seen_fails: int) -> "tuple[int, int]":
+    """Log each newly-fetched URL + its status (and each failed edge + why) since the
+    last round, and return the new counts. So the crawl is observable page by page."""
+    for card in crawl.pages[seen_pages:]:
+        log.info("    crawl [%s] %s", card.status_code, card.final_url or card.url)
+    for fail in crawl.failures[seen_fails:]:
+        log.info("    crawl [%s] %s  (%s)", fail.status_code or "x", fail.url, fail.reason)
+    return len(crawl.pages), len(crawl.failures)
 
 
 # --------------------------------------------------------------------------- #
@@ -606,7 +651,7 @@ def evaluate_candidate(
     # a login wall blocks the dataset -- no query reaches it; drop the candidate early.
     if flags["login_required"].present:
         return CandidateEval(url=candidate.url, verdict="login required", flags=flag_map)
-    skeleton = doc.skeleton(max_lines=70)
+    skeleton = doc.skeleton(max_lines=_FULL_SKELETON)  # the whole page structure
     endpoints = [c.url for c in doc.xhr_endpoints()]
     spa = flags["spa"]
     # if a SPA is backed by same-origin XHR endpoints, the API is the real source --
@@ -772,7 +817,7 @@ def write_query(
     against (a dataset spread across distinct URLs) -- recorded on ``base_urls`` for
     :func:`run_query` to union."""
     doc = wc.fetch(candidate_url, browser=browser, optional=True)
-    skeleton = doc.skeleton(max_lines=90) if doc.ok else ""
+    skeleton = doc.skeleton(max_lines=_FULL_SKELETON) if doc.ok else ""
     prompt = _query_prompt(brief, skeleton, paginated=paginated)
     bases = [candidate_url, *extra_urls]
     best: QueryArtifact | None = None
@@ -822,6 +867,7 @@ def onboard_company(
     attached to it, and if the cap is hit mid-pipeline the run stops and reports
     ``ok=False`` / ``reason="llm budget exceeded"`` instead of raising to the caller.
     """
+    _ensure_logging()  # progress is always visible
     result = OnboardingResult(company=company, brief=brief)
     # Thread the cap into an LlmClient so its per-call spend is enforced. A plain
     # callable llm (e.g. a test stub) carries no cost, so there is nothing to cap.
@@ -849,21 +895,26 @@ def _onboard_company(
     max_pages: int,
     browser: bool,
 ) -> OnboardingResult:
-    _trace(result, "searching the web for seeds")
+    def note(msg: str, *a: Any) -> None:  # trace with the running spend kept current
+        if isinstance(llm, LlmClient):
+            result.cost_usd = llm.spent_usd
+        _trace(result, msg, *a)
+
+    note("searching the web for seeds")
     seeds = search_web(brief, company, search=search, llm=llm)
     if not seeds:
         result.reason = "no search seeds"
         return result
-    _trace(result, "%d seed(s); crawling for the dataset", len(seeds))
+    note("%d seed(s); crawling for the dataset", len(seeds))
     crawl = crawl_from_seeds(
         seeds, brief, wc=wc, llm=llm, max_pages=max_pages, browser=browser
     )
-    _trace(result, "crawled %d page(s), %d failed", len(crawl.pages), len(crawl.failures))
+    note("crawled %d page(s), %d failed", len(crawl.pages), len(crawl.failures))
     candidates = select_candidates(crawl, brief, llm=llm)
     if not candidates:
         result.reason = "no candidate pages"
         return result
-    _trace(result, "%d candidate(s); evaluating best-first", len(candidates))
+    note("%d candidate(s); evaluating best-first", len(candidates))
     evaluation = evaluate_candidates(
         candidates, brief, wc=wc, llm=llm, browser=_mode(browser)
     )
@@ -872,8 +923,8 @@ def _onboard_company(
         result.evaluation = evaluation
         return result
     result.evaluation = evaluation
-    _trace(
-        result, "chose %s (queryable=%s, scrapability=%d)",
+    note(
+        "chose %s (queryable=%s, scrapability=%d)",
         evaluation.url, evaluation.is_queryable, evaluation.scrapability,
     )
     # -- the flag-driven decision cascade for the chosen source, in order ----------
@@ -889,7 +940,7 @@ def _onboard_company(
     # (3) resolve policy: spa -> browser, anti_bot_triggered -> proxy/stealth.
     result.resolve = write_resolve(list(flags.values()))
     fired = [n for n, f in flags.items() if f.present]
-    _trace(result, "flags fired: %s; authoring the query", ", ".join(fired) or "none")
+    note("flags fired: %s; authoring the query", ", ".join(fired) or "none")
     # (4) query: authored from the skeleton, told to page when the source paginates.
     result.query = write_query(
         query_url, brief, wc=wc, llm=llm, browser=_mode(browser),
@@ -900,9 +951,9 @@ def _onboard_company(
     result.ok = result.query is not None
     result.reason = "" if result.ok else "could not author a query"
     if result.query is not None:
-        _trace(
-            result, "query authored (tested=%s, %d row[s]); spent $%.4f",
-            result.query.tested, result.query.row_count, result.cost_usd,
+        note(
+            "query authored (tested=%s, %d row[s])",
+            result.query.tested, result.query.row_count,
         )
     return result
 

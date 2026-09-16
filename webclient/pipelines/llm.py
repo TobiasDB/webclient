@@ -221,11 +221,20 @@ class LlmClient:
     system: str | None = None
     timeout: float = 60.0
     budget: Budget = field(default_factory=Budget)
+    #: the price table this client charges against -- a copy of :data:`PRICING` by
+    #: default, so a caller can override a model's price when it changes (prices are
+    #: config, not a constant): ``LlmClient(pricing={**PRICING, "claude-opus-5":
+    #: ModelPrice.of(6, 30)})``.
+    pricing: dict[str, ModelPrice] = field(default_factory=lambda: dict(PRICING))
     transport: httpx.BaseTransport | None = None
     http_client: httpx.Client | None = None
     anthropic_version: str = ANTHROPIC_VERSION
     #: The token usage of the most recent call (``None`` before the first).
     last_usage: Usage | None = field(default=None, init=False)
+
+    def price(self) -> ModelPrice:
+        """This client's price for its model (from :attr:`pricing`, Opus-tier fallback)."""
+        return self.pricing.get(self.model, _FALLBACK_PRICE)
 
     def __post_init__(self) -> None:
         base = self.base_url or os.environ.get("ANTHROPIC_BASE_URL") or DEFAULT_BASE_URL
@@ -244,7 +253,7 @@ class LlmClient:
         self.budget.ensure()  # stop before spending past the cap
         text, usage = self._complete(prompt)
         self.last_usage = usage
-        self.budget.charge(usage, price_for(self.model))
+        self.budget.charge(usage, self.price())
         return text
 
     def _complete(self, prompt: str) -> tuple[str, Usage]:

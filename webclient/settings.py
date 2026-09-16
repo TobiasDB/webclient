@@ -30,10 +30,15 @@ if TYPE_CHECKING:
 class LlmSettings(BaseModel):
     """LLM configuration (the API key is read from the environment, never stored)."""
 
+    model_config = {"arbitrary_types_allowed": True}
+
     model: str = "claude-opus-5"
     base_url: str | None = None  # any Messages-API endpoint; None = Anthropic
     max_tokens: int = 4096
     budget_usd: float | None = None  # cap total spend; None = uncapped
+    #: per-model price overrides (prices change) -- merged over the default table when
+    #: building the client, e.g. ``{"claude-opus-5": ModelPrice.of(6, 30)}``.
+    pricing: dict[str, Any] = {}
 
 
 class Settings(BaseSettings):
@@ -89,7 +94,7 @@ class Settings(BaseSettings):
     def llm_client(self, *, auth: str | None = None, **overrides: Any) -> "LlmClient":
         """An ``LlmClient`` configured from ``self.llm`` (auth from ``auth`` or the
         environment's ``ANTHROPIC_API_KEY``; the budget from ``llm.budget_usd``)."""
-        from .pipelines.llm import Budget, LlmClient
+        from .pipelines.llm import PRICING, Budget, LlmClient
 
         kwargs: dict[str, Any] = {
             "model": self.llm.model,
@@ -97,6 +102,7 @@ class Settings(BaseSettings):
             "max_tokens": self.llm.max_tokens,
             "auth": auth,
             "budget": Budget(max_usd=self.llm.budget_usd),
+            "pricing": {**PRICING, **self.llm.pricing},  # price overrides win
         }
         kwargs.update(overrides)
         return LlmClient(**kwargs)

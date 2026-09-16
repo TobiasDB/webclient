@@ -460,3 +460,48 @@ def test_cli_positional_args_and_brief_by_name(monkeypatch, tmp_path):
     # a packaged brief resolves by name (with - / _ interchangeable)
     assert _load_brief("ir-news").name == "ir-news"
     assert _load_brief("product_catalogue").fields  # the shipped example
+
+
+def test_ask_json_retries_with_the_parser_error():
+    # a decode failure re-prompts the model with its bad output + the error, so it can
+    # fix it; the second reply is parsed.
+    from webclient.pipelines.onboarding import _ask_json
+
+    replies = ["not json at all", '{"ok": true}']
+    seen_prompts: list[str] = []
+
+    def llm(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        return replies[len(seen_prompts) - 1]
+
+    result = _ask_json(llm, "give me json", retries=1)
+    assert result == {"ok": True}
+    assert len(seen_prompts) == 2  # retried once
+    assert "could not be parsed as JSON" in seen_prompts[1]  # the error was supplied
+
+
+def test_ask_json_gives_up_after_retries():
+    from webclient.pipelines.onboarding import _ask_json
+
+    assert _ask_json(lambda p: "still not json", "give me json", retries=1) is None
+
+
+def test_model_pricing_is_configurable_on_the_client():
+    from webclient.pipelines.llm import LlmClient, ModelPrice, PRICING
+
+    client = LlmClient(model="claude-opus-5", auth="k",
+                       pricing={**PRICING, "claude-opus-5": ModelPrice.of(6.0, 30.0)})
+    assert client.price().input_usd_per_mtok == 6.0  # the override wins
+    # a plain client uses the default table
+    assert LlmClient(model="claude-opus-5", auth="k").price().input_usd_per_mtok == 5.0
+
+
+def test_settings_pass_pricing_overrides_to_the_llm_client():
+    from webclient import LlmSettings, Settings
+    from webclient.pipelines.llm import ModelPrice
+
+    s = Settings(llm=LlmSettings(model="claude-opus-5",
+                                 pricing={"claude-opus-5": ModelPrice.of(7.0, 35.0)}))
+    llm = s.llm_client(auth="k")
+    assert llm.price().input_usd_per_mtok == 7.0
+    llm.close()
