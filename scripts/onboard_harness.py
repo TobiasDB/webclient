@@ -82,6 +82,12 @@ BRIEFS: dict[str, Brief] = {
         description="every country listed, each with its name, capital, population and area",
         fields=["name", "capital", "population?", "area?"],
     ),
+    "blog": Brief(
+        name="blog", title="Blog posts",
+        description="every blog / news post listed on the page, each with its title, "
+                    "publication date, author and a link to the full post",
+        fields=["title", "date", "url", "author?", "summary?"],
+    ),
     "ir-news": _packaged_brief("ir-news"),
 }
 
@@ -112,6 +118,12 @@ CASES: list[tuple[str, str, list[str]]] = [
     ("ir-news", "Confluent", ["https://investors.confluent.io/news/default.aspx"]),
     ("ir-news", "Cisco", ["https://newsroom.cisco.com/c/r/newsroom/en/us/index.html"]),
     ("ir-news", "Oracle", ["https://www.oracle.com/news/"]),
+    # seed URLs found via web search (real, current) -- the seed is a homepage/blog/newsroom,
+    # not necessarily the dataset page; the crawl finds the dataset from there.
+    ("blog", "Stripe", ["https://stripe.com/blog"]),
+    ("blog", "Cloudflare", ["https://blog.cloudflare.com/"]),
+    ("ir-news", "Microsoft", ["https://news.microsoft.com/source/tag/press-releases/"]),
+    ("product-catalogue", "Framework", ["https://frame.work/marketplace/parts"]),
 ]
 
 
