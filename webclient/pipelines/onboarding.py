@@ -98,38 +98,97 @@ def _parse_frontmatter(text: str) -> "tuple[dict[str, Any], str]":
     return front, body
 
 
+def _coerce(v: str) -> Any:
+    """A frontmatter scalar to its natural type: an int / float / bool where it reads
+    as one, else the string."""
+    low = v.strip().lower()
+    if low in ("true", "false"):
+        return low == "true"
+    if low in ("null", "none", "~", ""):
+        return None
+    try:
+        return int(v)
+    except ValueError:
+        pass
+    try:
+        return float(v)
+    except ValueError:
+        return v.strip()
+
+
+def _kv_items(items: "list[str]") -> "dict[str, Any]":
+    """Parse ``["max_pages: 30", "browser: false"]`` -> ``{"max_pages": 30, "browser":
+    False}`` -- the ``key: value`` list items a frontmatter block carries."""
+    out: dict[str, Any] = {}
+    for item in items:
+        key, sep, value = item.partition(":")
+        if sep:
+            out[key.strip()] = _coerce(value)
+    return out
+
+
+class SchemaField(BaseModel):
+    """One field in the target schema: a ``name``, an optional ``description`` (what it
+    is / how to fill it), and nested ``children`` for structured values (a ``price``
+    with ``value`` / ``unit`` / ``modifiers``)."""
+
+    name: str
+    description: str = ""
+    children: "list[SchemaField]" = []
+
+
 class Brief(BaseModel):
-    """What dataset we want to onboard -- a reusable spec, loadable from a markdown
-    file with YAML frontmatter (:meth:`from_markdown` / :meth:`load`). ``description``
-    is the free-text ask (the markdown body); ``fields`` are the columns each record
-    should carry (they steer the query author); ``look`` / ``ignore`` are path/URL
-    hints (where the dataset likely lives, what to skip) that steer the crawl and the
-    candidate ranking; ``name`` / ``title`` identify the brief."""
+    """What dataset we want to onboard -- a reusable spec, loadable from a markdown file
+    with YAML frontmatter (:meth:`from_markdown` / :meth:`load`). ``description`` is the
+    free-text ask (the markdown body); the ``schema`` (``fields`` + per-field
+    ``descriptions``, nested via dotted paths) is what each record should carry;
+    ``look`` / ``ignore`` are NATURAL-LANGUAGE guides (what kind of pages to head for /
+    skip) the model interprets; ``crawl`` overrides the pipeline's crawl knobs
+    (``max_pages`` / ``depth`` / ``rounds`` / ``browser``); ``name`` / ``title``
+    identify the brief."""
 
     description: str = ""
-    fields: list[str] = []  # the target schema -- record columns (names, or "name: type")
+    fields: list[str] = []  # the target schema's leaf/branch paths (dotted for nesting)
+    descriptions: dict[str, str] = {}  # path -> what that field is / how to fill it
     name: str = ""  # a short slug id (e.g. "product-catalogue")
     title: str = ""  # a human title
-    look: list[str] = []  # path/URL fragments where the dataset likely lives (/products, /api)
-    ignore: list[str] = []  # path/URL fragments to skip (/blog, /careers, /legal)
+    look: list[str] = []  # natural-language guides: what kinds of pages to head for
+    ignore: list[str] = []  # natural-language guides: what kinds of pages to skip
+    crawl: dict[str, Any] = {}  # pipeline crawl overrides (max_pages/depth/rounds/browser)
 
     @classmethod
     def from_markdown(cls, text: str) -> "Brief":
-        """Build a :class:`Brief` from a markdown document: YAML frontmatter (``name`` /
-        ``title`` / ``schema`` or ``fields`` / ``look`` / ``ignore`` / ``description``)
-        over a body that becomes ``description`` when the frontmatter omits it."""
+        """Build a :class:`Brief` from a markdown document. Frontmatter keys: ``name`` /
+        ``title``; ``schema`` (a list of ``path: description`` items -- dotted paths
+        nest, the text is that field's description); ``look`` / ``ignore`` (NL guide
+        lines); ``crawl`` (a list of ``key: value`` pipeline crawl overrides);
+        ``description`` (else the body). Extra list items without a ``:`` are treated as
+        bare field names."""
         front, body = _parse_frontmatter(text)
 
         def as_list(v: Any) -> list[str]:
             return [str(x) for x in v] if isinstance(v, list) else ([str(v)] if v else [])
 
+        fields: list[str] = []
+        descriptions: dict[str, str] = {}
+        for item in as_list(front.get("schema") or front.get("fields")):
+            path, sep, desc = item.partition(":")
+            path = path.strip()
+            if path:
+                fields.append(path)
+                if sep and desc.strip():
+                    descriptions[path] = desc.strip()
+
+        crawl = front.get("crawl")
         return cls(
             description=str(front.get("description") or body).strip(),
-            fields=as_list(front.get("schema") or front.get("fields")),
+            fields=fields,
+            descriptions=descriptions,
             name=str(front.get("name") or ""),
             title=str(front.get("title") or ""),
             look=as_list(front.get("look")),
             ignore=as_list(front.get("ignore")),
+            crawl=_kv_items(crawl) if isinstance(crawl, list) else {},
         )
 
     @classmethod
@@ -139,20 +198,34 @@ class Brief(BaseModel):
 
         return cls.from_markdown(Path(path).read_text(encoding="utf-8"))
 
+    def schema_tree(self) -> "list[SchemaField]":
+        """The target schema as a nested :class:`SchemaField` tree, built from the dotted
+        ``fields`` + their ``descriptions`` -- so ``["name", "price.value",
+        "price.unit"]`` with a description on ``price`` becomes ``name`` and a ``price``
+        node (its description) with ``value`` / ``unit`` children. The query author nests
+        a sub-``extract`` per branch so the output JSON mirrors this shape."""
+        roots: list[SchemaField] = []
+        index: dict[str, SchemaField] = {}  # full path -> node
+        for path in self.fields:
+            parent = ""
+            for part in (p.strip() for p in path.split(".") if p.strip()):
+                full = f"{parent}.{part}" if parent else part
+                node = index.get(full)
+                if node is None:
+                    node = SchemaField(name=part, description=self.descriptions.get(full, ""))
+                    index[full] = node
+                    (index[parent].children if parent else roots).append(node)
+                parent = full
+        return roots
+
     def field_tree(self) -> "dict[str, Any]":
-        """The target schema as a NESTED tree, built from dotted field names -- so a
-        record can carry structured sub-fields. ``["name", "price.value", "price.unit",
-        "price.modifiers"]`` -> ``{"name": {}, "price": {"value": {}, "unit": {},
-        "modifiers": {}}}``. Leaves are empty dicts; the query author nests a
-        sub-``extract`` per branch so the output JSON mirrors this shape. (Named field_tree, not schema, to
-        avoid pydantic's BaseModel.schema.)"""
+        """The target schema as a plain nested name tree (no descriptions):
+        ``["name", "price.value"]`` -> ``{"name": {}, "price": {"value": {}}}``."""
         tree: dict[str, Any] = {}
         for f in self.fields:
             node = tree
-            for part in f.split("."):
-                part = part.strip()
-                if part:
-                    node = node.setdefault(part, {})
+            for part in (p.strip() for p in f.split(".") if p.strip()):
+                node = node.setdefault(part, {})
         return tree
 
     @property
@@ -286,32 +359,33 @@ def _ask_json(llm: LLM, prompt: str) -> Any:
         return None
 
 
-def _schema_outline(tree: "dict[str, Any]", indent: int = 0) -> str:
-    """A nested schema tree rendered as an indented outline for a prompt."""
+def _schema_outline(fields: "list[SchemaField]", indent: int = 0) -> str:
+    """A :class:`SchemaField` tree rendered as an indented outline for a prompt --
+    ``- name — description`` per field, nested children indented under their parent."""
     lines: list[str] = []
-    for key, sub in tree.items():
-        lines.append("  " * indent + f"- {key}")
-        if sub:
-            lines.append(_schema_outline(sub, indent + 1))
+    for f in fields:
+        desc = f" — {f.description}" if f.description else ""
+        lines.append("  " * indent + f"- {f.name}{desc}")
+        if f.children:
+            lines.append(_schema_outline(f.children, indent + 1))
     return "\n".join(line for line in lines if line)
 
 
 def _fields_line(brief: Brief) -> str:
     """The brief's hints as an appended block for any prompt: the target schema (a
-    nested outline when the fields nest, so the author knows to emit sub-extracts)
-    plus the ``look`` / ``ignore`` path hints. Empty when the brief carries none."""
+    nested outline with per-field descriptions, so the author knows the shape AND how
+    to fill each field, nesting a sub-extract per branch) plus the natural-language
+    ``look`` / ``ignore`` guides. Empty when the brief carries none."""
     parts: list[str] = []
-    if brief.is_nested:
+    if brief.fields:
         parts.append(
             "Target schema (nest a sub-extract per branch so the output JSON matches):\n"
-            + _schema_outline(brief.field_tree())
+            + _schema_outline(brief.schema_tree())
         )
-    elif brief.fields:
-        parts.append(f"Target fields: {', '.join(brief.fields)}.")
     if brief.look:
-        parts.append(f"Prefer sources under: {', '.join(brief.look)}.")
+        parts.append("Head for pages like: " + "; ".join(brief.look) + ".")
     if brief.ignore:
-        parts.append(f"Ignore anything under: {', '.join(brief.ignore)}.")
+        parts.append("Skip pages like: " + "; ".join(brief.ignore) + ".")
     return (" " + " ".join(parts)) if parts else ""
 
 
@@ -414,17 +488,14 @@ _PAGE_PARAMS = {
 
 
 def _filter_frontier(edges: Sequence[Any], brief: Brief) -> list[Any]:
-    """Prune the frontier before the model spends a pick on it: drop edges whose path
-    matches a brief ``ignore`` hint, then collapse paginated URL sets and repeated
-    similar-API calls to one representative each (keeping the first -- the frontier is
-    already best-first). Keeps the model's choices, and the crawl, from wasting budget
-    on many versions of the same thing."""
+    """Prune the frontier before the model spends a pick on it: collapse paginated URL
+    sets and repeated similar-API calls to one representative each (keeping the first --
+    the frontier is already best-first). This is a STRUCTURAL de-dup only; ``look`` /
+    ``ignore`` are natural-language guides the model applies when it picks, not literal
+    URL filters. Keeps the crawl from wasting budget on many versions of one thing."""
     kept: list[Any] = []
     seen: set[tuple[str, str, frozenset[str]]] = set()
     for e in edges:
-        path = e.url.lower()
-        if any(h and h.lower() in path for h in brief.ignore):
-            continue
         key = _frontier_key(e.url)
         if key in seen:
             continue
@@ -471,16 +542,23 @@ def crawl_from_seeds(
     """A hand-driven crawl steered by the model: fetch the seeds, then each round let
     the model pick which discovered edges to expand (favouring a queryable source),
     up to ``rounds`` rounds or ``max_pages`` pages. Returns the finished ``Crawl``
-    (read ``.pages`` for the retained Documents)."""
+    (read ``.pages`` for the retained Documents). The brief's ``crawl`` block overrides
+    ``max_pages`` / ``rounds`` / ``depth`` / ``browser`` per dataset."""
+    cfg = brief.crawl
+    max_pages = int(cfg.get("max_pages", max_pages))
+    rounds = int(cfg.get("rounds", rounds))
+    browser = bool(cfg.get("browser", browser))
+    depth = int(cfg.get("depth", 3))
     seed_urls = [s.url for s in seeds if s.url]
     crawl = wc.crawl(
-        seed_urls, auto=False, browser=browser, max_pages=max_pages, obey_robots=False
+        seed_urls, auto=False, browser=browser, max_pages=max_pages, depth=depth,
+        obey_robots=False,
     )
     crawl.step(seed_urls)  # round 0: fetch the seeds, discover their edges
     for _ in range(rounds):
         if not crawl.frontier or len(crawl.pages) >= max_pages:
             break
-        # prune paginated/similar-API duplicates + ignored paths before the model picks
+        # collapse paginated/similar-API duplicates before the model spends a pick
         candidates = _filter_frontier(list(crawl.frontier), brief)
         picks = _pick_edges(llm, brief, candidates)
         if not picks:

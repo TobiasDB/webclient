@@ -18,6 +18,7 @@ from .llm import (
 )
 from .onboarding import (
     Brief,
+    SchemaField,
     Candidate,
     CandidateEval,
     OnboardingResult,
@@ -40,6 +41,7 @@ from .prompts import render_prompt
 
 __all__ = [
     "Brief",
+    "SchemaField",
     "Seed",
     "SearchHit",
     "Candidate",

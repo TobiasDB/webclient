@@ -306,21 +306,30 @@ def test_brief_loads_from_markdown_frontmatter():
 name: product-catalogue
 title: Product Catalogue
 schema:
-  - name
-  - price
+  - name: the product's display name
+  - price: the price object
+  - price.value: the numeric amount
+  - price.unit: the currency or unit
 look:
-  - /products
-  - /api
+  - product and pricing listing pages
 ignore:
-  - /blog
+  - blog, careers and legal pages
+crawl:
+  - max_pages: 30
+  - depth: 2
+  - browser: false
 ---
-The company's full product catalogue: every product with name and price.
-Prefer a queryable API over a paginated listing.
+The company's full product catalogue.
 """
     brief = Brief.from_markdown(md)
     assert brief.name == "product-catalogue" and brief.title == "Product Catalogue"
-    assert brief.fields == ["name", "price"]
-    assert brief.look == ["/products", "/api"] and brief.ignore == ["/blog"]
+    # nested schema via dotted paths, each with a description
+    assert brief.fields == ["name", "price", "price.value", "price.unit"]
+    assert brief.descriptions["price.value"] == "the numeric amount"
+    # look/ignore are natural-language guides, not URL fragments
+    assert brief.look == ["product and pricing listing pages"]
+    # crawl block configures the pipeline (coerced to int/bool)
+    assert brief.crawl == {"max_pages": 30, "depth": 2, "browser": False}
     assert brief.description.startswith("The company's full product catalogue")
 
 
@@ -328,14 +337,15 @@ def test_filter_frontier_collapses_pagination_and_similar_apis():
     from webclient.core.crawl import Edge
     from webclient.pipelines.onboarding import Brief, _filter_frontier
 
-    brief = Brief(description="products", ignore=["/blog"])
+    # STRUCTURAL de-dup only (look/ignore are NL guides now, applied by the model): a
+    # paginated set + repeated similar-API calls collapse; distinct resources survive.
+    brief = Brief(description="products")
     edges = [
         Edge(url="https://x.co/list?page=1"),
         Edge(url="https://x.co/list?page=2"),   # same API, different value -> collapsed
         Edge(url="https://x.co/list/page/3"),   # paginated path -> collapsed
         Edge(url="https://x.co/item/1"),        # distinct resource -> kept
         Edge(url="https://x.co/item/2"),        # distinct resource -> kept
-        Edge(url="https://x.co/blog/post"),     # ignored hint -> dropped
     ]
     kept = [e.url for e in _filter_frontier(edges, brief)]
     assert kept == [
@@ -345,18 +355,22 @@ def test_filter_frontier_collapses_pagination_and_similar_apis():
     ]
 
 
-def test_brief_schema_builds_a_nested_tree_from_dotted_fields():
+def test_brief_schema_tree_carries_descriptions():
     from webclient.pipelines.onboarding import Brief, _fields_line
 
-    brief = Brief(fields=["name", "price.value", "price.unit", "price.modifiers"])
+    brief = Brief(
+        fields=["name", "price.value", "price.unit"],
+        descriptions={"price": "the price object", "price.value": "numeric amount"},
+    )
     assert brief.is_nested
-    assert brief.field_tree() == {
-        "name": {},
-        "price": {"value": {}, "unit": {}, "modifiers": {}},
-    }
-    # the nested schema is rendered as an outline into every prompt's hint block
+    tree = brief.schema_tree()
+    price = next(f for f in tree if f.name == "price")
+    assert price.description == "the price object"
+    assert {c.name for c in price.children} == {"value", "unit"}
+    assert next(c for c in price.children if c.name == "value").description == "numeric amount"
+    # the nested schema + descriptions are rendered into every prompt's hint block
     line = _fields_line(brief)
-    assert "- price" in line and "- value" in line and "sub-extract" in line
+    assert "- price — the price object" in line and "- value — numeric amount" in line
 
 
 def test_nested_extract_outputs_nested_json():
