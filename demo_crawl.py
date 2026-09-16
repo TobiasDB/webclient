@@ -193,7 +193,46 @@ def main() -> None:
                   len(rb.json()["result"]["sitemaps"]))
         svc.close()
 
+        # -- 5. Remote crawl is a server-side object you STEP over the wire -----
+        # A RemoteWebClient's crawl lives on the server; step/run/stream dispatch to
+        # it (and mirror the state back), so turn-based stepping works remotely too.
+        print("\n== remote crawl: step + stream over HTTP ==")
+        remote_crawl_demo(base)
+
     print("\nok")
+
+
+def remote_crawl_demo(base: str) -> None:
+    """Drive a crawl on a real (in-process) HTTP service via a RemoteWebClient."""
+    import uvicorn
+
+    from webclient import RemoteWebClient
+    from webclient.service import create_app
+
+    svc = WebClient()
+    cfg = uvicorn.Config(create_app(svc, token="demo"), host="127.0.0.1",
+                         port=0, log_level="critical")
+    server = uvicorn.Server(cfg)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    while not server.started:
+        pass
+    port = server.servers[0].sockets[0].getsockname()[1]
+    try:
+        with RemoteWebClient(f"http://127.0.0.1:{port}", token="demo") as rc:
+            crawl = rc.crawl(f"{base}/", keywords=["pricing"], max_pages=5)
+            print("  created (not yet run): pages =", len(crawl.pages),
+                  "| done =", crawl.done)
+            crawl.step()  # one round-trip -> fetch the seed
+            print("  after 1 step:", len(crawl.pages), "page(s), frontier",
+                  len(crawl.frontier))
+            for card in crawl.stream():  # drive the rest by streaming
+                print("    streamed:", _rel(card.final_url or card.url, base))
+            print("  done =", crawl.done, "| pages =", len(crawl.pages))
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+        svc.close()
 
 
 if __name__ == "__main__":

@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from collections import OrderedDict
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -105,6 +106,7 @@ def create_app(
     token: str | None = None,
     max_docs: int = 1024,
     max_sessions: int = 256,
+    max_crawls: int = 256,
     block_private_hosts: bool = False,
 ) -> FastAPI:
     """A FastAPI app exposing a WebClient over ``/execute`` (Bearer-token
@@ -119,6 +121,7 @@ def create_app(
     )
     app.state.docs = _DocStore(max_docs)
     app.state.sessions = {}
+    app.state.crawls = _DocStore(max_crawls)  # LRU id->Crawl (server-side, stateful)
 
     def _auth(authorization: str | None) -> None:
         if token is not None and authorization != f"Bearer {token}":
@@ -342,6 +345,117 @@ def create_app(
                 status_code=exc.error.status_code,
                 hint="retry if retriable; else the seed is unavailable or blocked",
             )
+
+    # -- stateful crawl: a server-side crawl a remote client steps/streams ----
+    def _page_wire(p: Any) -> dict[str, Any]:
+        """A retained page over the wire: a PageCard's fields (a document-retained page
+        falls back to a lean descriptor -- document retain is a local-only mode)."""
+        if hasattr(p, "model_dump"):
+            return cast("dict[str, Any]", p.model_dump())
+        return {"url": getattr(p, "url", ""), "kind": getattr(p, "kind", "html")}
+
+    def _crawl_state(cid: str, crawl: Any) -> dict[str, Any]:
+        """The full state of a server-side crawl, so a client handle can mirror it and
+        read its frontier/pages/done locally between round-trips."""
+        return {
+            "id": cid,
+            "config": crawl.config.model_dump(mode="json", exclude={"project"}),
+            "scope": crawl.scope,
+            "status": crawl.status,
+            "done": crawl.done,
+            "frontier": [e.model_dump() for e in crawl.frontier],
+            "pages": [_page_wire(p) for p in crawl.pages],
+            "history": [e.model_dump() for e in crawl.history],
+            "seen": sorted(crawl._seen),
+        }
+
+    def _no_such_crawl(cid: str) -> JSONResponse:
+        return _error(
+            404, "NoSuchCrawl", f"no server-side crawl {cid!r}",
+            hint="the crawl id expired from the store or was never created; "
+            "re-create it with POST /crawls",
+        )
+
+    @app.post("/crawls", response_model=None)
+    def create_crawl(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Create a server-side crawl from ``seeds`` + the crawl knobs and return its
+        state + id. It is NOT run here -- the client drives it via POST
+        /crawls/{id}/step and /run (turn-based or streamed)."""
+        _auth(authorization)
+        engine = _crawl_engine(body)
+        if isinstance(engine, JSONResponse):
+            return engine
+        crawl = engine.crawl(
+            body.get("seeds", []),
+            auto=bool(body.get("auto", True)),
+            width=int(body.get("width", 10)),
+            depth=int(body.get("depth", 3)),
+            max_pages=int(body.get("max_pages", 50)),
+            max_frontier=int(body.get("max_frontier", 10000)),
+            same_origin=bool(body.get("same_origin", True)),
+            allow_subdomains=bool(body.get("allow_subdomains", True)),
+            allow_domains=body.get("allow_domains"),
+            deny_domains=body.get("deny_domains"),
+            allow_countries=body.get("allow_countries"),
+            deny_countries=body.get("deny_countries"),
+            include=body.get("include"),
+            exclude=body.get("exclude"),
+            include_xhr=bool(body.get("include_xhr", True)),
+            keywords=body.get("keywords"),
+            obey_robots=bool(body.get("obey_robots", True)),
+            browser=body.get("browser", "auto"),
+            resolve=_resolve_of(body.get("resolve")),
+        )
+        cid = uuid.uuid4().hex
+        app.state.crawls[cid] = crawl
+        return _crawl_state(cid, crawl)
+
+    def _advance(
+        cid: str, op: str, select: Any = None
+    ) -> "dict[str, Any] | JSONResponse":
+        """Advance a stored crawl one ``step`` (with an optional URL selection) or
+        ``run`` it to completion, returning the refreshed state."""
+        if cid not in app.state.crawls:
+            return _no_such_crawl(cid)
+        crawl = app.state.crawls[cid]
+        try:
+            crawl.step(select) if op == "step" else crawl.run()
+        except WebException as exc:
+            return _error(
+                502, exc.error.type, str(exc),
+                retriable=exc.error.retriable, status_code=exc.error.status_code,
+                hint="retry if retriable; else a seed is unavailable or blocked",
+            )
+        return _crawl_state(cid, crawl)
+
+    @app.post("/crawls/{cid}/step", response_model=None)
+    def step_crawl(
+        cid: str, body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Fetch one round of the crawl ``cid`` (``select`` = URLs to fetch next, or
+        omit for the top-scored frontier edges) and return the refreshed state."""
+        _auth(authorization)
+        return _advance(cid, "step", body.get("select"))
+
+    @app.post("/crawls/{cid}/run", response_model=None)
+    def run_crawl(
+        cid: str, body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Drive the crawl ``cid`` to completion and return its final state."""
+        _auth(authorization)
+        return _advance(cid, "run")
+
+    @app.delete("/crawls/{cid}", response_model=None)
+    def close_crawl(
+        cid: str, authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        _auth(authorization)
+        if cid not in app.state.crawls:
+            return _no_such_crawl(cid)
+        app.state.crawls.pop(cid, None)
+        return {"id": cid, "status": "closed"}
 
     # -- task verbs: ready-to-use values for an agent (no plan machinery) -----
     def _verb_url(body: dict[str, Any]) -> "str | JSONResponse":

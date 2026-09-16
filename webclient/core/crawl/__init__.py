@@ -49,7 +49,10 @@ class Crawl(WebCore, ICrawl):
     """A scoped site traversal. State (frontier / pages / config) is the ``ICrawl``
     model it inherits; this core adds the client binding, the dedup/robots machinery,
     and ``state()`` (a resumable snapshot). A context manager; its ops (``step`` /
-    ``run`` / ``done``) are the ``CrawlBacking``."""
+    ``run`` / ``done``) are the ``CrawlBacking``. Under a remote client it is a thin
+    handle over a server-side crawl: ``step``/``run`` dispatch to the server (which
+    owns the frontier/fetch) and refresh this handle's mirrored state, so turn-based
+    stepping works remotely too."""
 
     _client: "WebClient" = PrivateAttr(default=None)  # type: ignore[assignment]
     _seen: set[str] = PrivateAttr(default_factory=set)  # dedup ledger (canonical urls)
@@ -59,8 +62,21 @@ class Crawl(WebCore, ICrawl):
     #: same ``len(pages)`` before appending, so each claims the full remaining budget
     #: and ``max_pages`` is blown past. Lazily created on the crawl's own loop.
     _step_lock: Any = PrivateAttr(default=None)  # asyncio.Lock (lazy, loop-bound)
+    #: set on a remote handle -- the id of the server-side crawl this mirrors, so
+    #: ``step``/``run`` round-trip to it (empty on a local crawl).
+    _crawl_id: str = PrivateAttr(default="")
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (CrawlBacking(),)
+
+    def _remote_call(self, op: str, is_prop: bool) -> Any:
+        """A remote crawl's ``step``/``run`` advance the server-side crawl and refresh
+        this handle's mirror (the frontier/pages are then read locally off the mirror --
+        only the IO ops round-trip). Every other op runs on the local mirror, so
+        ``done``/``pages``/``frontier`` need no round-trip."""
+        if op in ("step", "run"):
+            client = cast(Any, self._client)  # a RemoteWebClientCore in remote mode
+            return lambda *a, **k: client._advance_crawl(self, op, *a, **k)
+        return super()._remote_call(op, is_prop)
 
     def bind(self, client: "WebClient") -> "Crawl":
         """Share ``client``'s engine (its ``afetch``/pool drive the crawl) and seed
@@ -96,8 +112,23 @@ class Crawl(WebCore, ICrawl):
         the frontier + seen ledger stay intact, so re-entering the stream (or calling
         ``run()``) continues. ``run()`` is this stream drained; ``list(crawl.stream())``
         its pages. (Not ``__iter__`` -- iterating a pydantic model yields its fields.)"""
+        if self._dispatch_mode() == "remote":
+            return self._remote_stream()
         backing = cast(CrawlBacking, self.BACKINGS[0])
         return self._client.loop().stream(backing._astream(self))
+
+    def _remote_stream(self) -> "Iterator[Any]":
+        """Remote streaming: drive the server-side crawl one ``step`` round-trip at a
+        time, yielding each round's new pages off the refreshed mirror. Break pauses
+        exactly as locally (the server keeps the frontier)."""
+        seen = len(self.pages)  # only yield pages fetched during THIS stream
+        while not self.done:
+            self.dispatch("step")
+            fresh = self.pages[seen:]
+            seen = len(self.pages)
+            if not fresh:  # a round that fetched nothing (all blocked) -- stop
+                break
+            yield from fresh
 
     def astream(self) -> "AsyncIterator[Any]":
         """The async twin of :meth:`stream`: ``async for card in crawl.astream()``. Same

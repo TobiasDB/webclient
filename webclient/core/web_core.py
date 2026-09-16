@@ -279,12 +279,11 @@ class WebCore:
 
         if isinstance(self, Reference):  # a reference carries its full spec
             return Expr(Plan(root="Reference", source=me.model_dump()), client)
-        # any other core (e.g. a remote-returned, already-finished Crawl) has no
-        # remote root -- fail clearly instead of shipping a malformed plan (500).
+        # any other core has no plan-shaped remote root -- fail clearly instead of
+        # shipping a malformed plan (500). (A remote Crawl doesn't reach here: it
+        # overrides ``_remote_call`` to advance its server-side crawl directly.)
         raise NotImplementedError(
-            f"{type(self).__name__} ops are not available on a remote client; "
-            "remote crawl/sitemap run to completion server-side -- use a local "
-            "client for turn-based stepping"
+            f"{type(self).__name__} ops are not available on a remote client"
         )
 
     def _remote_call(self, op: str, is_prop: bool) -> Any:

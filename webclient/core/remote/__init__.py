@@ -164,22 +164,19 @@ class RemoteWebClientCore(WebClient):
         doc._remote_handle = True
         return doc
 
-    # -- crawl: run server-side via the /crawl endpoint ----------------------
-    # A crawl is client-held state driving many fetches; over the wire that is a
-    # server-side job (the same shape as a server-side ``session``), so remote crawl
-    # POSTs to the service's /crawl endpoint and hands back a finished :class:`Crawl` --
-    # run to completion in one round-trip (turn-based ``step()`` steering is a
-    # local-client feature). ``sitemap`` / ``robots`` are ordinary dispatched IO ops
-    # (they ride ``/execute`` like ``fetch``), so they need no override here.
-    def _remote_crawl(self, path: str, body: dict[str, Any]) -> "Crawl":
-        from ..crawl import Crawl, Edge
-
-        sid = getattr(self, "_sid", "")
-        if sid:  # a session-scoped crawl runs with the server session's identity
-            body["session"] = sid
-        payload = {k: v for k, v in body.items() if v is not None}
+    # -- crawl: a server-side crawl, driven by dispatch ----------------------
+    # A crawl is stateful (it owns a frontier + drives many fetches), so it lives on
+    # the server (like a session) addressed by id. ``crawl()`` creates it; the Crawl
+    # core's ``step``/``run`` dispatch here (``_advance_crawl``) to advance it and
+    # refresh the handle's mirror -- so turn-based stepping AND streaming work
+    # remotely, not just run-to-completion. ``sitemap``/``robots`` are ordinary
+    # dispatched IO ops (they ride ``/execute`` like ``fetch``), no override needed.
+    def _crawl_post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        """POST to a crawl endpoint and return the server crawl's state (or raise)."""
         resp = self._http.post(
-            f"{self.url}{path}", json=payload, headers=self._headers()
+            f"{self.url}{path}",
+            json={k: v for k, v in body.items() if v is not None},
+            headers=self._headers(),
         )
         if not (200 <= resp.status_code < 300):
             from ...errors import RemoteError, WebError
@@ -192,41 +189,74 @@ class RemoteWebClientCore(WebClient):
             except Exception:
                 pass
             raise RemoteError(resp.status_code, resp.text[:200], error=err)
-        data = resp.json()
-        # a remote crawl's Documents stay server-side; the wire carries a lean
-        # per-page record (url/status/kind/title), kept as ``.pages`` plain dicts.
-        core = Crawl(
-            status="closed",  # the server ran it to completion
-            pages=list(data.get("pages", [])),
-            frontier=[Edge(**e) for e in data.get("frontier", [])],
-        )
-        return core.bind(self)
+        return cast("dict[str, Any]", resp.json())
 
     def crawl(self, seeds: Any, **kwargs: Any) -> "Crawl":
-        """A remote crawl runs to completion server-side (one round-trip) and returns a
-        finished :class:`Crawl`. It accepts the local ``crawl`` keyword args for parity
-        but runs whole -- turn-based ``step`` is a local-client feature. The common wire
-        knobs (budget / scope / browser / resolve / keywords) are forwarded to the
-        service; a full ``config=`` beyond them is a local-only convenience for now."""
-        urls = _seed_urls(seeds)
+        """Create a server-side crawl and return a :class:`Crawl` handle over it. Unlike
+        before, it does NOT run to completion -- drive it with ``crawl.run()`` (batch),
+        ``crawl.step(select)`` (turn-based) or ``for card in crawl.stream()``, exactly as
+        a local crawl: each dispatches to the server. Accepts the local ``crawl`` wire
+        knobs (budget / scope / browser / resolve / keywords); a custom ``project`` is
+        local-only, so remote pages are always :class:`PageCard`\\ s."""
+        from ..crawl import Crawl
+
         resolve = kwargs.get("resolve")
-        return self._remote_crawl(
-            "/crawl",
-            {
-                "url": urls[0] if urls else "",
-                "width": kwargs.get("width", 10),
-                "depth": kwargs.get("depth", 3),
-                "max_pages": kwargs.get("max_pages", 50),
-                "max_frontier": kwargs.get("max_frontier", 10000),
-                "same_origin": kwargs.get("same_origin", True),
-                "obey_robots": kwargs.get("obey_robots", True),
-                "browser": kwargs.get("browser", "auto"),
-                "resolve": resolve.model_dump() if resolve is not None else None,
-                "keywords": kwargs.get("keywords"),
-                "include": kwargs.get("include"),
-                "exclude": kwargs.get("exclude"),
-            },
-        )
+        body: dict[str, Any] = {
+            "seeds": _seed_urls(seeds),
+            "auto": kwargs.get("auto", True),
+            "width": kwargs.get("width", 10),
+            "depth": kwargs.get("depth", 3),
+            "max_pages": kwargs.get("max_pages", 50),
+            "max_frontier": kwargs.get("max_frontier", 10000),
+            "same_origin": kwargs.get("same_origin", True),
+            "allow_subdomains": kwargs.get("allow_subdomains", True),
+            "allow_domains": kwargs.get("allow_domains"),
+            "deny_domains": kwargs.get("deny_domains"),
+            "allow_countries": kwargs.get("allow_countries"),
+            "deny_countries": kwargs.get("deny_countries"),
+            "include": kwargs.get("include"),
+            "exclude": kwargs.get("exclude"),
+            "include_xhr": kwargs.get("include_xhr", True),
+            "keywords": kwargs.get("keywords"),
+            "obey_robots": kwargs.get("obey_robots", True),
+            "browser": kwargs.get("browser", "auto"),
+            "resolve": resolve.model_dump() if resolve is not None else None,
+        }
+        sid = getattr(self, "_sid", "")
+        if sid:  # a session-scoped crawl runs with the server session's identity
+            body["session"] = sid
+        state = self._crawl_post("/crawls", body)
+        crawl = Crawl()
+        crawl._client = self
+        crawl._crawl_id = state["id"]
+        self._adopt_crawl_state(crawl, state)
+        return crawl
+
+    def _advance_crawl(self, crawl: "Crawl", op: str, *args: Any) -> "Crawl":
+        """Dispatch a remote ``step``/``run``: POST to the server-side crawl, then adopt
+        the returned state into ``crawl``'s mirror. ``step``'s selection is sent as a
+        list of URLs (the server matches its own frontier by URL, or adds new ones)."""
+        body: dict[str, Any] = {}
+        if op == "step" and args and args[0] is not None:
+            from ..crawl import Edge
+
+            body["select"] = [e.url if isinstance(e, Edge) else str(e) for e in args[0]]
+        state = self._crawl_post(f"/crawls/{crawl._crawl_id}/{op}", body)
+        self._adopt_crawl_state(crawl, state)
+        return crawl
+
+    def _adopt_crawl_state(self, crawl: "Crawl", state: dict[str, Any]) -> None:
+        """Refresh a crawl handle's mirrored state from the server (config / scope /
+        status / frontier / pages / history / seen), so its local reads are current."""
+        from ..crawl import CrawlConfig, Edge, PageCard
+
+        crawl.config = CrawlConfig.model_validate(state.get("config", {}))
+        crawl.scope = state.get("scope", "")
+        crawl.status = state.get("status", "running")
+        crawl.frontier = [Edge(**e) for e in state.get("frontier", [])]
+        crawl.pages = [PageCard(**p) for p in state.get("pages", [])]
+        crawl.history = [Edge(**e) for e in state.get("history", [])]
+        crawl._seen = set(state.get("seen", []))
 
     def release(self, doc: Document) -> None:
         """No-op on remote: the server owns its transport pool and reclaims pages
