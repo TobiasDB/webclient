@@ -669,6 +669,11 @@ class HtmlBacking(Backing):
                 "select yields elements; use .attr() for an attribute or text"
             )
         root = self._tree(core)
+        if selector.startswith("//"):
+            # lxml: element.xpath("//...") searches the WHOLE document, not the element.
+            # A leading "//" inside a selected record means "descendant of THIS node", so
+            # scope it with a leading "." (harmless at document level -- same result).
+            selector = "." + selector
         if selector.startswith("/") or selector.startswith("./"):
             return list(root.xpath(selector))
         return list(root.cssselect(selector))

@@ -599,6 +599,22 @@ def test_write_query_keeps_records_missing_an_optional_field(httpserver):
     assert names == ["A", "B"] and art.sample[1].get("sku") in (None, "")  # missing -> null
 
 
+def test_relative_xpath_field_selector_is_scoped_to_the_record():
+    # F10 regression: a `//` XPath field selector inside a record must match WITHIN that
+    # record, not leak to the whole document (lxml: element.xpath("//...") is document-wide).
+    from webclient import Document, default_client, wq
+
+    html = (b'<div class="r"><span class="n">A</span><time>2025-01-01</time></div>'
+            b'<div class="r"><span class="n">B</span><time>2025-02-02</time></div>')
+    d = Document(content=html, kind="html", status_code=200)
+    d._client = default_client()
+    rows = list(wq.doc.select_all(".r").extract(
+        n=wq.doc.select(".n").attr("text"),
+        t=wq.doc.select("//time").attr("text"),  # relative // -> scoped to each record
+    ).project().collect(d))
+    assert rows == [{"n": "A", "t": "2025-01-01"}, {"n": "B", "t": "2025-02-02"}]
+
+
 def test_nested_extract_outputs_nested_json():
     from webclient import Document, default_client, wq
 
