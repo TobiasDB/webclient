@@ -1214,18 +1214,79 @@ def _query_code(reply: str) -> str:
     return t.strip()
 
 
+#: constant literals a query may contain (selectors, group indices, flags).
+_QUERY_CONST = (str, int, float, bool, bytes, type(None))
+
+
+def _eval_query_ast(node: Any, root: Any) -> Any:
+    """Interpret ONE node of a written query, driving the REAL ``wq`` interface -- attribute
+    access and method calls on our own Expr / backing ops only. This is NOT ``eval``: the
+    only name is ``wq``, attributes starting with ``_`` are refused (so ``__globals__`` /
+    ``__class__`` and the builtins they reach are unreachable), only literal constants and
+    the query operators (``& | ~`` and the comparisons used in ``filter``) are allowed, and
+    anything else raises. So a prompt-injected line like
+    ``wq.reference.__globals__['os'].system(...)`` cannot execute -- it is rejected at the
+    ``__globals__`` attribute, never run."""
+    import ast
+
+    if isinstance(node, ast.Expression):
+        return _eval_query_ast(node.body, root)
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, _QUERY_CONST):
+            return node.value
+        raise ValueError(f"disallowed constant: {node.value!r}")
+    if isinstance(node, ast.Name):
+        if node.id == "wq":
+            return root
+        raise ValueError(f"only 'wq' is available in a query, not {node.id!r}")
+    if isinstance(node, ast.Attribute):
+        if node.attr.startswith("_"):
+            raise ValueError(f"attribute {node.attr!r} is not allowed in a query")
+        return getattr(_eval_query_ast(node.value, root), node.attr)
+    if isinstance(node, ast.Call):
+        func = _eval_query_ast(node.func, root)
+        if any(isinstance(a, ast.Starred) for a in node.args):
+            raise ValueError("*args are not allowed in a query")
+        args = [_eval_query_ast(a, root) for a in node.args]
+        kwargs: dict[str, Any] = {}
+        for kw in node.keywords:
+            if kw.arg is None:
+                raise ValueError("**kwargs are not allowed in a query")
+            kwargs[kw.arg] = _eval_query_ast(kw.value, root)
+        return func(*args, **kwargs)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):  # ~cond in a filter
+        return ~_eval_query_ast(node.operand, root)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.BitAnd, ast.BitOr)):  # a & b / a | b
+        left, right = _eval_query_ast(node.left, root), _eval_query_ast(node.right, root)
+        return (left & right) if isinstance(node.op, ast.BitAnd) else (left | right)
+    if isinstance(node, ast.Compare) and len(node.ops) == 1:  # a == b, a < b, ...
+        import operator as _op
+        ops = {ast.Eq: _op.eq, ast.NotEq: _op.ne, ast.Lt: _op.lt,
+               ast.LtE: _op.le, ast.Gt: _op.gt, ast.GtE: _op.ge}
+        fn = ops.get(type(node.ops[0]))
+        if fn is None:
+            raise ValueError("that comparison is not allowed in a query")
+        return fn(_eval_query_ast(node.left, root), _eval_query_ast(node.comparators[0], root))
+    raise ValueError(f"disallowed expression in a query: {type(node).__name__}")
+
+
 def _parse_query(reply: str) -> Any:
     """Load the model's query. The model WRITES it as a ``wq.doc`` chain -- exactly as the
-    guide documents -- and we evaluate that code into an ``Expr``, loading it as written
-    rather than asking the model to hand-serialize a ``to_blob()`` JSON (which it gets
-    wrong -- e.g. dropping the ``select_all`` so the query extracts nothing). A raw blob is
-    still accepted as a fallback. The eval namespace is just ``wq`` with no builtins: the
-    DSL records lazily, so building the query does no IO and reaches nothing but the DSL."""
+    guide documents -- and we rebuild it THROUGH OUR OWN INTERFACE: the code is parsed to an
+    AST and interpreted by :func:`_eval_query_ast`, which drives only the real ``wq`` Expr /
+    backing ops (attribute access + method calls with literal args, plus the query operators).
+    It is NOT ``eval`` -- a prompt-injected line reaching ``__globals__`` or any non-``wq``
+    name is refused before anything runs, so a hostile crawled page cannot achieve code
+    execution. A raw ``to_blob()`` blob is still accepted as a fallback."""
     from ..query.expr import Expr
+
+    import ast
 
     code = _query_code(reply)
     if code.startswith("wq."):
-        expr = eval(code, {"__builtins__": {}, "wq": wq})  # noqa: S307 - our DSL, restricted ns
+        # rebuild THROUGH OUR INTERFACE via a controlled AST walk -- NOT eval(): a
+        # prompt-injected line reaching __globals__ or a non-wq name is refused first.
+        expr = _eval_query_ast(ast.parse(code, mode="eval"), wq)
         if not isinstance(expr, Expr):
             raise TypeError(f"query is a {type(expr).__name__}, not a wq.doc chain")
         return expr

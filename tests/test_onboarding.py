@@ -1242,6 +1242,24 @@ def test_parse_query_loads_written_code_and_falls_back_to_a_blob():
         _parse_query("just some prose, not a query")
 
 
+def test_parse_query_refuses_code_execution(tmp_path):
+    # F1 regression: the loader drives our wq interface via a controlled AST walk, NOT eval,
+    # so a prompt-injected line cannot reach __globals__/builtins and run code.
+    from webclient.pipelines.onboarding import _parse_query
+
+    marker = tmp_path / "pwned"
+    payloads = [
+        f"wq.reference.__globals__['__builtins__']['__import__']('os').system('touch {marker}')",
+        f"wq.doc.select_all.__globals__['__builtins__']['open']('{marker}','w')",
+        "wq.doc.select_all(__import__('os').getcwd())",
+        "wq.doc.select(().__class__.__bases__[0].__subclasses__())",
+    ]
+    for p in payloads:
+        with pytest.raises(Exception):
+            _parse_query(p)
+    assert not marker.exists()  # nothing executed -- refused before running
+
+
 def test_zero_row_query_is_not_a_success(site):
     # a query that runs but extracts 0 rows -> ok is False with a clear reason (no more
     # "0 rows considered a success").
