@@ -1199,6 +1199,78 @@ def _no_rows_hint(expr: Any, doc: Any) -> str:
     )
 
 
+def _nonempty(v: Any) -> bool:
+    """Whether an extracted value actually carries content -- not ``None``, not blank/
+    whitespace, not an empty list/dict. The test of "did the selector match content"."""
+    if v is None:
+        return False
+    if isinstance(v, str):
+        return v.strip() != ""
+    if isinstance(v, (list, dict, tuple, set)):
+        return len(v) > 0
+    return True
+
+
+def _populated_rows(rows: "list[Any]") -> "list[Any]":
+    """The rows that carry AT LEAST ONE non-empty field. A row of all-empty cells means
+    the record selector matched an element but every FIELD selector matched nothing (a
+    guessed query, or content that isn't in this HTML) -- it is not real extracted data,
+    so it must not count as a extracted row."""
+    out: list[Any] = []
+    for r in rows:
+        if isinstance(r, dict):
+            if any(_nonempty(v) for v in r.values()):
+                out.append(r)
+        elif _nonempty(r):
+            out.append(r)
+    return out
+
+
+def _required_columns(brief: Brief) -> "list[str]":
+    """The top-level schema field names that must be populated (non-optional). The query's
+    ``.extract(col=...)`` columns are named after these, so we can check each really came
+    out with content."""
+    opt = {p.split(".")[0] for p in brief.optional}
+    req: list[str] = []
+    for f in brief.fields:
+        top = f.split(".")[0]
+        if top and top not in opt and top not in req:
+            req.append(top)
+    return req
+
+
+def _empty_required_fields(rows: "list[Any]", brief: Brief) -> "list[str]":
+    """Required columns that are EMPTY (or absent) across every row -- their selectors
+    matched no content, so the query is only a partial guess. Empty when the rows carry
+    every required field. Skipped when the brief has no schema (nothing to check)."""
+    req = _required_columns(brief)
+    dict_rows = [r for r in rows if isinstance(r, dict)]
+    if not req or not dict_rows:
+        return []
+    return [c for c in req if not any(_nonempty(r.get(c)) for r in dict_rows)]
+
+
+def _content_hint(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> str:
+    """The retry hint when a query RAN but did not truly extract the dataset -- naming the
+    specific validation that failed (record selector matched nothing / matched but fields
+    are empty / a required field is empty) and warning that the content may not be in the
+    HTML at all (client-rendered / iframe / shadow DOM), which a static query can't reach."""
+    caveat = (
+        " If the records are not visible in the skeleton at all, the page is likely rendered"
+        " client-side (an SPA) or the data sits inside an iframe or shadow DOM -- a static"
+        " query cannot reach it; do NOT guess selectors that are not in the skeleton."
+    )
+    if not _populated_rows(rows):  # matched a container but every field is empty (or 0 rows)
+        return _no_rows_hint(expr, doc) + caveat
+    empty = _empty_required_fields(rows, brief)  # some required field never came out
+    cols = ", ".join(f'"{c}"' for c in empty)
+    return (
+        f"Your query extracted rows, but the required field(s) {cols} were EMPTY on every"
+        " row -- those field selectors match nothing inside a record. Re-check them against"
+        " the skeleton (selectors are relative to the record)." + caveat
+    )
+
+
 def _test_query(expr: Any, doc: Any) -> "tuple[bool, list[Any]]":
     """Run the authored query against the fetched source ``doc`` to prove it loads and
     actually EXTRACTS the dataset. The query is the document-level extraction
@@ -1279,23 +1351,30 @@ def write_query(
             )
             continue
         tested, rows = _test_query(expr, doc) if doc.ok else (False, [])
+        # VALIDATE the extraction actually pulled content, not just that it ran: keep only
+        # rows with a non-empty field, and require every non-optional field to have come out
+        # somewhere. A query that matched a container but whose field selectors match nothing
+        # (a guess, or content that isn't in the HTML) is NOT a success.
+        good = _populated_rows(rows)
+        missing = _empty_required_fields(good, brief)
         exe = _executable_query(expr, candidate_url, resolve)  # self-contained + runnable
         art = QueryArtifact(
             blob=exe.to_blob(),
             describe=exe.explain(),
             plan=exe._plan.model_dump(mode="json"),
             tested=tested,
-            row_count=len(rows),
-            sample=list(rows[:5]),
+            row_count=len(good),
+            sample=list(good[:5]),
             base_urls=bases,
         )
-        if tested and rows:
-            return art  # a query that actually extracts DATA rows -- accept it
+        if tested and good and not missing:
+            return art  # rows with real, complete content -- accept it
         best = best or art  # keep the first rebuildable one as a fallback
-        # ran but extracted nothing: diagnose WHY (wrong record selector vs. wrong field
-        # selectors / no project) and hand the model a concrete, human-readable hint.
-        hint = _no_rows_hint(expr, doc)
-        log.info("    query ran but extracted 0 rows -- retrying with feedback: %s", hint)
+        # ran but did not truly extract: diagnose WHY (wrong record selector / empty fields /
+        # a required field never populated / content not in the HTML) and hand the model a
+        # concrete, human-readable hint.
+        hint = _content_hint(expr, rows, brief, doc)
+        log.info("    query did not extract valid content -- retrying with feedback: %s", hint)
         ask = prompt + f"\n\nYour previous query was:\n{expr.explain()}\n\n{hint}"
     return best
 

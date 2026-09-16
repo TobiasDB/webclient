@@ -967,6 +967,67 @@ def test_crawl_evaluates_seeds_before_fetching_them(httpserver):
     assert not any(u.endswith("/skip") for u in fetched)  # the rejected seed was NOT
 
 
+def test_write_query_rejects_rows_whose_fields_are_all_empty(httpserver):
+    # a query that matches the record container but whose FIELD selectors match nothing
+    # yields all-empty rows -- that is not extraction, it is a guess. It must be rejected
+    # (retried), not accepted as a success, and the hint must warn about client-rendered
+    # / iframe / shadow-DOM content that a static query cannot reach.
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/p").respond_with_data(
+        "<main>" + "".join(f'<div class="r"><span class="n">P{i}</span></div>' for i in range(3)) + "</main>",
+        content_type="text/html",
+    )
+    replies = iter([
+        'wq.doc.select_all(".r").extract(name=wq.doc.select(".missing").attr("text")).project()',  # empty
+        'wq.doc.select_all(".r").extract(name=wq.doc.select(".n").attr("text")).project()',          # real
+    ])
+    prompts: list[str] = []
+
+    def llm(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(replies)
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/p"), Brief(description="rows", fields=["name"]),
+                          wc=wc, llm=llm, browser="never", retries=1)
+    assert art is not None and art.row_count == 3  # only the real query is accepted
+    assert all(r.get("name") for r in art.sample)
+    assert len(prompts) == 2  # the all-empty query was rejected and retried
+    assert "iframe or shadow DOM" in prompts[1] or "client-side" in prompts[1]  # content caveat
+
+
+def test_write_query_rejects_a_missing_required_field(httpserver):
+    # a query that fills some fields but leaves a REQUIRED one empty on every row is only a
+    # partial guess -- reject + name the empty field. An OPTIONAL field left empty is fine.
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/p").respond_with_data(
+        '<main><div class="r"><span class="n">A</span><span class="d">Jan 1</span></div></main>',
+        content_type="text/html",
+    )
+    replies = iter([
+        # date marked optional (to dodge the miss error) but its selector is wrong -> the
+        # row is populated by title, yet the REQUIRED date is None on every row
+        'wq.doc.select_all(".r").extract(title=wq.doc.select(".n").attr("text"), '
+        'date=wq.doc.select(".nodate", optional=True).attr("text")).project()',
+        'wq.doc.select_all(".r").extract(title=wq.doc.select(".n").attr("text"), '
+        'date=wq.doc.select(".d").attr("text")).project()',        # date filled
+    ])
+    prompts: list[str] = []
+
+    def llm(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(replies)
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/p"),
+                          Brief(description="news", fields=["title", "date"]),
+                          wc=wc, llm=llm, browser="never", retries=1)
+    assert art is not None and art.row_count == 1 and art.sample[0]["date"] == "Jan 1"
+    assert len(prompts) == 2 and '"date"' in prompts[1]  # the empty required field was named
+
+
 def test_parse_query_loads_written_code_and_falls_back_to_a_blob():
     # the model WRITES the query as a wq.doc chain; we eval it (load it as written). A
     # code fence / preamble is tolerated, a raw to_blob() blob is still accepted, and a
