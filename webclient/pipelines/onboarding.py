@@ -1419,7 +1419,10 @@ def write_query(
             break
         try:
             expr = _parse_query(reply)  # load the written wq.doc chain (or a raw blob)
-        except Exception:  # noqa: BLE001 - unparsable query code -> retry with feedback
+        except Exception as exc:  # noqa: BLE001 - unparsable query code -> retry with feedback
+            # surface WHAT the model said so an all-unparseable run is diagnosable, not a
+            # silent "could not author a query"
+            log.info("    query reply not parseable (%s) -- retrying; reply: %.160r", exc, reply.strip())
             ask = prompt + "\n\nYour previous reply was not a valid query. Reply with ONLY the query code -- a single wq.doc... chain, nothing else."
             continue
         # a real extraction MUST select the records -- a query with no select_all/select
@@ -1460,6 +1463,8 @@ def write_query(
         hint = _content_hint(expr, rows, brief, doc)
         log.info("    query did not extract valid content -- retrying with feedback: %s", hint)
         ask = prompt + f"\n\nYour previous query was:\n{expr.explain()}\n\n{hint}"
+    if best is None:  # every attempt failed to author a usable query -- say so loudly
+        log.warning("    could not author any query in %d attempt(s)", retries + 1)
     return best
 
 

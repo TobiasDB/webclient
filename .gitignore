@@ -119,3 +119,6 @@ Thumbs.db
 docs/assessment.md
 docs/llm-usability.md
 docs/notes.md
+
+# onboarding harness outputs (local runs)
+harness_runs/
