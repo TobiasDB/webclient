@@ -374,6 +374,7 @@ class Review(BaseModel):
 
     stage: str
     verdict: str = ""
+    passed: bool = True  # did this stage's result pass the review? a fail GATES the pipeline
     score: int = 0
     issues: list[str] = []
     summary: str = ""
@@ -521,11 +522,12 @@ def _summarize(result: OnboardingResult) -> None:
         # the self-contained query blob on its own line -- executable as is, easy to copy
         lines.append("  query blob (copy; run with `from_blob(blob).collect()`):")
         lines.append(q.blob)
-    if result.reviews:  # the meta-review's grade of each stage (+ a failure diagnosis)
+    if result.reviews:  # the integral stage reviews (gates) + a failure diagnosis
         lines.append("  review:")
         for r in result.reviews:
+            mark = "" if r.stage == "failure" else ("✓ " if r.passed else "✗ ")
             grade = f"{r.verdict}" + (f", {r.score}/10" if r.score else "")
-            head = f"    {r.stage}" + (f" ({grade})" if grade.strip(", ") else "")
+            head = f"    {mark}{r.stage}" + (f" ({grade})" if grade.strip(", ") else "")
             lines.append(head + (f": {r.summary}" if r.summary else ""))
             for issue in r.issues:
                 lines.append(f"      · {issue}")
@@ -1439,6 +1441,7 @@ def _review_from_json(stage: str, data: Any) -> "Review | None":
     return Review(
         stage=stage,
         verdict=str(data.get("verdict") or ""),
+        passed=bool(data.get("pass", True)),  # absent -> don't block (default pass)
         score=max(0, min(10, score)),
         issues=[str(i) for i in issues][:10],
         summary=str(data.get("summary") or ""),
@@ -1530,19 +1533,31 @@ def review_failure(result: OnboardingResult, artifacts: _RunArtifacts, brief: Br
     return _review_from_json("failure", data)
 
 
-def review_run(result: OnboardingResult, artifacts: _RunArtifacts, *, brief: Brief, llm: LLM) -> None:
-    """The meta-review stage: grade whichever stages the run reached, and diagnose a
-    failure. Each sub-review degrades gracefully (a skipped/failed LLM call adds nothing).
-    Appends the reviews to ``result.reviews``."""
-    _trace(result, "reviewing the run's choices")
-    reviews = [
-        review_crawl(artifacts, brief, llm=llm),
-        review_select(result, artifacts, brief, llm=llm),
-        review_query(result, artifacts, brief, llm=llm),
-    ]
-    if not result.ok:  # diagnose WHAT went wrong (surfaced in the summary)
-        reviews.append(review_failure(result, artifacts, brief, llm=llm))
-    result.reviews = [r for r in reviews if r is not None]
+def _gate(result: OnboardingResult, review: "Review | None") -> bool:
+    """Record a stage review and GATE the pipeline on it: append it to ``result.reviews``
+    and return whether the run may CONTINUE. A review that did not pass fails the run here
+    (``ok=False`` + a reason naming the stage), so the review is integral -- a bad crawl /
+    selection / query stops the pipeline, it is not graded after the fact. ``None`` (the
+    review was skipped or the model gave nothing) does not gate."""
+    if review is None:
+        return True
+    result.reviews.append(review)
+    _trace(result, "%s review: %s%s", review.stage,
+           "passed" if review.passed else "FAILED",
+           f" — {review.summary}" if review.summary else "")
+    if not review.passed:
+        result.ok = False
+        result.reason = f"{review.stage} review failed" + (f": {review.summary}" if review.summary else "")
+        return False
+    return True
+
+
+def diagnose_failure(result: OnboardingResult, artifacts: _RunArtifacts, *, brief: Brief, llm: LLM) -> None:
+    """On a failed run (whether a stage review gated it or a stage errored), add the
+    failure review's diagnosis to ``result.reviews`` so the summary says WHY it failed."""
+    review = review_failure(result, artifacts, brief, llm=llm)
+    if review is not None:
+        result.reviews.append(review)
 
 
 # --------------------------------------------------------------------------- #
@@ -1585,9 +1600,10 @@ def onboard_company(
         _onboard_company(
             company, brief, result, artifacts,
             wc=wc, llm=llm, search=search, max_pages=max_pages, browser=browser,
+            review=review,  # stage reviews are integral + gating, run inline (see _onboard_company)
         )
-        if review:  # the meta-review stage grades the run's choices (opt-in)
-            review_run(result, artifacts, brief=brief, llm=llm)
+        if review and not result.ok:  # diagnose WHY it failed (a gate, or a stage error)
+            diagnose_failure(result, artifacts, brief=brief, llm=llm)
     except BudgetExceeded:
         result.ok = False
         result.reason = result.reason or "llm budget exceeded"
@@ -1608,6 +1624,7 @@ def _onboard_company(
     search: SearchFn,
     max_pages: int,
     browser: bool,
+    review: bool = False,
 ) -> OnboardingResult:
     def note(msg: str, *a: Any) -> None:  # trace with the running spend kept current
         if isinstance(llm, LlmClient):
@@ -1626,6 +1643,10 @@ def _onboard_company(
     )
     artifacts.crawl = crawl
     note("crawled %d page(s), %d failed", len(crawl.pages), len(crawl.failures))
+    # GATE: the crawl review is an integral stage -- a crawl that didn't reach the data
+    # fails the run here rather than pressing on to select a source that isn't there.
+    if review and not _gate(result, review_crawl(artifacts, brief, llm=llm)):
+        return result
     candidates = select_candidates(crawl, brief, llm=llm)
     artifacts.candidates = list(candidates)
     if not candidates:
@@ -1644,6 +1665,9 @@ def _onboard_company(
         "chose %s (queryable=%s, scrapability=%d)",
         evaluation.url, evaluation.is_queryable, evaluation.scrapability,
     )
+    # GATE: the selection review -- were the right URLs picked and the best source chosen?
+    if review and not _gate(result, review_select(result, artifacts, brief, llm=llm)):
+        return result
     # -- the flag-driven decision cascade for the chosen source, in order ----------
     # (1) reference: the data API if the SPA is backed by one, else the page URL.
     result.reference = write_reference(evaluation, wc=wc)
@@ -1678,6 +1702,10 @@ def _onboard_company(
         result.reason = "could not author a query"
     if q is not None:
         note("query authored (tested=%s, %d row[s])", q.tested, q.row_count)
+    # GATE: the query review -- does the output match the brief, are the selectors right,
+    # is it complete? A failing review fails the run even if the query technically ran.
+    if review and result.ok:
+        _gate(result, review_query(result, artifacts, brief, llm=llm))
     return result
 
 

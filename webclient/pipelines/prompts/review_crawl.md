@@ -11,4 +11,6 @@ Judge the crawl's choices:
 - Was it COMPLETE for this goal — did it likely miss an obvious better source (e.g. a press-release/news listing, an export/API endpoint) that a human would have gone to?
 - Was it too shallow (stopped short) or too broad (spent its budget on chrome)?
 
-Reply with ONLY a JSON object: "verdict" ("good"|"partial"|"poor"), "score" (0-10), "issues" (a list of short concrete problems, [] if none), "summary" (one sentence a human reads).
+This review GATES the pipeline: if the crawl did not reach the data, the run should stop here rather than press on to scrape a source that isn't there.
+
+Reply with ONLY a JSON object: "pass" (bool: true if the crawl reached the dataset well enough to continue; false to FAIL the run), "verdict" ("good"|"partial"|"poor"), "score" (0-10), "issues" (a list of short concrete problems, [] if none), "summary" (one sentence a human reads).

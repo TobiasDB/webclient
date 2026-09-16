@@ -15,4 +15,6 @@ Judge the query against the page and the brief:
 - Do they capture ALL the records on the page — is the row_count plausibly the FULL set, or did the query miss rows (too-narrow a record selector, a missed container, pagination not followed)?
 - Are any required fields empty, mis-mapped, or missing?
 
-Reply with ONLY a JSON object: "verdict" ("good"|"partial"|"poor"), "score" (0-10), "issues" (a list of short concrete problems, [] if none), "summary" (one sentence a human reads).
+This review GATES the pipeline: a query whose output does not actually match the brief -- wrong/empty fields, selectors that miss the real records, or only a fraction of the rows -- should FAIL the run even if it technically ran, so we don't ship a wrong dataset.
+
+Reply with ONLY a JSON object: "pass" (bool: true if the output genuinely matches the brief and is complete; false to FAIL the run), "verdict" ("good"|"partial"|"poor"), "score" (0-10), "issues" (a list of short concrete problems, [] if none), "summary" (one sentence a human reads).

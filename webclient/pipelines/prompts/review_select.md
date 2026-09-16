@@ -13,4 +13,6 @@ Judge the selection:
 - Was a better candidate present in the crawled pages but NOT selected (a missed listing / data endpoint)?
 - Was the best available source chosen to scrape, given the goal?
 
-Reply with ONLY a JSON object: "verdict" ("good"|"partial"|"poor"), "score" (0-10), "issues" (a list of short concrete problems, [] if none), "summary" (one sentence a human reads).
+This review GATES the pipeline: if the wrong source was chosen (or the right one wasn't among the candidates), the run should stop rather than author a query against the wrong page.
+
+Reply with ONLY a JSON object: "pass" (bool: true if the selection is good enough to continue; false to FAIL the run), "verdict" ("good"|"partial"|"poor"), "score" (0-10), "issues" (a list of short concrete problems, [] if none), "summary" (one sentence a human reads).
