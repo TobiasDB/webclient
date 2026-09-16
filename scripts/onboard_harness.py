@@ -189,7 +189,9 @@ def _report_md(rec: dict, slug: str, blob_path: str) -> str:
         f"# {mark} {rec['company']} × {rec['brief']}", "",
         f"- **Result:** {'ready' if rec['ok'] else 'not onboarded — ' + rec['reason']}",
         f"- **Source:** {rec.get('source') or '—'}",
-        f"- **Rows extracted:** {q['row_count'] if q else 0}",
+        f"- **Rows extracted (sample tested):** {q['row_count'] if q else 0}",
+        (f"- **Full dataset:** {rec['dataset_rows']} rows → [`{slug}.dataset.json`](./{slug}.dataset.json)"
+         if rec.get("dataset_rows") is not None else "- **Full dataset:** —"),
         f"- **Full trace:** [`{slug}.log`](./{slug}.log)   ·   **Re-run:** "
         f"`env/bin/python scripts/onboard_harness.py --only \"{rec['company']}\"`",
         "",
@@ -277,6 +279,17 @@ def _run_case(wc: WebClient, llm, case: tuple[str, str, list[str]], outdir: Path
         r = onboard_company(company, BRIEFS[brief_key], wc=sess, llm=llm,
                             search=_canned_search(urls, company), browser=browser, review=review)
         rec = _result_dict(brief_key, r)
+        # WRITE THE DATASET: run the authored query for the FULL set of rows (not just the
+        # 5-row sample) and save it, so a passing case yields the actual extracted dataset.
+        if r.ok and r.query is not None:
+            from webclient.pipelines import run_query
+            try:
+                rows = run_query(r.query, wc=sess)
+                prefix.with_suffix(".dataset.json").write_text(json.dumps(rows, indent=2, default=str))
+                rec["dataset_rows"] = len(rows)
+            except Exception as exc:  # noqa: BLE001 - dataset run failure shouldn't sink the case
+                buf.write(f"\ndataset run failed: {type(exc).__name__}: {exc}\n")
+                rec["dataset_rows"] = None
     except Exception as exc:  # a bad case must not sink the rest
         buf.write(f"\nEXCEPTION: {type(exc).__name__}: {exc}\n")
         rec = {"company": company, "brief": brief_key, "ok": False,
@@ -293,7 +306,9 @@ def _run_case(wc: WebClient, llm, case: tuple[str, str, list[str]], outdir: Path
         blob_path.write_text((rec["query"] or {}).get("blob", ""))
     prefix.with_suffix(".md").write_text(_report_md(rec, slug, str(blob_path)))
     rows = (rec.get("query") or {}).get("row_count", 0)
-    print(f"  {'✓' if rec['ok'] else '✗'} {company} × {brief_key}  ({rows} rows, {rec['secs']:.0f}s)")
+    ds = rec.get("dataset_rows")
+    extra = f", dataset {ds} rows" if ds is not None else ""
+    print(f"  {'✓' if rec['ok'] else '✗'} {company} × {brief_key}  ({rows} rows{extra}, {rec['secs']:.0f}s)")
     return rec
 
 
@@ -367,13 +382,31 @@ def main() -> None:
     ap.add_argument("--no-review", action="store_true")
     ap.add_argument("--verbose", action="store_true", help="capture logs at DEBUG")
     ap.add_argument("--aggregate", action="store_true", help="add a cross-matrix review at the end")
+    ap.add_argument("--budget", type=float, default=0.0, help="cap LLM spend (USD) when using the API key")
     a = ap.parse_args()
 
     # decreased crawl size: push the small budget into every brief's crawl block
     for b in BRIEFS.values():
         b.crawl.update(max_pages=a.max_pages, rounds=a.rounds, depth=a.depth)
 
-    from claude_llm_adapter import claude_code_llm
+    # Prefer a REAL Anthropic API key: LLM calls become lightweight httpx requests, avoiding
+    # the heavy nested `claude -p` processes (each a full Claude Code instance) whose combined
+    # footprint trips the background-task supervisor. Fall back to the local claude CLI when
+    # no key/base-url is set (keep --parallel low then: the nested procs get the task killed).
+    import contextlib
+    import os
+
+    _client = None
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_BASE_URL"):
+        from webclient.pipelines import Budget, LlmClient
+        _client = LlmClient(budget=Budget(max_usd=a.budget) if a.budget else Budget())
+        base_llm = _client
+        print(f"LLM: Anthropic API ({_client.model}) — lightweight, no nested processes")
+    else:
+        from claude_llm_adapter import claude_code_llm
+        base_llm = claude_code_llm
+        print("LLM: local Claude Code (claude -p) — heavy nested processes; keep --parallel low "
+              "(set ANTHROPIC_API_KEY for a fast, kill-free run)")
 
     calls = {"n": 0}
     _lock = threading.Lock()
@@ -381,7 +414,7 @@ def main() -> None:
     def llm(prompt: str) -> str:
         with _lock:
             calls["n"] += 1
-        return claude_code_llm(prompt)
+        return base_llm(prompt)
 
     cases = [c for c in CASES
              if (not a.brief or c[0] in a.brief) and (not a.only or c[1] in a.only)]
@@ -430,6 +463,9 @@ def main() -> None:
                                 browser=not a.no_browser, review=not a.no_review) for c in todo]
             for f in cf.as_completed(futs):
                 records.append(f.result())
+    if _client is not None:  # close the API client
+        with contextlib.suppress(Exception):
+            _client.close()
 
     records.sort(key=lambda r: (r["brief"], r["company"]))
     (outdir / "summary.json").write_text(json.dumps(records, indent=2, default=str))
