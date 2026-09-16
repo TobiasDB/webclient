@@ -121,6 +121,84 @@ def _result_dict(brief_key: str, r) -> dict:
 # worker: run ONE case in its own process; logs -> stdout, result -> <prefix>.json
 # ---------------------------------------------------------------------------- #
 
+def _md_table(sample: list) -> str:
+    """A markdown table from a list of row dicts (or a bullet list for scalars)."""
+    dicts = [r for r in sample if isinstance(r, dict)]
+    if not dicts:
+        return "\n".join(f"- {r}" for r in sample) or "_(no rows)_"
+    cols: list[str] = []
+    for r in dicts:
+        for k in r:
+            if k not in cols:
+                cols.append(k)
+    head = "| " + " | ".join(cols) + " |\n| " + " | ".join("---" for _ in cols) + " |"
+    body = "\n".join(
+        "| " + " | ".join(str(r.get(c, "")).replace("|", "\\|")[:60] for c in cols) + " |"
+        for r in dicts
+    )
+    return head + "\n" + body
+
+
+def _report_md(rec: dict, slug: str, blob_path: str) -> str:
+    """A human-readable report for one company: outcome, the authored query, a sample
+    table, the reviews, and a COPY-PASTE snippet to run the query yourself."""
+    q = rec.get("query")
+    mark = "✅" if rec["ok"] else "❌"
+    out = [
+        f"# {mark} {rec['company']} × {rec['brief']}", "",
+        f"- **Result:** {'ready' if rec['ok'] else 'not onboarded — ' + rec['reason']}",
+        f"- **Source:** {rec.get('source') or '—'}",
+        f"- **Rows extracted:** {q['row_count'] if q else 0}",
+        f"- **Full trace:** [`{slug}.log`](./{slug}.log)   ·   **Re-run:** "
+        f"`env/bin/python scripts/onboard_harness.py --only \"{rec['company']}\"`",
+        "",
+    ]
+    if q:
+        out += [
+            "## Authored query", "", f"```\n{q['describe']}\n```", "",
+            "### Test it yourself",
+            "The query blob is self-contained (fetch + extract). Run it and see the rows:", "",
+            "```bash", "env/bin/python - <<'PY'",
+            "from webclient import WebClient, from_blob",
+            f'blob = open("{blob_path}").read()',
+            "with WebClient() as wc:",
+            "    for row in from_blob(blob, wc).collect()[:20]:",
+            "        print(row)", "PY", "```", "",
+            f"### Sample rows ({q['row_count']} total, tested={q['tested']})", "",
+            _md_table(q["sample"]), "",
+        ]
+    else:
+        out += ["## No query authored", "", f"Reason: **{rec['reason']}** — see the trace log.", ""]
+    if rec["reviews"]:
+        out += ["## Review (the gates + diagnosis)", ""]
+        for v in rec["reviews"]:
+            m = "" if v["stage"] == "failure" else ("✓ " if v["passed"] else "✗ ")
+            grade = f" ({v['verdict']}{', ' + str(v['score']) + '/10' if v['score'] else ''})" if v["verdict"] else ""
+            out.append(f"**{m}{v['stage']}{grade}** — {v['summary']}")
+            out += [f"  - {i}" for i in v["issues"]]
+            out.append("")
+    return "\n".join(out)
+
+
+def _write_index(records: list[dict], outdir) -> None:
+    lines = [
+        f"# Onboarding harness run — {outdir.name}", "",
+        "Each row links to a human-readable report (outcome, the authored query, a sample "
+        "table, the reviews, and a snippet to run the query yourself) and the full trace log.", "",
+        "| | company | brief | rows | reports |",
+        "|---|---|---|---|---|",
+    ]
+    for r in records:
+        rows = (r.get("query") or {}).get("row_count", 0)
+        slug = r["slug"]
+        lines.append(f"| {'✅' if r['ok'] else '❌'} | {r['company']} | {r['brief']} | {rows} | "
+                     f"[report](./{slug}.md) · [trace](./{slug}.log) · [json](./{slug}.json) |")
+    ok = sum(1 for r in records if r["ok"])
+    lines += ["", f"**{ok}/{len(records)} onboarded.**  Full matrix: `summary.json`. "
+              "Cross-cutting fixes (if `--aggregate`): `aggregate.md`.", ""]
+    (outdir / "index.md").write_text("\n".join(lines))
+
+
 def _run_worker(a: argparse.Namespace) -> int:
     from claude_llm_adapter import claude_code_llm  # local to the worker process
 
@@ -167,6 +245,11 @@ def _launch(case: tuple[str, str, list[str]], outdir: Path, flags: list[str]) ->
                "query": None, "reviews": [], "trace": []}
     rec["secs"] = round(secs, 1)
     rec["slug"] = slug
+    # a testable blob sidecar + a human-readable per-company report
+    blob_path = prefix.with_suffix(".blob.json")
+    if rec.get("query"):
+        blob_path.write_text((rec["query"] or {}).get("blob", ""))
+    prefix.with_suffix(".md").write_text(_report_md(rec, slug, str(blob_path)))
     rows = (rec.get("query") or {}).get("row_count", 0)
     print(f"  {'✓' if rec['ok'] else '✗'} {company} × {brief_key}  ({rows} rows, {secs:.0f}s)",
           file=sys.stderr)
@@ -233,6 +316,7 @@ def main() -> None:
 
     records.sort(key=lambda r: (r["brief"], r["company"]))
     (outdir / "summary.json").write_text(json.dumps(records, indent=2, default=str))
+    _write_index(records, outdir)  # a readable index linking every per-company report
 
     print(f"\n{'='*96}\nHARNESS RESULTS  ->  {outdir}\n{'='*96}")
     print(f"{'company':22} {'brief':18} {'ok':3} {'rows':5} {'secs':5} reviews / reason")
@@ -245,7 +329,8 @@ def main() -> None:
               f"{rows:<5} {r.get('secs', 0):<5.0f} {detail[:44]}")
     ok = sum(1 for r in records if r["ok"])
     print("-" * 96)
-    print(f"{ok}/{len(records)} onboarded · logs + per-case json in {outdir}")
+    print(f"{ok}/{len(records)} onboarded")
+    print(f"READ THIS FIRST -> {outdir}/index.md   (per-company reports + how to test each query)")
 
     if a.aggregate and records:
         _aggregate(records, outdir)
