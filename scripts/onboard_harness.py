@@ -271,7 +271,10 @@ def _run_case(wc: WebClient, llm, case: tuple[str, str, list[str]], outdir: Path
     _local.buf = buf  # route THIS thread's pipeline log lines to buf
     t0 = time.monotonic()
     try:
-        r = onboard_company(company, BRIEFS[brief_key], wc=wc, llm=llm,
+        # a per-company SESSION isolates cookies/headers/state (shares the one browser pool),
+        # so concurrent companies don't cross-contaminate each other.
+        sess = wc.session()
+        r = onboard_company(company, BRIEFS[brief_key], wc=sess, llm=llm,
                             search=_canned_search(urls, company), browser=browser, review=review)
         rec = _result_dict(brief_key, r)
     except Exception as exc:  # a bad case must not sink the rest
