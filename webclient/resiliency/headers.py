@@ -11,7 +11,7 @@ top -- these headers are the *delegated* form, not a replacement.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Iterable
 
 if TYPE_CHECKING:
     from ..core.reference.models import (
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     )
 
 
-def _csv(values: Any) -> str:
+def _csv(values: "Iterable[object]") -> str:
     """A frozenset/list of scalars as a stable, comma-joined header value."""
     return ",".join(str(v) for v in sorted(values, key=str))
 
