@@ -40,7 +40,7 @@ class Subscription(BaseModel):
     id: str
     topic: Topic
 
-    _bus: Any = PrivateAttr(default=None)
+    _bus: "EventBus | None" = PrivateAttr(default=None)
 
     def cancel(self) -> None:
         if self._bus is not None:
@@ -56,7 +56,7 @@ class EventBus(BaseModel):
     events without one) and ``ts`` on every publish (ISSUES #15).
     """
 
-    _lock: Any = PrivateAttr(default_factory=threading.RLock)
+    _lock: "threading.RLock" = PrivateAttr(default_factory=threading.RLock)
     _subs: dict[str, tuple[Topic, dict[str, str | None], Callable[[Event], None]]] = (
         PrivateAttr(default_factory=dict)
     )
