@@ -356,6 +356,7 @@ class QueryArtifact(BaseModel):
     describe: str  # a readable one-line rendering of the chain
     plan: dict[str, Any] = {}  # the plan dict (from_plan-loadable; the wire form)
     tested: bool = False  # did it run against the source without error?
+    complete: bool = False  # tested + rows have content + every REQUIRED field populated
     row_count: int = 0  # how many rows it produced when tested
     sample: list[Any] = []  # up to 5 produced rows (as data), shown as a table
     #: the source URLs this one query runs against, unioned. Usually one, but a dataset
@@ -1450,13 +1451,14 @@ def write_query(
             describe=exe.explain(),
             plan=exe._plan.model_dump(mode="json"),
             tested=tested,
+            complete=bool(tested and good and not missing),  # every required field populated
             row_count=len(good),
             sample=list(good[:5]),
             base_urls=bases,
         )
-        if tested and good and not missing:
+        if art.complete:
             return art  # rows with real, complete content -- accept it
-        best = best or art  # keep the first rebuildable one as a fallback
+        best = best or art  # keep the first rebuildable one as a fallback (NOT complete)
         # ran but did not truly extract: diagnose WHY (wrong record selector / empty fields /
         # a required field never populated / content not in the HTML) and hand the model a
         # concrete, human-readable hint.
@@ -1833,12 +1835,15 @@ def _onboard_company(
     )
     if isinstance(llm, LlmClient):
         result.cost_usd = llm.spent_usd
-    # a real success EXTRACTS data: a query that ran but produced 0 rows is not ok
-    # (it selected nothing / didn't project / hit the wrong source).
+    # a real success EXTRACTS data with every required field: a query that ran but produced
+    # 0 rows, or left a required field empty on every row, is NOT ok (a fallback `best`
+    # artifact is kept for the summary but is marked not-complete).
     q = result.query
-    result.ok = q is not None and q.row_count > 0
+    result.ok = q is not None and q.complete and q.row_count > 0
     if result.ok:
         result.reason = ""
+    elif q is not None and q.row_count > 0:
+        result.reason = "authored query is missing required field(s)"
     elif q is not None:
         result.reason = "authored query extracted 0 rows"
     else:

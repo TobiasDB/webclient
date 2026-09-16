@@ -1206,6 +1206,24 @@ def test_write_query_rejects_a_missing_required_field(httpserver):
     assert len(prompts) == 2 and '"date"' in prompts[1]  # the empty required field was named
 
 
+def test_write_query_fallback_is_marked_incomplete_when_a_required_field_is_empty(httpserver):
+    # if EVERY attempt leaves a required field empty, the returned artifact is kept as a
+    # fallback but marked complete=False -- so the run is not reported ok (F3 regression).
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/p").respond_with_data(
+        '<main><div class="r"><span class="n">A</span></div></main>', content_type="text/html")
+    # date is required but its selector never matches (optional=True -> None on every row)
+    code = ('wq.doc.select_all(".r").extract(title=wq.doc.select(".n").attr("text"), '
+            'date=wq.doc.select(".nope", optional=True).attr("text")).project()')
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/p"),
+                          Brief(description="news", fields=["title", "date"]),
+                          wc=wc, llm=lambda p: code, browser="never", retries=1)
+    assert art is not None and art.row_count == 1  # a row came out (title populated)
+    assert not art.complete  # ...but a required field is empty -> not complete -> run not ok
+
+
 def test_parse_query_loads_written_code_and_falls_back_to_a_blob():
     # the model WRITES the query as a wq.doc chain; we eval it (load it as written). A
     # code fence / preamble is tolerated, a raw to_blob() blob is still accepted, and a
