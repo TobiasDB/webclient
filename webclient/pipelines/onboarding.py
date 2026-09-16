@@ -247,8 +247,11 @@ class CandidateEval(BaseModel):
     dataset_is_subset: bool = False  # our brief is a subset of what's on offer
     mostly_unstructured: bool = False
     drilldown_links: bool = False
+    #: this page DOCUMENTS an API (developer docs / reference / OpenAPI) rather than
+    #: being the data -- never a scrapable source, however "API-ish" it looks.
+    is_api_docs: bool = False
     scrapability: int = 0  # 0-10; higher is easier/cleaner to scrape
-    verdict: str = ""  # the model's one-line judgement
+    verdict: str = ""  # the model's one-line reason for its judgement (logged)
     #: the detected flags on the page (name -> confidence), and, when the SPA is
     #: backed by a same-origin data API, the endpoint to query INSTEAD of scraping.
     flags: dict[str, float] = {}
@@ -392,6 +395,8 @@ def _summarize(result: OnboardingResult) -> None:
                 f"{n} {c:.2f}" for n, c in sorted(ev.flags.items(), key=lambda x: -x[1])
             )
             lines.append(f"  flags:     {flags}")
+        if ev.verdict:  # the model's reason for choosing this source
+            lines.append(f"  reason:    {ev.verdict}")
     # the args to reproduce the fetch by hand
     if ref_url:
         bases = result.query.base_urls if result.query else []
@@ -629,9 +634,15 @@ def _pick_edges(llm: LLM, brief: Brief, frontier: Sequence[Any]) -> list[str]:
     if not isinstance(picked, list):
         return []
     urls: list[str] = []
-    for idx in picked:
+    for item in picked:
+        # accept {"n": i, "why": "..."} (reasoned) or a bare index for robustness
+        if isinstance(item, dict):
+            idx, why = item.get("n", item.get("index")), str(item.get("why") or item.get("reason") or "")
+        else:
+            idx, why = item, ""
         if isinstance(idx, int) and 0 <= idx < len(frontier):
             urls.append(frontier[idx].url)
+            log.info("    pick %s%s", frontier[idx].url, f"  — {why}" if why else "")
     return urls
 
 
@@ -710,9 +721,12 @@ def select_candidates(crawl: Any, brief: Brief, *, llm: LLM) -> list[Candidate]:
     out: list[Candidate] = []
     for r in rows if isinstance(rows, list) else []:
         if isinstance(r, dict) and r.get("url"):
-            out.append(Candidate.model_validate({**r, "url": str(r["url"])}))
+            note = str(r.get("reason") or r.get("note") or "")  # the model's WHY
+            out.append(Candidate.model_validate({**r, "url": str(r["url"]), "note": note}))
     _rank = {"must": 0, "should": 1, "could": 2}
     out.sort(key=lambda c: _rank.get(c.tier, 3))
+    for c in out:
+        log.info("    candidate [%s] %s%s", c.tier, c.url, f"  — {c.note}" if c.note else "")
     return out
 
 
@@ -762,8 +776,20 @@ def evaluate_candidate(
     data: dict[str, Any] = dict(parsed) if isinstance(parsed, dict) else {"verdict": "could not evaluate"}
     # the flags are ground truth for structure -> they win over the model's guesses.
     data["has_pagination"] = bool(data.get("has_pagination")) or flags["pagination"].present
+    # an API-documentation page is never the data source -- guard even if the model was
+    # inconsistent (this is the "docs page mistaken for the API" fix).
+    if data.get("is_api_docs"):
+        data["dataset_present"] = False
+        data["is_queryable"] = False
+        api_endpoint = None
     data.update(url=candidate.url, flags=flag_map, api_endpoint=api_endpoint, interactive=interactive)
-    return CandidateEval.model_validate(data)
+    ev = CandidateEval.model_validate(data)
+    log.info(
+        "    evaluated %s -> present=%s, queryable=%s, scrapability=%d%s — %s",
+        candidate.url, ev.dataset_present, ev.is_queryable, ev.scrapability,
+        " [API DOCS]" if ev.is_api_docs else "", ev.verdict or "(no reason given)",
+    )
+    return ev
 
 
 def evaluate_candidates(

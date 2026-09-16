@@ -5,4 +5,8 @@ Observed data endpoints (XHR/fetch): $endpoints_json
 Page skeleton:
 $skeleton
 
-Assess this page as the source to scrape and reply with only a JSON object with keys: "dataset_present" (bool), "is_queryable" (bool: is there an API/endpoint serving the WHOLE dataset?), "sort_order" (str|null), "completeness" ("full"|"partial"|"unknown"), "has_pagination" (bool), "has_filters" (bool), "dataset_is_subset" (bool: is our ask a subset of what is here?), "mostly_unstructured" (bool), "drilldown_links" (bool), "scrapability" (int 0-10), "verdict" (one short sentence).
+Assess this page as the source to scrape. Judge from the skeleton what the page ACTUALLY is:
+- "is_queryable" is true ONLY if this page IS a data endpoint (its body is the records as JSON/XML) OR it is backed by a same-origin data endpoint (listed above) that returns the records. A page that DOCUMENTS, DESCRIBES or lets you TRY an API -- developer docs, API reference, an OpenAPI/Swagger page, integration guides -- is NOT queryable and does NOT hold the dataset: set dataset_present=false, is_queryable=false and say so in the verdict.
+- The records must be the dataset itself, not examples, code samples, or a description of the data.
+
+Reply with ONLY a JSON object with keys: "dataset_present" (bool), "is_queryable" (bool, per the rule above), "sort_order" (str|null), "completeness" ("full"|"partial"|"unknown"), "has_pagination" (bool), "has_filters" (bool), "dataset_is_subset" (bool: is our ask a subset of what is here?), "mostly_unstructured" (bool), "drilldown_links" (bool), "is_api_docs" (bool: is this API documentation rather than data?), "scrapability" (int 0-10), "verdict" (one short sentence explaining your judgement -- this is logged).

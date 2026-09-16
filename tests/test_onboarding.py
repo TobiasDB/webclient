@@ -548,3 +548,42 @@ def test_summary_prints_scores_flags_reference_resolve_and_a_table():
     # the tested output rendered as a table (columns from the row keys)
     assert "name" in text and "price" in text and "Widget" in text and "$10" in text
     assert "spent:     $0.0231" in text
+
+
+def test_api_docs_page_is_never_a_data_source(httpserver):
+    # the "docs page mistaken for the API" fix: even if the model marks a page queryable,
+    # is_api_docs=True forces dataset_present/is_queryable false so it is not chosen.
+    httpserver.expect_request("/docs/api").respond_with_data(
+        "<html><body><h1>API Reference</h1><p>GET /v1/products returns...</p></body></html>",
+        content_type="text/html",
+    )
+
+    def llm(prompt: str) -> str:
+        # the model (wrongly) says queryable, but flags it as API docs
+        return json.dumps({
+            "dataset_present": True, "is_queryable": True, "is_api_docs": True,
+            "scrapability": 8, "verdict": "this is API documentation, not the data",
+        })
+
+    with WebClient() as wc:
+        ev = evaluate_candidate(
+            Candidate(url=httpserver.url_for("/docs/api")),
+            Brief(description="products"), wc=wc, llm=llm, browser="never",
+        )
+    assert ev.is_api_docs
+    assert not ev.dataset_present and not ev.is_queryable  # guarded out
+    assert ev.verdict  # the reason is captured (and logged)
+
+
+def test_pick_edges_accepts_reasons_and_bare_indices():
+    from webclient.core.crawl import Edge
+    from webclient.pipelines.onboarding import _pick_edges
+
+    frontier = [Edge(url="https://x/a"), Edge(url="https://x/b"), Edge(url="https://x/c")]
+    # reasoned objects
+    picks = _pick_edges(lambda p: '[{"n": 1, "why": "the data endpoint"}]',
+                        Brief(description="d"), frontier)
+    assert picks == ["https://x/b"]
+    # bare indices still work (robustness)
+    picks = _pick_edges(lambda p: "[0, 2]", Brief(description="d"), frontier)
+    assert picks == ["https://x/a", "https://x/c"]
