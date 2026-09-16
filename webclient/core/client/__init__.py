@@ -31,7 +31,8 @@ from ...events import EventBus
 from ...models import NavigationEvent, NetworkEvent, PlanEvent
 from ...query.executor import aevaluate, astream, evaluate
 from ..document import Document
-from ...resiliency import policy_headers, static_flags
+from ...resiliency import policy_headers
+from ...signals import flags_from_response
 from ..reference import Reference, from_url
 from ..reference.models import ProxyPolicy, Resolve
 from ..web_core import Backing, WebCore
@@ -521,12 +522,12 @@ class WebClient(WebCore, IWebClient):
     def _observe(self, doc: Document, resp: Any) -> "dict[str, Any] | None":
         """The request/static flags of this response (login / anti-bot / SPA), so
         ``afetch`` can decide whether -- and to what tier -- to escalate. Pure detection
-        (:mod:`webclient.resiliency.detect`), so a remote resolve reads the same flags;
-        the ``flags`` facet re-derives them (and adds rendered/network evidence) on read."""
+        (:mod:`webclient.signals`), so a remote resolve reads the same flags; the
+        ``flags`` facet re-derives them (adding rendered/network evidence) on read."""
         if resp is None:
             return None
         chain = [doc.url, doc.final_url] if doc.final_url and doc.final_url != doc.url else [doc.url]
-        return static_flags(doc.status_code, resp.headers, doc._set_cookies, doc.content, chain)
+        return flags_from_response(doc.status_code, resp.headers, doc._set_cookies, doc.content, chain)
 
     async def _escalate_to_browser(
         self,

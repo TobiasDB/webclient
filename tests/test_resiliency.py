@@ -1,6 +1,6 @@
 """Resiliency: pure request+static flag detection + the flag-driven escalation ladder.
 
-Detection (:func:`webclient.resiliency.static_flags`) is pure and conservative; a
+Detection (:func:`webclient.signals.flags_from_response`) is pure and conservative; a
 resolved document surfaces the conclusions through the ``flags`` facet (spa /
 anti_bot_present / anti_bot_triggered / login_present / login_required / …), and
 ``browser="auto"`` acts on them: a login wall fails, an anti-bot challenge escalates
@@ -10,14 +10,14 @@ anti_bot_present / anti_bot_triggered / login_present / login_required / …), a
 import pytest
 
 from webclient import WebClient, WebException
-from webclient.resiliency import static_flags
+from webclient.signals import flags_from_response
 
 HTML = {"content-type": "text/html; charset=utf-8"}
 
 
 def _f(status, headers, cookies, body):
     """The request/static flags of a raw response (a dict name -> Flag)."""
-    return static_flags(status, headers, cookies, body)
+    return flags_from_response(status, headers, cookies, body)
 
 
 def test_normal_page_detects_nothing():

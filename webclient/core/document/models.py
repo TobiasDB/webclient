@@ -127,7 +127,7 @@ class Signal(BaseModel):
     with the ``stage`` it was observed at and a ``confidence`` (0-1) for how strongly
     it indicates the flag. Several signals (often from different stages) corroborate
     one flag: a page is a SPA from a ``framework_marker`` (static) AND ``body_injected``
-    (rendered) AND ``xhr_composed`` (network). The ``webclient.resiliency.detect`` layer
+    (rendered) AND ``xhr_composed`` (network). The ``webclient.signals`` registry
     (request/static) and the ``flags`` facet (rendered/network) emit these."""
 
     name: str = ""  # detector id, e.g. "empty_root_shell" / "rel_next_link"
