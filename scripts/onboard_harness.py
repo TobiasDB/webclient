@@ -226,6 +226,21 @@ def _run_worker(a: argparse.Namespace) -> int:
 # parent: fan the cases out across processes, collect, summarise
 # ---------------------------------------------------------------------------- #
 
+def _load_existing(outdir: Path, case: tuple[str, str, list[str]]) -> "dict | None":
+    """A finished case's record from a prior run (for --resume), or None if not done."""
+    slug = _slug(case[0], case[1])
+    p = outdir / f"{slug}.json"
+    if not p.exists():
+        return None
+    try:
+        rec = json.loads(p.read_text())
+    except Exception:
+        return None
+    rec.setdefault("slug", slug)
+    rec.setdefault("secs", 0.0)
+    return rec
+
+
 def _launch(case: tuple[str, str, list[str]], outdir: Path, flags: list[str]) -> dict:
     brief_key, company, urls = case
     slug = _slug(brief_key, company)
@@ -286,8 +301,10 @@ def main() -> None:
     ap.add_argument("--brief-key"); ap.add_argument("--company"); ap.add_argument("--urls"); ap.add_argument("--out")
     ap.add_argument("--brief", action="append", help="only these brief key(s)")
     ap.add_argument("--only", action="append", help="only these compan(y/ies)")
-    ap.add_argument("--parallel", type=int, default=5, help="max companies to run at once")
+    ap.add_argument("--parallel", type=int, default=4,
+                    help="max companies at once (each may launch a browser; keep modest to avoid OOM)")
     ap.add_argument("--max", type=int, default=0, help="stop after N cases (0 = all)")
+    ap.add_argument("--resume", metavar="DIR", help="reuse finished cases in DIR; run only the rest")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--no-review", action="store_true")
     ap.add_argument("--verbose", action="store_true", help="worker logs at DEBUG")
@@ -301,16 +318,21 @@ def main() -> None:
              if (not a.brief or c[0] in a.brief) and (not a.only or c[1] in a.only)]
     if a.max:
         cases = cases[: a.max]
-    ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    outdir = Path("harness_runs") / ts
+    outdir = Path(a.resume) if a.resume else Path("harness_runs") / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir.mkdir(parents=True, exist_ok=True)
     flags = (["--no-browser"] if a.no_browser else []) + (["--no-review"] if a.no_review else []) \
         + (["--verbose"] if a.verbose else [])
-    print(f"running {len(cases)} case(s), {a.parallel} in parallel -> {outdir}", file=sys.stderr)
 
     records: list[dict] = []
+    todo: list[tuple[str, str, list[str]]] = []
+    for c in cases:  # --resume: keep finished cases, only run the missing ones
+        done = _load_existing(outdir, c) if a.resume else None
+        (records.append(done) if done is not None else todo.append(c))
+    print(f"{len(cases)} case(s): {len(records)} reused, {len(todo)} to run, "
+          f"{a.parallel} in parallel -> {outdir}", file=sys.stderr)
+
     with cf.ThreadPoolExecutor(max_workers=max(1, a.parallel)) as pool:
-        futs = [pool.submit(_launch, c, outdir, flags) for c in cases]
+        futs = [pool.submit(_launch, c, outdir, flags) for c in todo]
         for f in cf.as_completed(futs):
             records.append(f.result())
 

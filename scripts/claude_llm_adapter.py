@@ -38,15 +38,18 @@ def claude_code_result(prompt: str, *, system: str = _SYSTEM, timeout: float = 1
     """Run one prompt through ``claude -p`` and return its full JSON envelope (``result``
     text + ``usage``). Raises :class:`LlmError` on failure."""
     try:
+        # pass the prompt on STDIN, not as an argv value: an onboarding prompt can START
+        # with "---" (the query guide's YAML frontmatter) or "-", which `claude` would else
+        # parse as a CLI option ("unknown option '---...'").
         out = subprocess.run(
             [
-                "claude", "-p", prompt,
+                "claude", "-p",
                 "--output-format", "json",
                 "--system-prompt", system,             # replace the agent system prompt
                 "--exclude-dynamic-system-prompt-sections",  # drop cwd/git/memory noise
                 "--allowed-tools", "",                 # no tools: pure text in/out
             ],
-            capture_output=True, text=True, timeout=timeout,
+            input=prompt, capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
         raise LlmError(0, f"claude -p timed out after {timeout}s") from exc
