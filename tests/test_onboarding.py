@@ -375,6 +375,69 @@ def test_brief_schema_tree_carries_descriptions():
     assert "- price — the price object" in line and "- value — numeric amount" in line
 
 
+def test_review_run_grades_each_stage_and_diagnoses_a_failure():
+    import types
+
+    from webclient.pipelines.onboarding import (
+        CandidateEval, OnboardingResult, QueryArtifact, _RunArtifacts, review_run,
+    )
+    from webclient.pipelines import Candidate, Seed
+
+    def llm(prompt: str) -> str:
+        if "CRAWL stage" in prompt:
+            return '{"verdict":"good","score":8,"issues":[],"summary":"reached the listing"}'
+        if "SELECT stage" in prompt:
+            return '{"verdict":"partial","score":5,"issues":["missed the data API"],"summary":"picked the page not the API"}'
+        if "QUERY stage" in prompt:
+            return '{"verdict":"poor","score":3,"issues":["date empty on every row","only 3 of many rows"],"summary":"incomplete extraction"}'
+        if "FAILED" in prompt:
+            return '{"verdict":"query","score":7,"issues":["fix the date selector"],"summary":"the query could not match the records"}'
+        return "{}"
+
+    brief = Brief(description="ir news", fields=["title", "date"])
+    result = OnboardingResult(company="Acme", brief=brief)
+    result.ok = False
+    result.reason = "authored query extracted 0 rows"
+    result.evaluation = CandidateEval(url="https://x/list")
+    result.query = QueryArtifact(blob="{}", describe="Document.select_all('.r').extract(...).project()",
+                                 row_count=3, sample=[{"title": "A", "date": None}], base_urls=["https://x/list"])
+    crawl = types.SimpleNamespace(
+        pages=[types.SimpleNamespace(url="https://x/list", final_url="https://x/list",
+                                     final_tier="static", flags=["pagination"], title="News", status_code=200)],
+        failures=[],
+    )
+    artifacts = _RunArtifacts(seeds=[Seed(url="https://x/")], crawl=crawl,
+                              candidates=[Candidate(url="https://x/list", tier="must", note="listing")])
+
+    review_run(result, artifacts, brief=brief, llm=llm)
+    by = {r.stage: r for r in result.reviews}
+    assert set(by) == {"crawl", "select", "query", "failure"}  # every reached stage + a diagnosis
+    assert by["crawl"].verdict == "good" and by["crawl"].score == 8
+    assert by["query"].verdict == "poor" and "date empty on every row" in by["query"].issues
+    assert by["failure"].verdict == "query" and "fix the date selector" in by["failure"].issues
+
+
+def test_review_run_skips_the_failure_review_on_a_successful_run():
+    import types
+
+    from webclient.pipelines.onboarding import CandidateEval, OnboardingResult, QueryArtifact, _RunArtifacts, review_run
+    from webclient.pipelines import Candidate, Seed
+
+    def llm(prompt: str) -> str:
+        return '{"verdict":"good","score":9,"issues":[],"summary":"looks right"}'
+
+    brief = Brief(description="products", fields=["name"])
+    result = OnboardingResult(company="Acme", brief=brief, ok=True)
+    result.evaluation = CandidateEval(url="https://x/p")
+    result.query = QueryArtifact(blob="{}", describe="...", row_count=5, sample=[{"name": "A"}])
+    artifacts = _RunArtifacts(seeds=[Seed(url="https://x/")],
+                              crawl=types.SimpleNamespace(pages=[], failures=[]),
+                              candidates=[Candidate(url="https://x/p")])
+    review_run(result, artifacts, brief=brief, llm=llm)
+    stages = {r.stage for r in result.reviews}
+    assert "failure" not in stages and {"crawl", "select", "query"} <= stages  # no failure review
+
+
 def test_optional_schema_fields_are_marked_and_rendered():
     from webclient.pipelines.onboarding import Brief, _fields_line
 

@@ -67,6 +67,8 @@ def main(argv: "Sequence[str] | None" = None) -> int:
                         help="rate-limit the LLM: min seconds between calls")
     parser.add_argument("--max-pages", type=int, default=20, help="crawl page budget")
     parser.add_argument("--no-browser", action="store_true", help="static-only crawl")
+    parser.add_argument("--review", action="store_true",
+                        help="run the meta-review stage (grades the run; costs extra calls)")
     parser.add_argument("-v", "--verbose", action="count", default=0,
                         help="-v shows pipeline steps, -vv adds debug")
     args = parser.parse_args(argv)
@@ -94,6 +96,7 @@ def main(argv: "Sequence[str] | None" = None) -> int:
         results = onboard(
             args.companies, brief, wc=wc, llm=llm, search=ddg_search,
             max_pages=args.max_pages, browser=not args.no_browser, budget=budget,
+            review=args.review,
         )
     # the pipeline logs each company's full summary (source / scores / flags /
     # reference / resolve / query + sample table / spend); here we add only the totals.

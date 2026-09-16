@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Sequence
 
 from pydantic import BaseModel, model_validator
@@ -364,6 +365,20 @@ class QueryArtifact(BaseModel):
     base_urls: list[str] = []
 
 
+class Review(BaseModel):
+    """One LLM judgement of a pipeline stage's choices -- the meta-review that grades the
+    run so a human sees where it went right or wrong. ``stage`` is which review this is
+    (``crawl`` / ``select`` / ``query`` / ``failure``); ``verdict`` is a one-word grade
+    (``good`` / ``partial`` / ``poor``, or ``diagnosis`` for a failure); ``score`` is 0-10;
+    ``issues`` are the concrete problems found; ``summary`` is the one-line human takeaway."""
+
+    stage: str
+    verdict: str = ""
+    score: int = 0
+    issues: list[str] = []
+    summary: str = ""
+
+
 class OnboardingResult(BaseModel):
     """The end product for one company: the chosen source + how to fetch and query it."""
 
@@ -378,7 +393,19 @@ class OnboardingResult(BaseModel):
     resolve: Resolve | None = None
     query: QueryArtifact | None = None
     steps: list[str] = []  # a human-readable trace of the run (also logged)
+    reviews: list[Review] = []  # LLM meta-reviews grading the run's choices (opt-in)
     cost_usd: float = 0.0  # LLM spend for this company (when an LlmClient was used)
+
+
+@dataclass
+class _RunArtifacts:
+    """The live intermediate products of one run, kept so the review stage can judge each
+    stage's choices (they are not on the serialisable :class:`OnboardingResult`)."""
+
+    seeds: "list[Seed]" = field(default_factory=list)
+    crawl: Any = None            # the finished Crawl (pages / failures / frontier)
+    candidates: "list[Candidate]" = field(default_factory=list)
+    query_doc: Any = None        # the fetched source Document (for the query review skeleton)
 
 
 #: chatty third-party loggers to hush when WE own the logging setup, so the pipeline's
@@ -494,6 +521,14 @@ def _summarize(result: OnboardingResult) -> None:
         # the self-contained query blob on its own line -- executable as is, easy to copy
         lines.append("  query blob (copy; run with `from_blob(blob).collect()`):")
         lines.append(q.blob)
+    if result.reviews:  # the meta-review's grade of each stage (+ a failure diagnosis)
+        lines.append("  review:")
+        for r in result.reviews:
+            grade = f"{r.verdict}" + (f", {r.score}/10" if r.score else "")
+            head = f"    {r.stage}" + (f" ({grade})" if grade.strip(", ") else "")
+            lines.append(head + (f": {r.summary}" if r.summary else ""))
+            for issue in r.issues:
+                lines.append(f"      · {issue}")
     lines.append(f"  spent:     ${result.cost_usd:.4f}")
     for line in lines:
         log.info(line)
@@ -1385,6 +1420,132 @@ def write_query(
 
 
 # --------------------------------------------------------------------------- #
+# 8. review  (LLM meta-review: grade the run's choices)
+# --------------------------------------------------------------------------- #
+
+
+def _review_from_json(stage: str, data: Any) -> "Review | None":
+    """Build a :class:`Review` from a model's JSON judgement (``verdict`` / ``score`` /
+    ``issues`` / ``summary``). ``None`` if the model gave nothing usable."""
+    if not isinstance(data, dict):
+        return None
+    issues = data.get("issues") or []
+    if not isinstance(issues, list):
+        issues = [str(issues)]
+    try:
+        score = int(data.get("score") or 0)
+    except (TypeError, ValueError):
+        score = 0
+    return Review(
+        stage=stage,
+        verdict=str(data.get("verdict") or ""),
+        score=max(0, min(10, score)),
+        issues=[str(i) for i in issues][:10],
+        summary=str(data.get("summary") or ""),
+    )
+
+
+def _page_lines(crawl: Any, limit: int = 40) -> str:
+    """The crawled pages as ``url [tier] flags — title`` lines (for a review prompt)."""
+    out: list[str] = []
+    for card in (getattr(crawl, "pages", []) or [])[:limit]:
+        tier = getattr(card, "final_tier", "static") or "static"
+        flags = ", ".join(getattr(card, "flags", []) or []) or "-"
+        title = (getattr(card, "title", "") or "").strip()
+        out.append(f"{card.final_url or card.url} [{tier}; {flags}]" + (f" — {title}" if title else ""))
+    fails = [f"{f.url} ({f.reason})" for f in (getattr(crawl, "failures", []) or [])[:15]]
+    if fails:
+        out.append("failed: " + "; ".join(fails))
+    return "\n".join(out)
+
+
+def review_crawl(artifacts: _RunArtifacts, brief: Brief, *, llm: LLM) -> "Review | None":
+    """Grade the crawl: did it reach the pages likely to hold the dataset, and was it
+    complete (not too shallow, not off down irrelevant paths)?"""
+    if artifacts.crawl is None:
+        return None
+    data = _ask_json(llm, render_prompt(
+        "review_crawl",
+        description=brief.description, fields_line=_fields_line(brief),
+        seeds="\n".join(s.url for s in artifacts.seeds) or "(none)",
+        pages=_clip(_page_lines(artifacts.crawl), _MAX_PAGES_CHARS, "crawled pages") or "(none)",
+    ))
+    return _review_from_json("crawl", data)
+
+
+def review_select(result: OnboardingResult, artifacts: _RunArtifacts, brief: Brief, *, llm: LLM) -> "Review | None":
+    """Grade the selection: from the crawled pages, were the right URLs picked as
+    candidates, and was the best source chosen to scrape?"""
+    if not artifacts.candidates:
+        return None
+    chosen = result.evaluation.url if result.evaluation else "(none chosen)"
+    cands = "\n".join(f"{c.url} [{c.tier}] {c.note}".rstrip() for c in artifacts.candidates)
+    data = _ask_json(llm, render_prompt(
+        "review_select",
+        description=brief.description, fields_line=_fields_line(brief),
+        pages=_clip(_page_lines(artifacts.crawl), _MAX_PAGES_CHARS, "crawled pages") or "(none)",
+        candidates=_clip(cands, _MAX_LISTING_CHARS, "candidates"),
+        chosen=chosen,
+    ))
+    return _review_from_json("select", data)
+
+
+def review_query(result: OnboardingResult, artifacts: _RunArtifacts, brief: Brief, *, llm: LLM) -> "Review | None":
+    """Grade the authored query: does the output table hold data matching the brief, are
+    the selectors targeting the relevant parts of the page, and do they capture ALL the
+    records on the page (completeness)?"""
+    q = result.query
+    if q is None:
+        return None
+    doc = artifacts.query_doc
+    skeleton = _clip(doc.skeleton(max_lines=_FULL_SKELETON), _MAX_SKELETON_CHARS, "skeleton",
+                     kind=("json" if doc.kind == "json" else "html")) if (doc is not None and doc.ok) else "(unavailable)"
+    sample = json.dumps(list(q.sample)[:8], default=str, indent=2)
+    data = _ask_json(llm, render_prompt(
+        "review_query",
+        description=brief.description, fields_line=_fields_line(brief),
+        query=q.describe, row_count=str(q.row_count), tested=str(q.tested),
+        sample=_clip(sample, _MAX_LISTING_CHARS, "sample rows"),
+        skeleton=skeleton,
+    ))
+    return _review_from_json("query", data)
+
+
+def review_failure(result: OnboardingResult, artifacts: _RunArtifacts, brief: Brief, *, llm: LLM) -> "Review | None":
+    """Diagnose a failed run: from the trace + how far it got, name the most likely cause
+    and what would fix it. Included in the summary so a human sees WHY it failed."""
+    reached = (
+        f"seeds={len(artifacts.seeds)}, crawled={len(getattr(artifacts.crawl, 'pages', []) or [])}, "
+        f"candidates={len(artifacts.candidates)}, evaluated={'yes' if result.evaluation else 'no'}, "
+        f"query={'yes' if result.query else 'no'}"
+        + (f" ({result.query.row_count} rows)" if result.query else "")
+    )
+    data = _ask_json(llm, render_prompt(
+        "review_failure",
+        description=brief.description, fields_line=_fields_line(brief),
+        reason=result.reason or "(unknown)",
+        reached=reached,
+        trace="\n".join(result.steps[-25:]) or "(no trace)",
+    ))
+    return _review_from_json("failure", data)
+
+
+def review_run(result: OnboardingResult, artifacts: _RunArtifacts, *, brief: Brief, llm: LLM) -> None:
+    """The meta-review stage: grade whichever stages the run reached, and diagnose a
+    failure. Each sub-review degrades gracefully (a skipped/failed LLM call adds nothing).
+    Appends the reviews to ``result.reviews``."""
+    _trace(result, "reviewing the run's choices")
+    reviews = [
+        review_crawl(artifacts, brief, llm=llm),
+        review_select(result, artifacts, brief, llm=llm),
+        review_query(result, artifacts, brief, llm=llm),
+    ]
+    if not result.ok:  # diagnose WHAT went wrong (surfaced in the summary)
+        reviews.append(review_failure(result, artifacts, brief, llm=llm))
+    result.reviews = [r for r in reviews if r is not None]
+
+
+# --------------------------------------------------------------------------- #
 # The orchestrator.
 # --------------------------------------------------------------------------- #
 
@@ -1399,6 +1560,7 @@ def onboard_company(
     max_pages: int = 20,
     browser: bool = True,
     budget: Budget | None = None,
+    review: bool = False,
 ) -> OnboardingResult:
     """Run the whole pipeline for one company: search -> crawl -> select -> evaluate
     -> write the reference, resolve, and query for the best source found.
@@ -1407,21 +1569,28 @@ def onboard_company(
     an :class:`~webclient.pipelines.llm.LlmClient` is the injected ``llm`` the budget is
     attached to it, and if the cap is hit mid-pipeline the run stops and reports
     ``ok=False`` / ``reason="llm budget exceeded"`` instead of raising to the caller.
-    """
+
+    ``review=True`` runs the meta-review stage after the pipeline: the model grades the
+    run's choices (the crawl, the URL selection, the authored query -- and, on a failure,
+    diagnoses what went wrong). The reviews land on ``result.reviews`` and in the summary.
+    Off by default (it costs extra LLM calls)."""
     _ensure_logging()  # progress is always visible
     result = OnboardingResult(company=company, brief=brief)
+    artifacts = _RunArtifacts()
     # Thread the cap into an LlmClient so its per-call spend is enforced. A plain
     # callable llm (e.g. a test stub) carries no cost, so there is nothing to cap.
     if budget is not None and isinstance(llm, LlmClient):
         llm.budget = budget
     try:
         _onboard_company(
-            company, brief, result,
+            company, brief, result, artifacts,
             wc=wc, llm=llm, search=search, max_pages=max_pages, browser=browser,
         )
+        if review:  # the meta-review stage grades the run's choices (opt-in)
+            review_run(result, artifacts, brief=brief, llm=llm)
     except BudgetExceeded:
         result.ok = False
-        result.reason = "llm budget exceeded"
+        result.reason = result.reason or "llm budget exceeded"
     if isinstance(llm, LlmClient):
         result.cost_usd = llm.spent_usd
     _summarize(result)  # always print the end-of-run summary
@@ -1432,6 +1601,7 @@ def _onboard_company(
     company: str,
     brief: Brief,
     result: OnboardingResult,
+    artifacts: _RunArtifacts,
     *,
     wc: WebClient,
     llm: LLM,
@@ -1446,6 +1616,7 @@ def _onboard_company(
 
     note("searching the web for seeds")
     seeds = search_web(brief, company, search=search, llm=llm)
+    artifacts.seeds = list(seeds)
     if not seeds:
         result.reason = "no search seeds"
         return result
@@ -1453,8 +1624,10 @@ def _onboard_company(
     crawl = crawl_from_seeds(
         seeds, brief, wc=wc, llm=llm, company=company, max_pages=max_pages, browser=browser
     )
+    artifacts.crawl = crawl
     note("crawled %d page(s), %d failed", len(crawl.pages), len(crawl.failures))
     candidates = select_candidates(crawl, brief, llm=llm)
+    artifacts.candidates = list(candidates)
     if not candidates:
         result.reason = "no candidate pages"
         return result
@@ -1476,6 +1649,7 @@ def _onboard_company(
     result.reference = write_reference(evaluation, wc=wc)
     query_url = evaluation.api_endpoint or evaluation.url
     doc = wc.fetch(query_url, browser=_mode(browser), optional=True)
+    artifacts.query_doc = doc
     flags = _read_flags(doc) if doc.ok else {}
     # (2) a login wall on the source itself -> no query reaches the data; stop.
     if flags.get("login_required") is not None and flags["login_required"].present:
@@ -1517,15 +1691,17 @@ def onboard(
     max_pages: int = 20,
     browser: bool = True,
     budget: Budget | None = None,
+    review: bool = False,
 ) -> list[OnboardingResult]:
     """Onboard several companies for the same brief (sequentially, one crawl each).
 
     A shared ``budget`` caps LLM spend across the WHOLE run: once it is exhausted the
-    remaining companies report ``ok=False`` / ``reason="llm budget exceeded"``."""
+    remaining companies report ``ok=False`` / ``reason="llm budget exceeded"``.
+    ``review=True`` runs the meta-review stage for each company (see :func:`onboard_company`)."""
     return [
         onboard_company(
             c, brief, wc=wc, llm=llm, search=search, max_pages=max_pages,
-            browser=browser, budget=budget,
+            browser=browser, budget=budget, review=review,
         )
         for c in companies
     ]
