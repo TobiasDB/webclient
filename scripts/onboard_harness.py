@@ -85,7 +85,10 @@ BRIEFS: dict[str, Brief] = {
     "ir-news": _packaged_brief("ir-news"),
 }
 
-# (brief key, company, [seed urls]) -- curated so no live search runs.
+# (brief key, company, [seed urls]) -- curated so no live search runs. A LARGE, mixed set
+# spread across many distinct domains: rotate a random --sample of it each run so we don't
+# hammer any one site (and don't get blocked). The sandbox sites are reliable static
+# targets; the IR pages are the hard, real, mostly client-rendered / anti-bot cases.
 CASES: list[tuple[str, str, list[str]]] = [
     ("product-catalogue", "Books to Scrape", ["https://books.toscrape.com/"]),
     ("product-catalogue", "WebScraper Test Shop", ["https://webscraper.io/test-sites/e-commerce/allinone"]),
@@ -97,6 +100,18 @@ CASES: list[tuple[str, str, list[str]]] = [
     ("ir-news", "ServiceNow", ["https://www.servicenow.com/company/media/press-room.html"]),
     ("ir-news", "Snowflake", ["https://investors.snowflake.com/news/default.aspx"]),
     ("ir-news", "Datadog", ["https://investors.datadoghq.com/news-releases/default.aspx"]),
+    ("ir-news", "Cloudflare", ["https://cloudflare.net/news/default.aspx"]),
+    ("ir-news", "MongoDB", ["https://investors.mongodb.com/news-releases"]),
+    ("ir-news", "Atlassian", ["https://investors.atlassian.com/news-and-events/news"]),
+    ("ir-news", "Twilio", ["https://investors.twilio.com/news/default.aspx"]),
+    ("ir-news", "Okta", ["https://investor.okta.com/news-releases"]),
+    ("ir-news", "CrowdStrike", ["https://ir.crowdstrike.com/news-releases"]),
+    ("ir-news", "Zscaler", ["https://ir.zscaler.com/news-releases"]),
+    ("ir-news", "HubSpot", ["https://ir.hubspot.com/news"]),
+    ("ir-news", "Elastic", ["https://ir.elastic.co/news/default.aspx"]),
+    ("ir-news", "Confluent", ["https://investors.confluent.io/news/default.aspx"]),
+    ("ir-news", "Cisco", ["https://newsroom.cisco.com/c/r/newsroom/en/us/index.html"]),
+    ("ir-news", "Oracle", ["https://www.oracle.com/news/"]),
 ]
 
 
@@ -317,10 +332,20 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="parallel onboarding harness (curated URLs + Claude Code)")
     ap.add_argument("--brief", action="append", help="only these brief key(s)")
     ap.add_argument("--only", action="append", help="only these compan(y/ies)")
-    ap.add_argument("--parallel", type=int, default=5,
+    ap.add_argument("--parallel", type=int, default=2,
                     help="companies to run concurrently as SESSIONS on ONE shared browser")
     ap.add_argument("--pool", type=int, default=0,
                     help="browser page-pool size (0 = parallel+2); one browser, this many pages")
+    # decreased crawl: a small page budget forces the crawl to be efficient (and cheap)
+    ap.add_argument("--max-pages", type=int, default=6, help="crawl page budget per company")
+    ap.add_argument("--rounds", type=int, default=2, help="LLM frontier-pick rounds per crawl")
+    ap.add_argument("--depth", type=int, default=2, help="max crawl link depth")
+    # rotation: run a random sample of the (large) case list so we don't hammer one site
+    ap.add_argument("--sample", type=int, default=0, help="run a random N-case sample (0 = all)")
+    ap.add_argument("--seed", type=int, default=0, help="random seed for --sample (0 = time-based)")
+    # browser hardening
+    ap.add_argument("--headful", action="store_true", help="headless OFF (needs a display; less bot-detectable)")
+    ap.add_argument("--channel", default=None, help="browser channel, e.g. 'chrome' for real Google Chrome")
     ap.add_argument("--max", type=int, default=0, help="stop after N cases (0 = all)")
     ap.add_argument("--resume", metavar="DIR", help="reuse finished cases in DIR; run only the rest")
     ap.add_argument("--no-browser", action="store_true")
@@ -328,6 +353,10 @@ def main() -> None:
     ap.add_argument("--verbose", action="store_true", help="capture logs at DEBUG")
     ap.add_argument("--aggregate", action="store_true", help="add a cross-matrix review at the end")
     a = ap.parse_args()
+
+    # decreased crawl size: push the small budget into every brief's crawl block
+    for b in BRIEFS.values():
+        b.crawl.update(max_pages=a.max_pages, rounds=a.rounds, depth=a.depth)
 
     from claude_llm_adapter import claude_code_llm
 
@@ -341,6 +370,10 @@ def main() -> None:
 
     cases = [c for c in CASES
              if (not a.brief or c[0] in a.brief) and (not a.only or c[1] in a.only)]
+    if a.sample and a.sample < len(cases):  # rotate a random subset so we don't hammer one site
+        import random
+        random.Random(a.seed or None).shuffle(cases)
+        cases = cases[: a.sample]
     if a.max:
         cases = cases[: a.max]
     outdir = Path(a.resume) if a.resume else Path("harness_runs") / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -370,9 +403,11 @@ def main() -> None:
     # ONE browser, a pool of pages: each company is a session leasing pages from it -- the
     # right way to parallelise (not one browser process per company).
     pool_pages = a.pool or (a.parallel + 2)
-    bc = BrowserConfig(pool_pages=pool_pages, pool_http=max(10, a.parallel * 3))
+    bc = BrowserConfig(pool_pages=pool_pages, pool_http=max(10, a.parallel * 3),
+                       headless=not a.headful, channel=a.channel)  # stealth is on by default
     print(f"{len(cases)} case(s): {len(records)} reused, {len(todo)} to run · {a.parallel} concurrent "
-          f"sessions on 1 browser ({pool_pages}-page pool) -> {outdir}")
+          f"sessions on 1 browser ({pool_pages}-page pool, headless={not a.headful}, "
+          f"channel={a.channel or 'chromium'}) · crawl≤{a.max_pages}p/{a.rounds}r -> {outdir}")
 
     with WebClient(browser_config=bc) as wc:
         with cf.ThreadPoolExecutor(max_workers=max(1, a.parallel)) as pool:
