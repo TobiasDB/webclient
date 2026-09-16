@@ -190,8 +190,17 @@ class CandidateEval(BaseModel):
 
 
 class QueryArtifact(BaseModel):
+    """The authored lazy query, ready to reload and run. ``blob`` rebuilds it with
+    ``from_blob``; ``plan`` is the same chain as a plan dict (``from_plan``-loadable /
+    the wire form). It is TESTED at authoring time -- run against the source -- so
+    ``tested`` / ``row_count`` / ``sample`` report whether it actually extracts rows."""
+
     blob: str  # the portable lazy-query blob (rebuildable with from_blob)
     describe: str  # a readable one-line rendering of the chain
+    plan: dict[str, Any] = {}  # the plan dict (from_plan-loadable; the wire form)
+    tested: bool = False  # did it run against the source without error?
+    row_count: int = 0  # how many rows it produced when tested
+    sample: list[str] = []  # up to 3 produced rows (stringified), for a sanity check
 
 
 class OnboardingResult(BaseModel):
@@ -600,6 +609,24 @@ def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False) -> st
     )
 
 
+def _test_query(expr: Any, context: Any) -> "tuple[bool, list[Any]]":
+    """Run the authored query against the source to prove it loads and extracts. The
+    ``context`` is the source's :class:`Reference` (``wc.ref(url)``) -- the query resolves
+    it (a page/API query is ``wq.ref.resolve()...``). Returns ``(ran_without_error,
+    rows)`` -- a query that raises is not ``tested`` and its rows are empty."""
+    try:
+        result = expr.collect(context)
+    except Exception:  # noqa: BLE001 - a query that can't run against the source
+        return False, []
+    if result is None:
+        return True, []
+    try:
+        rows = list(result)
+    except TypeError:  # a scalar/Field result, not a row set
+        rows = [result]
+    return True, rows
+
+
 def write_query(
     candidate_url: str,
     brief: Brief,
@@ -611,20 +638,34 @@ def write_query(
     retries: int = 1,
 ) -> QueryArtifact | None:
     """Have the model author a lazy query for the dataset from the page skeleton, then
-    validate it by rebuilding it with :func:`from_blob`. Retries once on an invalid
-    blob. Returns ``None`` if no valid query could be authored. ``paginated`` (from the
-    pagination flag) tells the author to also capture the next-page link."""
+    reload it (``from_blob``) AND run it against the source to confirm it extracts rows.
+    Retries on an invalid or empty query, preferring one that actually produces rows;
+    returns the best :class:`QueryArtifact` (with its plan + a tested row sample), or
+    ``None`` if none rebuilt. ``paginated`` tells the author to also capture the
+    next-page link."""
     doc = wc.fetch(candidate_url, browser=browser, optional=True)
     skeleton = doc.skeleton(max_lines=90) if doc.ok else ""
     prompt = _query_prompt(brief, skeleton, paginated=paginated)
+    best: QueryArtifact | None = None
     for _ in range(retries + 1):
         blob = _json_blob(llm(prompt))
         try:
             expr = from_blob(blob)
         except Exception:  # noqa: BLE001 - any malformed blob -> retry / give up
             continue
-        return QueryArtifact(blob=blob, describe=expr.explain())
-    return None
+        tested, rows = _test_query(expr, wc.ref(candidate_url))
+        art = QueryArtifact(
+            blob=blob,
+            describe=expr.explain(),
+            plan=expr._plan.model_dump(mode="json"),
+            tested=tested,
+            row_count=len(rows),
+            sample=[str(r)[:200] for r in rows[:3]],
+        )
+        if tested and rows:
+            return art  # a query that actually extracts rows -- accept it
+        best = best or art  # keep the first rebuildable one as a fallback
+    return best
 
 
 # --------------------------------------------------------------------------- #

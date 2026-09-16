@@ -112,12 +112,19 @@ def test_onboard_company_finds_and_queries_the_dataset(site):
     # write_resolve was deterministic from signals: a plain static page needs nothing
     assert result.resolve is not None and result.resolve.browser is None
     assert result.query is not None and ".project()" in result.query.describe
+    # the query was tested at authoring time -- it ran against the source and extracted
+    assert result.query.tested and result.query.row_count == 3
+    assert result.query.sample  # a small produced-row sample is kept
 
-    # the authored query actually extracts the dataset when run against the page
+    # the output is loadable as a plan too (not just the blob), and both run the same
+    from webclient import from_plan
+
     with WebClient() as wc:
         rows = from_blob(result.query.blob).collect(wc.ref(products_url))
+        plan_rows = from_plan(result.query.plan, wc).collect(wc.ref(products_url))
     assert [r["name"] for r in rows] == ["Widget", "Sprocket", "Cog"]
     assert rows[0]["price"] == "$10"
+    assert [r["name"] for r in plan_rows] == ["Widget", "Sprocket", "Cog"]  # plan == blob
 
 
 def test_onboard_company_reports_when_no_seeds(site):
