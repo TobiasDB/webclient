@@ -665,8 +665,15 @@ def test_clip_bounds_and_notes_truncation():
     from webclient.pipelines.onboarding import _clip
 
     assert _clip("short", 100, "x") == "short"  # under budget: unchanged
+    # head (default): keeps the start
     out = _clip("y" * 500, 100, "skeleton")
-    assert out.startswith("y" * 100) and "truncated" in out and "skeleton" in out
+    assert out.startswith("y" * 100) and "trimmed" in out and "skeleton" in out
+    # html: keeps the CENTRE (chrome at the ends is dropped)
+    html = _clip("A" * 50 + "M" * 100 + "Z" * 50, 100, "skeleton", kind="html")
+    assert "M" * 100 in html and "trimmed" in html
+    # json: keeps both ENDS (the repetitive middle is dropped)
+    js = _clip("HEAD" + "x" * 500 + "TAIL", 100, "pages", kind="json")
+    assert js.startswith("HEAD") and js.endswith("TAIL") and "trimmed" in js
 
 
 def test_evaluate_clips_a_huge_page_skeleton(httpserver):
@@ -695,6 +702,6 @@ def test_evaluate_clips_a_huge_page_skeleton(httpserver):
             Candidate(url=httpserver.url_for("/big")),
             Brief(description="products"), wc=wc, llm=llm, browser="never",
         )
-    assert "truncated" in captured["eval"]  # the big skeleton was clipped
+    assert "trimmed" in captured["eval"]  # the big skeleton was clipped (centre kept)
     # the prompt is bounded (skeleton budget + the fixed prompt scaffolding)
     assert len(captured["eval"]) < _MAX_SKELETON_CHARS + 4000
