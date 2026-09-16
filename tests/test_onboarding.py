@@ -343,3 +343,37 @@ def test_filter_frontier_collapses_pagination_and_similar_apis():
         "https://x.co/item/1",
         "https://x.co/item/2",
     ]
+
+
+def test_brief_schema_builds_a_nested_tree_from_dotted_fields():
+    from webclient.pipelines.onboarding import Brief, _fields_line
+
+    brief = Brief(fields=["name", "price.value", "price.unit", "price.modifiers"])
+    assert brief.is_nested
+    assert brief.field_tree() == {
+        "name": {},
+        "price": {"value": {}, "unit": {}, "modifiers": {}},
+    }
+    # the nested schema is rendered as an outline into every prompt's hint block
+    line = _fields_line(brief)
+    assert "- price" in line and "- value" in line and "sub-extract" in line
+
+
+def test_nested_extract_outputs_nested_json():
+    from webclient import Document, default_client, wq
+
+    d = Document(
+        content=b'<div class="product"><span class="name">A</span>'
+        b'<span class="price">30 $ /1TB</span></div>',
+        kind="html",
+        status_code=200,
+    )
+    d._client = default_client()
+    row = d.select(".product").extract(
+        name=wq.doc.select(".name").text_content,
+        price=wq.doc.select(".price").extract(
+            value=wq.doc.regex(r"[\d.]+"),
+            unit=wq.doc.regex(r"[\d.]+\s*(\S+)", group=1),
+        ).project(),
+    ).project()
+    assert row == {"name": "A", "price": {"value": "30", "unit": "$"}}

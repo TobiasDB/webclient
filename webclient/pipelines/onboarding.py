@@ -139,6 +139,26 @@ class Brief(BaseModel):
 
         return cls.from_markdown(Path(path).read_text(encoding="utf-8"))
 
+    def field_tree(self) -> "dict[str, Any]":
+        """The target schema as a NESTED tree, built from dotted field names -- so a
+        record can carry structured sub-fields. ``["name", "price.value", "price.unit",
+        "price.modifiers"]`` -> ``{"name": {}, "price": {"value": {}, "unit": {},
+        "modifiers": {}}}``. Leaves are empty dicts; the query author nests a
+        sub-``extract`` per branch so the output JSON mirrors this shape. (Named field_tree, not schema, to
+        avoid pydantic's BaseModel.schema.)"""
+        tree: dict[str, Any] = {}
+        for f in self.fields:
+            node = tree
+            for part in f.split("."):
+                part = part.strip()
+                if part:
+                    node = node.setdefault(part, {})
+        return tree
+
+    @property
+    def is_nested(self) -> bool:
+        return any("." in f for f in self.fields)
+
 
 class SearchHit(BaseModel):
     url: str
@@ -261,12 +281,27 @@ def _ask_json(llm: LLM, prompt: str) -> Any:
         return None
 
 
+def _schema_outline(tree: "dict[str, Any]", indent: int = 0) -> str:
+    """A nested schema tree rendered as an indented outline for a prompt."""
+    lines: list[str] = []
+    for key, sub in tree.items():
+        lines.append("  " * indent + f"- {key}")
+        if sub:
+            lines.append(_schema_outline(sub, indent + 1))
+    return "\n".join(line for line in lines if line)
+
+
 def _fields_line(brief: Brief) -> str:
-    """The brief's hints as one appended line for any prompt: the target schema plus
-    the ``look`` / ``ignore`` path hints, so every stage sees where to look and what to
-    skip. Empty when the brief carries none."""
+    """The brief's hints as an appended block for any prompt: the target schema (a
+    nested outline when the fields nest, so the author knows to emit sub-extracts)
+    plus the ``look`` / ``ignore`` path hints. Empty when the brief carries none."""
     parts: list[str] = []
-    if brief.fields:
+    if brief.is_nested:
+        parts.append(
+            "Target schema (nest a sub-extract per branch so the output JSON matches):\n"
+            + _schema_outline(brief.field_tree())
+        )
+    elif brief.fields:
         parts.append(f"Target fields: {', '.join(brief.fields)}.")
     if brief.look:
         parts.append(f"Prefer sources under: {', '.join(brief.look)}.")
