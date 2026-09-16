@@ -43,6 +43,18 @@ class Edge(BaseModel):
     score: float = 0.0
 
 
+class Failure(BaseModel):
+    """A frontier edge that failed to load, so a crawl degrades gracefully instead of
+    silently dropping pages. ``reason`` is the cause (``"robots-disallowed"``, a
+    :class:`WebError` type like ``"AntiBot"`` / ``"Timeout"``, or an exception name);
+    ``status_code`` is the HTTP status when there was a response."""
+
+    url: str
+    reason: str = ""
+    status_code: int | None = None
+    depth: int = 0
+
+
 class ScoreWeights(BaseModel):
     """Weights for the frontier scorer (all overridable). Higher = more influence."""
 
@@ -120,6 +132,7 @@ class CrawlState(BaseModel):
     frontier: list[Edge] = []
     seen: list[str] = []  # canonical URLs already fetched or queued
     history: list[Edge] = []  # the edges taken, in order (the resume trail)
+    failures: list[Failure] = []  # edges that failed to load, with the reason
 
 
 class ICrawl(BaseModel):
@@ -142,6 +155,9 @@ class ICrawl(BaseModel):
     frontier: list[Edge] = []
     #: the edges taken, in order -- the audit trail + the resume history.
     history: list[Edge] = []
+    #: edges that failed to load (robots-blocked / error / timeout), with the reason --
+    #: a crawl degrades gracefully rather than silently dropping them.
+    failures: list[Failure] = []
 
     def __str__(self) -> str:
         """An LLM/human-readable digest: status, the pages crawled, and the top of the
@@ -169,6 +185,10 @@ class ICrawl(BaseModel):
                 lines.append(f"  {e.score:6.2f}  {label!r:40}  {e.url}")
             if len(self.frontier) > 10:
                 lines.append(f"  … +{len(self.frontier) - 10} more")
+        if self.failures:
+            lines.append(f"failed: {len(self.failures)} edge(s)")
+            for f in self.failures[:5]:
+                lines.append(f"  [{f.status_code or '-'}] {f.reason}  {f.url}")
         return "\n".join(lines)
 
     if TYPE_CHECKING:
@@ -183,4 +203,6 @@ class ICrawl(BaseModel):
         pass
 
 
-__all__ = ["Edge", "PageCard", "ScoreWeights", "CrawlConfig", "CrawlState", "ICrawl"]
+__all__ = [
+    "Edge", "Failure", "PageCard", "ScoreWeights", "CrawlConfig", "CrawlState", "ICrawl",
+]

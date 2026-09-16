@@ -34,7 +34,7 @@ from .canon import (  # URL canon / scope / scoring vocabulary (pure helpers)
     _registrable,
     _url_entropy,
 )
-from .models import Edge
+from .models import Edge, Failure
 
 if TYPE_CHECKING:
     from urllib.robotparser import RobotFileParser
@@ -126,18 +126,35 @@ class CrawlBacking(Backing):
 
     async def _fetch_edge(self, core: "Crawl", edge: Edge) -> Any:
         """Fetch one edge, expand the frontier from its DOM, and return its retained
-        projection (``None`` if robots-blocked or the fetch failed). The audit/resume
-        trail records the edge either way."""
+        projection (``None`` if robots-blocked or the fetch failed -- a
+        :class:`Failure` is recorded either way, so the crawl degrades gracefully).
+        The audit/resume trail records every edge actually taken."""
         if core.config.obey_robots and not await self._allowed(core, edge.url):
+            core.failures.append(
+                Failure(url=edge.url, reason="robots-disallowed", depth=edge.depth)
+            )
             return None
-        doc = await core._client.afetch(
-            core._client.ref(edge.url),
-            optional=True,
-            browser=core.config.browser,
-            resolve=core.config.resolve,
-        )
+        try:
+            doc = await core._client.afetch(
+                core._client.ref(edge.url),
+                optional=True,
+                browser=core.config.browser,
+                resolve=core.config.resolve,
+            )
+        except Exception as exc:  # never let one bad edge abort the whole crawl
+            core.failures.append(
+                Failure(url=edge.url, reason=type(exc).__name__, depth=edge.depth)
+            )
+            return None
         core.history.append(edge)  # the audit + resume trail (every edge taken)
         if not doc.ok:
+            err = getattr(doc, "error", None)
+            core.failures.append(Failure(
+                url=edge.url,
+                reason=err.type if err is not None else "not-ok",
+                status_code=doc.status_code or (err.status_code if err is not None else None),
+                depth=edge.depth,
+            ))
             return None
         # expand the frontier BEFORE releasing the page (needs the DOM), then project +
         # free it -- content is retained on the Document either way.

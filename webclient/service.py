@@ -362,6 +362,7 @@ def create_app(
             "frontier": [e.model_dump() for e in crawl.frontier],
             "pages": [_serialize(p, app.state.docs) for p in crawl.pages],
             "history": [e.model_dump() for e in crawl.history],
+            "failures": [f.model_dump() for f in crawl.failures],
             "seen": sorted(crawl._seen),
         }
 

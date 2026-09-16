@@ -235,6 +235,28 @@ def test_lazy_frontier_is_a_collection(wc, site):
     assert all(isinstance(e, Edge) for e in front)
 
 
+def test_crawl_records_failed_edges_gracefully(wc, httpserver):
+    # a crawl degrades gracefully: a page that errors (or is robots-blocked) is
+    # recorded in .failures with its reason, not silently dropped or fatal.
+    from webclient.core.crawl import Failure
+
+    httpserver.expect_request("/").respond_with_data(
+        '<a href="/ok">ok</a> <a href="/boom">boom</a>', content_type="text/html"
+    )
+    httpserver.expect_request("/ok").respond_with_data("<p>fine</p>", content_type="text/html")
+    httpserver.expect_request("/boom").respond_with_data("nope", status=500)
+    httpserver.expect_request("/robots.txt").respond_with_data(
+        "User-agent: *\nDisallow: /secret\n", content_type="text/plain"
+    )
+    with wc.crawl(httpserver.url_for("/"), max_pages=10, browser=False) as crawl:
+        crawl.step([httpserver.url_for("/boom")])  # force-fetch the failing URL
+        crawl.run()
+    assert all(isinstance(f, Failure) for f in crawl.failures)
+    boom = next(f for f in crawl.failures if f.url.endswith("/boom"))
+    assert boom.status_code == 500  # the reason/status is captured
+    assert not any((p.final_url or p.url).endswith("/boom") for p in crawl.pages)  # not a page
+
+
 def test_crawl_dedups_seed_variants(wc, site):
     # two seeds that canonicalise to the same target collapse to one edge.
     with wc.crawl(

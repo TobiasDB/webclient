@@ -253,7 +253,7 @@ class RemoteWebClientCore(WebClient):
         status / frontier / pages / history / seen), so its local reads are current.
         ``pages`` is deserialised the usual way -- a PageCard/model, a Document handle,
         or a scalar/dict -- so a custom projection survives the round-trip."""
-        from ..crawl import CrawlConfig, Edge
+        from ..crawl import CrawlConfig, Edge, Failure
 
         crawl.config = CrawlConfig.model_validate(state.get("config", {}))
         crawl.scope = state.get("scope", "")
@@ -261,6 +261,7 @@ class RemoteWebClientCore(WebClient):
         crawl.frontier = [Edge(**e) for e in state.get("frontier", [])]
         crawl.pages = [self._deserialize(p) for p in state.get("pages", [])]
         crawl.history = [Edge(**e) for e in state.get("history", [])]
+        crawl.failures = [Failure(**f) for f in state.get("failures", [])]
         crawl._seen = set(state.get("seen", []))
 
     def release(self, doc: Document) -> None:

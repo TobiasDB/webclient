@@ -22,7 +22,7 @@ from pydantic import PrivateAttr
 
 from ...collection import Collection
 from ..web_core import Backing, WebCore
-from .models import CrawlConfig, CrawlState, Edge, ICrawl, PageCard  # noqa: F401  (re-exported)
+from .models import CrawlConfig, CrawlState, Edge, Failure, ICrawl, PageCard  # noqa: F401  (re-exported)
 
 from .backing import CrawlBacking
 
@@ -103,6 +103,7 @@ class Crawl(WebCore, ICrawl):
         return CrawlState(
             config=self.config, scope=self.scope, frontier=list(self.frontier),
             seen=sorted(self._seen), history=list(self.history),
+            failures=list(self.failures),
         )
 
     # -- streaming: the same engine as run(), consumed incrementally -----------
@@ -142,4 +143,4 @@ class Crawl(WebCore, ICrawl):
         return _CrawlLazy(self)
 
 
-__all__ = ["Crawl", "Edge", "PageCard", "CrawlConfig", "CrawlState", "ICrawl"]
+__all__ = ["Crawl", "Edge", "Failure", "PageCard", "CrawlConfig", "CrawlState", "ICrawl"]
