@@ -1540,35 +1540,87 @@ def review_select(result: OnboardingResult, artifacts: _RunArtifacts, brief: Bri
     return _review_from_json("select", data)
 
 
-def _recency_note(rows: "list[Any]", brief: Brief) -> str:
-    """A completeness signal for DATED datasets: the newest year present vs the current
-    year. If a date field exists and the newest item predates this year, the most-recent
-    data is probably MISSING (often client-rendered / behind a tab we didn't capture) --
-    exactly the "141 historic rows, no current year" trap. Empty when the brief carries no
-    date field or no year could be read."""
+#: newest item older than this many TYPICAL inter-row intervals -> the latest data is
+#: missing (a self-calibrating timeliness bar: a daily feed silent for weeks is stale,
+#: a quarterly feed a couple months out is not).
+_TIMELINESS_INTERVALS = 3
+
+#: the completeness gate is KEPT but DISABLED by default -- flip this True to make the query
+#: review fail a query that captured only a fraction of the records (e.g. one of many pages).
+#: We are focused on TIMELINESS (the latest data) for now, not full-history completeness.
+_CHECK_COMPLETENESS = False
+_COMPLETENESS_BLOCK = (
+    "- COMPLETENESS: the query should capture ALL the records the dataset covers -- if it "
+    "returned only a fraction (one of several pages/tabs, a too-narrow record selector, "
+    "pagination not followed), that is INCOMPLETE and must FAIL."
+)
+_COMPLETENESS_OFF = (
+    "- Completeness is NOT required for this run: do NOT fail because older records or other "
+    "pages/tabs are missing. Only the fields' CORRECTNESS and the TIMELINESS of the newest "
+    "rows matter here."
+)
+
+
+def _parse_date(s: str) -> "Any":
+    """A ``date`` from a human/ISO date string, or ``None``. Handles the common shapes
+    (``December 18, 2025`` / ``Dec 18, 2025`` / ``2025-12-18`` / ``12/18/2025`` / ...)."""
     import datetime
     import re
+
+    s = s.strip()
+    for fmt in ("%B %d, %Y", "%b %d, %Y", "%B %d %Y", "%b %d %Y", "%b. %d, %Y",
+                "%Y-%m-%d", "%m/%d/%Y", "%d %B %Y", "%d %b %Y", "%Y/%m/%d"):
+        try:
+            return datetime.datetime.strptime(s, fmt).date()
+        except ValueError:
+            pass
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        try:
+            return datetime.date(int(m[1]), int(m[2]), int(m[3]))
+        except ValueError:
+            pass
+    return None
+
+
+def _timeliness(rows: "list[Any]", brief: Brief) -> "tuple[str, bool]":
+    """TIMELINESS for a dated dataset: is the newest row recent RELATIVE TO how often rows
+    appear? Returns ``(note, stale)``. ``stale`` is True when the gap from the newest item
+    to today is far larger than the typical interval BETWEEN rows -- i.e. the most-recent
+    items are missing (the current data is likely client-rendered / behind a tab we didn't
+    capture). No date field, or no parseable dates, -> ``("", False)`` (nothing to judge).
+    This is a timeliness bar, NOT a completeness one: older rows / other pages missing is
+    fine; only the LATEST data must be present."""
+    import datetime
+    import statistics
 
     date_cols = [f.split(".")[0] for f in brief.fields
                  if any(w in f.lower() for w in ("date", "publish", "time", "year"))]
     if not date_cols:
-        return ""
-    years: list[int] = []
-    for r in rows:
-        if isinstance(r, dict):
-            for c in date_cols:
-                v = r.get(c)
-                if isinstance(v, str):
-                    years += [int(m.group()) for m in re.finditer(r"\b(?:19|20)\d{2}\b", v)]
-    if not years:
-        return ""
-    newest, today = max(years), datetime.date.today()
-    if newest < today.year:
-        return (f"RECENCY CHECK: today is {today.isoformat()}, but the newest item is dated {newest} "
-                f"-- about {today.year - newest} year(s) of more recent items appear to be MISSING. "
-                "For a current/ongoing dataset this means the extraction is INCOMPLETE (the recent "
-                "data is likely loaded client-side or behind a tab/filter that was not captured).")
-    return f"RECENCY CHECK: the newest item is dated {newest} (the current year), so recent data is present."
+        return "", False
+    dates = sorted(
+        {d for r in rows if isinstance(r, dict) for c in date_cols
+         if isinstance(r.get(c), str) and (d := _parse_date(r[c])) is not None},
+        reverse=True,
+    )
+    if not dates:
+        return "", False
+    today, newest = datetime.date.today(), dates[0]
+    age = (today - newest).days
+    gaps = [(dates[i] - dates[i + 1]).days for i in range(len(dates) - 1)]
+    gaps = [g for g in gaps if g >= 0]
+    if gaps:  # cadence known -> compare the gap-to-now against the typical inter-row gap
+        typical = max(1, int(statistics.median(gaps)))
+        stale = age > max(_TIMELINESS_INTERVALS * typical, 7)
+        if stale:
+            return (f"TIMELINESS: rows appear about every {typical} day(s), but the newest is "
+                    f"{newest.isoformat()} ({age} days ago, today is {today.isoformat()}) -- a gap far "
+                    "larger than that cadence, so the MOST RECENT items are MISSING.", True)
+        return (f"TIMELINESS: rows appear about every {typical} day(s) and the newest is {age} day(s) "
+                "old -- within cadence, so the latest data is present.", False)
+    stale = age > 120  # a single dated row: only flag a clearly-old lone item
+    return (f"TIMELINESS: the only datable item is {newest.isoformat()} ({age} days ago)"
+            + ("; likely missing more recent data." if stale else "; recent enough."), stale)
 
 
 def review_query(result: OnboardingResult, artifacts: _RunArtifacts, brief: Brief, *, llm: LLM) -> "Review | None":
@@ -1582,16 +1634,27 @@ def review_query(result: OnboardingResult, artifacts: _RunArtifacts, brief: Brie
     skeleton = _clip(doc.skeleton(max_lines=_FULL_SKELETON), _MAX_SKELETON_CHARS, "skeleton",
                      kind=("json" if doc.kind == "json" else "html")) if (doc is not None and doc.ok) else "(unavailable)"
     sample = json.dumps(list(q.sample)[:8], default=str, indent=2)
-    recency = _recency_note(list(q.sample), brief)  # is the MOST-RECENT data present?
+    tnote, stale = _timeliness(list(q.sample), brief)  # is the LATEST data present, per cadence?
     data = _ask_json(llm, render_prompt(
         "review_query",
         description=brief.description, fields_line=_fields_line(brief),
         query=q.describe, row_count=str(q.row_count), tested=str(q.tested),
         sample=_clip(sample, _MAX_LISTING_CHARS, "sample rows"),
-        recency=recency or "(no date field to check recency)",
+        timeliness=tnote or "(no date field to assess timeliness)",
+        # completeness is KEPT but DISABLED by default -- flip _CHECK_COMPLETENESS to gate on it
+        completeness=(_COMPLETENESS_BLOCK if _CHECK_COMPLETENESS else _COMPLETENESS_OFF),
         skeleton=skeleton,
     ))
-    return _review_from_json("query", data)
+    review = _review_from_json("query", data)
+    if stale:  # ENSURE the timeliness gate deterministically, whatever the model said
+        review = review or Review(stage="query", verdict="poor")
+        review.passed = False
+        review.verdict = review.verdict or "poor"
+        if tnote and tnote not in review.issues:
+            review.issues = [tnote, *review.issues][:10]
+        if not review.summary:
+            review.summary = "the most recent data is missing (fails timeliness)"
+    return review
 
 
 def review_failure(result: OnboardingResult, artifacts: _RunArtifacts, brief: Brief, *, llm: LLM) -> "Review | None":

@@ -141,19 +141,30 @@ def test_onboard_company_reports_when_no_seeds(site):
     assert not result.ok and result.reason == "no search seeds"
 
 
-def test_recency_note_flags_missing_current_year_data():
+def test_timeliness_gate_uses_the_inter_row_interval():
     import datetime
 
-    from webclient.pipelines.onboarding import _recency_note
+    from webclient.pipelines.onboarding import _timeliness
 
     news = Brief(description="ir news", fields=["title", "date"])
-    yr = datetime.date.today().year
-    stale = [{"title": "x", "date": f"December 18, {yr - 1}"}]
-    note = _recency_note(stale, news)
-    assert "MISSING" in note and "INCOMPLETE" in note  # newest is last year -> incomplete
-    fresh = [{"title": "y", "date": f"March 1, {yr}"}]
-    assert "present" in _recency_note(fresh, news)  # newest is this year -> ok
-    assert _recency_note([{"name": "a"}], Brief(description="p", fields=["name"])) == ""  # no date field
+    today = datetime.date.today()
+
+    def d(days_ago: int) -> str:
+        return (today - datetime.timedelta(days=days_ago)).strftime("%B %d, %Y")
+
+    # cadence ~10 days, newest 2 days ago -> the gap to now is within cadence -> TIMELY
+    fresh = [{"date": d(2)}, {"date": d(12)}, {"date": d(22)}, {"date": d(32)}]
+    note, stale = _timeliness(fresh, news)
+    assert not stale and "within cadence" in note
+
+    # same ~10-day cadence but the newest is 200 days ago -> the gap dwarfs the cadence,
+    # so the most recent items are MISSING -> STALE (a self-calibrating bar, not a fixed one)
+    old = [{"date": d(200)}, {"date": d(210)}, {"date": d(220)}, {"date": d(230)}]
+    note, stale = _timeliness(old, news)
+    assert stale and "MISSING" in note
+
+    # no date field -> nothing to judge
+    assert _timeliness([{"name": "a"}], Brief(description="p", fields=["name"])) == ("", False)
 
 
 def test_seeds_for_company_drops_look_alike_companies():
