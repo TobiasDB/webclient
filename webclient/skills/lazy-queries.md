@@ -183,28 +183,54 @@ wq.doc.select_all(".card").extract(
 ).project()
 ```
 
-### 3. A JSON / API document (same syntax, dotted paths)
+### 3. A JSON / API document (dotted paths + `.attr(key)`)
 
-Skeleton:
+JSON is NOT HTML: `select`/`select_all` take **dotted paths** (`data.items`, `results[0]`),
+and you read a record's fields with **`.attr("<key>")` directly** — there is no `.attr("text")`
+on JSON (that is an HTML thing and returns null here). A nested object is a `select` then
+`.attr` on its keys.
+
+Skeleton (the shape, from a JSON document):
 ```
 {
-  results: [12]
-    id: number
-    name: string
-    inStock: bool
+  data: {
+    results: [12]
+      id: number
+      name: string
+      price: { amount: number, currency: string }
 ```
 Schema:
 ```
 - id — the record id
 - name — the record name
+- price.amount / price.currency — the structured price
 ```
 Query:
 ```python
-wq.doc.select_all("results").extract(
-    id=wq.doc.select("id").attr("text"),
-    name=wq.doc.select("name").attr("text"),
+wq.doc.select_all("data.results").extract(
+    id=wq.doc.attr("id"),                 # read the key off the record — NOT .select("id").attr("text")
+    name=wq.doc.attr("name"),
+    price=wq.doc.select("price").extract(  # a nested object: select it, then .attr its keys
+        amount=wq.doc.attr("amount"),
+        currency=wq.doc.attr("currency"),
+    ).project(),
 ).project()
 ```
+
+**JSON injected into an HTML page.** When the DOM is a shell but the records are inlined in a
+`<script type="application/json">` island (or a `__NEXT_DATA__` / ld+json blob), select that
+script and **`.as_json()`** to reparse its text as a JSON document, then use the dotted-path
+form above:
+```python
+wq.doc.select("script#__DATA__").as_json().select_all("catalog.items").extract(
+    title=wq.doc.attr("title"),
+    sku=wq.doc.attr("sku"),
+).project()
+```
+
+**An RSS/XML feed** is parsed like HTML — records are `<item>`s, fields are child tags
+(`.select("title").attr("text")`, `.select("pubDate").attr("text")`); tag names can be
+mixed-case.
 
 ### 4. Filtering — drop rows with a sold-out badge
 

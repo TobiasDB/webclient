@@ -438,6 +438,325 @@ def xhr_behind_shell(seed: int = 9) -> Scenario:
     )
 
 
+# --------------------------------------------------------------------------- #
+# 9. AMBIGUOUS dedup: the newest post ALSO appears as a big "Featured" hero at the top,
+#    then again in the full list. A naive `article.post` double-counts it -- the query
+#    must scope to the canonical list section.
+# --------------------------------------------------------------------------- #
+
+def duplicate_featured(seed: int = 10) -> Scenario:
+    r = _rng(seed)
+    posts = [("Series B announced", "2026-09-15"), ("Hiring across the board", "2026-09-11"),
+             ("Our new London office", "2026-09-05"), ("Roadmap update", "2026-08-30")]
+
+    def card(t: str, d: str) -> str:
+        return _wrap(r, f'<article class="{_cls(r, "post")}">'
+                        f'<h3 class="{_cls(r, "post-title")}">{t}</h3>'
+                        f'<time class="{_cls(r, "post-date")}">{d}</time></article>', depth=1)
+
+    featured = (f'<section class="{_cls(r, "featured")}"><h2>Featured</h2>'
+                f'{card(*posts[0])}</section>')  # the newest post, duplicated as a hero
+    listing = ('<section id="all-posts"><h2>All posts</h2>'
+               + "".join(card(*p) for p in posts) + "</section>")
+    body = _decoys(r) + "<main>" + featured + listing + "</main>"
+    expected = [{"title": t, "date": d} for t, d in posts]  # each post ONCE
+    solution = (
+        'wq.doc.select_all("#all-posts article.post").extract('
+        'title=wq.doc.select("[class*=post-title]").attr("text"),'
+        ' date=wq.doc.select("time").attr("text")).project()'
+    )
+    return Scenario(
+        name="duplicate_featured",
+        desc="every blog post, each with its title and publication date (no duplicates)",
+        fields=["title", "date"],
+        pages={"/": body}, expected=expected, solution=solution,
+        notes="the newest post appears TWICE -- once as a 'Featured' hero and once in the list. A "
+              "bare 'article.post' selector double-counts it; the query must scope to the canonical "
+              "#all-posts list so each post is returned exactly once.",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 10. AMBIGUOUS value pick: two prices per card -- a struck-through ORIGINAL and the
+#     current SALE price -- and some items aren't on sale (only one price). "The price"
+#     must resolve to the CURRENT one, with the original captured only as an optional
+#     was-price. The wrong pick (or grabbing the container text) yields a mangled value.
+# --------------------------------------------------------------------------- #
+
+def price_current_vs_original(seed: int = 11) -> Scenario:
+    r = _rng(seed)
+    data = [
+        ("Alpha Mechanical Keyboard", "$129.00", "$99.00"),  # on sale
+        ("Beta Wireless Mouse", None, "$49.00"),             # NOT on sale (no original)
+        ("Gamma 4K Monitor", "$399.00", "$329.00"),          # on sale
+    ]
+    cards = ""
+    for name, was, now in data:
+        was_html = f'<del class="{_cls(r, "was")}">{was}</del> ' if was else ""
+        cards += _wrap(r,
+            f'<article class="{_cls(r, "product")}">'
+            f'<span class="{_cls(r, "name")}">{name}</span>'
+            f'<span class="{_cls(r, "price")}">{was_html}'
+            f'<ins class="{_cls(r, "now")}">{now}</ins></span></article>', depth=1)
+    body = _decoys(r) + "<main>" + cards + "</main>"
+    expected = [{"name": n, "price": now, "was": was} for n, was, now in data]
+    solution = (
+        'wq.doc.select_all("article.product").extract('
+        'name=wq.doc.select("[class*=name]").attr("text"),'
+        ' price=wq.doc.select("ins[class*=now]").attr("text"),'
+        ' was=wq.doc.select("del[class*=was]", optional=True).attr("text")).project()'
+    )
+    return Scenario(
+        name="price_current_vs_original",
+        desc="each product with its name, its current price, and its original price if discounted",
+        fields=["name", "price", "was?"],
+        pages={"/": body}, expected=expected, solution=solution,
+        notes="each price cell holds TWO numbers on sale items -- a struck-through <del> original and "
+              "an <ins> current price. 'price' must be the CURRENT (<ins>) value; the original is an "
+              "OPTIONAL was-price absent on non-sale items. Reading the whole cell concatenates both.",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 11. HTML TABLE with interleaved section-header rows + a totals row: data rows and group
+#     headers are both <tr> in the same <tbody>, so the record selector must admit only
+#     real data rows (those with <td>, excluding the totals row) and read cells by column
+#     POSITION -- the classic "table that isn't a clean list" shape.
+# --------------------------------------------------------------------------- #
+
+def table_with_section_headers(seed: int = 12) -> Scenario:
+    r = _rng(seed)
+    y2026 = [("Q1 2026", "$1.20B"), ("Q2 2026", "$1.45B")]
+    y2025 = [("Q3 2025", "$0.90B"), ("Q4 2025", "$1.10B")]
+
+    def datarow(q: str, rev: str) -> str:
+        return (f'<tr class="{_cls(r, "row")}"><td class="{_cls(r, "q")}">{q}</td>'
+                f'<td class="{_cls(r, "rev")}">{rev}</td><td>+12%</td></tr>')
+
+    def header(year: str) -> str:
+        return f'<tr class="{_cls(r, "section")}"><th colspan="3">Fiscal {year}</th></tr>'
+
+    totals = (f'<tr class="{_cls(r, "totals")}"><td>Total</td>'
+              f'<td>$4.65B</td><td></td></tr>')
+    tbody = (header("2026") + "".join(datarow(*x) for x in y2026)
+             + header("2025") + "".join(datarow(*x) for x in y2025) + totals)
+    table = (f'<table class="{_cls(r, "results")}"><thead><tr>'
+             f'<th>Quarter</th><th>Revenue</th><th>Growth</th></tr></thead>'
+             f'<tbody>{tbody}</tbody></table>')
+    body = _decoys(r) + "<main>" + _wrap(r, table, depth=1) + "</main>"
+    expected = [{"quarter": q, "revenue": rev} for q, rev in [*y2026, *y2025]]
+    solution = (
+        'wq.doc.select_all("tbody tr:has(td):not([class*=totals])").extract('
+        'quarter=wq.doc.select("td:nth-of-type(1)").attr("text"),'
+        ' revenue=wq.doc.select("td:nth-of-type(2)").attr("text")).project()'
+    )
+    return Scenario(
+        name="table_with_section_headers",
+        desc="each fiscal quarter with its revenue (every quarter across the years shown)",
+        fields=["quarter", "revenue"],
+        pages={"/": body}, expected=expected, solution=solution,
+        notes="a real <table>: 'Fiscal <year>' group-header rows (a <th colspan>) are interleaved with "
+              "the data rows and a grand-total row sits at the bottom. The record selector must take "
+              "only data rows (have a <td>, not the totals row) and read cells by column position.",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 12. HETEROGENEOUS records under one list: a newsroom feed mixing press releases, blog
+#     posts and events, each carrying a different inner shape (an event has a venue, etc.),
+#     plus an undated DRAFT that must be dropped. Every kept record needs a `type` read
+#     from a badge, and only items that are actually published (have a date) count.
+# --------------------------------------------------------------------------- #
+
+def mixed_record_types(seed: int = 13) -> Scenario:
+    r = _rng(seed)
+    items = [
+        ("Press Release", "Acme raises a Series C", "2026-09-14"),
+        ("Blog", "Engineering our new cache", "2026-09-10"),
+        ("Event", "Acme Summit 2026", "2026-09-20"),
+        ("Press Release", "Acme partners with Globex", "2026-09-02"),
+    ]
+    draft = ("Blog", "Untitled draft — do not publish", None)  # no date -> must be dropped
+
+    def li(kind: str, title: str, date: "str | None") -> str:
+        badge = f'<span class="{_cls(r, "badge")}">{kind}</span>'
+        time_html = f'<time class="{_cls(r, "item-date")}">{date}</time>' if date else ""
+        extra = (f'<span class="{_cls(r, "venue")}">Main Hall</span>' if kind == "Event"
+                 else f'<span class="{_cls(r, "author")}">by staff</span>' if kind == "Blog" else "")
+        return (f'<li class="{_cls(r, "feed-item")}">{badge}'
+                f'<h3 class="{_cls(r, "item-title")}">{title}</h3>{time_html}{extra}</li>')
+
+    lis = "".join(li(*x) for x in items) + li(*draft)
+    body = _decoys(r) + "<main><ul>" + lis + "</ul></main>"
+    expected = [{"title": t, "date": d, "type": k} for k, t, d in items]
+    solution = (
+        'wq.doc.select_all("li.feed-item:has(time)").extract('
+        'title=wq.doc.select("[class*=item-title]").attr("text"),'
+        ' date=wq.doc.select("time").attr("text"),'
+        ' type=wq.doc.select("[class*=badge]").attr("text")).project()'
+    )
+    return Scenario(
+        name="mixed_record_types",
+        desc="each published newsroom item with its title, date and type (press release / blog / event)",
+        fields=["title", "date", "type"],
+        pages={"/": body}, expected=expected, solution=solution,
+        notes="one <ul> mixes press releases, blog posts and events -- each with a DIFFERENT inner "
+              "shape (an event has a venue, a blog an author) and a type badge. An undated draft item "
+              "looks like a record but must be dropped: scope to items that actually have a <time>.",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 13. TWO-LEVEL nested resolve + regex on the twice-followed page: a listing -> each item's
+#     detail page -> a certification page linked from the detail, where the target id is
+#     buried in prose and must be regex'd out. The single hardest shape: two hops per
+#     record and a text-extraction at the end.
+# --------------------------------------------------------------------------- #
+
+def two_level_resolve_regex(seed: int = 14) -> Scenario:
+    r = _rng(seed)
+    items = [
+        ("Reactor Core X1", "/p/reactor", "/cert/reactor", "NRC-2026-00219"),
+        ("Fusion Cell Z9", "/p/fusion", "/cert/fusion", "NRC-2026-00477"),
+    ]
+    listing = "".join(
+        _wrap(r, f'<li class="{_cls(r, "product")}">'
+                 f'<a class="{_cls(r, "detail-link")}" href="{detail}">{name}</a></li>', depth=1)
+        for name, detail, _cert, _cid in items)
+    pages = {"/": _decoys(r) + "<main><ul>" + listing + "</ul></main>"}
+    for name, detail, cert, cid in items:
+        pages[detail] = (f'<main><h1 class="{_cls(r, "title")}">{name}</h1>'
+                         f'<p>Specifications and safety documents for {name}.</p>'
+                         f'<a class="{_cls(r, "cert-link")}" href="{cert}">View certification</a></main>')
+        pages[cert] = (f'<main><section class="{_cls(r, "cert-body")}">'
+                       f'This unit is certified for commercial operation. '
+                       f'Certification ID: {cid}. Issued 2026 by the regulator.</section></main>')
+    expected = [{"name": name, "cert": cid} for name, _d, _c, cid in items]
+    solution = (
+        'wq.doc.select_all("li.product").extract('
+        'name=wq.doc.select("a").attr("text"),'
+        ' cert=wq.doc.select("a").attr("href").resolve()'
+        '.select("a[class*=cert-link]").attr("href").resolve()'
+        '.select("[class*=cert-body]").regex(r"Certification ID:\\s*([A-Z0-9-]+)", group=1)'
+        ').project()'
+    )
+    return Scenario(
+        name="two_level_resolve_regex",
+        desc="each product with its name and its certification ID (the id lives two pages away)",
+        fields=["name", "cert"],
+        pages=pages, expected=expected, solution=solution,
+        notes="the certification ID is on neither the listing NOR the detail page: the detail page "
+              "links to a certification page where the id is buried in prose. The query must resolve "
+              "TWICE per record (listing->detail->cert) and regex the id out of the cert page's text.",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 14. FEATURE CARDS in HIDDEN TABS + a BRANCHING extract: a product page's feature cards
+#     are split across tab panels of which only one is visible (the rest are `hidden` but
+#     PRESENT in the DOM), and each card branches into TWO distinct sub-extracts (a spec
+#     {value,unit} and a price-delta {amount,currency}). A query scoped to the active tab
+#     misses most cards; the branches must each be their own nested project.
+# --------------------------------------------------------------------------- #
+
+def product_hidden_tabs(seed: int = 15) -> Scenario:
+    r = _rng(seed)
+    tabs = [
+        ("Storage", True, [("256GB SSD", "256", "GB", "0", "USD"),
+                           ("512GB SSD", "512", "GB", "200", "USD")]),
+        ("Memory", False, [("16GB RAM", "16", "GB", "0", "USD"),
+                           ("32GB RAM", "32", "GB", "400", "USD")]),
+        ("Warranty", False, [("AppleCare+", "2", "yr", "199", "USD")]),
+    ]
+
+    def feature(name: str, val: str, unit: str, amt: str, cur: str) -> str:
+        return _wrap(r,
+            f'<article class="{_cls(r, "feature")}">'
+            f'<h4 class="{_cls(r, "feat-name")}">{name}</h4>'
+            f'<div class="{_cls(r, "feat-spec")}">'
+            f'<span class="{_cls(r, "spec-val")}">{val}</span>'
+            f'<span class="{_cls(r, "spec-unit")}">{unit}</span></div>'
+            f'<div class="{_cls(r, "feat-delta")}">'
+            f'<span class="{_cls(r, "delta-amt")}">{amt}</span>'
+            f'<span class="{_cls(r, "delta-cur")}">{cur}</span></div></article>', depth=1)
+
+    panels = ""
+    for label, active, feats in tabs:
+        hidden = "" if active else " hidden"
+        cls = _cls(r, "tabpanel", "active") if active else _cls(r, "tabpanel")
+        panels += (f'<div role="tabpanel" class="{cls}"{hidden} aria-label="{label}">'
+                   + "".join(feature(*f) for f in feats) + "</div>")
+    body = _decoys(r) + "<main><div class=\"tabs\">" + panels + "</div></main>"
+    expected = [
+        {"name": n, "spec": {"value": v, "unit": u}, "delta": {"amount": a, "currency": c}}
+        for _label, _active, feats in tabs for (n, v, u, a, c) in feats
+    ]
+    solution = (
+        'wq.doc.select_all("[role=tabpanel] article.feature").extract('
+        'name=wq.doc.select("[class*=feat-name]").attr("text"),'
+        ' spec=wq.doc.select("[class*=feat-spec]").extract('
+        '   value=wq.doc.select("[class*=spec-val]").attr("text"),'
+        '   unit=wq.doc.select("[class*=spec-unit]").attr("text")).project(),'
+        ' delta=wq.doc.select("[class*=feat-delta]").extract('
+        '   amount=wq.doc.select("[class*=delta-amt]").attr("text"),'
+        '   currency=wq.doc.select("[class*=delta-cur]").attr("text")).project()).project()'
+    )
+    return Scenario(
+        name="product_hidden_tabs",
+        desc="every configuration option across all tabs, each with its spec and price delta",
+        fields=["name", "spec.value", "spec.unit", "delta.amount", "delta.currency"],
+        pages={"/": body}, expected=expected, solution=solution,
+        notes="the feature cards are split across TAB PANELS -- only the first is visible, the rest "
+              "are `hidden` but present in the DOM. A query scoped to the active/visible tab misses "
+              "most cards; it must select across ALL [role=tabpanel]s. Each card BRANCHES into two "
+              "distinct nested extracts (a spec and a price delta), each its own .project().",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 15. JSON INJECTED into the page: the visible HTML is a near-empty shell, but the real
+#     records are inlined in a <script type="application/json"> island. The query must
+#     select the script and REPARSE its text as JSON (.as_json()), then dotted-path in --
+#     not scrape the (empty) DOM.
+# --------------------------------------------------------------------------- #
+
+def json_injected(seed: int = 16) -> Scenario:
+    r = _rng(seed)
+    import json as _json
+    products = [
+        {"title": "Nimbus Router", "sku": "NB-100", "price": {"amount": 129, "currency": "USD"}},
+        {"title": "Cirrus Switch", "sku": "CR-240", "price": {"amount": 349, "currency": "USD"}},
+        {"title": "Stratus AP", "sku": "ST-88", "price": {"amount": 99, "currency": "USD"}},
+    ]
+    blob = _json.dumps({"page": 1, "catalog": {"items": products}})
+    body = (_decoys(r) + '<main><div class="' + _cls(r, "grid") + '">'
+            '<!-- products are hydrated client-side from the JSON island below --></div></main>'
+            '<script id="__CATALOG__" type="application/json">' + blob + '</script>')
+    expected = [
+        {"title": p["title"], "sku": p["sku"],
+         "price": {"amount": p["price"]["amount"], "currency": p["price"]["currency"]}}
+        for p in products
+    ]
+    solution = (
+        'wq.doc.select("script#__CATALOG__").as_json().select_all("catalog.items").extract('
+        'title=wq.doc.attr("title"),'
+        ' sku=wq.doc.attr("sku"),'
+        ' price=wq.doc.select("price").extract('
+        '   amount=wq.doc.attr("amount"),'
+        '   currency=wq.doc.attr("currency")).project()).project()'
+    )
+    return Scenario(
+        name="json_injected",
+        desc="every product with its title, SKU and structured price (amount + currency)",
+        fields=["title", "sku", "price.amount", "price.currency"],
+        pages={"/": body}, expected=expected, solution=solution,
+        notes="the DOM is an EMPTY grid -- the records are inlined in a <script "
+              "type=application/json> island (client-hydrated). The query must select that script "
+              "and .as_json() reparse its text, then dotted-path into catalog.items[] -- scraping "
+              "the DOM yields nothing.",
+    )
+
+
 def all_scenarios() -> list[Scenario]:
     return [
         flat_sibling_press(),
@@ -449,4 +768,11 @@ def all_scenarios() -> list[Scenario]:
         rss_feed(),
         json_api(),
         xhr_behind_shell(),
+        duplicate_featured(),
+        price_current_vs_original(),
+        table_with_section_headers(),
+        mixed_record_types(),
+        two_level_resolve_regex(),
+        product_hidden_tabs(),
+        json_injected(),
     ]

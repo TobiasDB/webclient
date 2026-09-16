@@ -506,7 +506,7 @@ class HtmlBacking(Backing):
     in."""
 
     provides = frozenset(
-        {"select", "select_all", "attr", "render",
+        {"select", "select_all", "attr", "render", "as_json",
          "markdown", "text", "html", "links", "elements", "skeleton"}
     )
     collections = frozenset({"select_all", "links"})  # return a Collection of cores
@@ -563,6 +563,28 @@ class HtmlBacking(Backing):
     def elements(self, core: "Document") -> "list[Element]":
         """The page as a flat list of typed content blocks."""
         return self.render(core, "elements")
+
+    def as_json(self, core: "Document") -> "Document":
+        """Reparse THIS element's text as a JSON document -- for data injected into the page
+        as a JSON blob rather than as DOM (a ``<script type="application/json">`` island, a
+        ``__NEXT_DATA__`` / ld+json blob, an inlined API payload). Select the script/element,
+        then ``.as_json()`` to switch to the JSON ops and dotted-path into it
+        (``.select("data.items")`` / ``.select_all("items")`` / ``.attr(key)``). Non-JSON or
+        empty text yields a not-ok document, exactly like a missed select."""
+        from . import Document
+
+        if core._missing:
+            return core._sub(None)
+        el = core._element if core._element is not None else self._tree(core)
+        raw = "".join(el.itertext())  # the element's RAW text (unnormalised -> valid JSON)
+        doc = Document(
+            url=core.url, final_url=core.final_url, kind="json",
+            status_code=core.status_code, content=raw.encode("utf-8", "replace"),
+        )
+        doc.root = core.name or core.root
+        doc._client = core._client
+        doc._events = core._events
+        return doc
 
     def skeleton(
         self,

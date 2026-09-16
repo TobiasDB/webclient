@@ -158,6 +158,21 @@ def test_json_select_and_attr_value():
     assert doc.select("items[1].n").text_content == "2"
 
 
+def test_as_json_reparses_an_injected_json_island():
+    # data injected into the page as a <script type=application/json> blob, not as DOM:
+    # select the script, .as_json() reparses its text into a JSON document, then dotted-path.
+    html = (b'<html><body><div id="grid"></div>'
+            b'<script id="__DATA__" type="application/json">'
+            b'{"catalog": {"items": [{"sku": "A-1"}, {"sku": "B-2"}]}}'
+            b"</script></body></html>")
+    doc = make_doc(content=html)  # kind html
+    data = doc.select("script#__DATA__").as_json()
+    assert data.kind == "json"
+    assert [d.attr("sku").get() for d in data.select_all("catalog.items")] == ["A-1", "B-2"]
+    # a missed select .as_json() is a not-ok document, not a crash
+    assert not doc.select("script#nope", optional=True).as_json().ok
+
+
 # -- elements are documents (P3) -------------------------------------------- #
 
 
