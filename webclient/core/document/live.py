@@ -62,6 +62,41 @@ INIT_JS = """(() => {
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', mark, {once: true});
   } else { mark(); }
+  // Fold shadow-DOM + same-origin iframe content into the LIGHT dom so page.content()
+  // (and the skeleton the agent reads) contains the real records, not an empty
+  // <custom-element>/<iframe> shell. Called from the "inline" page-script after settle.
+  // Recurse into nested shadow roots first so deep trees are captured too.
+  window.__wc_inline = () => {
+    let shadow = 0, frames = 0;
+    const pierce = (root) => {
+      let n = 0;
+      const hosts = root.querySelectorAll('*');
+      for (const el of hosts) {
+        if (el.shadowRoot) {
+          n += 1 + pierce(el.shadowRoot);            // nested shadows first
+          const holder = document.createElement('div');
+          holder.setAttribute('data-wc-shadow', '');
+          holder.innerHTML = el.shadowRoot.innerHTML;  // now includes inlined descendants
+          el.appendChild(holder);
+        }
+      }
+      return n;
+    };
+    try { shadow = pierce(document); } catch (e) {}
+    for (const f of document.querySelectorAll('iframe')) {
+      try {
+        const idoc = f.contentDocument;               // null / throws for cross-origin
+        if (idoc && idoc.body) {
+          frames++;
+          const holder = document.createElement('div');
+          holder.setAttribute('data-wc-frame', f.getAttribute('src') || '');
+          holder.innerHTML = idoc.body.innerHTML;
+          f.parentNode.insertBefore(holder, f.nextSibling);
+        }
+      } catch (e) { /* cross-origin frame -- unreadable, leave it */ }
+    }
+    return {shadow: shadow, frames: frames};
+  };
 })()"""
 
 #: read + clear the mutation buffer AND snapshot the settled page's total text +
@@ -168,7 +203,12 @@ class LiveBacking(Backing):
     #: read by ``dom_mutations`` via ``drain``) and the buffer drain (``drain``
     #: phase, run after replay to discard load-time mutations). The client gathers
     #: and installs them; the backing owns the *what*.
-    page_scripts = (PageScript(INIT_JS, "init"), PageScript(DRAIN_JS, "drain"))
+    page_scripts = (
+        PageScript(INIT_JS, "init"),
+        # fold shadow-DOM / same-origin iframe content into the light DOM before the snapshot
+        PageScript("() => window.__wc_inline ? window.__wc_inline() : {shadow:0,frames:0}", "inline"),
+        PageScript(DRAIN_JS, "drain"),
+    )
     gate = "page"
 
     def applies(self, core: "Document") -> bool:

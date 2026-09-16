@@ -180,6 +180,33 @@ def test_auto_escalates_js_injected_content(httpserver, wc):
     assert doc.transport().final_tier == "browser"
 
 
+def test_browser_inlines_shadow_dom_and_same_origin_iframe(httpserver, wc):
+    # content hidden in shadow DOM or a same-origin iframe is invisible to a plain HTML
+    # snapshot. The render inlines both into the light DOM so the captured content (and the
+    # skeleton the agent reads) contains the real records, and the shadow_dom / iframe flags
+    # fire with the counts.
+    httpserver.expect_request("/frame").respond_with_data(
+        "<html><body><p class='fitem'>FRAME-RECORD</p></body></html>", content_type="text/html")
+    page = """<html><body><main>
+        <div id="host"></div>
+        <iframe src="/frame"></iframe>
+        <script>
+          const r = document.getElementById('host').attachShadow({mode:'open'});
+          r.innerHTML = '<ul><li class="sitem">SHADOW-RECORD-1</li>'
+                      + '<li class="sitem">SHADOW-RECORD-2</li></ul>';
+        </script>
+      </main></body></html>"""
+    httpserver.expect_request("/sh").respond_with_data(page, content_type="text/html")
+    doc = wc.fetch(httpserver.url_for("/sh"), browser="always")
+    text = doc.text_content
+    assert "SHADOW-RECORD-1" in text and "FRAME-RECORD" in text  # inlined into the light DOM
+    assert "SHADOW-RECORD" in doc.skeleton() and "FRAME-RECORD" in doc.skeleton()
+    shadow, frame = doc.shadow_dom(), doc.iframe()
+    assert shadow.present and shadow.value == 1  # one shadow root inlined
+    assert frame.present and frame.value == 1    # one same-origin frame inlined
+    wc.release(doc)
+
+
 def test_auto_stays_static_for_a_sparse_page(httpserver, wc):
     # a genuinely sparse static page the browser would not enrich (empty but no
     # bundle to run) is NOT escalated -- it stays on the static tier.

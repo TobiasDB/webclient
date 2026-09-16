@@ -74,6 +74,61 @@ def _xhr_composed(ctx: Context) -> Hit | None:
     return None
 
 
+# -- shadow_dom / iframe: content a plain HTML snapshot would miss ------------
+# A shadow root or a same-origin iframe hides its content from page.content() (and so
+# from the skeleton). The browser render inlines it (see live.py __wc_inline) and reports
+# the counts in render_stats; these flags surface that so the pipeline renders + reads it.
+
+def _shadow_value(signals: "list[Signal]", ctx: Context) -> "int | None":
+    return int((ctx.render_stats or {}).get("shadow", 0) or 0) or None
+
+
+def _iframe_value(signals: "list[Signal]", ctx: Context) -> "int | None":
+    n = int((ctx.render_stats or {}).get("frames", 0) or 0)
+    if not n:
+        n = len(ctx.tree.cssselect("iframe")) if ctx.tree is not None else ctx.low.count("<iframe")
+    return n or None
+
+
+flag("shadow_dom", value=_shadow_value)
+flag("iframe", value=_iframe_value)
+
+
+@detector(flag="shadow_dom", name="shadow_roots_inlined", stage="rendered")
+def _shadow_inlined(ctx: Context) -> Hit | None:
+    n = int((ctx.render_stats or {}).get("shadow", 0) or 0)
+    if n > 0:
+        return Hit(0.9, f"{n} shadow root(s) inlined from the live page", n)
+    return None
+
+
+@detector(flag="shadow_dom", name="attach_shadow_marker", stage="static")
+def _attach_shadow(ctx: Context) -> Hit | None:
+    t = ctx.text or ""
+    if "attachShadow" in t or "shadowrootmode" in t.lower():
+        return Hit(0.5, "the page uses shadow DOM (attachShadow / shadowrootmode)")
+    return None
+
+
+@detector(flag="iframe", name="iframes_inlined", stage="rendered")
+def _iframe_inlined(ctx: Context) -> Hit | None:
+    n = int((ctx.render_stats or {}).get("frames", 0) or 0)
+    if n > 0:
+        return Hit(0.85, f"{n} same-origin iframe(s) inlined from the live page", n)
+    return None
+
+
+@detector(flag="iframe", name="iframe_element", stage="static")
+def _iframe_element(ctx: Context) -> Hit | None:
+    if ctx.tree is not None:
+        if fr := ctx.tree.cssselect("iframe"):
+            return Hit(0.6, f"{len(fr)} iframe element(s) on the page", len(fr))
+        return None
+    if "<iframe" in ctx.low:  # treeless (remote / no-lxml) context -- read the raw HTML
+        return Hit(0.6, "an iframe element on the page")
+    return None
+
+
 # -- pagination (tree) --------------------------------------------------------
 
 

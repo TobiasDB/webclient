@@ -54,6 +54,20 @@ SPA = b"""
   </script>
 </body></html>
 """
+# a page that hides its records in shadow DOM + a same-origin iframe -- invisible to a
+# plain HTML snapshot; the render inlines both so the content (and skeleton) captures them.
+SHADOW = b"""
+<html><head><title>Shadow</title></head><body><main>
+  <div id="host"></div>
+  <iframe src="/frame"></iframe>
+  <script>
+    const r = document.getElementById('host').attachShadow({mode:'open'});
+    r.innerHTML = '<ul><li class="rec">shadow record A</li>'
+                + '<li class="rec">shadow record B</li></ul>';
+  </script>
+</main></body></html>
+"""
+FRAME = b'<html><body><p class="frec">iframe record</p></body></html>'
 APP = b"""
 <html><head><title>Live App</title></head><body>
   <h1>Cart</h1>
@@ -124,6 +138,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body, ctype = SPA, "text/html"
         elif self.path == "/app":  # a JS-driven live page
             body, ctype = APP, "text/html"
+        elif self.path == "/shadow":  # records hidden in shadow DOM + a same-origin iframe
+            body, ctype = SHADOW, "text/html"
+        elif self.path == "/frame":  # the iframe's content
+            body, ctype = FRAME, "text/html"
         elif self.path == "/old":  # a redirect hop
             self.send_response(302)
             self.send_header("Location", "/")
@@ -304,6 +322,22 @@ def main() -> None:
                 "tiers": probed.transport().escalation,
             },
         )
+        # [shadow/iframe] records hidden in shadow DOM or a same-origin iframe are
+        #      invisible to a plain HTML snapshot. The render inlines both into the light
+        #      DOM, so the captured content (and the skeleton an agent reads) holds them,
+        #      and the shadow_dom / iframe flags fire with the counts.
+        deep = wc.fetch(f"{base}/shadow", browser="always")
+        print(
+            "shadow/iframe:",
+            {
+                "shadow_dom": (deep.shadow_dom().present, deep.shadow_dom().value),
+                "iframe": (deep.iframe().present, deep.iframe().value),
+                "shadow_inlined": "shadow record A" in deep.text_content,
+                "iframe_inlined": "iframe record" in deep.text_content,
+            },
+        )
+        wc.release(deep)
+
         # [browser transport] a browser render now carries the REAL Playwright
         #      main-response status + headers (not a fabricated 200 / empty), so
         #      transport() and the access signals are accurate on a rendered page.

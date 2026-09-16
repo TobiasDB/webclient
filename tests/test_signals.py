@@ -34,6 +34,20 @@ def test_flags_from_response_is_pure_and_usable_standalone():
     assert 0.0 < sig.confidence <= 1.0 and sig.reason
 
 
+def test_iframe_and_shadow_dom_flags_from_the_static_tree():
+    # even without a render, an <iframe> element and an attachShadow/shadowrootmode marker
+    # are flagged (statically) so auto knows to escalate to a browser that can inline them.
+    got = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {},
+        b"<html><body><main><iframe src='/f'></iframe>"
+        b"<div id='h'></div><script>document.getElementById('h')"
+        b".attachShadow({mode:'open'})</script></main></body></html>",
+    ))
+    assert got["iframe"].present and got["iframe"].value == 1  # one iframe element
+    assert got["shadow_dom"].present  # attachShadow marker in the served HTML
+    assert got["shadow_dom"].signals[0].stage == "static"
+
+
 def test_signals_package_imports_without_lxml_or_a_browser():
     # the detection package is isolated: importable + runnable with the native deps
     # unavailable, so a remote/thin context can read flags too.

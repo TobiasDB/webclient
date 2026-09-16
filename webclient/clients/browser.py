@@ -18,7 +18,7 @@ from typing import Any, Literal
 from ..errors import RAISE, RETURN, _Policy, select_error
 from .base import Client, ClientFactory
 
-Phase = Literal["init", "load", "drain"]
+Phase = Literal["init", "load", "inline", "drain"]
 
 
 class WaitEvent(Enum):
@@ -93,9 +93,12 @@ def _is_timeout(exc: BaseException) -> bool:
 @dataclass(frozen=True)
 class PageScript:
     """Script to install on a browser page. ``init`` runs before each navigation
-    (``add_init_script``); ``load`` is evaluated once after navigation; ``drain``
-    is evaluated after any replay (to clear a buffer, e.g. discard load-time DOM
-    mutations) and its result is ignored."""
+    (``add_init_script``); ``inline`` is evaluated once after the page settles but
+    BEFORE the HTML snapshot (to fold shadow-DOM / same-origin iframe content into
+    the light DOM so ``page.content()`` captures it), its returned dict merged into
+    ``dom_stats``; ``load`` is evaluated once after navigation; ``drain`` is evaluated
+    after any replay (to clear a buffer, e.g. discard load-time DOM mutations) and its
+    result is ignored."""
 
     source: str
     phase: Phase = "init"
@@ -237,6 +240,15 @@ class BrowserClient(Client):
         # (Playwright hands it back from ``goto``). ``None`` for a non-HTTP nav.
         response = await page.goto(url, wait_until="domcontentloaded")
         await self._do_wait(page, wait)  # let JS/lazy content load before snapshotting
+        # fold shadow-DOM / same-origin iframe content into the light DOM BEFORE the
+        # snapshot, so page.content() (and thus the skeleton) contains the real records
+        # instead of an empty <custom-element>/<iframe> shell.
+        inline_stats: dict[str, Any] = {}
+        for s in scripts:
+            if s.phase == "inline":
+                got = await page.evaluate(s.source)
+                if isinstance(got, dict):
+                    inline_stats.update(got)
         status: int = 0
         headers: dict[str, str] = {}
         if response is not None:
@@ -268,6 +280,7 @@ class BrowserClient(Client):
                     }
                 elif isinstance(drained, list):  # back-compat
                     result.mutations.extend(drained)
+        result.dom_stats.update(inline_stats)  # carry shadow / frame counts to the flags
         for s in scripts:  # load scripts run once, after navigation
             if s.phase == "load":
                 await page.evaluate(s.source)

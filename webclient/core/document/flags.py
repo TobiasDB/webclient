@@ -32,7 +32,8 @@ class FlagsBacking(Backing):
 
     provides = frozenset(
         {"flags", "spa", "anti_bot_present", "anti_bot_triggered", "login_present",
-         "login_required", "pagination", "forms", "buttons", "framework", "xhr_endpoints"}
+         "login_required", "pagination", "forms", "buttons", "shadow_dom", "iframe",
+         "framework", "xhr_endpoints"}
     )
     gate = "ok"
 
@@ -96,13 +97,25 @@ class FlagsBacking(Backing):
         """Interactive buttons on the page. ``value`` is a sample of button labels."""
         return self._flags(core)["buttons"]
 
+    def shadow_dom(self, core: "Document") -> Flag:
+        """The page hides content in shadow DOM -- invisible to a plain HTML snapshot.
+        A browser render inlines each shadow root into the light DOM so the content is
+        captured; ``value`` is how many roots were inlined."""
+        return self._flags(core)["shadow_dom"]
+
+    def iframe(self, core: "Document") -> Flag:
+        """The page embeds content in iframe(s). A browser render inlines each SAME-ORIGIN
+        frame's body into the parent DOM so its content is captured; ``value`` is the frame
+        count. Cross-origin frames cannot be inlined (their content stays out of reach)."""
+        return self._flags(core)["iframe"]
+
     # -- the digest + data ops ------------------------------------------------
     def flags(self, core: "Document") -> "list[Flag]":
         """Every flag that is present, most-actionable first -- the compact digest of
         "what is notable about this page"."""
         order = (
-            "anti_bot_triggered", "login_required", "spa", "anti_bot_present",
-            "login_present", "pagination", "forms", "buttons",
+            "anti_bot_triggered", "login_required", "spa", "shadow_dom", "iframe",
+            "anti_bot_present", "login_present", "pagination", "forms", "buttons",
         )
         got = self._flags(core)
         return [got[name] for name in order if got[name].present]

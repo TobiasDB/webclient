@@ -593,7 +593,8 @@ def _fields_line(brief: Brief) -> str:
 
 #: the flags the pipeline reads to decide how to fetch, resolve and query a source.
 _DECISION_FLAGS = (
-    "spa", "anti_bot_triggered", "login_required", "pagination", "forms", "buttons",
+    "spa", "shadow_dom", "iframe", "anti_bot_triggered", "login_required",
+    "pagination", "forms", "buttons",
 )
 
 
@@ -1021,12 +1022,15 @@ def write_resolve(flags: Sequence[Flag]) -> Resolve:
     (``proxy`` for a bare block, ``stealth`` = a browser behind a proxy with anti-bot
     handling for a named vendor). A login wall has no transport remedy."""
     by = {f.name: f for f in flags if f.present}
-    spa = "spa" in by
+    # a browser is needed to build the DOM: an SPA composes it client-side; shadow DOM /
+    # a same-origin iframe hides content a plain HTML snapshot misses, and only a render
+    # inlines it (see the __wc_inline page script).
+    needs_render = any(n in by for n in ("spa", "shadow_dom", "iframe"))
     triggered = by.get("anti_bot_triggered")
     stealth = bool(triggered and triggered.remedy == "stealth")
     proxy = bool(triggered and triggered.remedy in ("proxy", "stealth"))
     return Resolve(
-        browser=BrowserPolicy(when="always") if (spa or stealth) else None,
+        browser=BrowserPolicy(when="always") if (needs_render or stealth) else None,
         proxy=ProxyPolicy.auto() if proxy else None,
         antibot=AntiBotPolicy.auto() if stealth else None,
     )
