@@ -56,7 +56,7 @@ def test_lazy_query_guide_tool_returns_the_packaged_skill(wc):
     # the query-syntax skill ships as package data and is pullable as an MCP tool.
     out = dispatch("lazy_query_guide", {}, wc)
     assert "name: lazy-web-queries" in out  # skill frontmatter
-    assert "wq.ref.resolve()" in out and ".project()" in out  # the DSL
+    assert "wq.doc" in out and ".project()" in out  # the doc-rooted DSL
 
 
 def test_unknown_tool_raises(wc):

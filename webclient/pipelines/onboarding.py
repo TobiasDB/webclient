@@ -743,13 +743,13 @@ def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False) -> st
     )
 
 
-def _test_query(expr: Any, context: Any) -> "tuple[bool, list[Any]]":
-    """Run the authored query against the source to prove it loads and extracts. The
-    ``context`` is the source's :class:`Reference` (``wc.ref(url)``) -- the query resolves
-    it (a page/API query is ``wq.ref.resolve()...``). Returns ``(ran_without_error,
-    rows)`` -- a query that raises is not ``tested`` and its rows are empty."""
+def _test_query(expr: Any, doc: Any) -> "tuple[bool, list[Any]]":
+    """Run the authored query against the fetched source ``doc`` to prove it loads and
+    extracts. The query is the document-level extraction (``wq.doc...``), so it collects
+    directly against the resolved document. Returns ``(ran_without_error, rows)`` -- a
+    query that raises is not ``tested`` and its rows are empty."""
     try:
-        result = expr.collect(context)
+        result = expr.collect(doc)
     except Exception:  # noqa: BLE001 - a query that can't run against the source
         return False, []
     if result is None:
@@ -761,16 +761,23 @@ def _test_query(expr: Any, context: Any) -> "tuple[bool, list[Any]]":
     return True, rows
 
 
-def run_query(artifact: QueryArtifact, *, wc: WebClient) -> list[Any]:
+def run_query(
+    artifact: QueryArtifact, *, wc: WebClient, browser: BrowserMode = "auto"
+) -> list[Any]:
     """Run an authored query against ALL its ``base_urls`` and concatenate the rows --
     so a dataset split across distinct URLs (``/products/cloud`` + ``/products/onprem``)
-    comes back as one list. Reloads the query from its blob and resolves it per base."""
+    comes back as one list. The query is the document-level extraction; the pipeline
+    fetches each base (the caller owns fetch/resolve) and collects the query against the
+    resolved document."""
     expr = from_blob(artifact.blob)
     out: list[Any] = []
     for url in artifact.base_urls or []:
+        doc = wc.fetch(url, browser=browser, optional=True)
+        if not doc.ok:
+            continue
         try:
-            result = expr.collect(wc.ref(url))
-        except Exception:  # noqa: BLE001 - a base that fails contributes nothing
+            result = expr.collect(doc)
+        except Exception:  # noqa: BLE001 - a base whose query fails contributes nothing
             continue
         out.extend(list(result) if result is not None else [])
     return out
@@ -806,7 +813,7 @@ def write_query(
             expr = from_blob(blob)
         except Exception:  # noqa: BLE001 - any malformed blob -> retry / give up
             continue
-        tested, rows = _test_query(expr, wc.ref(candidate_url))
+        tested, rows = _test_query(expr, doc) if doc.ok else (False, [])
         art = QueryArtifact(
             blob=blob,
             describe=expr.explain(),

@@ -58,8 +58,7 @@ def test_onboard_company_finds_and_queries_the_dataset(site):
     # the query the model is expected to author for this page (built here so the stub
     # can hand back its blob -- in production the LLM writes this from the skeleton).
     expected = (
-        wq.ref.resolve()
-        .select_all(".product")
+        wq.doc.select_all(".product")  # document-rooted: the caller supplies the doc
         .extract(
             name=wq.doc.select(".name").text_content,
             price=wq.doc.select(".price").text_content,
@@ -120,8 +119,9 @@ def test_onboard_company_finds_and_queries_the_dataset(site):
     from webclient import from_plan
 
     with WebClient() as wc:
-        rows = from_blob(result.query.blob).collect(wc.ref(products_url))
-        plan_rows = from_plan(result.query.plan, wc).collect(wc.ref(products_url))
+        doc = wc.fetch(products_url)  # the caller fetches; the query is doc-level
+        rows = from_blob(result.query.blob).collect(doc)
+        plan_rows = from_plan(result.query.plan, wc).collect(doc)
     assert [r["name"] for r in rows] == ["Widget", "Sprocket", "Cog"]
     assert rows[0]["price"] == "$10"
     assert [r["name"] for r in plan_rows] == ["Widget", "Sprocket", "Cog"]  # plan == blob
@@ -410,7 +410,7 @@ def test_query_runs_across_multiple_base_urls(httpserver):
             f"<main>{html}</main>", content_type="text/html"
         )
     query = (
-        wq.ref.resolve().select_all(".product")
+        wq.doc.select_all(".product")  # document-rooted; run_query fetches each base
         .extract(name=wq.doc.select(".name").text_content).project()
     )
     art = QueryArtifact(

@@ -678,6 +678,9 @@ class HtmlBacking(Backing):
         optional: bool = False,
         error: Any = None,
     ) -> "Document":
+        """The first element matching a CSS or XPath ``selector``, itself selectable.
+        Loud on a miss (pass ``optional=True`` for a not-ok element instead); ``index``
+        picks the n-th match."""
         from ...errors import RETURN
 
         els = self._find(core, selector)
@@ -693,6 +696,9 @@ class HtmlBacking(Backing):
         limit: int | None = None,
         offset: int = 0,
     ) -> "list[Document]":
+        """Every element matching ``selector`` (an empty match is still a collection),
+        each selectable. ``limit`` / ``offset`` bound it. Pair with ``extract`` to shape
+        one row per match."""
         els = self._find(core, selector)[offset:]
         if limit is not None:
             els = els[:limit]
@@ -710,11 +716,11 @@ class HtmlBacking(Backing):
     def attr(
         self, core: "Document", name: str, *, optional: bool = False, error: Any = None
     ) -> Any:
-        # ``attr`` is the one element accessor: a real HTML attribute, plus the
-        # pseudo-attributes ``"text"`` (the element's text -- same as ``text_content``)
-        # and ``"html"`` (its markup). So "give me X from this node" is always
-        # ``attr("x")`` -- no separate op to remember, and ``attr("text")`` yields text
-        # instead of a silent miss.
+        """The one element accessor -- give me ``name`` from this node. A real HTML
+        attribute (``class``, ``data-id``, …) as a ``Field``; the link attrs
+        ``href``/``src``/``action`` as a resolvable ``Reference``; the pseudo-attrs
+        ``"text"`` (the element's text, same as ``text_content``) and ``"html"`` (its
+        markup). ``optional=True`` for an attribute that may be absent."""
         if name == "text":
             return Field(self.text_content(core))
         if name == "html":
@@ -743,6 +749,8 @@ class HtmlBacking(Backing):
         return Field(value)
 
     def text_content(self, core: "Document") -> "str | None":
+        """The element's visible text, whitespace-normalised (``None`` on a miss). The
+        same as ``attr("text")``; a property, so no ``()``."""
         if core._missing:
             return None
         el = core._element if core._element is not None else self._tree(core)
