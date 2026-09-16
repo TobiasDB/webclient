@@ -383,6 +383,11 @@ def main() -> None:
     ap.add_argument("--verbose", action="store_true", help="capture logs at DEBUG")
     ap.add_argument("--aggregate", action="store_true", help="add a cross-matrix review at the end")
     ap.add_argument("--budget", type=float, default=0.0, help="cap LLM spend (USD) when using the API key")
+    ap.add_argument("--shim", action="store_true",
+                    help="route the Messages API through `claude -p` in process (budget-tracked, "
+                         "no API key, no server) at the cheapest model")
+    ap.add_argument("--model", default=None,
+                    help="priced model id (default: the cheapest in the price table)")
     a = ap.parse_args()
 
     # decreased crawl size: push the small budget into every brief's crawl block
@@ -397,16 +402,28 @@ def main() -> None:
     import os
 
     _client = None
-    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_BASE_URL"):
-        from webclient.pipelines import Budget, LlmClient
-        _client = LlmClient(budget=Budget(max_usd=a.budget) if a.budget else Budget())
+    if a.shim:
+        # route the Messages API through `claude -p` IN PROCESS: budget-tracked + retried
+        # like the real API, no key, no server -- and at the cheapest model. One nested CLI
+        # per call still, so keep --parallel low.
+        from claude_llm_adapter import claude_shim_client
+        from webclient.pipelines import Budget
+        _client = claude_shim_client(
+            model=a.model, budget=Budget(max_usd=a.budget) if a.budget else Budget())
+        base_llm = _client
+        print(f"LLM: claude -p via in-process Messages shim (priced as {_client.model}, cheapest "
+              "CLI model) — budget-tracked; heavy nested processes, keep --parallel low")
+    elif os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_BASE_URL"):
+        from webclient.pipelines import Budget, LlmClient, cheapest_model
+        _client = LlmClient(budget=Budget(max_usd=a.budget) if a.budget else Budget(),
+                            model=a.model or cheapest_model())
         base_llm = _client
         print(f"LLM: Anthropic API ({_client.model}) — lightweight, no nested processes")
     else:
-        from claude_llm_adapter import claude_code_llm
-        base_llm = claude_code_llm
-        print("LLM: local Claude Code (claude -p) — heavy nested processes; keep --parallel low "
-              "(set ANTHROPIC_API_KEY for a fast, kill-free run)")
+        from claude_llm_adapter import CHEAPEST_CLI_MODEL, claude_code_llm
+        base_llm = lambda prompt: claude_code_llm(prompt, model=CHEAPEST_CLI_MODEL)  # noqa: E731
+        print(f"LLM: local Claude Code (claude -p, {CHEAPEST_CLI_MODEL}) — heavy nested processes; "
+              "keep --parallel low (set ANTHROPIC_API_KEY, or --shim for budget tracking)")
 
     calls = {"n": 0}
     _lock = threading.Lock()

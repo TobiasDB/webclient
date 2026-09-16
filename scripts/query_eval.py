@@ -78,17 +78,28 @@ def _rows(result) -> list:
     return [r.model_dump() if hasattr(r, "model_dump") else r for r in result]
 
 
-def _make_llm():
-    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_BASE_URL"):
-        from webclient.pipelines import Budget, LlmClient
+def _make_llm(shim: bool, model: str | None):
+    # --shim routes the Messages API through `claude -p` in process (budget/pricing/retries,
+    # no API key, no server) at the cheapest model; else the Anthropic API if a key is set;
+    # else the raw local claude -p adapter. Every path defaults to the cheapest model.
+    if shim:
+        from claude_llm_adapter import claude_shim_client
 
-        client = LlmClient(budget=Budget())
+        client = claude_shim_client(model=model)
+        print(f"LLM: claude -p via in-process Messages shim (priced as {client.model}, "
+              f"cheapest CLI model)")
+        return client
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_BASE_URL"):
+        from webclient.pipelines import Budget, LlmClient, cheapest_model
+
+        client = LlmClient(budget=Budget(), model=model or cheapest_model())
         print(f"LLM: Anthropic API ({client.model})")
         return client
-    from claude_llm_adapter import claude_code_llm
+    from claude_llm_adapter import CHEAPEST_CLI_MODEL, claude_code_llm
 
-    print("LLM: local Claude Code (claude -p) — heavy; run few scenarios at a time")
-    return claude_code_llm
+    print(f"LLM: local Claude Code (claude -p, {CHEAPEST_CLI_MODEL}) — heavy; "
+          "run few scenarios at a time (use --shim for budget-tracked calls)")
+    return lambda prompt: claude_code_llm(prompt, model=CHEAPEST_CLI_MODEL)
 
 
 def _brief_of(sc) -> Brief:
@@ -124,10 +135,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--only", nargs="*", default=None, help="run only these scenario names")
     ap.add_argument("--json", type=Path, default=None, help="write full results as JSON here")
+    ap.add_argument("--shim", action="store_true",
+                    help="route the Messages API through `claude -p` in process (no key/server)")
+    ap.add_argument("--model", default=None,
+                    help="priced model id (default: the cheapest in the price table)")
     a = ap.parse_args()
 
     scenarios = [s for s in all_scenarios() if not a.only or s.name in a.only]
-    llm = _make_llm()
+    llm = _make_llm(a.shim, a.model)
     results = []
     with WebClient() as wc:
         for sc in scenarios:

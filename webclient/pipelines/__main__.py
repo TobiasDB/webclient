@@ -19,11 +19,33 @@ import logging
 import sys
 from importlib.resources import files
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, cast
 
 from ..surfaces import WebClient
-from .llm import Budget, LlmClient
+from .llm import Budget, LlmClient, cheapest_model
 from .onboarding import Brief, ddg_search, onboard
+
+
+def _build_llm(args: argparse.Namespace, budget: Budget, parser: argparse.ArgumentParser) -> LlmClient:
+    """The LLM client for this run. ``--shim`` routes the Messages API through local
+    ``claude -p`` in process (no API key, no server; the cheapest model) for TESTING;
+    otherwise the real Anthropic API (or any ``--base-url`` gateway), which needs a key."""
+    if args.shim:
+        # the shim helper lives in scripts/ (a dev/testing tool, not library code); add it to
+        # the path only for this opt-in flag so the package stays import-clean otherwise.
+        scripts = Path(__file__).resolve().parents[2] / "scripts"
+        sys.path.insert(0, str(scripts))
+        from claude_llm_adapter import claude_shim_client  # type: ignore[import-not-found]
+
+        return cast(LlmClient, claude_shim_client(model=args.model, budget=budget))
+    kwargs: dict[str, object] = {"min_interval": args.rate, "model": args.model or cheapest_model()}
+    if args.base_url:
+        kwargs["base_url"] = args.base_url
+    llm = LlmClient(budget=budget, **kwargs)  # type: ignore[arg-type]
+    if not llm.auth:
+        parser.error("no API key -- set ANTHROPIC_API_KEY (or point --base-url at a gateway), "
+                     "or use --shim to route through local `claude -p`")
+    return llm
 
 
 def _load_brief(arg: str) -> Brief:
@@ -61,6 +83,9 @@ def main(argv: "Sequence[str] | None" = None) -> int:
                         help="one or more companies to onboard")
     parser.add_argument("--model", default=None, help="LLM model id (else the default)")
     parser.add_argument("--base-url", default=None, help="a Messages-API base URL")
+    parser.add_argument("--shim", action="store_true",
+                        help="route the Messages API through local `claude -p` in process "
+                             "(no API key/server; cheapest model) -- for TESTING")
     parser.add_argument("--budget", type=float, default=None, metavar="USD",
                         help="cap total LLM spend across the run")
     parser.add_argument("--rate", type=float, default=0.0, metavar="SECS",
@@ -84,15 +109,9 @@ def main(argv: "Sequence[str] | None" = None) -> int:
     print(f"brief: {brief.title or brief.name or args.brief} "
           f"({len(brief.fields)} field[s]) -> {len(args.companies)} company(ies)")
 
-    kwargs: dict[str, object] = {"min_interval": args.rate}
-    if args.model:
-        kwargs["model"] = args.model
-    if args.base_url:
-        kwargs["base_url"] = args.base_url
     budget = Budget(max_usd=args.budget)
-    with WebClient() as wc, LlmClient(budget=budget, **kwargs) as llm:  # type: ignore[arg-type]
-        if not llm.auth:
-            parser.error("no API key -- set ANTHROPIC_API_KEY (or point --base-url at a gateway)")
+    llm = _build_llm(args, budget, parser)
+    with WebClient() as wc, llm:
         results = onboard(
             args.companies, brief, wc=wc, llm=llm, search=ddg_search,
             max_pages=args.max_pages, browser=not args.no_browser, budget=budget,

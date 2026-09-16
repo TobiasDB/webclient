@@ -20,10 +20,16 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from typing import TYPE_CHECKING, Any
 
 from webclient import WebClient
 from webclient.pipelines.llm import LlmError
 from webclient.pipelines.onboarding import Brief, ddg_search, onboard
+
+if TYPE_CHECKING:
+    import httpx
+
+    from webclient.pipelines.llm import Budget, LlmClient
 
 # a minimal system prompt so Claude Code answers like a raw completion, not a coding agent
 _SYSTEM = (
@@ -33,10 +39,18 @@ _SYSTEM = (
     "message alone."
 )
 
+#: the cheapest Claude Code CLI model alias -- what ``claude -p`` should actually run so a
+#: test/eval pass is as inexpensive as possible (paired with the cheapest priced model id
+#: on the client side for budget accounting).
+CHEAPEST_CLI_MODEL = "haiku"
 
-def claude_code_result(prompt: str, *, system: str = _SYSTEM, timeout: float = 180.0) -> dict:
+
+def claude_code_result(
+    prompt: str, *, system: str = _SYSTEM, timeout: float = 180.0, model: str | None = None
+) -> dict:
     """Run one prompt through ``claude -p`` and return its full JSON envelope (``result``
-    text + ``usage``). Raises :class:`LlmError` on failure."""
+    text + ``usage``). ``model`` picks a specific CLI model (e.g. ``"haiku"`` -- the
+    cheapest); ``None`` uses the CLI default. Raises :class:`LlmError` on failure."""
     try:
         # pass the prompt on STDIN, not as an argv value: an onboarding prompt can START
         # with "---" (the query guide's YAML frontmatter) or "-", which `claude` would else
@@ -48,6 +62,7 @@ def claude_code_result(prompt: str, *, system: str = _SYSTEM, timeout: float = 1
                 "--system-prompt", system,             # replace the agent system prompt
                 "--exclude-dynamic-system-prompt-sections",  # drop cwd/git/memory noise
                 "--allowed-tools", "",                 # no tools: pure text in/out
+                *(("--model", model) if model else ()),  # cheapest model when asked
             ],
             input=prompt, capture_output=True, text=True, timeout=timeout,
         )
@@ -64,9 +79,93 @@ def claude_code_result(prompt: str, *, system: str = _SYSTEM, timeout: float = 1
     return payload
 
 
-def claude_code_llm(prompt: str, *, timeout: float = 180.0) -> str:
+def claude_code_llm(prompt: str, *, timeout: float = 180.0, model: str | None = None) -> str:
     """Run one onboarding prompt through ``claude -p`` and return its text result."""
-    return str(claude_code_result(prompt, timeout=timeout).get("result", ""))
+    return str(claude_code_result(prompt, timeout=timeout, model=model).get("result", ""))
+
+
+# --------------------------------------------------------------------------- #
+# In-process Messages-API shim: the same thing claude_messages_shim.py exposes over HTTP,
+# but as an httpx transport, so the real LlmClient (budget / pricing / retries) can speak
+# the Messages API to `claude -p` with NO server or port to manage.
+# --------------------------------------------------------------------------- #
+
+
+def _flatten_messages(messages: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for m in messages:
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content = "".join(
+                str(b.get("text", "")) for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
+        if content:
+            parts.append(str(content))
+    return "\n\n".join(parts)
+
+
+def _flatten_system(system: Any) -> str:
+    if isinstance(system, list):
+        system = "".join(
+            str(b.get("text", "")) for b in system
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return str(system) if system else _SYSTEM
+
+
+def shim_transport(
+    *, cli_model: str | None = CHEAPEST_CLI_MODEL, timeout: float = 180.0
+) -> "httpx.MockTransport":
+    """An in-process Messages-API transport backed by ``claude -p`` -- a drop-in for
+    :class:`LlmClient`'s ``transport`` so it speaks the Messages API to your Claude Code
+    subscription with no HTTP server. ``cli_model`` is what ``claude -p`` actually runs
+    (default: the cheapest, ``haiku``). The CLI envelope's real token ``usage`` is passed
+    back, so budget / pricing accounting is honest against the client's model id."""
+    import httpx
+
+    def handle(request: "httpx.Request") -> "httpx.Response":
+        body = json.loads(request.content or b"{}")
+        prompt = _flatten_messages(body.get("messages", []))
+        try:
+            payload = claude_code_result(
+                prompt, system=_flatten_system(body.get("system")),
+                timeout=timeout, model=cli_model,
+            )
+        except LlmError as exc:  # surface as an Anthropic-shaped error for LlmClient
+            return httpx.Response(
+                exc.status_code or 500,
+                json={"type": "error", "error": {"type": "api_error", "message": exc.message}},
+            )
+        text = str(payload.get("result", ""))
+        usage = payload.get("usage") or {"input_tokens": len(prompt) // 4,
+                                         "output_tokens": len(text) // 4}
+        return httpx.Response(200, json={
+            "id": "msg_shim", "type": "message", "role": "assistant",
+            "model": str(body.get("model") or "claude-code"),
+            "content": [{"type": "text", "text": text}],
+            "usage": usage,
+        })
+
+    return httpx.MockTransport(handle)
+
+
+def claude_shim_client(
+    *, model: str | None = None, cli_model: str | None = CHEAPEST_CLI_MODEL,
+    budget: "Budget | None" = None, timeout: float = 180.0,
+) -> "LlmClient":
+    """A ready :class:`LlmClient` that routes the Messages API through ``claude -p`` in
+    process (see :func:`shim_transport`). ``model`` is the priced model id used for budget
+    accounting (default: the cheapest); ``cli_model`` is what the CLI actually runs
+    (default: the cheapest, ``haiku``). ``auth`` is a dummy the transport ignores."""
+    from webclient.pipelines.llm import Budget, LlmClient, cheapest_model
+
+    return LlmClient(
+        model=model or cheapest_model(),
+        auth="shim",  # ignored by the in-process transport; keeps LlmClient.auth truthy
+        budget=budget or Budget(),
+        transport=shim_transport(cli_model=cli_model, timeout=timeout),
+    )
 
 
 def main() -> None:

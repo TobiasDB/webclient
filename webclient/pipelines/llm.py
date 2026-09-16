@@ -126,6 +126,16 @@ def price_for(model: str) -> ModelPrice:
     return PRICING.get(model, _FALLBACK_PRICE)
 
 
+def cheapest_model() -> str:
+    """The cheapest model in :data:`PRICING`, by input+output price per 1M tokens -- so a
+    cost-sensitive run (a test harness, a smoke eval) can pick the least-expensive model
+    without hard-coding an id that a price update might dethrone."""
+    return min(
+        PRICING,
+        key=lambda m: PRICING[m].input_usd_per_mtok + PRICING[m].output_usd_per_mtok,
+    )
+
+
 @dataclass(frozen=True)
 class Usage:
     """The token counts from one Messages API response."""
@@ -388,6 +398,7 @@ __all__ = [
     "ModelPrice",
     "PRICING",
     "price_for",
+    "cheapest_model",
     "DEFAULT_MODEL",
     "DEFAULT_BASE_URL",
 ]

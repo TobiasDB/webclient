@@ -14,6 +14,7 @@ from .llm import (
     LlmClient,
     ModelPrice,
     Usage,
+    cheapest_model,
     price_for,
 )
 from .onboarding import (
@@ -70,5 +71,6 @@ __all__ = [
     "Usage",
     "ModelPrice",
     "price_for",
+    "cheapest_model",
     "render_prompt",
 ]
