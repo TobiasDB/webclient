@@ -10,14 +10,24 @@ under ``TYPE_CHECKING``, the ops it implements (``step`` / ``run`` / ``done``).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from ..document.models import PageCard  # the default projection's output (re-exported)
 from ..reference.models import Resolve
 
 if TYPE_CHECKING:
     from . import Crawl  # noqa: F401  (step/run return the crawl itself)
+
+
+def _default_project() -> Any:
+    """The default retention expression: ``doc.card()`` -- a serializable, always-used
+    projection that yields a :class:`PageCard` per page (built lazily so importing the
+    lazy ``doc`` root doesn't cycle at module load)."""
+    from ...surfaces import doc
+
+    return doc.card()
 
 
 class Edge(BaseModel):
@@ -31,22 +41,6 @@ class Edge(BaseModel):
     text: str = ""
     depth: int = 0
     score: float = 0.0
-
-
-class PageCard(BaseModel):
-    """The default retained projection of a crawled page -- a lean descriptor (not the
-    whole Document), enough to understand the page and rebuild a :class:`Reference`
-    for it. ``crawl.pages`` holds these unless ``retain="document"``."""
-
-    url: str
-    final_url: str | None = None
-    kind: str = "html"  # the sniffed content type (html / json / xml / binary)
-    status_code: int = 0
-    title: str | None = None
-    description: str | None = None  # metadata description, when present
-    flags: list[str] = []  # the names of the flags that fired (spa / login / ...)
-    final_tier: str = "static"  # how the bytes were obtained (traceability)
-    escalation: list[str] = ["static"]
 
 
 class ScoreWeights(BaseModel):
@@ -105,13 +99,13 @@ class CrawlConfig(BaseModel):
     scoring: ScoreWeights = ScoreWeights()
 
     # -- retention (what ends up in .pages) ----------------------------------
-    #: ``"projection"`` (default) keeps a lean per-page descriptor; ``"document"`` keeps
-    #: the whole resolved Document (heavier, but you can select/extract/interact later).
-    retain: Literal["projection", "document"] = "projection"
-    #: a custom projection ``(Document) -> value`` evaluated per page when
-    #: ``retain="projection"``; ``None`` uses the built-in :class:`PageCard`. A custom
-    #: callable is local-only (it does not cross to a remote crawl).
-    project: "Callable[..., Any] | None" = None
+    #: the projection expression evaluated against every fetched page -- ``.pages`` is
+    #: its result. A serializable ``Expr`` rooted at the document (so it runs the same
+    #: locally and on a remote server), defaulting to ``doc.card()`` (a lean
+    #: :class:`PageCard`). Pass any document expression to reshape retention --
+    #: ``wq.doc.markdown()``, ``wq.doc.extract(...).project()``, or ``wq.doc`` (the
+    #: identity, to keep whole Documents).
+    project: Any = Field(default_factory=_default_project)
 
 
 class CrawlState(BaseModel):

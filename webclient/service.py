@@ -347,16 +347,12 @@ def create_app(
             )
 
     # -- stateful crawl: a server-side crawl a remote client steps/streams ----
-    def _page_wire(p: Any) -> dict[str, Any]:
-        """A retained page over the wire: a PageCard's fields (a document-retained page
-        falls back to a lean descriptor -- document retain is a local-only mode)."""
-        if hasattr(p, "model_dump"):
-            return cast("dict[str, Any]", p.model_dump())
-        return {"url": getattr(p, "url", ""), "kind": getattr(p, "kind", "html")}
-
     def _crawl_state(cid: str, crawl: Any) -> dict[str, Any]:
         """The full state of a server-side crawl, so a client handle can mirror it and
-        read its frontier/pages/done locally between round-trips."""
+        read its frontier/pages/done locally between round-trips. ``pages`` is the
+        projection expression's output, serialised the usual way (a PageCard/model as
+        ``__model__``, a Document as a ``__doc__`` handle, a scalar/dict inline) -- so a
+        custom ``project`` reshapes remote pages exactly as locally."""
         return {
             "id": cid,
             "config": crawl.config.model_dump(mode="json", exclude={"project"}),
@@ -364,7 +360,7 @@ def create_app(
             "status": crawl.status,
             "done": crawl.done,
             "frontier": [e.model_dump() for e in crawl.frontier],
-            "pages": [_page_wire(p) for p in crawl.pages],
+            "pages": [_serialize(p, app.state.docs) for p in crawl.pages],
             "history": [e.model_dump() for e in crawl.history],
             "seen": sorted(crawl._seen),
         }
@@ -387,8 +383,16 @@ def create_app(
         engine = _crawl_engine(body)
         if isinstance(engine, JSONResponse):
             return engine
+        project = None
+        if body.get("project") is not None:  # a client projection expression (a Plan)
+            try:
+                project = from_plan(body["project"], app.state.wc)
+            except ValueError as exc:
+                return _error(422, "InvalidPlan", str(exc),
+                              hint="the crawl 'project' must be a valid document plan")
         crawl = engine.crawl(
             body.get("seeds", []),
+            project=project,
             auto=bool(body.get("auto", True)),
             width=int(body.get("width", 10)),
             depth=int(body.get("depth", 3)),

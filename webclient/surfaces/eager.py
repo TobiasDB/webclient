@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from ..events import EventBus
     from ..models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
     from ..clients import ClientPool, WaitConfig
-    from ..core.document.models import Flag, Metadata, Signal, Structure, Transport, XhrCall
+    from ..core.document.models import Flag, Metadata, PageCard, Signal, Structure, Transport, XhrCall
     from ..core.client.models import Robots
     from .lazy import LazyDocument, LazyReference, LazyWebClient
 
@@ -89,6 +89,7 @@ if TYPE_CHECKING:
         @overload
         def attr(self, name: str, *, optional: bool = ..., error: Any = ...) -> "Field[str]": ...
         def buttons(self) -> "Flag": ...
+        def card(self) -> "PageCard": ...
         async def click(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ..., error: Any = ...) -> "AsyncDocument": ...  # type: ignore[override]
         def elements(self) -> "list[Element]": ...
         async def evaluate(self, script: str, *, mutates: bool = ...) -> "Any": ...  # type: ignore[override]

@@ -55,13 +55,14 @@ def _wire_models() -> "dict[str, type[Any]]":
             Element,
             Metadata,
             Flag,
+            PageCard,
             Signal,
             Structure,
             Transport,
         )
 
         models: list[type[Any]] = [
-            Transport, Metadata, Structure, Signal, Flag, Element,
+            Transport, Metadata, Structure, Signal, Flag, Element, PageCard,
             Edge, Robots, Event, NavigationEvent, NetworkEvent, ConsoleEvent,
             DOMUpdateEvent, ActionEvent, PlanEvent,
         ]
@@ -201,8 +202,10 @@ class RemoteWebClientCore(WebClient):
         from ..crawl import Crawl
 
         resolve = kwargs.get("resolve")
+        project = kwargs.get("project")
         body: dict[str, Any] = {
             "seeds": _seed_urls(seeds),
+            "project": project._plan.model_dump() if isinstance(project, Expr) else None,
             "auto": kwargs.get("auto", True),
             "width": kwargs.get("width", 10),
             "depth": kwargs.get("depth", 3),
@@ -247,14 +250,16 @@ class RemoteWebClientCore(WebClient):
 
     def _adopt_crawl_state(self, crawl: "Crawl", state: dict[str, Any]) -> None:
         """Refresh a crawl handle's mirrored state from the server (config / scope /
-        status / frontier / pages / history / seen), so its local reads are current."""
-        from ..crawl import CrawlConfig, Edge, PageCard
+        status / frontier / pages / history / seen), so its local reads are current.
+        ``pages`` is deserialised the usual way -- a PageCard/model, a Document handle,
+        or a scalar/dict -- so a custom projection survives the round-trip."""
+        from ..crawl import CrawlConfig, Edge
 
         crawl.config = CrawlConfig.model_validate(state.get("config", {}))
         crawl.scope = state.get("scope", "")
         crawl.status = state.get("status", "running")
         crawl.frontier = [Edge(**e) for e in state.get("frontier", [])]
-        crawl.pages = [PageCard(**p) for p in state.get("pages", [])]
+        crawl.pages = [self._deserialize(p) for p in state.get("pages", [])]
         crawl.history = [Edge(**e) for e in state.get("history", [])]
         crawl._seen = set(state.get("seen", []))
 

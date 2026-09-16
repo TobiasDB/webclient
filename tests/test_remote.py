@@ -119,6 +119,21 @@ def test_remote_sitemap_and_robots(remote):
     assert robots.exists and robots.sitemaps == [f"{base}/sitemap.xml"]
 
 
+def test_remote_crawl_custom_projection_crosses_the_wire(remote):
+    # the projection is a serializable expression, so a custom project= runs server-side
+    # and its result (here markdown strings) rides back -- not just PageCards.
+    from webclient import wq
+
+    rc, server = remote
+    crawl = rc.crawl(
+        server.url_for("/cards"), max_pages=1, obey_robots=False, browser=False,
+        project=wq.doc.markdown(),
+    )
+    crawl.run()
+    assert crawl.pages and all(isinstance(p, str) for p in crawl.pages)
+    assert "Featured" in crawl.pages[0]
+
+
 def test_remote_crawl_manual_step_selects_urls(remote):
     # a manual (auto=False) remote crawl: the caller selects which URLs to fetch each
     # round, dispatched to the server which matches its own frontier by URL.

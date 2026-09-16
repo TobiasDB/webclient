@@ -83,6 +83,23 @@ class Transport(BaseModel):
     final_tier: str = "static"
 
 
+class PageCard(BaseModel):
+    """A lean page descriptor -- what ``doc.card()`` projects: enough to understand a
+    page and rebuild a :class:`Reference` for it, without keeping the whole Document.
+    The default crawl projection (``project=doc.card()``), so ``crawl.pages`` holds
+    these unless a different projection expression is given."""
+
+    url: str
+    final_url: str | None = None
+    kind: str = "html"  # the sniffed content type (html / json / xml / binary)
+    status_code: int = 0
+    title: str | None = None
+    description: str | None = None  # metadata description, when present
+    flags: list[str] = []  # the names of the flags that fired (spa / login / ...)
+    final_tier: str = "static"  # how the bytes were obtained (traceability)
+    escalation: list[str] = ["static"]
+
+
 class Metadata(BaseModel):
     """Head / schema metadata -- title/description are values; og and JSON-LD are
     reported as key/type names."""
@@ -213,6 +230,7 @@ class IDocument(BaseModel):
         @overload
         def attr(self, name: str, *, optional: bool = ..., error: Any = ...) -> "Field[str]": ...
         def buttons(self) -> "Flag": ...
+        def card(self) -> "PageCard": ...
         def click(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ..., error: Any = ...) -> "Document": ...
         def elements(self) -> "list[Element]": ...
         def evaluate(self, script: str, *, mutates: bool = ...) -> "Any": ...
@@ -263,6 +281,7 @@ __all__ = [
     "Form",
     "XhrCall",
     "Transport",
+    "PageCard",
     "Metadata",
     "Structure",
     "Signal",

@@ -34,7 +34,7 @@ from .canon import (  # URL canon / scope / scoring vocabulary (pure helpers)
     _registrable,
     _url_entropy,
 )
-from .models import Edge, PageCard
+from .models import Edge
 
 if TYPE_CHECKING:
     from urllib.robotparser import RobotFileParser
@@ -145,7 +145,7 @@ class CrawlBacking(Backing):
             self._expand(core, doc, edge.depth + 1)
         if core.config.include_xhr and edge.depth < core.config.max_depth:
             self._expand_xhr(core, doc, edge.depth + 1)
-        page = self._retain(core, doc)  # project while the page is still live
+        page = await self._retain(core, doc)  # project while the page is still live
         if getattr(doc, "_page", None) is not None:
             await core._client._arelease(doc)
         return page
@@ -158,27 +158,14 @@ class CrawlBacking(Backing):
         return cast("asyncio.Lock", core._step_lock)
 
     # -- retention ------------------------------------------------------------
-    def _retain(self, core: "Crawl", doc: "Document") -> Any:
-        """What to keep for a fetched page: the whole Document (``retain="document"``),
-        a custom ``config.project(doc)``, or the default lean :class:`PageCard`."""
-        if core.config.retain == "document":
-            return doc
-        if core.config.project is not None:
-            return core.config.project(doc)
-        return self._card(doc)
+    async def _retain(self, core: "Crawl", doc: "Document") -> Any:
+        """Evaluate the crawl's projection expression against the fetched page and keep
+        the result -- ``config.project`` is a document-rooted :class:`Expr` (default
+        ``doc.card()`` -> a :class:`PageCard`), so ``.pages`` is that expression's
+        output. Read while the page is still live (before its browser page is freed)."""
+        from ...query.executor import aevaluate
 
-    def _card(self, doc: "Document") -> PageCard:
-        """The default page descriptor -- enough to understand the page and rebuild a
-        Reference, without keeping the whole Document. Read while the page is live."""
-        t = doc.transport()
-        desc = doc.metadata().description if doc.has_op("metadata") else None
-        flags = [f.name for f in doc.flags()] if doc.has_op("flags") else []
-        title = doc.title if doc.has_op("title") else None
-        return PageCard(
-            url=doc.url, final_url=doc.final_url, kind=doc.kind,
-            status_code=doc.status_code, title=title, description=desc, flags=flags,
-            final_tier=t.final_tier, escalation=t.escalation,
-        )
+        return await aevaluate(core.config.project, doc, client=core._client)
 
     # -- frontier selection + scoring -----------------------------------------
     def _select(self, core: "Crawl", select: Any) -> "list[Edge]":

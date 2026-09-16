@@ -645,16 +645,18 @@ class WebClient(WebCore, IWebClient):
         obey_robots: bool = True,
         browser: "bool | Literal['never', 'auto', 'always']" = "auto",
         resolve: Any = None,
-        retain: "Literal['projection', 'document']" = "projection",
         project: Any = None,
     ) -> "Crawl":
         """A scoped site traversal sharing this engine (a :class:`Crawl` core). Drive it
         with ``crawl.run()`` (batch → read ``.pages``) or ``crawl.step(select)`` (one
         round; ``select`` may be frontier edges/URLs or brand-new URLs to fetch next).
 
-        ``.pages`` holds a lean :class:`PageCard` per page by default (url / kind /
-        title / description / flags / the tier it was fetched at) -- enough to rebuild a
-        Reference; pass ``retain="document"`` (or a ``project`` callable) to keep more.
+        ``.pages`` is the ``project`` expression evaluated per page. It defaults to
+        ``doc.card()`` -- a lean :class:`PageCard` (url / kind / title / description /
+        flags / the tier it was fetched at), enough to rebuild a Reference. Pass any
+        document expression to reshape retention (``project=wq.doc.markdown()``,
+        ``project=wq.doc.extract(...).project()``, or ``project=wq.doc`` to keep whole
+        Documents) -- it is serializable, so it runs the same on a remote crawl.
 
         Tune it with the typed keyword args, or pass a whole :class:`CrawlConfig`
         (``config=`` then wins over the kwargs). ``browser="auto"`` (default) fetches
@@ -672,6 +674,7 @@ class WebClient(WebCore, IWebClient):
             crawl._seen |= set(resume.seen)
             return crawl
 
+        overrides: dict[str, Any] = {} if project is None else {"project": project}
         cfg = config or CrawlConfig(
             max_pages=max_pages, max_depth=depth, width=width, max_frontier=max_frontier,
             same_origin=same_origin, allow_subdomains=allow_subdomains,
@@ -680,7 +683,7 @@ class WebClient(WebCore, IWebClient):
             include=include, exclude=exclude, include_xhr=include_xhr,
             keywords=[k.lower() for k in (keywords or [])], obey_robots=obey_robots,
             browser=browser, resolve=resolve,
-            order="best-first" if auto else "manual", retain=retain, project=project,
+            order="best-first" if auto else "manual", **overrides,
         )
         urls = _seed_urls(seeds)
         return Crawl(

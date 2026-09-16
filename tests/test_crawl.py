@@ -153,10 +153,9 @@ def test_crawl_can_be_seeded_from_a_sitemap_hunt(wc, httpserver):
 
 
 def test_crawl_pages_are_page_cards_by_default(wc, site):
-    # by default a crawl retains a lean PageCard per page (enough to rebuild a
-    # Reference), not the whole Document.
-    from webclient import Document
-    from webclient.core.crawl import PageCard
+    # .pages is the project expression evaluated per page -- default doc.card() -> a
+    # lean PageCard (enough to rebuild a Reference), not the whole Document.
+    from webclient.core.document.models import PageCard
 
     with wc.crawl(site.url_for("/"), max_pages=5, browser=False) as crawl:
         crawl.run()
@@ -164,11 +163,21 @@ def test_crawl_pages_are_page_cards_by_default(wc, site):
     card = crawl.pages[0]
     assert card.kind == "html" and card.url and card.final_tier == "static"
 
-    # retain="document" keeps the whole Document for later select/extract/interact
-    with wc.crawl(site.url_for("/"), max_pages=1, browser=False, retain="document") as docs:
+
+def test_crawl_retention_is_a_projection_expression(wc, site):
+    # project= reshapes .pages -- any document expression. The identity wq.doc keeps
+    # whole Documents; a custom expression yields whatever it evaluates to.
+    from webclient import Document, wq
+
+    with wc.crawl(site.url_for("/"), max_pages=1, browser=False, project=wq.doc) as docs:
         docs.run()
-    assert all(isinstance(p, Document) for p in docs.pages)
+    assert all(isinstance(p, Document) for p in docs.pages)  # the identity -> Documents
     assert docs.pages[0].transport().kind == "html" and isinstance(docs.pages[0].markdown(), str)
+
+    # a custom projection: keep only the markdown string per page
+    with wc.crawl(site.url_for("/"), max_pages=2, browser=False, project=wq.doc.markdown()) as md:
+        md.run()
+    assert md.pages and all(isinstance(p, str) for p in md.pages)
 
 
 def test_stream_yields_page_projections_incrementally(wc, site):
