@@ -54,7 +54,7 @@ from ..core.reference.models import (
 )
 from ..guides import lazy_query_guide
 from ..query.expr import from_blob
-from ..surfaces import Reference, WebClient
+from ..surfaces import Reference, WebClient, wq
 from .llm import Budget, BudgetExceeded, LlmClient, LlmError
 from .prompts import render_prompt
 
@@ -290,6 +290,9 @@ class CandidateEval(BaseModel):
     #: the detected flags on the page (name -> confidence), and, when the SPA is
     #: backed by a same-origin data API, the endpoint to query INSTEAD of scraping.
     flags: dict[str, float] = {}
+    #: the EVIDENCE behind each present flag -- the signals that fired, as readable
+    #: "name (stage, confidence): reason" strings, so a flag can be justified.
+    flag_signals: dict[str, list[str]] = {}
     api_endpoint: str | None = None
     #: the dataset is reached only through interaction (forms / buttons), so a static
     #: fetch or a single query will not surface it -- a browser session is needed.
@@ -425,17 +428,20 @@ def _summarize(result: OnboardingResult) -> None:
             + f"paginated={ev.has_pagination}, filters={ev.has_filters}, "
             + f"subset={ev.dataset_is_subset}, interactive={ev.interactive}"
         )
-        if ev.flags:
-            flags = ", ".join(
-                f"{n} {c:.2f}" for n, c in sorted(ev.flags.items(), key=lambda x: -x[1])
-            )
-            lines.append(f"  flags:     {flags}")
+        if ev.flags:  # each present flag with the SIGNALS (evidence) behind it
+            lines.append("  flags:")
+            for name, conf in sorted(ev.flags.items(), key=lambda x: -x[1]):
+                lines.append(f"    {name} ({conf:.2f})")
+                for sig in ev.flag_signals.get(name, []):
+                    lines.append(f"      · {sig}")
         if ev.verdict:  # the model's reason for choosing this source
             lines.append(f"  reason:    {ev.verdict}")
-    # the args to reproduce the fetch by hand
-    if ref_url:
-        bases = result.query.base_urls if result.query else []
-        lines.append(f"  reference: {', '.join(bases) if len(bases) > 1 else ref_url}")
+    # the reference(s) the query actually runs against (== the query's own root now)
+    refs = result.query.base_urls if (result.query and result.query.base_urls) else (
+        [ref_url] if ref_url else []
+    )
+    if refs:
+        lines.append(f"  reference: {', '.join(refs)}")
     lines.append(f"  resolve:   {_resolve_summary(result.resolve)}")
     if result.query is not None:
         q = result.query
@@ -443,7 +449,9 @@ def _summarize(result: OnboardingResult) -> None:
         lines.append(f"  tested:    {'✓' if q.tested else '✗'}  {q.row_count} row(s)")
         lines.append("  sample:")
         lines += _render_table(q.sample)
-        lines.append(f"  blob:      {q.blob}")
+        # the self-contained query blob on its own line -- executable as is, easy to copy
+        lines.append("  query blob (copy; run with `from_blob(blob).collect()`):")
+        lines.append(q.blob)
     lines.append(f"  spent:     ${result.cost_usd:.4f}")
     for line in lines:
         log.info(line)
@@ -792,15 +800,17 @@ def evaluate_candidate(
         return CandidateEval(url=candidate.url, verdict="fetch failed")
     flags = _read_flags(doc)  # the detected conclusions (spa / pagination / login / ...)
     flag_map = {n: round(f.confidence, 2) for n, f in flags.items() if f.present}
+    # the evidence behind each present flag -- the signals that fired, for the summary
+    flag_signals = {
+        n: [f"{s.name} ({s.stage}, {s.confidence:.2f}): {s.reason}" for s in f.signals]
+        for n, f in flags.items() if f.present
+    }
     # a login wall blocks the dataset -- no query reaches it; drop the candidate early.
     if flags["login_required"].present:
-        return CandidateEval(url=candidate.url, verdict="login required", flags=flag_map)
+        return CandidateEval(url=candidate.url, verdict="login required",
+                             flags=flag_map, flag_signals=flag_signals)
     skeleton = _clip(doc.skeleton(max_lines=_FULL_SKELETON), _MAX_SKELETON_CHARS, "skeleton", kind=("json" if doc.kind == "json" else "html"))
     endpoints = [c.url for c in doc.xhr_endpoints()]
-    spa = flags["spa"]
-    # if a SPA is backed by same-origin XHR endpoints, the API is the real source --
-    # querying it beats scraping the rendered page. Record the first as a candidate.
-    api_endpoint = spa.value[0] if spa.present and isinstance(spa.value, list) and spa.value else None
     interactive = flags["forms"].present or flags["buttons"].present
     parsed = _ask_json(
         llm,
@@ -817,13 +827,20 @@ def evaluate_candidate(
     data: dict[str, Any] = dict(parsed) if isinstance(parsed, dict) else {"verdict": "could not evaluate"}
     # the flags are ground truth for structure -> they win over the model's guesses.
     data["has_pagination"] = bool(data.get("has_pagination")) or flags["pagination"].present
+    # The API endpoint is used ONLY if the model names one of the OBSERVED same-origin
+    # XHR endpoints (never a blind "first XHR" pick, and never a hallucinated URL) -- so
+    # the reference stays the CHOSEN page unless a real data endpoint is identified. This
+    # fixes the reference pointing at a different URL than the source.
+    llm_ep = data.get("api_endpoint")
+    api_endpoint = llm_ep if (isinstance(llm_ep, str) and llm_ep in set(endpoints)) else None
     # an API-documentation page is never the data source -- guard even if the model was
     # inconsistent (this is the "docs page mistaken for the API" fix).
     if data.get("is_api_docs"):
         data["dataset_present"] = False
         data["is_queryable"] = False
         api_endpoint = None
-    data.update(url=candidate.url, flags=flag_map, api_endpoint=api_endpoint, interactive=interactive)
+    data.update(url=candidate.url, flags=flag_map, flag_signals=flag_signals,
+                api_endpoint=api_endpoint, interactive=interactive)
     ev = CandidateEval.model_validate(data)
     log.info(
         "    evaluated %s -> present=%s, queryable=%s, scrapability=%d%s — %s",
@@ -913,43 +930,93 @@ def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False) -> st
     )
 
 
+def _data_rows(result: Any) -> list[Any]:
+    """The EXTRACTED DATA a query produced -- plain rows (dicts / scalars), never the
+    elements themselves. A query that stops at ``select_all`` yields a collection of
+    ``Document`` elements: that is a selection, NOT extracted data, so it counts as
+    zero rows (the author must ``.project()``). This is what stops an un-projected
+    query from looking like a success and what keeps the sample as data, not objects."""
+    from ..core.web_core import WebCore
+
+    if result is None or isinstance(result, WebCore):
+        return []  # None, or a single selected element -- not data
+    try:
+        items = list(result)
+    except TypeError:  # a scalar / Field -- one value
+        return [result]
+    if items and all(isinstance(i, WebCore) for i in items):
+        return []  # a collection of elements -- selected, not extracted (no project)
+    return items
+
+
+def _extraction_steps(doc_expr: Any) -> list[Any]:
+    """The model's EXTRACTION steps only -- from the first ``select``/``select_all``
+    onward -- dropping any navigation (a stray ``resolve``) it may have prefixed. So the
+    join with the reference + resolve is DETERMINISTIC: the model supplies the selection,
+    the pipeline supplies exactly one reference + one resolve."""
+    steps = list(doc_expr._plan.steps)
+    for i, s in enumerate(steps):
+        if s.kind == "get" and s.name in ("select", "select_all"):
+            return steps[i:]
+    return steps
+
+
+def _executable_query(doc_expr: Any, url: str, resolve: "Resolve | None") -> Any:
+    """DETERMINISTICALLY wrap the model's DOCUMENT-level extraction into a SELF-CONTAINED
+    query rooted at the source reference with a ``resolve`` step baked in, so
+    ``from_blob(blob).collect()`` fetches + resolves + extracts with no context --
+    executable exactly as output. The model supplies only the extraction; this function
+    (no LLM) supplies the reference + resolve. The browser tier comes from the resolve
+    policy (proxy/antibot are transport concerns a lazy ``.resolve()`` can't encode)."""
+    from ..query.expr import Expr
+    from ..query.plan import Plan
+
+    tier = resolve.browser.when if (resolve is not None and resolve.browser is not None) else None
+    rooted = wq.reference(url).resolve(browser=tier) if tier else wq.reference(url).resolve()
+    steps = [*rooted._plan.steps, *_extraction_steps(doc_expr)]
+    return Expr(Plan(root="Reference", source=rooted._plan.source, steps=steps), doc_expr._client)
+
+
+def _reroot(expr: Any, url: str) -> Any:
+    """A copy of a reference-rooted executable query re-pointed at ``url`` (so ONE
+    authored query runs against each of several base URLs)."""
+    from ..core.reference import from_url
+    from ..query.expr import Expr
+    from ..query.plan import Plan
+
+    return Expr(
+        Plan(root="Reference", source=from_url(url).model_dump(), steps=expr._plan.steps),
+        expr._client,
+    )
+
+
 def _test_query(expr: Any, doc: Any) -> "tuple[bool, list[Any]]":
     """Run the authored query against the fetched source ``doc`` to prove it loads and
-    extracts. The query is the document-level extraction (``wq.doc...``), so it collects
-    directly against the resolved document. Returns ``(ran_without_error, rows)`` -- a
-    query that raises is not ``tested`` and its rows are empty."""
+    actually EXTRACTS the dataset. The query is the document-level extraction
+    (``wq.doc...``), so it collects directly against the resolved document. Returns
+    ``(ran_without_error, rows)`` where ``rows`` is the extracted DATA (see
+    :func:`_data_rows`) -- a query that only selects elements (no ``.project()``)
+    extracts zero rows and so is not treated as a working query."""
     try:
         result = expr.collect(doc)
     except Exception:  # noqa: BLE001 - a query that can't run against the source
         return False, []
-    if result is None:
-        return True, []
-    try:
-        rows = list(result)
-    except TypeError:  # a scalar/Field result, not a row set
-        rows = [result]
-    return True, rows
+    return True, _data_rows(result)
 
 
-def run_query(
-    artifact: QueryArtifact, *, wc: WebClient, browser: BrowserMode = "auto"
-) -> list[Any]:
-    """Run an authored query against ALL its ``base_urls`` and concatenate the rows --
+def run_query(artifact: QueryArtifact, *, wc: WebClient) -> list[Any]:
+    """Run the authored query against ALL its ``base_urls`` and concatenate the rows --
     so a dataset split across distinct URLs (``/products/cloud`` + ``/products/onprem``)
-    comes back as one list. The query is the document-level extraction; the pipeline
-    fetches each base (the caller owns fetch/resolve) and collects the query against the
-    resolved document."""
-    expr = from_blob(artifact.blob)
+    comes back as one list. The blob is SELF-CONTAINED (reference + resolve + extraction),
+    so it resolves + extracts on its own; each base just re-points the reference."""
+    base_expr = from_blob(artifact.blob, wc)
     out: list[Any] = []
     for url in artifact.base_urls or []:
-        doc = wc.fetch(url, browser=browser, optional=True)
-        if not doc.ok:
-            continue
         try:
-            result = expr.collect(doc)
+            result = _reroot(base_expr, url).collect()  # self-contained: no context
         except Exception:  # noqa: BLE001 - a base whose query fails contributes nothing
             continue
-        out.extend(list(result) if result is not None else [])
+        out.extend(_data_rows(result))  # extracted data rows, not selected elements
     return out
 
 
@@ -963,43 +1030,57 @@ def write_query(
     paginated: bool = False,
     retries: int = 1,
     extra_urls: Sequence[str] = (),
+    resolve: "Resolve | None" = None,
 ) -> QueryArtifact | None:
-    """Have the model author a lazy query for the dataset from the page skeleton, then
-    reload it (``from_blob``) AND run it against the source to confirm it extracts rows.
-    Retries on an invalid or empty query, preferring one that actually produces rows;
-    returns the best :class:`QueryArtifact` (with its plan + a tested row sample), or
-    ``None`` if none rebuilt. ``paginated`` tells the author to also capture the
-    next-page link. ``extra_urls`` are further base URLs the SAME query also runs
-    against (a dataset spread across distinct URLs) -- recorded on ``base_urls`` for
-    :func:`run_query` to union."""
+    """Have the model author the DOCUMENT-level extraction from the page skeleton, test
+    it against the fetched source (``from_blob`` + run -> it must extract DATA rows), and
+    return the best :class:`QueryArtifact`. The stored ``blob`` is the SELF-CONTAINED
+    executable query -- the extraction wrapped in ``reference(url).resolve(...)`` so it
+    runs as is (:func:`_executable_query`). Retries with feedback on an invalid or
+    non-extracting query. ``paginated`` tells the author to capture the next-page link;
+    ``extra_urls`` are further base URLs the same query also runs against;
+    ``resolve`` bakes the fetch policy (browser tier) into the executable query."""
     doc = wc.fetch(candidate_url, browser=browser, optional=True)
     skeleton = _clip(doc.skeleton(max_lines=_FULL_SKELETON), _MAX_SKELETON_CHARS, "skeleton", kind=("json" if doc.kind == "json" else "html")) if doc.ok else ""
     prompt = _query_prompt(brief, skeleton, paginated=paginated)
     bases = [candidate_url, *extra_urls]
     best: QueryArtifact | None = None
+    ask = prompt
     for _ in range(retries + 1):
         try:
-            blob = _json_blob(llm(prompt))
+            blob = _json_blob(llm(ask))
         except LlmError as exc:  # a bad-request / exhausted-retry API error
             log.warning("query authoring LLM call failed: %s", exc)
             break
         try:
             expr = from_blob(blob)
-        except Exception:  # noqa: BLE001 - any malformed blob -> retry / give up
+        except Exception:  # noqa: BLE001 - any malformed blob -> retry with feedback
+            ask = prompt + "\n\nYour previous reply was not a valid query blob. Reply with ONLY the blob from expr.to_blob()."
             continue
         tested, rows = _test_query(expr, doc) if doc.ok else (False, [])
+        exe = _executable_query(expr, candidate_url, resolve)  # self-contained + runnable
         art = QueryArtifact(
-            blob=blob,
-            describe=expr.explain(),
-            plan=expr._plan.model_dump(mode="json"),
+            blob=exe.to_blob(),
+            describe=exe.explain(),
+            plan=exe._plan.model_dump(mode="json"),
             tested=tested,
             row_count=len(rows),
             sample=list(rows[:5]),
             base_urls=bases,
         )
         if tested and rows:
-            return art  # a query that actually extracts rows -- accept it
+            return art  # a query that actually extracts DATA rows -- accept it
         best = best or art  # keep the first rebuildable one as a fallback
+        # ran but extracted nothing: usually a query that selected elements without
+        # projecting, or the wrong selector -- tell the model so it can fix it.
+        log.info("    query ran but extracted 0 rows -- retrying with feedback")
+        ask = (
+            prompt + "\n\nYour previous query RAN but extracted 0 data rows"
+            + f" ({expr.explain()}). It probably selected elements without extracting: it"
+            " MUST select the repeating record with .select_all(...), pull each field with"
+            " .extract(col=...), and END with .project() so it returns data rows -- not"
+            " select elements. Re-write it."
+        )
     return best
 
 
@@ -1107,7 +1188,7 @@ def _onboard_company(
     # (4) query: authored from the skeleton, told to page when the source paginates.
     result.query = write_query(
         query_url, brief, wc=wc, llm=llm, browser=_mode(browser),
-        paginated=evaluation.has_pagination,
+        paginated=evaluation.has_pagination, resolve=result.resolve,
     )
     if isinstance(llm, LlmClient):
         result.cost_usd = llm.spent_usd

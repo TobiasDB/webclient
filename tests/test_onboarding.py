@@ -409,12 +409,17 @@ def test_query_runs_across_multiple_base_urls(httpserver):
         httpserver.expect_request(path).respond_with_data(
             f"<main>{html}</main>", content_type="text/html"
         )
-    query = (
-        wq.doc.select_all(".product")  # document-rooted; run_query fetches each base
+    from webclient.pipelines.onboarding import _executable_query
+
+    # the LLM writes the document-level extraction; the pipeline deterministically wraps
+    # it into a self-contained reference+resolve query, run against each base by re-root.
+    doc_query = (
+        wq.doc.select_all(".product")
         .extract(name=wq.doc.select(".name").text_content).project()
     )
+    exe = _executable_query(doc_query, httpserver.url_for("/cloud"), None)
     art = QueryArtifact(
-        blob=query.to_blob(), describe=query.explain(),
+        blob=exe.to_blob(), describe=exe.explain(),
         base_urls=[httpserver.url_for("/cloud"), httpserver.url_for("/onprem")],
     )
     with WebClient() as wc:
@@ -521,6 +526,7 @@ def test_summary_prints_scores_flags_reference_resolve_and_a_table():
             url="https://acme/products", dataset_present=True, is_queryable=True,
             completeness="full", has_pagination=True, scrapability=8,
             flags={"spa": 0.9, "pagination": 0.62},
+            flag_signals={"spa": ["framework_marker (static, 0.60): a react marker"]},
         ),
         resolve=Resolve(browser=BrowserPolicy(when="always", stealth=True), proxy=ProxyPolicy.auto()),
         query=QueryArtifact(
@@ -541,12 +547,15 @@ def test_summary_prints_scores_flags_reference_resolve_and_a_table():
 
     assert "result:    ready" in text
     assert "scrapability 8/10" in text and "queryable=True" in text  # the scores
-    assert "spa 0.90" in text and "pagination 0.62" in text  # all the page's flags
+    assert "spa (0.90)" in text and "pagination (0.62)" in text  # all the page's flags
+    assert "framework_marker (static, 0.60): a react marker" in text  # the flag's SIGNALS
     # the reference (multi-URL) + resolve args, enough to reproduce the fetch
     assert "reference: https://acme/cloud, https://acme/onprem" in text
     assert "browser=always, stealth, proxy=on" in text
     # the tested output rendered as a table (columns from the row keys)
     assert "name" in text and "price" in text and "Widget" in text and "$10" in text
+    # the blob is printed on its own line for copying
+    assert "query blob (copy" in text
     assert "spent:     $0.0231" in text
 
 
@@ -705,3 +714,87 @@ def test_evaluate_clips_a_huge_page_skeleton(httpserver):
     assert "trimmed" in captured["eval"]  # the big skeleton was clipped (centre kept)
     # the prompt is bounded (skeleton budget + the fixed prompt scaffolding)
     assert len(captured["eval"]) < _MAX_SKELETON_CHARS + 4000
+
+
+def test_data_rows_ignores_selected_elements(httpserver):
+    # a query that only selects (no .project()) yields elements, not data -> 0 rows;
+    # a projected query yields the extracted dicts.
+    from webclient import WebClient, from_blob, wq
+    from webclient.pipelines.onboarding import _data_rows
+
+    httpserver.expect_request("/p").respond_with_data(
+        "<main>" + "".join(f'<div class="r"><span class="n">P{i}</span></div>' for i in range(4)) + "</main>",
+        content_type="text/html",
+    )
+    with WebClient() as wc:
+        doc = wc.fetch(httpserver.url_for("/p"))
+        selected = from_blob(wq.doc.select_all(".r").to_blob()).collect(doc)
+        assert _data_rows(selected) == []  # elements, not data
+        projected = from_blob(
+            wq.doc.select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project().to_blob()
+        ).collect(doc)
+        rows = _data_rows(projected)
+        assert rows == [{"n": "P0"}, {"n": "P1"}, {"n": "P2"}, {"n": "P3"}]  # real data
+
+
+def test_write_query_retries_an_unprojected_query_with_feedback(httpserver):
+    # first reply selects without projecting (0 data rows) -> retried with feedback ->
+    # the second reply projects, so the sample is DATA (dicts), never element objects.
+    from webclient import wq
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/p").respond_with_data(
+        "<main>" + "".join(f'<div class="r"><span class="n">P{i}</span></div>' for i in range(3)) + "</main>",
+        content_type="text/html",
+    )
+    unprojected = wq.doc.select_all(".r").to_blob()
+    projected = wq.doc.select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project().to_blob()
+    replies = iter([unprojected, projected])
+    prompts: list[str] = []
+
+    def llm(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(replies)
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/p"), Brief(description="rows"),
+                          wc=wc, llm=llm, browser="never", retries=1)
+    assert art is not None and art.tested and art.row_count == 3
+    assert all(isinstance(r, dict) for r in art.sample)  # data, not element objects
+    assert len(prompts) == 2 and "extracted 0 data rows" in prompts[1]  # feedback given
+
+
+def test_output_query_is_self_contained_and_executable(httpserver):
+    # the join of the LLM's extraction with the reference + resolve is deterministic and
+    # produces a SELF-CONTAINED blob: from_blob(blob).collect() (no context) fetches,
+    # resolves and extracts -- executable as is.
+    from webclient import WebClient, from_blob, wq
+    from webclient.core.reference.models import Resolve
+    from webclient.pipelines.onboarding import _executable_query
+
+    httpserver.expect_request("/p").respond_with_data(
+        "<main>" + "".join(f'<div class="r"><span class="n">P{i}</span></div>' for i in range(3)) + "</main>",
+        content_type="text/html",
+    )
+    url = httpserver.url_for("/p")
+    # the model supplies ONLY the document-level extraction
+    doc_q = wq.doc.select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project()
+    exe = _executable_query(doc_q, url, Resolve())
+    assert exe.explain().startswith(f"reference('{url}').resolve()")  # reference+resolve baked in
+    with WebClient() as wc:
+        rows = from_blob(exe.to_blob(), wc).collect()  # no context -- self-contained
+    assert rows == [{"n": "P0"}, {"n": "P1"}, {"n": "P2"}]
+
+
+def test_executable_query_strips_stray_navigation_from_the_model():
+    # deterministic join: even if the model prefixed a resolve, only its extraction is
+    # used (one reference + one resolve, supplied by the pipeline -- not the model).
+    from webclient import wq
+    from webclient.core.reference.models import Resolve
+    from webclient.pipelines.onboarding import _executable_query
+
+    stray = wq.ref.resolve().select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project()
+    exe = _executable_query(stray, "https://x/p", Resolve())
+    # exactly one resolve, then the extraction (no double resolve)
+    assert exe.explain().count(".resolve(") == 1
+    assert exe.explain().startswith("reference('https://x/p').resolve().select_all")
