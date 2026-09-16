@@ -23,7 +23,7 @@ from typing import Sequence
 
 from ..surfaces import WebClient
 from .llm import Budget, LlmClient
-from .onboarding import Brief, OnboardingResult, ddg_search, onboard
+from .onboarding import Brief, ddg_search, onboard
 
 
 def _load_brief(arg: str) -> Brief:
@@ -50,25 +50,6 @@ def _packaged_briefs() -> "list[str]":
         return []
 
 
-def _print_result(result: OnboardingResult, *, show_steps: bool) -> None:
-    mark = "OK " if result.ok else "-- "
-    print(f"\n{mark}{result.company}: {'ready' if result.ok else result.reason}")
-    if show_steps:
-        for step in result.steps:
-            print(f"    · {step}")
-    if result.evaluation is not None:
-        ev = result.evaluation
-        print(f"    source:  {ev.url}  (queryable={ev.is_queryable}, scrapability={ev.scrapability})")
-    if result.query is not None:
-        q = result.query
-        print(f"    query:   {q.describe}")
-        print(f"    tested:  {q.tested}  rows={q.row_count}")
-        if len(q.base_urls) > 1:
-            print(f"    bases:   {', '.join(q.base_urls)}")
-        print(f"    blob:    {q.blob}")
-    print(f"    spent:   ${result.cost_usd:.4f}")
-
-
 def main(argv: "Sequence[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(
         prog="onboard",
@@ -88,9 +69,12 @@ def main(argv: "Sequence[str] | None" = None) -> int:
                         help="-v shows pipeline steps, -vv adds debug")
     args = parser.parse_args(argv)
 
-    # progress always prints (INFO); -v adds debug detail
-    level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(level=level, format="%(message)s")
+    # keep the root (and thus httpx/httpcore) quiet; show only the pipeline's progress
+    # -- always at INFO, -v adds debug detail.
+    logging.basicConfig(level=logging.WARNING, format="%(message)s")
+    logging.getLogger("webclient.pipelines").setLevel(
+        logging.DEBUG if args.verbose else logging.INFO
+    )
 
     brief = _load_brief(args.brief)
     print(f"brief: {brief.title or brief.name or args.brief} "
@@ -109,8 +93,8 @@ def main(argv: "Sequence[str] | None" = None) -> int:
             args.companies, brief, wc=wc, llm=llm, search=ddg_search,
             max_pages=args.max_pages, browser=not args.no_browser, budget=budget,
         )
-    for result in results:
-        _print_result(result, show_steps=args.verbose > 0)
+    # the pipeline logs each company's full summary (source / scores / flags /
+    # reference / resolve / query + sample table / spend); here we add only the totals.
     ok = sum(r.ok for r in results)
     print(f"\ndone: {ok}/{len(results)} onboarded · spent ${budget.spent_usd:.4f}"
           f" over {budget.calls} call(s)")

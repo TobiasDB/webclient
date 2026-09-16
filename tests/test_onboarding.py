@@ -505,3 +505,46 @@ def test_settings_pass_pricing_overrides_to_the_llm_client():
     llm = s.llm_client(auth="k")
     assert llm.price().input_usd_per_mtok == 7.0
     llm.close()
+
+
+def test_summary_prints_scores_flags_reference_resolve_and_a_table():
+    import io
+    import logging as _logging
+
+    from webclient.core.reference.models import BrowserPolicy, ProxyPolicy, Resolve
+    from webclient.pipelines import onboarding as ob
+    from webclient.pipelines.onboarding import CandidateEval, OnboardingResult, QueryArtifact
+
+    r = OnboardingResult(
+        company="Acme", brief=Brief(), ok=True, cost_usd=0.0231,
+        evaluation=CandidateEval(
+            url="https://acme/products", dataset_present=True, is_queryable=True,
+            completeness="full", has_pagination=True, scrapability=8,
+            flags={"spa": 0.9, "pagination": 0.62},
+        ),
+        resolve=Resolve(browser=BrowserPolicy(when="always", stealth=True), proxy=ProxyPolicy.auto()),
+        query=QueryArtifact(
+            blob="{}", describe="Document.select_all('.product').extract(...).project()",
+            tested=True, row_count=3, base_urls=["https://acme/cloud", "https://acme/onprem"],
+            sample=[{"name": "Widget", "price": "$10"}, {"name": "Cog", "price": "$30"}],
+        ),
+    )
+    buf = io.StringIO()
+    handler = _logging.StreamHandler(buf)
+    ob.log.addHandler(handler)
+    ob.log.setLevel(_logging.INFO)
+    try:
+        ob._summarize(r)
+    finally:
+        ob.log.removeHandler(handler)
+    text = buf.getvalue()
+
+    assert "result:    ready" in text
+    assert "scrapability 8/10" in text and "queryable=True" in text  # the scores
+    assert "spa 0.90" in text and "pagination 0.62" in text  # all the page's flags
+    # the reference (multi-URL) + resolve args, enough to reproduce the fetch
+    assert "reference: https://acme/cloud, https://acme/onprem" in text
+    assert "browser=always, stealth, proxy=on" in text
+    # the tested output rendered as a table (columns from the row keys)
+    assert "name" in text and "price" in text and "Widget" in text and "$10" in text
+    assert "spent:     $0.0231" in text

@@ -273,7 +273,7 @@ class QueryArtifact(BaseModel):
     plan: dict[str, Any] = {}  # the plan dict (from_plan-loadable; the wire form)
     tested: bool = False  # did it run against the source without error?
     row_count: int = 0  # how many rows it produced when tested
-    sample: list[str] = []  # up to 3 produced rows (stringified), for a sanity check
+    sample: list[Any] = []  # up to 5 produced rows (as data), shown as a table
     #: the source URLs this one query runs against, unioned. Usually one, but a dataset
     #: split across distinct URLs (e.g. /products/cloud + /products/onprem -- NOT
     #: pagination) lists them all; :func:`run_query` resolves the query per base and
@@ -298,10 +298,16 @@ class OnboardingResult(BaseModel):
     cost_usd: float = 0.0  # LLM spend for this company (when an LlmClient was used)
 
 
+#: chatty third-party loggers to hush when WE own the logging setup, so the pipeline's
+#: progress isn't buried under each httpx request line etc.
+_NOISY_LOGGERS = ("httpx", "httpcore", "urllib3", "playwright", "asyncio", "werkzeug")
+
+
 def _ensure_logging() -> None:
     """Make the pipeline's progress ALWAYS visible: if nothing has configured logging
-    (no handler on our logger or the root), attach a plain stderr handler at INFO. A
-    host that has set up logging keeps full control -- we add nothing then."""
+    (no handler on our logger or the root), attach a plain stderr handler at INFO and
+    hush the chatty transport loggers (httpx/httpcore/...). A host that has set up
+    logging keeps full control -- we add nothing then."""
     if log.handlers or logging.getLogger().handlers:
         return
     handler = logging.StreamHandler()
@@ -309,6 +315,8 @@ def _ensure_logging() -> None:
     log.addHandler(handler)
     log.setLevel(logging.INFO)
     log.propagate = False
+    for name in _NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def _trace(result: OnboardingResult, message: str, *args: Any) -> None:
@@ -318,6 +326,87 @@ def _trace(result: OnboardingResult, message: str, *args: Any) -> None:
     rendered = message % args if args else message
     result.steps.append(rendered)
     log.info("[$%.4f] %s: %s", result.cost_usd, result.company, rendered)
+
+
+def _cell(value: Any) -> str:
+    """One table cell -- JSON for a nested value, truncated so the table stays legible."""
+    s = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
+    return s if len(s) <= 40 else s[:39] + "…"
+
+
+def _render_table(rows: "list[Any]", max_rows: int = 5) -> "list[str]":
+    """The sample output rows as an aligned text table -- columns are the row keys (a
+    non-dict row falls back to a single ``value`` column)."""
+    rows = list(rows[:max_rows])
+    if not rows:
+        return ["    (no rows)"]
+    dicts = [r if isinstance(r, dict) else {"value": r} for r in rows]
+    cols: list[str] = []
+    for d in dicts:
+        cols += [k for k in d if k not in cols]
+    width = {c: max([len(c)] + [len(_cell(d.get(c, ""))) for d in dicts]) for c in cols}
+
+    def row(vals: "list[str]") -> str:
+        return "    " + "  ".join(f"{v:<{width[c]}}" for c, v in zip(cols, vals))
+
+    out = [row(cols), row(["-" * width[c] for c in cols])]
+    out += [row([_cell(d.get(c, "")) for c in cols]) for d in dicts]
+    return out
+
+
+def _resolve_summary(resolve: "Resolve | None") -> str:
+    """The resolve policy in a compact, reproducible form (only the active concerns)."""
+    if resolve is None:
+        return "none — a plain static fetch"
+    parts: list[str] = []
+    if resolve.browser is not None:
+        parts.append(f"browser={resolve.browser.when}" + (", stealth" if resolve.browser.stealth else ""))
+    if resolve.proxy is not None:
+        parts.append("proxy=on")
+    if resolve.antibot is not None:
+        parts.append(f"antibot={resolve.antibot.level}")
+    return ", ".join(parts) if parts else "retry/rate defaults only"
+
+
+def _summarize(result: OnboardingResult) -> None:
+    """The always-printed end-of-run summary: outcome, the chosen source with its scores
+    + flags, the reference + resolve args to reproduce the fetch, the authored query with
+    a sample-output table + its portable blob, and the spend. Enough to re-run by hand."""
+    ref_url = str(getattr(result.reference, "url", "")) or (
+        result.evaluation.url if result.evaluation else ""
+    )
+    lines = ["", f"── {result.company} " + "─" * max(3, 46 - len(result.company))]
+    lines.append(f"  result:    {'ready' if result.ok else 'not onboarded — ' + result.reason}")
+    ev = result.evaluation
+    if ev is not None:
+        lines.append(f"  source:    {ev.url}")
+        lines.append(
+            "  scores:    "
+            + f"scrapability {ev.scrapability}/10, queryable={ev.is_queryable}, "
+            + f"present={ev.dataset_present}, complete={ev.completeness or '?'}, "
+            + f"paginated={ev.has_pagination}, filters={ev.has_filters}, "
+            + f"subset={ev.dataset_is_subset}, interactive={ev.interactive}"
+        )
+        if ev.flags:
+            flags = ", ".join(
+                f"{n} {c:.2f}" for n, c in sorted(ev.flags.items(), key=lambda x: -x[1])
+            )
+            lines.append(f"  flags:     {flags}")
+    # the args to reproduce the fetch by hand
+    if ref_url:
+        bases = result.query.base_urls if result.query else []
+        lines.append(f"  reference: {', '.join(bases) if len(bases) > 1 else ref_url}")
+    lines.append(f"  resolve:   {_resolve_summary(result.resolve)}")
+    if result.query is not None:
+        q = result.query
+        lines.append(f"  query:     {q.describe}")
+        lines.append(f"  tested:    {'✓' if q.tested else '✗'}  {q.row_count} row(s)")
+        lines.append("  sample:")
+        lines += _render_table(q.sample)
+        lines.append(f"  blob:      {q.blob}")
+    lines.append(f"  spent:     ${result.cost_usd:.4f}")
+    for line in lines:
+        log.info(line)
 
 
 # --------------------------------------------------------------------------- #
@@ -834,7 +923,7 @@ def write_query(
             plan=expr._plan.model_dump(mode="json"),
             tested=tested,
             row_count=len(rows),
-            sample=[str(r)[:200] for r in rows[:3]],
+            sample=list(rows[:5]),
             base_urls=bases,
         )
         if tested and rows:
@@ -874,14 +963,17 @@ def onboard_company(
     if budget is not None and isinstance(llm, LlmClient):
         llm.budget = budget
     try:
-        return _onboard_company(
+        _onboard_company(
             company, brief, result,
             wc=wc, llm=llm, search=search, max_pages=max_pages, browser=browser,
         )
     except BudgetExceeded:
         result.ok = False
         result.reason = "llm budget exceeded"
-        return result
+    if isinstance(llm, LlmClient):
+        result.cost_usd = llm.spent_usd
+    _summarize(result)  # always print the end-of-run summary
+    return result
 
 
 def _onboard_company(
