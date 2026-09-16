@@ -229,10 +229,32 @@ wq.doc.select("script#__DATA__").as_json().select_all("catalog.items").extract(
 ```
 
 **An RSS/XML feed** is parsed like HTML — records are `<item>`s, fields are child tags
-(`.select("title").attr("text")`, `.select("pubDate").attr("text")`); tag names can be
-mixed-case.
+(`.select("title").attr("text")`, `.select("pubDate").attr("text")`). **XML tag names are
+case-SENSITIVE** (unlike HTML): match `pubDate`, not `pubdate`, exactly as the feed spells it.
 
-### 4. Filtering — drop rows with a sold-out badge
+### 4. A field that lives on the DETAIL page (nested resolve)
+
+When a required field is **not on the listing** — it only appears on each item's own page —
+follow the item's link and `.resolve()` it, then select on that page. Do NOT guess an
+attribute (`data-sku`) that isn't in the record: resolve the link and read the real value.
+
+Skeleton (the listing has a link but no SKU):
+```
+<li class="product">
+  <a class="detail" href="/item/123">Widget Pro</a>   ← SKU is on /item/123, not here
+```
+Query (resolve the href per record, then select on the detail page):
+```python
+wq.doc.select_all("li.product").extract(
+    name=wq.doc.select("a.detail").attr("text"),
+    sku=wq.doc.select("a.detail").attr("href").resolve().select("[class*=sku]").attr("text"),
+).project()
+```
+Chain another `.resolve()` for a field two pages deep (listing → detail → spec page), and
+end with `.regex(...)` if the value is buried in prose:
+`...attr("href").resolve().select("a.spec").attr("href").resolve().select(".body").regex(r"ID:\s*([A-Z0-9-]+)", group=1)`.
+
+### 5. Filtering — drop rows with a sold-out badge
 
 Skeleton:
 ```

@@ -4,6 +4,7 @@ markdown / text / elements / links render helpers -- all html-only."""
 from __future__ import annotations
 
 import copy
+import json
 import re
 from typing import TYPE_CHECKING, Any, Literal, overload
 from urllib.parse import urljoin
@@ -307,6 +308,40 @@ def _static_sig_set(static_html: "bytes | None") -> "frozenset[str] | None":
     )
 
 
+_JSON_SCRIPT = 'script[type="application/json"], script[type="application/ld+json"]'
+
+
+def _json_islands(root: Any, *, max_islands: int = 4, preview_lines: int = 12) -> list[str]:
+    """Injected-JSON islands in the page: ``<script type="application/json">`` /
+    ``ld+json`` blobs (a ``__NEXT_DATA__`` / catalog payload) whose records the DOM does
+    NOT render. The skeleton strips scripts, so these are otherwise invisible -- surfacing
+    them (a selector + a small JSON shape preview) is what tells the LLM to
+    ``select("script#…").as_json()`` into the blob instead of scraping an empty shell."""
+    from .json import _json_skeleton  # local: avoid a module-level html<->json cycle
+
+    out: list[str] = []
+    try:
+        scripts = root.cssselect(_JSON_SCRIPT)
+    except Exception:  # noqa: BLE001 - a tree the selector engine can't run -> no islands
+        return out
+    for el in scripts[:max_islands]:
+        raw = "".join(el.itertext()).strip()
+        if len(raw) < 2:
+            continue
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            continue  # not real JSON (an inline config with JS, etc.)
+        if not isinstance(data, (dict, list)):
+            continue
+        sid = el.get("id")
+        sel = f"script#{sid}" if sid else 'script[type="application/json"]'
+        shape = "\n".join("    " + ln for ln in _json_skeleton(
+            data, max_lines=preview_lines).splitlines()[:preview_lines])
+        out.append(f"{sel}  ->  .as_json() then dotted-path in:\n{shape}")
+    return out
+
+
 def _skeleton(
     root: Any,
     *,
@@ -392,6 +427,8 @@ def _skeleton(
         shown_ep = xhr_endpoints[:8]
         more = f" (+{len(xhr_endpoints) - 8} more)" if len(xhr_endpoints) > 8 else ""
         header.append("# XHR/fetch data APIs: " + ", ".join(shown_ep) + more)
+    for island in _json_islands(root):  # injected-JSON blobs the DOM doesn't render
+        header.append("# injected JSON island (records live here, not in the DOM): " + island)
     return "\n".join([*header, *lines])
 
 

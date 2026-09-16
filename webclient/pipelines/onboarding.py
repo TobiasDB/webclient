@@ -1372,6 +1372,24 @@ def _no_rows_hint(expr: Any, doc: Any) -> str:
     )
 
 
+def _sample_record_html(expr: Any, doc: Any, *, limit: int = 900) -> str:
+    """The FIRST matched record's own markup (whitespace-collapsed, trimmed) -- so a retry
+    hint can SHOW the model the exact element it must extract from. This is what turns a
+    vague "a field is empty" into a fixable one: the record's HTML reveals values that live
+    in an ATTRIBUTE (``data-rating="Four"``, ``datetime=...``) rather than in text, so the
+    model can switch ``.attr("text")`` to ``.attr("data-rating")``. Empty if unprobeable."""
+    sel = _row_selector(expr)
+    if not sel or not doc.ok:
+        return ""
+    try:
+        first = wq.doc.select(sel).collect(doc)  # the first matching record element
+        html = first.html() if getattr(first, "ok", False) else ""
+    except Exception:  # noqa: BLE001 - a selector the engine can't run -> no sample
+        return ""
+    html = " ".join(html.split())
+    return html[:limit] + ("…" if len(html) > limit else "")
+
+
 def _nonempty(v: Any) -> bool:
     """Whether an extracted value actually carries content -- not ``None``, not blank/
     whitespace, not an empty list/dict. The test of "did the selector match content"."""
@@ -1433,14 +1451,22 @@ def _content_hint(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> str:
         " client-side (an SPA) or the data sits inside an iframe or shadow DOM -- a static"
         " query cannot reach it; do NOT guess selectors that are not in the skeleton."
     )
+    sample = _sample_record_html(expr, doc)
+    shown = (
+        f"\n\nHere is the FIRST matched record's HTML -- find the missing field(s) IN IT. A "
+        f"value may live in an ATTRIBUTE (e.g. data-rating=\"Four\", datetime=\"...\") rather "
+        f"than in the element text: read it with .attr(\"<name>\"), not .attr(\"text\"). Do not "
+        f"add fields that are genuinely absent here.\n{sample}"
+        if sample else ""
+    )
     if not _populated_rows(rows):  # matched a container but every field is empty (or 0 rows)
-        return _no_rows_hint(expr, doc) + caveat
+        return _no_rows_hint(expr, doc) + shown + caveat
     empty = _empty_required_fields(rows, brief)  # some required field never came out
     cols = ", ".join(f'"{c}"' for c in empty)
     return (
         f"Your query extracted rows, but the required field(s) {cols} were EMPTY on every"
-        " row -- those field selectors match nothing inside a record. Re-check them against"
-        " the skeleton (selectors are relative to the record)." + caveat
+        " row. Either their selector matched no element, OR it matched an element whose TEXT"
+        " is empty because the value is in an attribute (use .attr(\"<name>\"))." + shown + caveat
     )
 
 

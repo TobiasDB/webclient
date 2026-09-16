@@ -141,6 +141,21 @@ def test_onboard_company_reports_when_no_seeds(site):
     assert not result.ok and result.reason == "no search seeds"
 
 
+def test_skeleton_surfaces_an_injected_json_island():
+    # records inlined in a <script type=application/json> island are invisible in the DOM
+    # skeleton (scripts are stripped) -- they must be surfaced so the model uses .as_json().
+    from webclient import Document
+
+    html = (b'<html><body><div id="grid"></div>'
+            b'<script id="__DATA__" type="application/json">'
+            b'{"catalog": {"items": [{"sku": "A-1"}, {"sku": "B-2"}]}}'
+            b"</script></body></html>")
+    skel = Document(url="https://x/", kind="html", content=html, status_code=200).skeleton()
+    assert "injected JSON island" in skel
+    assert "script#__DATA__" in skel and "as_json()" in skel
+    assert "catalog" in skel  # a shape preview so the model can write dotted paths
+
+
 def test_timeliness_gate_uses_the_inter_row_interval():
     import datetime
 

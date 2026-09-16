@@ -124,6 +124,33 @@ CASES: list[tuple[str, str, list[str]]] = [
     ("blog", "Cloudflare", ["https://blog.cloudflare.com/"]),
     ("ir-news", "Microsoft", ["https://news.microsoft.com/source/tag/press-releases/"]),
     ("product-catalogue", "Framework", ["https://frame.work/marketplace/parts"]),
+    # -- round 2: 20 more live sites, chosen to exercise the TRICKY shapes the messy-HTML
+    #    scenarios probe (JS-rendered lists, AJAX/JSON endpoints, real <table>s, RSS/XML,
+    #    SPA blogs, injected JSON) so live gaps surface where the controlled ones did. --
+    # JS-rendered / infinite-scroll (records arrive via XHR JSON, not the served HTML):
+    ("quotes", "Quotes (JS-rendered)", ["https://quotes.toscrape.com/js/"]),
+    ("quotes", "Quotes (infinite scroll/XHR)", ["https://quotes.toscrape.com/scroll"]),
+    ("countries", "ScrapeThisSite (AJAX/JSON)", ["https://www.scrapethissite.com/pages/ajax-javascript/"]),
+    # real HTML tables (positional cells, pagination, header rows):
+    ("countries", "ScrapeThisSite (paginated table)", ["https://www.scrapethissite.com/pages/forms/"]),
+    ("product-catalogue", "WebScraper Computers/Laptops", ["https://webscraper.io/test-sites/e-commerce/static/computers/laptops"]),
+    ("product-catalogue", "Scrapingcourse Ecommerce", ["https://www.scrapingcourse.com/ecommerce/"]),
+    ("product-catalogue", "OpenCart Demo", ["https://demo.opencart.com/"]),
+    # SPA / framework blogs (framework markers; content may be SSR or client-injected):
+    ("blog", "Vercel", ["https://vercel.com/blog"]),
+    ("blog", "GitHub", ["https://github.blog/"]),
+    ("blog", "Netflix Tech", ["https://netflixtechblog.com/"]),
+    ("blog", "Kubernetes", ["https://kubernetes.io/blog/"]),
+    ("blog", "PyTorch", ["https://pytorch.org/blog/"]),
+    # newsrooms / IR variety (some serve RSS; some are heavy SPAs; some have anti-bot):
+    ("ir-news", "NVIDIA", ["https://nvidianews.nvidia.com/"]),
+    ("ir-news", "Intel", ["https://newsroom.intel.com/"]),
+    ("ir-news", "AMD", ["https://ir.amd.com/news-events/press-releases"]),
+    ("ir-news", "SAP", ["https://news.sap.com/"]),
+    ("ir-news", "Shopify", ["https://news.shopify.com/"]),
+    ("ir-news", "Docusign", ["https://investor.docusign.com/investors/press-releases/default.aspx"]),
+    ("ir-news", "Tesla", ["https://ir.tesla.com/press"]),
+    ("ir-news", "Zoom", ["https://investors.zoom.us/news-releases"]),
 ]
 
 
