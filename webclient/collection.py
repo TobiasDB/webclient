@@ -48,9 +48,14 @@ class Field(Generic[T]):
         return Field(self._ok)
 
     def is_empty(self) -> "Field[bool]":
+        # PRESENCE, not truthiness: a matched ``0`` / ``0.0`` / ``False`` field is NOT empty
+        # (only "" / [] / {} / None / a miss are). Use this (and ``is_ok``) in ``filter`` --
+        # they disagree with ``bool(field)`` on falsy-but-present values like a ``0`` price.
         return Field(not self._ok or self._value in ("", [], {}, None))
 
     def __bool__(self) -> bool:
+        # value TRUTHINESS (so ``0`` / ``False`` read as falsy) -- deliberately different from
+        # ``is_empty`` (presence). Query filters should use ``.is_ok()`` / ``.is_empty()``.
         return bool(self._value) if self._ok else False
 
     def __eq__(self, o: Any) -> bool:  # type: ignore[override]

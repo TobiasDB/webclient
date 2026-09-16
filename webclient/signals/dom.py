@@ -9,6 +9,8 @@ method on it -- so importing this module stays remote-safe.
 
 from __future__ import annotations
 
+import logging
+import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlparse
 
@@ -17,6 +19,8 @@ from .registry import Hit, detector, flag
 
 if TYPE_CHECKING:
     from ..core.document.models import Form, Signal
+
+_log = logging.getLogger(__name__)
 
 _SPA_RATIO = 0.4  # injected-text share that alone marks a SPA
 _SPA_MAIN_RATIO = 0.15  # lower bar when the injection is main-area + same-origin XHR
@@ -71,7 +75,8 @@ def _injection(ctx: Context) -> "tuple[float, bool, int, int]":
             continue
         try:
             u = str(req.dispatch("url"))
-        except Exception:
+        except Exception as exc:  # a malformed request event -- don't let it flip SPA silently
+            _log.debug("dropped an XHR event with an unreadable url: %s", exc)
             continue
         host = (urlparse(u).hostname or "").lower()
         if not host:
@@ -147,11 +152,15 @@ def _shadow_inlined(ctx: Context) -> Hit | None:
     return None
 
 
+#: shadow DOM used for REAL -- a call ``el.attachShadow(...)`` or a declarative
+#: ``<template shadowrootmode=...>`` -- not a bare mention of the word in prose/JSON.
+_SHADOW_RE = re.compile(r"\.attachShadow\s*\(|shadowrootmode\s*=|<template[^>]*\bshadowroot", re.I)
+
+
 @detector(flag="shadow_dom", name="attach_shadow_marker", stage="static")
 def _attach_shadow(ctx: Context) -> Hit | None:
-    t = ctx.text or ""
-    if "attachShadow" in t or "shadowrootmode" in t.lower():
-        return Hit(0.5, "the page uses shadow DOM (attachShadow / shadowrootmode)")
+    if _SHADOW_RE.search(ctx.text or ""):  # a real usage, not the word inside an article/blob
+        return Hit(0.5, "the page uses shadow DOM (attachShadow() / shadowrootmode)")
     return None
 
 

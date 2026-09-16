@@ -167,6 +167,25 @@ def test_timeliness_gate_uses_the_inter_row_interval():
     assert _timeliness([{"name": "a"}], Brief(description="p", fields=["name"])) == ("", False)
 
 
+def test_timeliness_reads_a_nested_date_field_and_ignores_lookalike_names():
+    import datetime
+
+    from webclient.pipelines.onboarding import _date_field_paths, _timeliness
+
+    # the date lives under a nested branch (meta.published); "timezone"/"runtime" are NOT dates
+    brief = Brief(description="posts", fields=["title", "meta.published", "timezone", "runtime"])
+    assert _date_field_paths(brief) == ["meta.published"]
+    today = datetime.date.today()
+
+    def d(n: int) -> str:
+        return (today - datetime.timedelta(days=n)).strftime("%Y-%m-%d")
+
+    stale = [{"meta": {"published": d(300)}}, {"meta": {"published": d(310)}},
+             {"meta": {"published": d(320)}}]
+    _, is_stale = _timeliness(stale, brief)
+    assert is_stale  # nested date is read + far beyond cadence -> stale
+
+
 def test_seeds_for_company_drops_look_alike_companies():
     from webclient.pipelines.onboarding import Seed, _seeds_for_company
 
