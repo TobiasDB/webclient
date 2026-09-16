@@ -798,3 +798,23 @@ def test_executable_query_strips_stray_navigation_from_the_model():
     # exactly one resolve, then the extraction (no double resolve)
     assert exe.explain().count(".resolve(") == 1
     assert exe.explain().startswith("reference('https://x/p').resolve().select_all")
+
+
+def test_docs_pages_are_hard_banned_from_the_crawl():
+    from webclient.core.crawl import Edge
+    from webclient.pipelines.onboarding import _filter_frontier, _is_docs_url
+
+    # docs URLs are banned; data endpoints and listings are kept
+    assert _is_docs_url("https://x.co/docs/api") and _is_docs_url("https://docs.x.co/y")
+    assert _is_docs_url("https://developer.x.co/") and _is_docs_url("https://x.co/api-docs/v1")
+    assert not _is_docs_url("https://x.co/products")
+    assert not _is_docs_url("https://x.co/api/v1/products.json")  # a DATA endpoint stays
+
+    edges = [
+        Edge(url="https://x.co/products"),
+        Edge(url="https://x.co/docs/api"),        # banned
+        Edge(url="https://x.co/api/v1/items.json"),
+        Edge(url="https://developer.x.co/guide"),  # banned
+    ]
+    kept = [e.url for e in _filter_frontier(edges, Brief(description="items"))]
+    assert kept == ["https://x.co/products", "https://x.co/api/v1/items.json"]

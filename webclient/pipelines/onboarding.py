@@ -645,16 +645,42 @@ _PAGE_PARAMS = {
     "page", "p", "pg", "pagenum", "offset", "start", "limit", "per_page", "cursor",
 }
 
+#: path fragments that mark a page as API / product DOCUMENTATION rather than data. A
+#: docs page is never a scrapable dataset, so it is HARD-BANNED from the crawl (never
+#: expanded, never a candidate) -- kept specific so a data endpoint like ``/api/v1/
+#: products`` is NOT caught (only ``/api-docs`` etc.).
+_DOCS_HINTS = (
+    "/docs", "/doc/", "/documentation", "/developer", "/dev-docs", "/api-docs",
+    "/apidocs", "/api-reference", "/reference/", "/swagger", "/openapi", "/redoc",
+    "/guide", "/tutorial", "/sdk", "/faq", "/help/", "/knowledge", "/manual",
+)
+
+
+def _is_docs_url(url: str) -> bool:
+    """Whether ``url`` is API / product DOCUMENTATION (a ``docs.`` / ``developer.``
+    host, or a docs path fragment) -- hard-banned from the crawl."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url.lower())
+    host = parts.hostname or ""
+    if host.startswith(("docs.", "developer.", "developers.", "apidocs.")):
+        return True
+    path = parts.path.rstrip("/") + "/"  # so a trailing "/docs" matches "/docs/"
+    return any(hint in path for hint in _DOCS_HINTS)
+
 
 def _filter_frontier(edges: Sequence[Any], brief: Brief) -> list[Any]:
-    """Prune the frontier before the model spends a pick on it: collapse paginated URL
+    """Prune the frontier before the model spends a pick on it: HARD-BAN documentation
+    pages (:func:`_is_docs_url` -- they are never a dataset), then collapse paginated URL
     sets and repeated similar-API calls to one representative each (keeping the first --
-    the frontier is already best-first). This is a STRUCTURAL de-dup only; ``look`` /
-    ``ignore`` are natural-language guides the model applies when it picks, not literal
-    URL filters. Keeps the crawl from wasting budget on many versions of one thing."""
+    the frontier is already best-first). ``look`` / ``ignore`` stay natural-language
+    guides the model applies; this filter is purely structural."""
     kept: list[Any] = []
     seen: set[tuple[str, str, frozenset[str]]] = set()
     for e in edges:
+        if _is_docs_url(e.url):
+            log.debug("banned docs URL from the frontier: %s", e.url)
+            continue
         key = _frontier_key(e.url)
         if key in seen:
             continue
@@ -755,7 +781,12 @@ def select_candidates(crawl: Any, brief: Brief, *, llm: LLM) -> list[Candidate]:
     """Rank the crawled pages into must / should / could-evaluate candidates by
     scrapability + likely relevance to the dataset."""
     # crawl.pages are lean PageCards by default (url / title / flags already projected)
-    pages = [{"url": p.final_url or p.url, "title": p.title, "flags": p.flags} for p in crawl.pages]
+    # hard-ban documentation pages: even if one was fetched (a seed / a stray pick), it
+    # is never a scrapable dataset, so it can't become a candidate.
+    pages = [
+        {"url": p.final_url or p.url, "title": p.title, "flags": p.flags}
+        for p in crawl.pages if not _is_docs_url(p.final_url or p.url)
+    ]
     if not pages:
         return []
     rows = _ask_json(
