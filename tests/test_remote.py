@@ -87,12 +87,23 @@ def test_remote_crawl_runs_server_side(remote):
     assert any(u.endswith("/cards") for u in urls)
 
 
-def test_remote_sitemap_and_sitemaps(remote):
+def test_remote_sitemap_and_robots(remote):
+    # sitemap/robots are ordinary dispatched IO ops now (they ride /execute), so they
+    # round-trip with no bespoke remote override.
     rc, server = remote
-    sm = rc.sitemap(server.url_for("/cards"), max_pages=3)
-    assert sm.done and len(sm.pages) >= 1
-    # sitemaps() discovery also works remotely (an io op that round-trips)
-    assert isinstance(rc.discover_sitemaps(server.url_for("/cards")), list)
+    base = server.url_for("/").rstrip("/")
+    server.expect_request("/robots.txt").respond_with_data(
+        f"User-agent: *\nSitemap: {base}/sitemap.xml\n", content_type="text/plain"
+    )
+    server.expect_request("/sitemap.xml").respond_with_data(
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f"<url><loc>{base}/cards</loc></url></urlset>",
+        content_type="application/xml",
+    )
+    refs = rc.sitemap(server.url_for("/"))
+    assert [r.url for r in refs] == [f"{base}/cards"]  # rebuilt as real References
+    robots = rc.robots(server.url_for("/"))  # rebuilt as a real Robots model
+    assert robots.exists and robots.sitemaps == [f"{base}/sitemap.xml"]
 
 
 def test_remote_crawl_step_fails_cleanly(remote):

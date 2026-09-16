@@ -188,9 +188,8 @@ def main() -> None:
             crawl.run()   # then let it self-drive the rest
             print("crawled:    ", [(p.final_url or p.url).replace(base, "")
                                     for p in crawl.pages])
-        # sitemap: an eager, single-domain crawl -> pages + edges (site map)
-        smap = wc.sitemap(f"{base}/", depth=1, width=10)
-        print("sitemap:    ", len(smap.pages), "pages,", len(smap.frontier), "edges")
+        # sitemap: a cheap hunt for the site's sitemap.xml page URLs (not a crawl)
+        print("sitemap:    ", [r.url.replace(base, "") for r in wc.sitemap(f"{base}/")])
 
         # [P1] Every object is addressable: short scoped names, a root chain
         #      (ref -> doc), recovery by name from the resolver, shop.ref().
@@ -483,8 +482,8 @@ def main() -> None:
         print("expr blob:   ", blob)
         print("expr rebuilt:", from_blob(blob).explain())
 
-        # [#3] Discover a site's real sitemap.xml URLs (none served here -> []).
-        print("sitemaps:    ", [r.url for r in wc.discover_sitemaps(f"{base}/")])
+        # [#3] Hunt a site's real sitemap.xml URLs (none served here -> []).
+        print("sitemaps:    ", [r.url for r in wc.sitemap(f"{base}/")])
 
     # [#7] The resiliency policy bundle is declared to a proxy service as request
     #      headers (the service is assumed to exist; here we just show the headers).

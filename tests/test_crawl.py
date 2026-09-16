@@ -114,11 +114,42 @@ def test_edges_carry_anchor_text(wc, site):
     assert "Pricing" in docs.text  # anchor text kept (the keyword signal)
 
 
-def test_sitemap_is_an_eager_single_domain_crawl(wc, site):
-    sm = wc.sitemap(site.url_for("/"), depth=3, width=20)
-    assert isinstance(sm, Crawl) and sm.done
-    assert len(sm.pages) >= 4  # mapped several pages of the one domain
-    assert all("external.example" not in u for u in _urls(sm))
+def test_sitemap_is_a_hunt_not_a_crawl(wc, httpserver):
+    # sitemap() hunts the sitemap.xml page URLs (References) -- it does NOT crawl.
+    from webclient import Reference
+
+    base = httpserver.url_for("/").rstrip("/")
+    httpserver.expect_request("/robots.txt").respond_with_data(
+        "User-agent: *\n", content_type="text/plain"
+    )
+    httpserver.expect_request("/sitemap.xml").respond_with_data(
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f"<url><loc>{base}/a</loc></url><url><loc>{base}/b</loc></url></urlset>",
+        content_type="application/xml",
+    )
+    refs = wc.sitemap(httpserver.url_for("/"))
+    assert refs and all(isinstance(r, Reference) for r in refs)  # not a Crawl
+    assert sorted(r.url for r in refs) == [f"{base}/a", f"{base}/b"]
+
+
+def test_crawl_can_be_seeded_from_a_sitemap_hunt(wc, httpserver):
+    # the composition that replaces the old sitemap-crawl: hunt, then crawl the URLs.
+    base = httpserver.url_for("/").rstrip("/")
+    for p in ("/a", "/b"):
+        httpserver.expect_request(p).respond_with_data(
+            f"<html><body>page {p}</body></html>", content_type="text/html"
+        )
+    httpserver.expect_request("/robots.txt").respond_with_data(
+        "User-agent: *\n", content_type="text/plain"
+    )
+    httpserver.expect_request("/sitemap.xml").respond_with_data(
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f"<url><loc>{base}/a</loc></url><url><loc>{base}/b</loc></url></urlset>",
+        content_type="application/xml",
+    )
+    with wc.crawl(wc.sitemap(httpserver.url_for("/")), max_pages=5, browser=False) as crawl:
+        crawl.run()
+    assert sorted(_urls(crawl)) == [f"{base}/a", f"{base}/b"]
 
 
 def test_crawl_pages_are_page_cards_by_default(wc, site):
@@ -273,14 +304,14 @@ def test_sitemaps_discovers_urls_from_robots_and_sitemap_xml(wc, httpserver):
         f"<url><loc>{base}/a</loc></url><url><loc>{base}/b</loc></url></urlset>",
         content_type="application/xml",
     )
-    refs = wc.discover_sitemaps(httpserver.url_for("/"))
+    refs = wc.sitemap(httpserver.url_for("/"))
     urls = sorted(r.url for r in refs)
     assert urls == [f"{base}/a", f"{base}/b"]
 
 
 def test_sitemaps_on_a_site_without_one_is_empty(wc, site):
     # the `site` fixture has a robots.txt with no Sitemap: and no /sitemap.xml.
-    assert list(wc.discover_sitemaps(site.url_for("/"))) == []
+    assert list(wc.sitemap(site.url_for("/"))) == []
 
 
 def test_step_keeps_unfetched_edges_when_budget_is_nearly_full(wc, site):

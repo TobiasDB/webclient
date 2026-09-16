@@ -312,14 +312,33 @@ def test_crawl_frontier_is_capped_to_width(client_and_server):
     assert data["frontier_total"] >= len(data["frontier"])  # true count reported
 
 
-def test_sitemap_maps_a_domain(client_and_server):
+def test_sitemap_verb_hunts_page_urls(client_and_server):
     api, server = client_and_server
-    resp = api.post(
-        "/sitemap", headers=AUTH, json={"url": server.url_for("/cards"), "depth": 2}
+    base = server.url_for("/").rstrip("/")
+    server.expect_request("/robots.txt").respond_with_data(
+        "User-agent: *\n", content_type="text/plain"
     )
+    server.expect_request("/sitemap.xml").respond_with_data(
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f"<url><loc>{base}/cards</loc></url></urlset>",
+        content_type="application/xml",
+    )
+    resp = api.post("/sitemap", headers=AUTH, json={"url": server.url_for("/")})
     assert resp.status_code == 200
-    urls = resp.json()["urls"]
-    assert any(u.endswith("/cards") for u in urls)
+    assert any(u.endswith("/cards") for u in resp.json()["result"])
+
+
+def test_robots_verb_returns_rules(client_and_server):
+    api, server = client_and_server
+    base = server.url_for("/").rstrip("/")
+    server.expect_request("/robots.txt").respond_with_data(
+        f"User-agent: *\nDisallow: /private\nSitemap: {base}/sitemap.xml\n",
+        content_type="text/plain",
+    )
+    resp = api.post("/robots", headers=AUTH, json={"url": server.url_for("/")})
+    assert resp.status_code == 200
+    robots = resp.json()["result"]
+    assert robots["exists"] and robots["sitemaps"] == [f"{base}/sitemap.xml"]
 
 
 def test_crawl_runs_on_a_named_session(client_and_server):

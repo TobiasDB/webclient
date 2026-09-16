@@ -39,7 +39,7 @@ from ..web_core import Backing, WebCore
 from .fetch import FetchBacking
 from .loop import EngineLoop
 from .models import IWebClient
-from .sitemap import SitemapBacking
+from .sitemap import SiteBacking
 
 if TYPE_CHECKING:
     from ..crawl import Crawl, CrawlConfig, CrawlState
@@ -89,8 +89,11 @@ def _flag_reason(flag: Any, default: str) -> str:
 
 def _seed_urls(seeds: Any) -> list[str]:
     """Normalise crawl seeds -- a URL string, a Reference (surface or core), or a
-    list of either -- to a list of URL strings."""
-    items = seeds if isinstance(seeds, (list, tuple)) else [seeds]
+    list / :class:`Collection` of either (so ``wc.crawl(wc.sitemap(url))`` composes) --
+    to a list of URL strings."""
+    from ...collection import Collection
+
+    items = list(seeds) if isinstance(seeds, (list, tuple, Collection)) else [seeds]
     return [s if isinstance(s, str) else str(getattr(s, "url", s)) for s in items]
 
 
@@ -248,7 +251,7 @@ class WebClient(WebCore, IWebClient):
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (
         FetchBacking(),
-        SitemapBacking(),
+        SiteBacking(),
     )
 
     # -- loop / lifecycle ----------------------------------------------------
@@ -686,34 +689,9 @@ class WebClient(WebCore, IWebClient):
             frontier=[Edge(url=u, depth=0) for u in urls],
         ).bind(self)
 
-    def sitemap(
-        self,
-        url: Any,
-        *,
-        depth: int = 2,
-        width: int = 20,
-        max_pages: int = 1000,
-        use_sitemap_xml: bool = True,
-        browser: bool = False,
-        resolve: Any = None,
-    ) -> "Crawl":
-        """Map a site: an eager, single-domain :meth:`crawl` run to completion -- HEAVY
-        (fetches up to ``max_pages`` pages). Returns the finished crawl (a
-        :class:`PageCard` per page in ``.pages`` + the unresolved ``.frontier``). For
-        just the sitemap URLs, use the cheap :meth:`discover_sitemaps` instead.
-        ``use_sitemap_xml`` (default on) seeds the frontier with the site's declared
-        ``sitemap.xml`` URLs, then link-crawls to fill in whatever it omits.
-
-        Unlike :meth:`crawl`, ``browser`` defaults **off**: rendering up to ``max_pages``
-        pages is prohibitively slow and URL discovery rarely needs JS."""
-        seeds: list[Any] = [url]
-        if use_sitemap_xml:
-            discovered = self.dispatch("discover_sitemaps", url)
-            seeds += [r.url for r in discovered]
-        return self.crawl(
-            seeds, depth=depth, width=width, max_pages=max_pages,
-            browser=browser, resolve=resolve,
-        ).run()
+    # ``sitemap`` (hunt the sitemap.xml) and ``robots`` (hunt the robots.txt) are
+    # dispatched IO ops on ``SiteBacking`` -- reached via ``__getattr__``, so remote is
+    # a pure dispatch difference. To crawl a sitemap: ``wc.crawl(wc.sitemap(url))``.
 
     # -- live / browser ------------------------------------------------------
     def inject_script(self, source: str, *, phase: str = "init") -> Self:

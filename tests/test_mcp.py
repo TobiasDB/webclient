@@ -27,7 +27,7 @@ def wc():
 def test_tool_registry_is_well_formed(wc):
     tools = build_tools(wc)
     names = {t.name for t in tools}
-    assert {"fetch_markdown", "links", "skeleton", "crawl", "discover_sitemaps",
+    assert {"fetch_markdown", "links", "skeleton", "crawl", "sitemap", "robots",
             "validate_plan", "run_plan"} <= names
     for t in tools:  # every tool has a JSON-schema object with properties
         assert t.input_schema["type"] == "object" and "properties" in t.input_schema

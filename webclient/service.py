@@ -270,20 +270,11 @@ def create_app(
             return _error(404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT)
         return app.state.sessions[sid]
 
-    def _run_crawl(engine: "Any", body: dict[str, Any], *, sitemap: bool) -> "Any":
+    def _run_crawl(engine: "Any", body: dict[str, Any]) -> "Any":
         """Build and run a crawl on ``engine`` (a client or session); the caller
         turns the finished crawl into a response. Raises WebException on a failure."""
         url = body["url"]
         resolve = _resolve_of(body.get("resolve"))
-        if sitemap:
-            return engine.sitemap(
-                url,
-                depth=int(body.get("depth", 2)),
-                width=int(body.get("width", 20)),
-                max_pages=int(body.get("max_pages", 1000)),
-                browser=bool(body.get("browser", False)),
-                resolve=resolve,
-            )
         return engine.crawl(
             url,
             auto=True,  # the HTTP tier runs a bounded auto crawl (Firecrawl-shaped)
@@ -341,36 +332,7 @@ def create_app(
         if isinstance(engine, JSONResponse):
             return engine
         try:
-            return _crawl_response(_run_crawl(engine, body, sitemap=False))
-        except WebException as exc:
-            return _error(
-                502,
-                exc.error.type,
-                str(exc),
-                retriable=exc.error.retriable,
-                status_code=exc.error.status_code,
-                hint="retry if retriable; else the seed is unavailable or blocked",
-            )
-
-    @app.post("/sitemap", response_model=None)
-    def sitemap(
-        body: dict[str, Any], authorization: str | None = Header(default=None)
-    ) -> "dict[str, Any] | JSONResponse":
-        """Map a site: an eager, single-domain crawl of ``url`` -> its pages'
-        summaries + URLs and the unresolved frontier."""
-        _auth(authorization)
-        if not body.get("url"):
-            return _error(
-                422,
-                "InvalidRequest",
-                "sitemap requires a 'url'",
-                hint='POST {"url": "https://...", "depth": 2}',
-            )
-        engine = _crawl_engine(body)
-        if isinstance(engine, JSONResponse):
-            return engine
-        try:
-            return _crawl_response(_run_crawl(engine, body, sitemap=True))
+            return _crawl_response(_run_crawl(engine, body))
         except WebException as exc:
             return _error(
                 502,
@@ -456,17 +418,29 @@ def create_app(
         browser = body.get("browser", False)
         return _run_verb(lambda: wc_.fetch(url, browser=browser).skeleton())
 
-    @app.post("/discover_sitemaps", response_model=None)
-    def discover_sitemaps(
+    @app.post("/sitemap", response_model=None)
+    def sitemap(
         body: dict[str, Any], authorization: str | None = Header(default=None)
     ) -> "dict[str, Any] | JSONResponse":
-        """Discover a site's real sitemap.xml page URLs from ``url``."""
+        """Hunt a site's sitemap.xml page URLs from ``url`` (cheap -- not a crawl)."""
         _auth(authorization)
         url = _verb_url(body)
         if isinstance(url, JSONResponse):
             return url
         wc_: WebClient = app.state.wc
-        return _run_verb(lambda: [r.url for r in wc_.discover_sitemaps(url)])
+        return _run_verb(lambda: [r.url for r in wc_.sitemap(url)])
+
+    @app.post("/robots", response_model=None)
+    def robots(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Hunt a site's robots.txt from ``url`` -- its Sitemap: URLs and raw rules."""
+        _auth(authorization)
+        url = _verb_url(body)
+        if isinstance(url, JSONResponse):
+            return url
+        wc_: WebClient = app.state.wc
+        return _run_verb(lambda: wc_.robots(url).model_dump())
 
     # -- plan authoring: validate / pretty-print / (de)serialise a lazy expr --
     @app.post("/plan", response_model=None)

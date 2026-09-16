@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from ..core.document import Element
     from ..models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
     from ..core.document.models import Flag, Metadata, Signal, Structure, Transport, XhrCall
+    from ..core.client.models import Robots
     from .eager import Document, Reference
 
 T = TypeVar("T")
@@ -207,9 +208,10 @@ class LazyWebClient:
     """The lazy recorder rooted at a client/session (``wc.lazy``): its verbs
     record a ``WebClient``-rooted plan to batch/defer -- ``wc.lazy.fetch(url)
     .collect()`` records then runs on the client's engine."""
-    def discover_sitemaps(self, url: Any, *, limit: int = ...) -> "LazyCollection[LazyReference]": ...
     def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ..., wait: 'WaitConfig | None' = ..., **kw: Any) -> "LazyDocument": ...
     def ref(self, url: Any, method: str = ..., **kw: Any) -> "LazyReference": ...
+    def robots(self, url: Any) -> "Lazy[Robots]": ...
+    def sitemap(self, url: Any, *, limit: int = ...) -> "LazyCollection[LazyReference]": ...
 # fmt: on
 # >>> end generated <<<
 

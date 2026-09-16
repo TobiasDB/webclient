@@ -37,13 +37,24 @@ SITE: dict[str, str] = {
     "/blog/2": "<h1>v2 is out</h1><p>Version 2 ships.</p>",
     "/private": "<h1>Internal</h1><p>staff only.</p>",
 }
-ROBOTS = "User-agent: *\nDisallow: /private\n"
+ROBOTS = "User-agent: *\nDisallow: /private\nSitemap: {base}/sitemap.xml\n"
+SITEMAP = (
+    '<?xml version="1.0"?>'
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+    "{locs}</urlset>"
+)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
+        base = f"http://{self.headers.get('Host', '')}"
         if self.path == "/robots.txt":
-            body, ctype = ROBOTS.encode(), "text/plain"
+            body, ctype = ROBOTS.format(base=base).encode(), "text/plain"
+        elif self.path == "/sitemap.xml":
+            locs = "".join(
+                f"<url><loc>{base}{p}</loc></url>" for p in SITE if p != "/private"
+            )
+            body, ctype = SITEMAP.format(locs=locs).encode(), "application/xml"
         elif self.path in SITE:
             title = self.path.strip("/").replace("/", " ").title() or "Home"
             body = (
@@ -129,17 +140,21 @@ def main() -> None:
             print("  resumed to", len(crawl.pages), "pages total")
             print("  lazy.frontier is a Collection:", type(crawl.lazy.frontier).__name__)
 
-        # -- 3. Sitemap: an eager, single-domain map ----------------------------
-        print("\n== sitemap (eager single-domain crawl) ==")
-        smap = wc.sitemap(f"{base}/", depth=2, width=20)
-        mapped = sorted(_purl(p, base) for p in smap.pages)
-        print("  pages:    ", len(smap.pages))
-        print("  urls:     ", mapped)
-        print("  external kept out:", "/x" not in " ".join(mapped))
-        print("  robots kept /private out:", "/private" not in mapped)
+        # -- 3. Sitemap + robots: cheap hunts (dispatched IO ops, not crawls) ---
+        print("\n== sitemap / robots (hunts, not crawls) ==")
+        rob = wc.robots(f"{base}/")
+        print("  robots.txt exists:", rob.exists, "| declares", len(rob.sitemaps), "sitemap(s)")
+        print("  robots allows /pricing:", rob.allowed(f"{base}/pricing"),
+              "| /private:", rob.allowed(f"{base}/private"))
+        found = wc.sitemap(f"{base}/")  # a Collection[Reference] -- the sitemap.xml URLs
+        print("  sitemap urls:", sorted(_rel(r.url, base) for r in found))
+        # to crawl the sitemap, feed the hunt straight into crawl:
+        with wc.crawl(found, max_pages=4) as smap:
+            smap.run()
+        print("  crawled from sitemap:", sorted(_purl(p, base) for p in smap.pages))
 
-        # -- 4. The same feature over the HTTP Service API ----------------------
-        print("\n== Service API: POST /crawl and /sitemap ==")
+        # -- 4. The same features over the HTTP Service API ---------------------
+        print("\n== Service API: POST /crawl, /sitemap, /robots ==")
         from fastapi.testclient import TestClient
 
         from webclient.service import create_app
@@ -166,13 +181,16 @@ def main() -> None:
                 "    page[0] handle keys:",
                 sorted(k for k, v in first.items() if v is not None),
             )
-            m = api.post("/sitemap", headers=auth, json={"url": f"{base}/", "depth": 2})
+            m = api.post("/sitemap", headers=auth, json={"url": f"{base}/"})
             print(
                 "  POST /sitemap ->",
                 m.status_code,
                 "| urls:",
-                sorted(_rel(u, base) for u in m.json()["urls"]),
+                sorted(_rel(u, base) for u in m.json()["result"]),
             )
+            rb = api.post("/robots", headers=auth, json={"url": f"{base}/"})
+            print("  POST /robots ->", rb.status_code, "| sitemaps:",
+                  len(rb.json()["result"]["sitemaps"]))
         svc.close()
 
     print("\nok")

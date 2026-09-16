@@ -1,13 +1,14 @@
-"""SitemapBacking: the client's ``discover_sitemaps`` verb -- discover a site's real
-``sitemap.xml`` URLs.
+"""SiteBacking: the client's site-discovery verbs -- ``robots`` (hunt the
+``robots.txt``) and ``sitemap`` (hunt the ``sitemap.xml`` page URLs).
 
-Built on the interface (``core.afetch`` + ``core.ref``), like ``search`` and
-``crawl``: it reads ``robots.txt`` for ``Sitemap:`` directives, falls back to the
-well-known ``/sitemap.xml``, then parses each sitemap -- expanding a
-``<sitemapindex>`` one level into its child sitemaps -- and returns the page URLs
-as :class:`~webclient.core.reference.Reference` objects (deduped, bounded). Users
-call it directly (``wc.discover_sitemaps(url)``); the ``sitemap()`` map verb seeds its
-crawl frontier from it so a real sitemap is honoured, not just link-following.
+Both are cheap, dispatched IO ops (a couple of fetches), built on the interface
+(``core.afetch`` + ``core.ref``) like ``search`` -- so remote is a pure dispatch
+difference (they ride ``/execute``, no bespoke endpoint). ``sitemap`` reads
+``robots`` for ``Sitemap:`` directives, falls back to the well-known
+``/sitemap.xml``, then parses each sitemap -- expanding a ``<sitemapindex>`` one
+level into its child sitemaps -- and returns the page URLs as
+:class:`~webclient.core.reference.Reference` objects (deduped, bounded). To crawl a
+sitemap, feed it in: ``wc.crawl(wc.sitemap(url))``.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from urllib.parse import urljoin, urlparse
 
 from ..reference import Reference, from_url
 from ..web_core import Backing
+from .models import Robots
 
 if TYPE_CHECKING:
     from . import WebClient
@@ -63,26 +65,38 @@ def _locs(content: bytes) -> "tuple[str, list[str]]":
     return _localname(root.tag), locs
 
 
-class SitemapBacking(Backing):
-    """The client's ``discover_sitemaps`` verb: discover a site's sitemap URLs."""
+class SiteBacking(Backing):
+    """The client's site-discovery verbs: ``robots`` + ``sitemap`` (both dispatched)."""
 
-    provides = frozenset({"discover_sitemaps"})
-    collections = frozenset({"discover_sitemaps"})
-    io = frozenset({"discover_sitemaps"})  # IO op: the interface bridges it (dispatch)
+    provides = frozenset({"sitemap", "robots"})
+    collections = frozenset({"sitemap"})  # sitemap -> a Collection; robots -> one model
+    io = frozenset({"sitemap", "robots"})  # IO ops: the interface bridges them (dispatch)
     gate = "ok"
 
-    async def discover_sitemaps(
+    async def robots(self, core: "WebClient", url: Any) -> "Robots":
+        """Hunt ``url``'s site ``robots.txt`` -- CHEAP (one fetch). Returns a
+        :class:`Robots`: its ``Sitemap:`` URLs plus ``allowed(url)`` / ``delay()`` over
+        the rules. A site with no robots.txt yields ``exists=False`` (never raises)."""
+        origin = _origin(str(getattr(url, "url", url)))
+        if not origin:
+            return Robots()
+        rurl = f"{origin}/robots.txt"
+        doc = await core.afetch(core.ref(rurl), optional=True)
+        if not doc.ok or not doc.content:
+            return Robots(url=rurl, exists=False)
+        text = doc.content.decode("utf-8", "replace")
+        return Robots(url=rurl, exists=True, content=text, sitemaps=_robots_sitemaps(text))
+
+    async def sitemap(
         self, core: "WebClient", url: Any, *, limit: int = 5000
     ) -> "list[Reference]":
-        """Discover ``url``'s site's sitemap page URLs -- CHEAP (a couple of fetches),
-        returns the list of URLs. (Not to be confused with ``wc.sitemap(url)``, which
-        *runs a whole crawl*.) Reads ``robots.txt`` for
-        ``Sitemap:`` directives (else the well-known ``/sitemap.xml``), fetches each,
-        and collects the ``<loc>`` page URLs -- expanding a ``<sitemapindex>`` one
-        level into its child sitemaps. Returns deduped References, capped at
-        ``limit``. A site with no sitemap yields an empty list (never raises)."""
-        base = str(getattr(url, "url", url))
-        origin = _origin(base)
+        """Hunt ``url``'s site ``sitemap.xml`` page URLs -- CHEAP (a couple of fetches),
+        NOT a crawl. Reads ``robots`` for ``Sitemap:`` directives (else the well-known
+        ``/sitemap.xml``), fetches each, and collects the ``<loc>`` page URLs --
+        expanding a ``<sitemapindex>`` one level into its child sitemaps. Returns
+        deduped References, capped at ``limit``. A site with no sitemap yields an empty
+        list (never raises). To crawl these, feed them in: ``wc.crawl(wc.sitemap(url))``."""
+        origin = _origin(str(getattr(url, "url", url)))
         if not origin:
             return []
         sources = await self._sitemap_sources(core, origin)
@@ -105,15 +119,10 @@ class SitemapBacking(Backing):
         return out
 
     async def _sitemap_sources(self, core: "WebClient", origin: str) -> list[str]:
-        """The sitemap URLs to read: robots.txt ``Sitemap:`` directives, else the
-        well-known ``/sitemap.xml``."""
-        doc = await core.afetch(core.ref(f"{origin}/robots.txt"), optional=True)
-        found = (
-            _robots_sitemaps(doc.content.decode("utf-8", "replace"))
-            if doc.ok and doc.content
-            else []
-        )
-        return found or [f"{origin}/sitemap.xml"]
+        """The sitemap URLs to read: the ``robots`` op's ``Sitemap:`` directives, else
+        the well-known ``/sitemap.xml``."""
+        robots = await self.robots(core, origin)
+        return robots.sitemaps or [f"{origin}/sitemap.xml"]
 
     async def _fetch_locs(
         self, core: "WebClient", src: str
@@ -135,4 +144,4 @@ class SitemapBacking(Backing):
                 out.append(from_url(u))
 
 
-__all__ = ["SitemapBacking"]
+__all__ = ["SiteBacking"]

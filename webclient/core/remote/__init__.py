@@ -49,6 +49,7 @@ def _wire_models() -> "dict[str, type[Any]]":
             NetworkEvent,
             PlanEvent,
         )
+        from ..client.models import Robots
         from ..crawl.models import Edge
         from ..document.models import (
             Element,
@@ -61,7 +62,7 @@ def _wire_models() -> "dict[str, type[Any]]":
 
         models: list[type[Any]] = [
             Transport, Metadata, Structure, Signal, Flag, Element,
-            Edge, Event, NavigationEvent, NetworkEvent, ConsoleEvent,
+            Edge, Robots, Event, NavigationEvent, NetworkEvent, ConsoleEvent,
             DOMUpdateEvent, ActionEvent, PlanEvent,
         ]
         _WIRE_MODELS_CACHE = {m.__name__: m for m in models}
@@ -163,12 +164,13 @@ class RemoteWebClientCore(WebClient):
         doc._remote_handle = True
         return doc
 
-    # -- crawl / sitemap: run server-side via the service endpoints ----------
+    # -- crawl: run server-side via the /crawl endpoint ----------------------
     # A crawl is client-held state driving many fetches; over the wire that is a
-    # server-side job (the same shape as a server-side ``session``), so remote
-    # crawl/sitemap POST to the service's /crawl and /sitemap endpoints and hand
-    # back a finished :class:`Crawl` -- run to completion in one round-trip
-    # (turn-based ``step()`` steering is a local-client feature).
+    # server-side job (the same shape as a server-side ``session``), so remote crawl
+    # POSTs to the service's /crawl endpoint and hands back a finished :class:`Crawl` --
+    # run to completion in one round-trip (turn-based ``step()`` steering is a
+    # local-client feature). ``sitemap`` / ``robots`` are ordinary dispatched IO ops
+    # (they ride ``/execute`` like ``fetch``), so they need no override here.
     def _remote_crawl(self, path: str, body: dict[str, Any]) -> "Crawl":
         from ..crawl import Crawl, Edge
 
@@ -223,27 +225,6 @@ class RemoteWebClientCore(WebClient):
                 "keywords": kwargs.get("keywords"),
                 "include": kwargs.get("include"),
                 "exclude": kwargs.get("exclude"),
-            },
-        )
-
-    def sitemap(
-        self,
-        url: Any,
-        *,
-        depth: int = 2,
-        width: int = 20,
-        max_pages: int = 1000,
-        use_sitemap_xml: bool = True,
-        browser: bool = False,
-        resolve: Any = None,
-    ) -> "Crawl":
-        target = url if isinstance(url, str) else str(getattr(url, "url", url))
-        return self._remote_crawl(
-            "/sitemap",
-            {
-                "url": target, "depth": depth, "width": width, "max_pages": max_pages,
-                "browser": browser,
-                "resolve": resolve.model_dump() if resolve is not None else None,
             },
         )
 

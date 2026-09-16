@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from ..models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
     from ..clients import ClientPool, WaitConfig
     from ..core.document.models import Flag, Metadata, Signal, Structure, Transport, XhrCall
+    from ..core.client.models import Robots
     from .lazy import LazyDocument, LazyReference, LazyWebClient
 
 T = TypeVar("T")
@@ -178,9 +179,10 @@ if TYPE_CHECKING:
 
         # >>> generated: AsyncWebClient surface <<<
         # fmt: off
-        async def discover_sitemaps(self, url: Any, *, limit: int = ...) -> "Collection[AsyncReference]": ...  # type: ignore[override]
         async def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ..., wait: 'WaitConfig | None' = ..., **kw: Any) -> "AsyncDocument": ...  # type: ignore[override]
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "AsyncReference": ...
+        async def robots(self, url: Any) -> "Robots": ...  # type: ignore[override]
+        async def sitemap(self, url: Any, *, limit: int = ...) -> "Collection[AsyncReference]": ...  # type: ignore[override]
         # fmt: on
         # >>> end generated <<<
 

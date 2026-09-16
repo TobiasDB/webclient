@@ -19,9 +19,40 @@ from ..reference.models import Resolve
 
 if TYPE_CHECKING:
     from ...clients import WaitConfig  # noqa: F401  (fetch wait strategy)
-    from ...collection import Collection  # noqa: F401  (sitemaps -> Collection)
+    from ...collection import Collection  # noqa: F401  (sitemap -> Collection)
     from ..document import Document  # noqa: F401  (fetch -> Document)
-    from ..reference import Reference  # noqa: F401  (ref/sitemaps -> Reference)
+    from ..reference import Reference  # noqa: F401  (ref/sitemap -> Reference)
+
+
+class Robots(BaseModel):
+    """A site's ``robots.txt``, hunted from its origin (``wc.robots(url)``). When the
+    site serves none, ``exists`` is False -- nothing is disallowed, so ``allowed`` is
+    always True. ``sitemaps`` are the declared ``Sitemap:`` URLs; the raw ``content``
+    is kept so the rules parse anywhere (including after crossing the wire)."""
+
+    url: str = ""  # the robots.txt URL that was fetched
+    exists: bool = False  # whether the site actually served a robots.txt
+    content: str = ""  # the raw body (retained so allowed()/delay() work over the wire)
+    sitemaps: list[str] = []  # the Sitemap: directive URLs (seed a crawl from these)
+
+    def _parser(self) -> Any:
+        from urllib.robotparser import RobotFileParser
+
+        rp = RobotFileParser()
+        rp.parse(self.content.splitlines())
+        return rp
+
+    def allowed(self, url: str, agent: str = "*") -> bool:
+        """Whether ``agent`` may fetch ``url`` under these rules (True when there is no
+        robots.txt)."""
+        return True if not self.exists else bool(self._parser().can_fetch(agent, url))
+
+    def delay(self, agent: str = "*") -> float | None:
+        """The ``Crawl-delay`` for ``agent`` in seconds, if the site declares one."""
+        if not self.exists:
+            return None
+        d = self._parser().crawl_delay(agent)
+        return float(d) if d is not None else None
 
 
 class IWebClient(BaseModel):
@@ -47,12 +78,13 @@ class IWebClient(BaseModel):
     if TYPE_CHECKING:
         # >>> generated: WebClient interface <<<
         # fmt: off
-        def discover_sitemaps(self, url: Any, *, limit: int = ...) -> "Collection[Reference]": ...
         def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ..., wait: 'WaitConfig | None' = ..., **kw: Any) -> "Document": ...
         def ref(self, url: Any, method: str = ..., **kw: Any) -> "Reference": ...
+        def robots(self, url: Any) -> "Robots": ...
+        def sitemap(self, url: Any, *, limit: int = ...) -> "Collection[Reference]": ...
         # fmt: on
         # >>> end generated <<<
         pass
 
 
-__all__ = ["IWebClient"]
+__all__ = ["IWebClient", "Robots"]

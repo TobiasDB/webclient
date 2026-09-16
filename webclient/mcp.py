@@ -2,7 +2,7 @@
 
 MCP is the way most agents consume a browsing/scraping capability, and this is an
 *adapter*, not new capability: each tool is a thin wrapper over an existing verb
-(``fetch``/``render``/``search``/``crawl``/``discover_sitemaps``) or the plan machinery
+(``fetch``/``render``/``search``/``crawl``/``sitemap``/``robots``) or the plan machinery
 (write + validate + run a lazy expression from a blob). The tool registry
 (:func:`build_tools`) is plain data + handlers, so it is testable with no MCP SDK
 installed; :func:`serve` wires it onto an stdio MCP server, importing the ``mcp``
@@ -79,8 +79,11 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
     def skeleton(a: dict[str, Any]) -> str:
         return wc().fetch(a["url"], browser=a.get("browser", False)).skeleton()
 
-    def discover_sitemaps(a: dict[str, Any]) -> list[str]:
-        return [r.url for r in wc().discover_sitemaps(a["url"])]
+    def sitemap(a: dict[str, Any]) -> list[str]:
+        return [r.url for r in wc().sitemap(a["url"])]
+
+    def robots(a: dict[str, Any]) -> dict[str, Any]:
+        return wc().robots(a["url"]).model_dump()
 
     def crawl(a: dict[str, Any]) -> dict[str, Any]:
         c = wc().crawl(
@@ -119,8 +122,10 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
              "(an HTML-tag outline) to write CSS selectors from. Set browser='auto' "
              "for a JS/SPA page: injected nodes are marked [xhr]/[js] and data APIs listed.",
              _schema(url={**_URL, "_required": True}, browser={"type": "string"}), skeleton),
-        Tool("discover_sitemaps", "Discover a site's real sitemap.xml page URLs.",
-             _schema(url={**_URL, "_required": True}), discover_sitemaps),
+        Tool("sitemap", "Hunt a site's sitemap.xml page URLs (cheap -- not a crawl).",
+             _schema(url={**_URL, "_required": True}), sitemap),
+        Tool("robots", "Hunt a site's robots.txt: its Sitemap: URLs and raw rules.",
+             _schema(url={**_URL, "_required": True}), robots),
         Tool("crawl", "Bounded, same-origin crawl from a seed URL; a lean record per "
              "page (url/status/kind/title) plus the unresolved frontier. Renders each "
              "page in a browser by default (browser=true) so JS/lazy links load -- set "

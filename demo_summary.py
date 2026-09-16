@@ -251,11 +251,13 @@ def main() -> None:
 
         # 8 -------------------------------------------------------------------
         panel(
-            "8. SITEMAP DISCOVERY -- honour a site's own map",
-            "seed a crawl from robots.txt / sitemap.xml, not just link-following.",
+            "8. SITEMAP / ROBOTS -- cheap hunts (dispatched IO ops, not crawls)",
+            "hunt the sitemap.xml URLs and the robots.txt rules; crawl them if you like.",
         )
-        call("[r.url for r in wc.discover_sitemaps(base)]")
-        out([r.url for r in wc.discover_sitemaps(base)])
+        call("[r.url for r in wc.sitemap(base)]")
+        out([r.url for r in wc.sitemap(base)])
+        call("wc.robots(base).sitemaps")
+        out(wc.robots(base).sitemaps)
 
         # 9 ------------------------------------------------------------------
         panel(

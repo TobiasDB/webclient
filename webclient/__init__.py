@@ -3,6 +3,7 @@
 from .clients import DEFAULT_WAIT, WaitConfig, WaitEvent
 from .collection import Collection, Field
 from .core.crawl import Crawl, Edge
+from .core.client.models import Robots
 from .core.document import Element, HtmlBacking, JsonBacking
 from .core.reference.models import (
     AUTO,
@@ -77,6 +78,7 @@ __all__ = [
     "Crawl",
     "Edge",
     "Element",
+    "Robots",
     "Resolve",
     "RetryPolicy",
     "RatePolicy",
