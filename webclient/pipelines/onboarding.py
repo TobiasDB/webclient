@@ -38,7 +38,7 @@ import json
 import logging
 from typing import Any, Callable, Literal, Sequence
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 #: the pipeline's logger. Stages log progress here (seeds, crawl, candidates, the
 #: evaluation, the query, spend); a CLI or app sets the level / handler. Each line is
@@ -132,23 +132,41 @@ def _parse_frontmatter(text: str) -> "tuple[dict[str, Any], str]":
     return (front if isinstance(front, dict) else {}), body
 
 
-def _parse_schema(schema: Any) -> "tuple[list[str], dict[str, str]]":
-    """Interpret a frontmatter ``schema`` into ``(fields, descriptions)``. Each item is
-    a dotted field path, either a bare string (``name``) or a one-key mapping carrying
-    its description (``{name: the display name}``); dotted paths nest."""
+def _strip_optional(path: str) -> "tuple[str, bool]":
+    """Split a schema path into ``(clean_path, is_optional)``: a trailing ``?`` marks the
+    field optional (``sku?`` / ``price.discount?``) -- it MAY be absent on a page, and the
+    author should not force it. Returns the path without the ``?`` and whether it was set."""
+    path = path.strip()
+    if path.endswith("?"):
+        return path[:-1].strip(), True
+    return path, False
+
+
+def _parse_schema(schema: Any) -> "tuple[list[str], dict[str, str], list[str]]":
+    """Interpret a frontmatter ``schema`` into ``(fields, descriptions, optional)``. Each
+    item is a dotted field path, either a bare string (``name``) or a one-key mapping
+    carrying its description (``{name: the display name}``); dotted paths nest, and a
+    trailing ``?`` on a path marks that field OPTIONAL (``sku?``)."""
     fields: list[str] = []
     descriptions: dict[str, str] = {}
+    optional: list[str] = []
     for item in schema if isinstance(schema, list) else ([schema] if schema else []):
         if isinstance(item, dict):
-            for path, desc in item.items():
-                path = str(path).strip()
+            for raw, desc in item.items():
+                path, is_opt = _strip_optional(str(raw))
                 if path:
                     fields.append(path)
+                    if is_opt:
+                        optional.append(path)
                     if desc:
                         descriptions[path] = str(desc).strip()
         elif item:
-            fields.append(str(item).strip())
-    return fields, descriptions
+            path, is_opt = _strip_optional(str(item))
+            if path:
+                fields.append(path)
+                if is_opt:
+                    optional.append(path)
+    return fields, descriptions, optional
 
 
 class SchemaField(BaseModel):
@@ -158,6 +176,7 @@ class SchemaField(BaseModel):
 
     name: str
     description: str = ""
+    optional: bool = False  # may be absent on a page -- don't force it (use optional=True)
     children: "list[SchemaField]" = []
 
 
@@ -174,11 +193,28 @@ class Brief(BaseModel):
     description: str = ""
     fields: list[str] = []  # the target schema's leaf/branch paths (dotted for nesting)
     descriptions: dict[str, str] = {}  # path -> what that field is / how to fill it
+    optional: list[str] = []  # field paths that MAY be absent on a page (mark with a `?`)
     name: str = ""  # a short slug id (e.g. "product-catalogue")
     title: str = ""  # a human title
     look: list[str] = []  # natural-language guides: what kinds of pages to head for
     ignore: list[str] = []  # natural-language guides: what kinds of pages to skip
     crawl: dict[str, Any] = {}  # pipeline crawl overrides (max_pages/depth/rounds/browser)
+
+    @model_validator(mode="after")
+    def _normalize_optional(self) -> "Brief":
+        """Accept a trailing ``?`` on directly-passed ``fields`` too (``fields=["name",
+        "sku?"]``): strip it and record the field as optional. So both a loaded brief and
+        a hand-built one express optionality the same way."""
+        clean: list[str] = []
+        opt = list(self.optional)
+        for f in self.fields:
+            name, is_opt = _strip_optional(f)
+            clean.append(name)
+            if is_opt and name not in opt:
+                opt.append(name)
+        self.fields = clean
+        self.optional = opt
+        return self
 
     @classmethod
     def from_markdown(cls, text: str) -> "Brief":
@@ -193,12 +229,13 @@ class Brief(BaseModel):
         def as_list(v: Any) -> list[str]:
             return [str(x) for x in v] if isinstance(v, list) else ([str(v)] if v else [])
 
-        fields, descriptions = _parse_schema(front.get("schema") or front.get("fields"))
+        fields, descriptions, optional = _parse_schema(front.get("schema") or front.get("fields"))
         crawl = front.get("crawl")
         return cls(
             description=str(front.get("description") or body).strip(),
             fields=fields,
             descriptions=descriptions,
+            optional=optional,
             name=str(front.get("name") or ""),
             title=str(front.get("title") or ""),
             look=as_list(front.get("look")),
@@ -221,13 +258,18 @@ class Brief(BaseModel):
         a sub-``extract`` per branch so the output JSON mirrors this shape."""
         roots: list[SchemaField] = []
         index: dict[str, SchemaField] = {}  # full path -> node
+        optional = set(self.optional)
         for path in self.fields:
             parent = ""
             for part in (p.strip() for p in path.split(".") if p.strip()):
                 full = f"{parent}.{part}" if parent else part
                 node = index.get(full)
                 if node is None:
-                    node = SchemaField(name=part, description=self.descriptions.get(full, ""))
+                    node = SchemaField(
+                        name=part,
+                        description=self.descriptions.get(full, ""),
+                        optional=full in optional,
+                    )
                     index[full] = node
                     (index[parent].children if parent else roots).append(node)
                 parent = full
@@ -523,8 +565,9 @@ def _schema_outline(fields: "list[SchemaField]", indent: int = 0) -> str:
     ``- name — description`` per field, nested children indented under their parent."""
     lines: list[str] = []
     for f in fields:
+        opt = " (optional)" if f.optional else ""
         desc = f" — {f.description}" if f.description else ""
-        lines.append("  " * indent + f"- {f.name}{desc}")
+        lines.append("  " * indent + f"- {f.name}{opt}{desc}")
         if f.children:
             lines.append(_schema_outline(f.children, indent + 1))
     return "\n".join(line for line in lines if line)
@@ -747,14 +790,22 @@ def crawl_from_seeds(
         obey_robots=False,
     )
     seen_pages = seen_fails = 0
-    crawl.step(seed_urls)  # round 0: fetch the seeds, discover their edges
-    seen_pages, seen_fails = _log_crawl_progress(crawl, seen_pages, seen_fails)
-    for _ in range(rounds):
+    # The seeds sit in the frontier UNFETCHED: round 0 lets the model evaluate the seeds
+    # and pick which to fetch (not blindly fetch them all), and each further round picks
+    # from newly-discovered edges -- so a docs/irrelevant seed is dropped before it costs
+    # a fetch. If the model rejects every seed on round 0, fall back to the filtered seeds
+    # so the crawl still gets off the ground.
+    for round_i in range(rounds + 1):
         if not crawl.frontier or len(crawl.pages) >= max_pages:
             break
-        # collapse paginated/similar-API duplicates before the model spends a pick
+        # collapse paginated/similar-API duplicates + ban docs pages before a pick
         candidates = _filter_frontier(list(crawl.frontier), brief)
+        if not candidates:
+            break
         picks = _pick_edges(llm, brief, candidates)
+        if not picks and round_i == 0:
+            log.info("    model picked no seeds -- fetching the filtered seeds")
+            picks = [e.url for e in candidates]
         if not picks:
             break
         crawl.step(picks)
@@ -763,10 +814,16 @@ def crawl_from_seeds(
 
 
 def _log_crawl_progress(crawl: Any, seen_pages: int, seen_fails: int) -> "tuple[int, int]":
-    """Log each newly-fetched URL + its status (and each failed edge + why) since the
-    last round, and return the new counts. So the crawl is observable page by page."""
+    """Log each newly-fetched URL since the last round with the TRANSPORT it used (http vs
+    browser -- from the page's final tier) and the SIGNALS that fired on it (the flag
+    names), plus each failed edge + why. So the crawl is observable page by page: you can
+    see when a page forced a browser escalation and what it tripped."""
     for card in crawl.pages[seen_pages:]:
-        log.info("    crawl [%s] %s", card.status_code, card.final_url or card.url)
+        tier = getattr(card, "final_tier", "static") or "static"
+        transport = "http" if tier == "static" else tier  # static tier == a plain HTTP fetch
+        flags = ", ".join(getattr(card, "flags", []) or []) or "none"
+        log.info("    crawl [%s] %s  (via %s; signals: %s)",
+                 card.status_code, card.final_url or card.url, transport, flags)
     for fail in crawl.failures[seen_fails:]:
         log.info("    crawl [%s] %s  (%s)", fail.status_code or "x", fail.url, fail.reason)
     return len(crawl.pages), len(crawl.failures)

@@ -134,6 +134,11 @@ class CrawlBacking(Backing):
                 Failure(url=edge.url, reason="robots-disallowed", depth=edge.depth)
             )
             return None
+        # The WHOLE edge -- fetch, DOM expansion, and projection -- is guarded: a transport
+        # error can surface not just from the fetch but while reading a live page (expanding
+        # its links / XHR, projecting its card), and none of those may abort the crawl. One
+        # bad edge becomes one Failure; the page is always released.
+        doc: Any = None
         try:
             doc = await core._client.afetch(
                 core._client.ref(edge.url),
@@ -141,31 +146,30 @@ class CrawlBacking(Backing):
                 browser=core.config.browser,
                 resolve=core.config.resolve,
             )
+            core.history.append(edge)  # the audit + resume trail (every edge taken)
+            if not doc.ok:
+                err = getattr(doc, "error", None)
+                core.failures.append(Failure(
+                    url=edge.url,
+                    reason=err.type if err is not None else "not-ok",
+                    status_code=doc.status_code or (err.status_code if err is not None else None),
+                    depth=edge.depth,
+                ))
+                return None
+            # expand the frontier BEFORE releasing the page (needs the DOM), then project.
+            if edge.depth < core.config.max_depth and doc.kind in ("html", "xml"):
+                self._expand(core, doc, edge.depth + 1)
+            if core.config.include_xhr and edge.depth < core.config.max_depth:
+                self._expand_xhr(core, doc, edge.depth + 1)
+            return await self._retain(core, doc)  # project while the page is still live
         except Exception as exc:  # never let one bad edge abort the whole crawl
             core.failures.append(
                 Failure(url=edge.url, reason=type(exc).__name__, depth=edge.depth)
             )
             return None
-        core.history.append(edge)  # the audit + resume trail (every edge taken)
-        if not doc.ok:
-            err = getattr(doc, "error", None)
-            core.failures.append(Failure(
-                url=edge.url,
-                reason=err.type if err is not None else "not-ok",
-                status_code=doc.status_code or (err.status_code if err is not None else None),
-                depth=edge.depth,
-            ))
-            return None
-        # expand the frontier BEFORE releasing the page (needs the DOM), then project +
-        # free it -- content is retained on the Document either way.
-        if edge.depth < core.config.max_depth and doc.kind in ("html", "xml"):
-            self._expand(core, doc, edge.depth + 1)
-        if core.config.include_xhr and edge.depth < core.config.max_depth:
-            self._expand_xhr(core, doc, edge.depth + 1)
-        page = await self._retain(core, doc)  # project while the page is still live
-        if getattr(doc, "_page", None) is not None:
-            await core._client._arelease(doc)
-        return page
+        finally:
+            if doc is not None and getattr(doc, "_page", None) is not None:
+                await core._client._arelease(doc)
 
     def _lock(self, core: "Crawl") -> "asyncio.Lock":
         """The crawl's step lock, created lazily on its running loop (the sync check +

@@ -629,6 +629,35 @@ def test_browser_crawl_releases_every_page(httpserver, wc):
     assert after.pages_free == before.pages_free  # no leaked page lease
 
 
+def test_crawl_survives_an_error_while_reading_a_live_page(wc, httpserver, monkeypatch):
+    # a transport error can surface not only from the fetch but while reading a live page
+    # (expanding its links, projecting its card). None of those may abort the crawl: the
+    # bad edge becomes one Failure and the crawl keeps going.
+    from webclient.core.crawl import Failure
+    from webclient.core.crawl.backing import CrawlBacking
+
+    httpserver.expect_request("/").respond_with_data(
+        '<a href="/ok">ok</a> <a href="/boom">boom</a>', content_type="text/html"
+    )
+    httpserver.expect_request("/ok").respond_with_data("<p>fine</p>", content_type="text/html")
+    httpserver.expect_request("/boom").respond_with_data("<p>live</p>", content_type="text/html")
+
+    real_retain = CrawlBacking._retain
+
+    async def flaky_retain(self, core, doc):
+        if (doc.final_url or "").endswith("/boom"):
+            raise ConnectionResetError("transport blew up mid-read")
+        return await real_retain(self, core, doc)
+
+    monkeypatch.setattr(CrawlBacking, "_retain", flaky_retain)
+    with wc.crawl(httpserver.url_for("/"), max_pages=10, browser=False) as crawl:
+        crawl.step([httpserver.url_for("/boom")])  # the edge that errors mid-read
+        crawl.run()  # must not abort -- the rest of the crawl proceeds
+    # the failing edge was recorded, not fatal; the good pages were still crawled
+    assert any(f.url.endswith("/boom") and f.reason == "ConnectionResetError" for f in crawl.failures)
+    assert any((p.final_url or p.url).endswith("/ok") for p in crawl.pages)
+
+
 def test_optional_browser_render_failure_is_swallowed(wc, monkeypatch):
     # a browser render/launch failure under optional (a browser crawl fetches
     # optional=True) returns a not-ok doc, not a raise that aborts the crawl.

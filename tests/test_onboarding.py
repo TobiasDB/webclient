@@ -375,6 +375,52 @@ def test_brief_schema_tree_carries_descriptions():
     assert "- price — the price object" in line and "- value — numeric amount" in line
 
 
+def test_optional_schema_fields_are_marked_and_rendered():
+    from webclient.pipelines.onboarding import Brief, _fields_line
+
+    # a trailing `?` marks a field optional, both directly and from markdown frontmatter
+    brief = Brief(fields=["name", "sku?", "price.value", "price.discount?"])
+    assert brief.fields == ["name", "sku", "price.value", "price.discount"]  # `?` stripped
+    assert set(brief.optional) == {"sku", "price.discount"}
+    tree = brief.schema_tree()
+    assert next(f for f in tree if f.name == "sku").optional
+    assert not next(f for f in tree if f.name == "name").optional
+    discount = next(c for f in tree if f.name == "price" for c in f.children if c.name == "discount")
+    assert discount.optional
+    # the outline flags optional fields so the author knows they may be absent
+    line = _fields_line(brief)
+    assert "- sku (optional)" in line and "- name\n" in line + "\n"  # name has no marker
+
+    md = "---\nschema:\n  - name: the name\n  - sku?: often missing\n---\nx"
+    loaded = Brief.from_markdown(md)
+    assert loaded.fields == ["name", "sku"] and loaded.optional == ["sku"]
+
+
+def test_write_query_keeps_records_missing_an_optional_field(httpserver):
+    # a query the model writes with .select(..., optional=True) for an optional field keeps
+    # records where that field is absent (null), instead of dropping them.
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/p").respond_with_data(
+        '<main>'
+        '<div class="r"><span class="n">A</span><span class="s">S1</span></div>'
+        '<div class="r"><span class="n">B</span></div>'  # no .s here
+        '</main>',
+        content_type="text/html",
+    )
+    code = ('wq.doc.select_all(".r").extract('
+            'name=wq.doc.select(".n").attr("text"), '
+            'sku=wq.doc.select(".s", optional=True).attr("text")).project()')
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/p"),
+                          Brief(description="rows", fields=["name", "sku?"]),
+                          wc=wc, llm=lambda p: code, browser="never", retries=0)
+    assert art is not None and art.row_count == 2  # BOTH records kept
+    names = [r["name"] for r in art.sample]
+    assert names == ["A", "B"] and art.sample[1].get("sku") in (None, "")  # missing -> null
+
+
 def test_nested_extract_outputs_nested_json():
     from webclient import Document, default_client, wq
 
@@ -870,6 +916,33 @@ def test_write_query_hint_names_a_wrong_record_selector(httpserver):
                           wc=wc, llm=llm, browser="never", retries=1)
     assert art is not None and art.row_count == 1  # recovered on the retry
     assert 'matched NO elements' in prompts[1] and '".nope"' in prompts[1]  # named the culprit
+
+
+def test_crawl_evaluates_seeds_before_fetching_them(httpserver):
+    # the seeds are NOT all blindly fetched: round 0 lets the model evaluate the seeds and
+    # pick which to fetch, so a rejected seed is never crawled.
+    from webclient.pipelines.onboarding import Seed, crawl_from_seeds
+
+    httpserver.expect_request("/keep").respond_with_data("<p>data</p>", content_type="text/html")
+    httpserver.expect_request("/skip").respond_with_data("<p>noise</p>", content_type="text/html")
+    keep, skip = httpserver.url_for("/keep"), httpserver.url_for("/skip")
+    seeds = [Seed(url=keep), Seed(url=skip)]
+
+    def llm(prompt: str) -> str:
+        if "frontier links" in prompt:  # the seed-evaluation round: pick only /keep
+            for line in prompt.splitlines():
+                s = line.strip()
+                if s[:1].isdigit() and "/keep" in s:
+                    return f'[{s.split(".", 1)[0]}]'
+            return "[]"
+        return "[]"
+
+    with WebClient() as wc:
+        crawl = crawl_from_seeds(seeds, Brief(description="data"), wc=wc, llm=llm,
+                                 rounds=1, browser=False)
+    fetched = [(p.final_url or p.url) for p in crawl.pages]
+    assert any(u.endswith("/keep") for u in fetched)  # the picked seed was fetched
+    assert not any(u.endswith("/skip") for u in fetched)  # the rejected seed was NOT
 
 
 def test_parse_query_loads_written_code_and_falls_back_to_a_blob():
