@@ -164,6 +164,12 @@ class BrowserConfig(BaseModel, frozen=True):
     headless: bool = True
     stealth: bool = True
     fingerprint: bool = False
+    #: how many browser PAGES the pool may hold open at once -- ONE browser process, this
+    #: many concurrent pages. Raise it to run more references/sessions concurrently against
+    #: a single browser (the right way to parallelise, instead of many browser processes).
+    pool_pages: int = 4
+    #: how many concurrent HTTP clients the pool may lease at once.
+    pool_http: int = 10
 
     @classmethod
     def auto(cls) -> "BrowserConfig":

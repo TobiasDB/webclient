@@ -27,19 +27,33 @@ from __future__ import annotations
 import argparse
 import concurrent.futures as cf
 import datetime as dt
+import io
 import json
 import logging
-import os
 import re
-import subprocess
-import sys
+import threading
 import time
+from importlib.resources import files
 from pathlib import Path
 
-from importlib.resources import files
-
 from webclient import WebClient
+from webclient.core.reference.models import BrowserConfig
 from webclient.pipelines import Brief, SearchHit, onboard_company
+
+# per-thread log capture: every company runs in its own thread against ONE shared client;
+# this router sends that thread's pipeline log lines to its own buffer (-> its .log file),
+# so parallel runs stay separable without separate processes.
+_local = threading.local()
+
+
+class _ThreadLogRouter(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        buf = getattr(_local, "buf", None)
+        if buf is not None:
+            try:
+                buf.write(self.format(record) + "\n")
+            except Exception:
+                pass
 
 
 def _packaged_brief(name: str) -> Brief:
@@ -199,31 +213,8 @@ def _write_index(records: list[dict], outdir) -> None:
     (outdir / "index.md").write_text("\n".join(lines))
 
 
-def _run_worker(a: argparse.Namespace) -> int:
-    from claude_llm_adapter import claude_code_llm  # local to the worker process
-
-    # the full trace to stdout (captured by the parent into the .log file)
-    h = logging.StreamHandler(sys.stdout)
-    h.setFormatter(logging.Formatter("%(message)s"))
-    lg = logging.getLogger("webclient.pipelines")
-    lg.handlers[:] = [h]
-    lg.setLevel(logging.DEBUG if a.verbose else logging.INFO)
-    lg.propagate = False
-
-    brief = BRIEFS[a.brief_key]
-    urls = a.urls.split(",")
-    with WebClient() as wc:
-        r = onboard_company(
-            a.company, brief, wc=wc, llm=claude_code_llm,
-            search=_canned_search(urls, a.company),
-            browser=not a.no_browser, review=not a.no_review,
-        )
-    Path(a.out).write_text(json.dumps(_result_dict(a.brief_key, r), indent=2, default=str))
-    return 0 if r.ok else 1
-
-
 # ---------------------------------------------------------------------------- #
-# parent: fan the cases out across processes, collect, summarise
+# parent: run cases as concurrent SESSIONS on ONE shared client, collect, summarise
 # ---------------------------------------------------------------------------- #
 
 def _load_existing(outdir: Path, case: tuple[str, str, list[str]]) -> "dict | None":
@@ -241,34 +232,61 @@ def _load_existing(outdir: Path, case: tuple[str, str, list[str]]) -> "dict | No
     return rec
 
 
-def _launch(case: tuple[str, str, list[str]], outdir: Path, flags: list[str]) -> dict:
+def _run_case(wc: WebClient, llm, case: tuple[str, str, list[str]], outdir: Path,
+              *, browser: bool, review: bool) -> dict:
+    """Onboard ONE company against the SHARED client (a session's fetches lease pages from
+    the one browser pool). Its pipeline log is captured to this thread's buffer -> .log,
+    and the structured result + a readable report are written."""
     brief_key, company, urls = case
     slug = _slug(brief_key, company)
     prefix = outdir / slug
-    cmd = [sys.executable, os.path.abspath(__file__), "--worker",
-           "--brief-key", brief_key, "--company", company, "--urls", ",".join(urls),
-           "--out", str(prefix.with_suffix(".json"))] + flags
+    buf = io.StringIO()
+    _local.buf = buf  # route THIS thread's pipeline log lines to buf
     t0 = time.monotonic()
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    prefix.with_suffix(".log").write_text((proc.stdout or "") + (proc.stderr or ""))
-    secs = time.monotonic() - t0
     try:
-        rec = json.loads(prefix.with_suffix(".json").read_text())
-    except Exception:  # the worker crashed before writing -- synthesise a failure record
+        r = onboard_company(company, BRIEFS[brief_key], wc=wc, llm=llm,
+                            search=_canned_search(urls, company), browser=browser, review=review)
+        rec = _result_dict(brief_key, r)
+    except Exception as exc:  # a bad case must not sink the rest
+        buf.write(f"\nEXCEPTION: {type(exc).__name__}: {exc}\n")
         rec = {"company": company, "brief": brief_key, "ok": False,
-               "reason": f"worker crashed (exit {proc.returncode}); see {slug}.log",
+               "reason": f"crashed: {type(exc).__name__}: {exc}", "source": None,
                "query": None, "reviews": [], "trace": []}
-    rec["secs"] = round(secs, 1)
+    finally:
+        _local.buf = None
+    rec["secs"] = round(time.monotonic() - t0, 1)
     rec["slug"] = slug
-    # a testable blob sidecar + a human-readable per-company report
+    prefix.with_suffix(".log").write_text(buf.getvalue())
+    prefix.with_suffix(".json").write_text(json.dumps(rec, indent=2, default=str))
     blob_path = prefix.with_suffix(".blob.json")
     if rec.get("query"):
         blob_path.write_text((rec["query"] or {}).get("blob", ""))
     prefix.with_suffix(".md").write_text(_report_md(rec, slug, str(blob_path)))
     rows = (rec.get("query") or {}).get("row_count", 0)
-    print(f"  {'✓' if rec['ok'] else '✗'} {company} × {brief_key}  ({rows} rows, {secs:.0f}s)",
-          file=sys.stderr)
+    print(f"  {'✓' if rec['ok'] else '✗'} {company} × {brief_key}  ({rows} rows, {rec['secs']:.0f}s)")
     return rec
+
+
+def _aggregate(records: list[dict], outdir: Path) -> None:
+    """One cross-matrix review: feed every case's reason + reviews to the model and ask
+    what the COMMON failure modes are and how to fix them."""
+    from claude_llm_adapter import claude_code_llm
+
+    lines = []
+    for r in records:
+        revs = "; ".join(f"{v['stage']}{'ok' if v['passed'] else 'FAIL'}: {v['summary']}" for v in r["reviews"])
+        lines.append(f"- {r['company']} [{r['brief']}]: {'OK' if r['ok'] else 'FAIL'} — "
+                     f"{r['reason'] or 'ok'} | rows={(r.get('query') or {}).get('row_count', 0)} | {revs}")
+    prompt = (
+        "These are the results of running a web-data onboarding pipeline over several "
+        "companies. For each, the outcome, the failure reason, and the per-stage review "
+        "diagnoses are given.\n\n" + "\n".join(lines) +
+        "\n\nAcross ALL of these, what are the COMMON failure modes, and what concrete "
+        "changes to the pipeline (search, crawl, selection, query authoring, rendering) "
+        "would fix the most cases? Reply as a short prioritised markdown list."
+    )
+    md = claude_code_llm(prompt)
+    (outdir / "aggregate.md").write_text(md)
 
 
 def _aggregate(records: list[dict], outdir: Path) -> None:
@@ -297,22 +315,29 @@ def _aggregate(records: list[dict], outdir: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="parallel onboarding harness (curated URLs + Claude Code)")
-    ap.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
-    ap.add_argument("--brief-key"); ap.add_argument("--company"); ap.add_argument("--urls"); ap.add_argument("--out")
     ap.add_argument("--brief", action="append", help="only these brief key(s)")
     ap.add_argument("--only", action="append", help="only these compan(y/ies)")
-    ap.add_argument("--parallel", type=int, default=4,
-                    help="max companies at once (each may launch a browser; keep modest to avoid OOM)")
+    ap.add_argument("--parallel", type=int, default=5,
+                    help="companies to run concurrently as SESSIONS on ONE shared browser")
+    ap.add_argument("--pool", type=int, default=0,
+                    help="browser page-pool size (0 = parallel+2); one browser, this many pages")
     ap.add_argument("--max", type=int, default=0, help="stop after N cases (0 = all)")
     ap.add_argument("--resume", metavar="DIR", help="reuse finished cases in DIR; run only the rest")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--no-review", action="store_true")
-    ap.add_argument("--verbose", action="store_true", help="worker logs at DEBUG")
+    ap.add_argument("--verbose", action="store_true", help="capture logs at DEBUG")
     ap.add_argument("--aggregate", action="store_true", help="add a cross-matrix review at the end")
     a = ap.parse_args()
 
-    if a.worker:
-        sys.exit(_run_worker(a))
+    from claude_llm_adapter import claude_code_llm
+
+    calls = {"n": 0}
+    _lock = threading.Lock()
+
+    def llm(prompt: str) -> str:
+        with _lock:
+            calls["n"] += 1
+        return claude_code_llm(prompt)
 
     cases = [c for c in CASES
              if (not a.brief or c[0] in a.brief) and (not a.only or c[1] in a.only)]
@@ -320,21 +345,34 @@ def main() -> None:
         cases = cases[: a.max]
     outdir = Path(a.resume) if a.resume else Path("harness_runs") / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir.mkdir(parents=True, exist_ok=True)
-    flags = (["--no-browser"] if a.no_browser else []) + (["--no-review"] if a.no_review else []) \
-        + (["--verbose"] if a.verbose else [])
+
+    # route the pipeline's log lines to the running thread's buffer (per-company .log)
+    router = _ThreadLogRouter()
+    router.setFormatter(logging.Formatter("%(message)s"))
+    lg = logging.getLogger("webclient.pipelines")
+    lg.handlers[:] = [router]
+    lg.setLevel(logging.DEBUG if a.verbose else logging.INFO)
+    lg.propagate = False
 
     records: list[dict] = []
     todo: list[tuple[str, str, list[str]]] = []
     for c in cases:  # --resume: keep finished cases, only run the missing ones
         done = _load_existing(outdir, c) if a.resume else None
         (records.append(done) if done is not None else todo.append(c))
-    print(f"{len(cases)} case(s): {len(records)} reused, {len(todo)} to run, "
-          f"{a.parallel} in parallel -> {outdir}", file=sys.stderr)
 
-    with cf.ThreadPoolExecutor(max_workers=max(1, a.parallel)) as pool:
-        futs = [pool.submit(_launch, c, outdir, flags) for c in todo]
-        for f in cf.as_completed(futs):
-            records.append(f.result())
+    # ONE browser, a pool of pages: each company is a session leasing pages from it -- the
+    # right way to parallelise (not one browser process per company).
+    pool_pages = a.pool or (a.parallel + 2)
+    bc = BrowserConfig(pool_pages=pool_pages, pool_http=max(10, a.parallel * 3))
+    print(f"{len(cases)} case(s): {len(records)} reused, {len(todo)} to run · {a.parallel} concurrent "
+          f"sessions on 1 browser ({pool_pages}-page pool) -> {outdir}")
+
+    with WebClient(browser_config=bc) as wc:
+        with cf.ThreadPoolExecutor(max_workers=max(1, a.parallel)) as pool:
+            futs = [pool.submit(_run_case, wc, llm, c, outdir,
+                                browser=not a.no_browser, review=not a.no_review) for c in todo]
+            for f in cf.as_completed(futs):
+                records.append(f.result())
 
     records.sort(key=lambda r: (r["brief"], r["company"]))
     (outdir / "summary.json").write_text(json.dumps(records, indent=2, default=str))

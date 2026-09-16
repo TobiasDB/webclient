@@ -255,7 +255,7 @@ class WebClient(WebCore, IWebClient):
                     headless=bc.headless, stealth=bc.stealth, fingerprint=bc.fingerprint
                 ),
             },
-            limits={"http": 10, "page": 4},
+            limits={"http": bc.pool_http, "page": bc.pool_pages},
         )
 
     def new_scope(self) -> NameScope:
