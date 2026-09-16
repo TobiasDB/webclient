@@ -235,12 +235,6 @@ _REGION_WEIGHT = {
     "footer": -1.2,
 }
 
-#: how much one keyword hit outweighs the importance heuristic. ``_link_score``
-#: spans roughly -4..+4, so a single explicit keyword match (>= this) dominates it
-#: -- a keyword-directed crawl surfaces the matching page first, with importance
-#: only breaking ties among equally-matching links.
-_KEYWORD_WEIGHT = 10.0
-
 #: call-to-action anchor text -- the "read more" / "continue reading" links the
 #: user specifically wants surfaced (a strong article signal).
 _CTA = (
