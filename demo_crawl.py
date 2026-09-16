@@ -115,6 +115,20 @@ def main() -> None:
             for p in crawl.pages:  # .pages are lean PageCards (already projected)
                 print("  page:     ", _purl(p, base), "|", p.title, "| flags", p.flags)
 
+        # -- 2b. Streaming: the same engine, consumed incrementally -------------
+        # `for card in crawl.stream()` drives best-first and hands back each page's
+        # projection as it lands; breaking pauses (frontier intact), so it resumes.
+        print("\n== streaming crawl (stop after 2, then resume) ==")
+        with wc.crawl(f"{base}/", width=1, max_pages=6) as crawl:
+            for card in crawl.stream():
+                print("  streamed: ", _purl(card, base), "|", card.title)
+                if len(crawl.pages) >= 2:
+                    break  # pause -- the frontier + seen ledger stay intact
+            print("  paused at", len(crawl.pages), "with", len(crawl.frontier), "queued")
+            crawl.run()  # resume via the batch drive
+            print("  resumed to", len(crawl.pages), "pages total")
+            print("  lazy.frontier is a Collection:", type(crawl.lazy.frontier).__name__)
+
         # -- 3. Sitemap: an eager, single-domain map ----------------------------
         print("\n== sitemap (eager single-domain crawl) ==")
         smap = wc.sitemap(f"{base}/", depth=2, width=20)

@@ -290,8 +290,15 @@ class LiveBacking(Backing):
             return _html().select_all(core, selector)
         return self._loop(core).run(self._aselect_all(core, selector))
 
-    async def evaluate(self, core: "Document", script: str) -> Any:
-        return await core._page.evaluate(script)
+    async def evaluate(self, core: "Document", script: str, *, mutates: bool = True) -> Any:
+        """Run ``script`` in the live page and return its result. ``mutates`` (default
+        True) drains afterward -- refreshing the captured content and invalidating the
+        cached tree -- so a later ``text_content`` / ``html`` / ``select`` reflects any
+        DOM the script changed. Pass ``mutates=False`` for a pure read to skip the settle."""
+        result = await core._page.evaluate(script)
+        if mutates:
+            await drain(core)
+        return result
 
     async def screenshot(self, core: "Document", selector: str | None = None) -> "Document":
         return await self._ashot(core, selector)

@@ -12,7 +12,7 @@ discovery + projection -- so a crawl is one backing over existing cores.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, cast
 from urllib.parse import urlparse, urlsplit
 
 from ..web_core import Backing
@@ -76,41 +76,79 @@ class CrawlBacking(Backing):
 
         A per-crawl lock serialises rounds so the frontier-claim + budget + expansion
         is atomic -- concurrently-awaited steps can't each claim the full budget."""
+        await self._pump(core, lambda: self._select(core, select))
+        return core
+
+    async def run(self, core: "Crawl") -> "Crawl":
+        """Drive the crawl to completion (the batch drain of the stream): expand the
+        best-first frontier round by round until done. Equivalent to exhausting
+        ``stream()`` -- ``config.order`` only governs a bare ``step()``, not the drive."""
+        while True:
+            produced = await self._pump(core, lambda: self._drive_select(core))
+            if self.done(core) or not produced:
+                break
+        return core
+
+    async def _astream(self, core: "Crawl") -> "AsyncIterator[Any]":
+        """The crawl's one engine: drive the best-first frontier round by round and
+        yield each fetched page's retained projection as the round completes. Pausing
+        (breaking the consumer) leaves the frontier + seen ledger intact, so the crawl
+        is resumable; ``run`` is this stream drained. Each round's claim/fetch/expand is
+        atomic under the step lock; the yield happens after the lock is released, so a
+        paused consumer never holds it."""
+        while not self.done(core):
+            produced = await self._pump(core, lambda: self._drive_select(core))
+            for page in produced:
+                yield page
+            if not produced:  # no progress (all robots-blocked / errored) -- stop
+                break
+
+    async def _pump(
+        self, core: "Crawl", choose: "Callable[[], list[Edge]]"
+    ) -> "list[Any]":
+        """One round, atomic under the step lock: select+claim the edges (``choose`` runs
+        under the lock so concurrent rounds can't pick the same edges or over-claim the
+        page budget), fetch each, and append the retained projections. Returns the pages
+        produced this round (for the stream to yield)."""
         async with self._lock(core):
-            chosen = self._select(core, select)
+            chosen = choose()
             room = max(0, core.config.max_pages - len(core.pages))
             to_fetch = chosen[:room]
             taken = {e.url for e in to_fetch}
             core.frontier = [e for e in core.frontier if e.url not in taken]
+            produced: list[Any] = []
             for edge in to_fetch:
-                if core.config.obey_robots and not await self._allowed(core, edge.url):
-                    continue
-                doc = await core._client.afetch(
-                    core._client.ref(edge.url),
-                    optional=True,
-                    browser=core.config.browser,
-                    resolve=core.config.resolve,
-                )
-                core.history.append(edge)  # the audit + resume trail (every edge taken)
-                if not doc.ok:
-                    continue
-                # expand the frontier BEFORE releasing the page (needs the DOM), then
-                # project + free it -- content is retained on the Document either way.
-                if edge.depth < core.config.max_depth and doc.kind in ("html", "xml"):
-                    self._expand(core, doc, edge.depth + 1)
-                if core.config.include_xhr and edge.depth < core.config.max_depth:
-                    self._expand_xhr(core, doc, edge.depth + 1)
-                page = self._retain(core, doc)  # project while the page is still live
-                if getattr(doc, "_page", None) is not None:
-                    await core._client._arelease(doc)
-                core.pages.append(page)
-            return core
+                page = await self._fetch_edge(core, edge)
+                if page is not None:
+                    core.pages.append(page)
+                    produced.append(page)
+            return produced
 
-    async def run(self, core: "Crawl") -> "Crawl":
-        """Drive ``step`` to completion (the batch drain of the crawl)."""
-        while not self.done(core):
-            await self.step(core)
-        return core
+    async def _fetch_edge(self, core: "Crawl", edge: Edge) -> Any:
+        """Fetch one edge, expand the frontier from its DOM, and return its retained
+        projection (``None`` if robots-blocked or the fetch failed). The audit/resume
+        trail records the edge either way."""
+        if core.config.obey_robots and not await self._allowed(core, edge.url):
+            return None
+        doc = await core._client.afetch(
+            core._client.ref(edge.url),
+            optional=True,
+            browser=core.config.browser,
+            resolve=core.config.resolve,
+        )
+        core.history.append(edge)  # the audit + resume trail (every edge taken)
+        if not doc.ok:
+            return None
+        # expand the frontier BEFORE releasing the page (needs the DOM), then project +
+        # free it -- content is retained on the Document either way.
+        if edge.depth < core.config.max_depth and doc.kind in ("html", "xml"):
+            self._expand(core, doc, edge.depth + 1)
+        if core.config.include_xhr and edge.depth < core.config.max_depth:
+            self._expand_xhr(core, doc, edge.depth + 1)
+        page = self._retain(core, doc)  # project while the page is still live
+        if getattr(doc, "_page", None) is not None:
+            await core._client._arelease(doc)
+        return page
 
     def _lock(self, core: "Crawl") -> "asyncio.Lock":
         """The crawl's step lock, created lazily on its running loop (the sync check +
@@ -154,6 +192,12 @@ class CrawlBacking(Backing):
             return [e for e in core.frontier if e.url in want]
         if core.config.order == "manual":
             return []  # manual: a bare step() fetches nothing -- the caller selects
+        return self._drive_select(core)
+
+    def _drive_select(self, core: "Crawl") -> "list[Edge]":
+        """The auto drive's selection: the top-``width`` frontier edges by score. Used by
+        ``run``/``stream`` regardless of ``config.order`` -- the drives are always
+        best-first; ``order`` only governs what a bare ``step()`` does."""
         ranked = sorted(core.frontier, key=lambda e: self._score(core, e), reverse=True)
         return ranked[: core.config.width]
 

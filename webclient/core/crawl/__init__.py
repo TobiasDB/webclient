@@ -16,10 +16,11 @@ default (``config.retain="document"`` keeps the whole Document).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar, Iterator, cast
 
 from pydantic import PrivateAttr
 
+from ...collection import Collection
 from ..web_core import Backing, WebCore
 from .models import CrawlConfig, CrawlState, Edge, ICrawl, PageCard  # noqa: F401  (re-exported)
 
@@ -27,6 +28,21 @@ from .backing import CrawlBacking
 
 if TYPE_CHECKING:
     from ..client import WebClient
+
+
+class _CrawlLazy:
+    """The crawl's lazy views. ``frontier`` returns the pending edges as a
+    ``Collection[Edge]`` (filterable / projectable / iterable) rather than the eager
+    ``list[Edge]`` -- a snapshot at access time, so re-read it after a step."""
+
+    __slots__ = ("_crawl",)
+
+    def __init__(self, crawl: "Crawl") -> None:
+        self._crawl = crawl
+
+    @property
+    def frontier(self) -> "Collection[Edge]":
+        return Collection(list(self._crawl.frontier), client=self._crawl._client)
 
 
 class Crawl(WebCore, ICrawl):
@@ -72,6 +88,27 @@ class Crawl(WebCore, ICrawl):
             config=self.config, scope=self.scope, frontier=list(self.frontier),
             seen=sorted(self._seen), history=list(self.history),
         )
+
+    # -- streaming: the same engine as run(), consumed incrementally -----------
+    def stream(self) -> "Iterator[Any]":
+        """Stream the crawl: drive best-first and yield each page's retained projection
+        as it is fetched (``for card in crawl.stream()``). Breaking pauses the crawl --
+        the frontier + seen ledger stay intact, so re-entering the stream (or calling
+        ``run()``) continues. ``run()`` is this stream drained; ``list(crawl.stream())``
+        its pages. (Not ``__iter__`` -- iterating a pydantic model yields its fields.)"""
+        backing = cast(CrawlBacking, self.BACKINGS[0])
+        return self._client.loop().stream(backing._astream(self))
+
+    def astream(self) -> "AsyncIterator[Any]":
+        """The async twin of :meth:`stream`: ``async for card in crawl.astream()``. Same
+        best-first engine and pause/resume semantics, delivered on the caller's loop."""
+        backing = cast(CrawlBacking, self.BACKINGS[0])
+        return self._client.loop().astream(backing._astream(self))
+
+    @property
+    def lazy(self) -> "_CrawlLazy":
+        """The crawl's lazy views (currently ``lazy.frontier`` -> ``Collection[Edge]``)."""
+        return _CrawlLazy(self)
 
 
 __all__ = ["Crawl", "Edge", "PageCard", "CrawlConfig", "CrawlState", "ICrawl"]

@@ -80,6 +80,26 @@ def test_write_and_live_state(app):
     assert app.evaluate("document.querySelector('#name').value") == "Ada"
 
 
+def test_evaluate_mutation_refreshes_captured_content(app):
+    # a mutating evaluate() drains afterward (like click/write), so the captured-content
+    # ops -- text_content / html, which read the snapshot, not the live DOM -- reflect
+    # the change instead of a stale pre-evaluate snapshot. (Regression: evaluate did not
+    # invalidate the cached tree, so text_content/html could lag a live select.)
+    app.evaluate(
+        "document.querySelector('#c2').insertAdjacentHTML('beforeend',"
+        "\"<div class='zonk'>zonk-word</div>\")"
+    )
+    assert app.select(".zonk").text_content == "zonk-word"  # the live DOM has it
+    assert "zonk-word" in app.text_content  # ...and so does the captured snapshot
+    assert "zonk-word" in app.html()
+
+
+def test_evaluate_pure_read_can_skip_the_drain(app):
+    # mutates=False is the pure-read fast path: it returns the value without settling
+    # or refreshing captured content.
+    assert app.evaluate("1 + 2", mutates=False) == 3
+
+
 def test_console_capture(app):
     app.wait_for(timeout=0.3)  # let the boot script finish
     assert any("booted" in e.text for e in app.console)

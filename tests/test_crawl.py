@@ -140,6 +140,61 @@ def test_crawl_pages_are_page_cards_by_default(wc, site):
     assert docs.pages[0].transport().kind == "html" and isinstance(docs.pages[0].markdown(), str)
 
 
+def test_stream_yields_page_projections_incrementally(wc, site):
+    # streaming drives the same best-first engine as run(), yielding each page's
+    # retained projection (a PageCard by default) as it is fetched.
+    from webclient.core.crawl import PageCard
+
+    with wc.crawl(site.url_for("/"), max_pages=4, browser=False) as crawl:
+        seen = [card for card in crawl.stream()]
+    assert seen and all(isinstance(c, PageCard) for c in seen)
+    assert len(seen) == len(crawl.pages)  # every yielded card is retained
+
+
+def test_stream_break_pauses_and_is_resumable(wc, site):
+    # breaking out of the stream leaves the frontier + seen ledger intact, so the
+    # crawl resumes where it stopped -- no page is fetched twice.
+    with wc.crawl(site.url_for("/"), max_pages=10, width=1, browser=False) as crawl:
+        for _ in crawl.stream():
+            break  # pause after the first page
+        assert len(crawl.pages) >= 1 and crawl.frontier  # paused with work left
+        crawl.run()  # resume via the batch drive
+    urls = _urls(crawl)
+    assert urls and len(urls) == len(set(urls))  # nothing re-fetched across the pause
+
+
+def test_run_equals_draining_the_stream(wc, site):
+    # run() and exhausting stream() reach the same pages (one engine, two drives).
+    with wc.crawl(site.url_for("/"), max_pages=6, browser=False) as a:
+        a.run()
+    with wc.crawl(site.url_for("/"), max_pages=6, browser=False) as b:
+        streamed = list(b.stream())
+    assert {p.url for p in a.pages} == {c.url for c in streamed}
+
+
+def test_astream_delivers_pages_on_the_caller_loop(site):
+    async def main():
+        async with AsyncWebClient() as ac:
+            crawl = ac.crawl(site.url_for("/"), max_pages=4, browser=False)
+            async with crawl:
+                got = [card async for card in crawl.astream()]
+            return got, len(crawl.pages)
+
+    got, retained = asyncio.run(main())
+    assert got and len(got) == retained
+
+
+def test_lazy_frontier_is_a_collection(wc, site):
+    from webclient.collection import Collection
+
+    with wc.crawl(site.url_for("/"), browser=False) as crawl:
+        crawl.step()  # discover some edges (the seed's links)
+        front = crawl.lazy.frontier
+    assert isinstance(front, Collection)
+    assert len(front) == len(crawl.frontier)  # a snapshot of the pending edges
+    assert all(isinstance(e, Edge) for e in front)
+
+
 def test_crawl_dedups_seed_variants(wc, site):
     # two seeds that canonicalise to the same target collapse to one edge.
     with wc.crawl(
