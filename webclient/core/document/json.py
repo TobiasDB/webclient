@@ -63,7 +63,7 @@ class JsonBacking(Backing):
             items = items[:limit]
         return [core._sub(item) for item in items]
 
-    def render(self, core: "Document", format: str, **options: Any) -> Any:
+    def render(self, core: "Document", format: str, **options: Any) -> "list[Element]":
         if format != "elements":
             from ...errors import render_error
 
@@ -106,7 +106,7 @@ class JsonBacking(Backing):
 
     def attr(
         self, core: "Document", name: str, *, optional: bool = False, error: Any = None
-    ) -> Any:
+    ) -> "Field[Any]":
         from ...errors import RAISE, current_policy, select_error
 
         if core._missing:

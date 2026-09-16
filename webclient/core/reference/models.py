@@ -9,7 +9,7 @@ lives here too, so the ``derive`` backing and ``from_url`` share it with no cycl
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, TypeVar
 
 from pydantic import BaseModel
 
@@ -187,7 +187,15 @@ class _AutoSentinel:
 AUTO: Any = _AutoSentinel()
 
 
-def resolve_policy(value: Any, cls: Any) -> Any:
+class _HasAuto(Protocol):
+    @classmethod
+    def auto(cls) -> Self: ...
+
+
+P = TypeVar("P", bound=_HasAuto)
+
+
+def resolve_policy(value: "P | Literal['auto'] | None", cls: type[P]) -> "P | None":
     """Normalise a per-concern kwarg (``Policy | "auto" | AUTO | None``): a Policy
     passes through, ``AUTO``/``"auto"`` -> ``cls.auto()``, ``None`` -> ``None`` (off
     / inherit the default)."""

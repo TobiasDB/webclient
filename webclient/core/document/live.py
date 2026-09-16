@@ -23,7 +23,10 @@ from ...models import ActionEvent, ConsoleEvent, DOMUpdateEvent, NetworkEvent
 from ..web_core import Backing
 
 if TYPE_CHECKING:
+    from ...clients import PageResult
+    from ..client.loop import EngineLoop
     from . import Document
+    from .html import HtmlBacking
 
 #: installed on every navigation -- an id-path-tagging MutationObserver feeding
 #: ``window.__wc_mutations`` (see ``LiveBacking.page_scripts``).
@@ -96,7 +99,7 @@ def _is_timeout(exc: BaseException) -> bool:
     return "Timeout" in type(exc).__name__
 
 
-def _mutation_event(r: dict[str, Any], doc: Any, *, phase: str | None = None) -> DOMUpdateEvent:
+def _mutation_event(r: dict[str, Any], doc: "Document", *, phase: str | None = None) -> DOMUpdateEvent:
     """Wrap one raw mutation record into a DOMUpdateEvent, carrying the position /
     size detail the runtime facet reads (``inMain`` / ``added`` / ``addedText``)."""
     detail: dict[str, Any] = {
@@ -109,7 +112,7 @@ def _mutation_event(r: dict[str, Any], doc: Any, *, phase: str | None = None) ->
     return DOMUpdateEvent(kind=cast(Any, _kind(r)), detail=detail, document_id=doc.name)
 
 
-async def drain(doc: Any) -> None:
+async def drain(doc: "Document") -> None:
     """After an interaction: move any pending DOM mutations onto the document AND
     refresh its captured ``content`` from the (now-changed) live page, so a later
     ``select`` / ``text_content`` / ``skeleton`` -- including the in-memory fallback
@@ -124,13 +127,13 @@ async def drain(doc: Any) -> None:
     doc._tree = None  # invalidate the cached lxml parse of the old content
 
 
-def console_event(level: str, text: str, doc: Any) -> ConsoleEvent:
+def console_event(level: str, text: str, doc: "Document") -> ConsoleEvent:
     return ConsoleEvent(
         level=cast(Any, _LEVELS.get(level, "log")), text=text, document_id=doc.name
     )
 
 
-def network_event(method: str, url: str, resource_type: str, doc: Any) -> NetworkEvent:
+def network_event(method: str, url: str, resource_type: str, doc: "Document") -> NetworkEvent:
     """A browser sub-request captured onto the document (an XHR/fetch the page
     made) -- the raw material for the summary ``runtime`` facet's xhr_endpoints."""
     from ..reference import from_url
@@ -142,7 +145,7 @@ def network_event(method: str, url: str, resource_type: str, doc: Any) -> Networ
     )
 
 
-def _html() -> Any:
+def _html() -> "HtmlBacking":
     """The (stateless) HTML backing, for an in-memory select on captured content."""
     from .html import HtmlBacking
 
@@ -168,10 +171,10 @@ class LiveBacking(Backing):
     page_scripts = (PageScript(INIT_JS, "init"), PageScript(DRAIN_JS, "drain"))
     gate = "page"
 
-    def applies(self, core: Any) -> bool:
+    def applies(self, core: "Document") -> bool:
         return core._page is not None
 
-    def on_load(self, core: Any, result: Any) -> None:
+    def on_load(self, core: "Document", result: "PageResult") -> None:
         """Wrap the load-time console/network/DOM-mutations the client captured (a
         ``clients.PageResult``) into events on the document -- the client hands
         back raw facts and fires this; the backing owns the shaping."""
@@ -187,20 +190,20 @@ class LiveBacking(Backing):
             core._events.append(_mutation_event(r, core, phase="load"))
         core._render_stats = getattr(result, "dom_stats", {}) or {}
 
-    def _loop(self, core: Any) -> Any:
+    def _loop(self, core: "Document") -> "EngineLoop":
         return core._client.loop()
 
     # -- captured event views ------------------------------------------------
-    def dom_mutations(self, core: Any) -> "list[DOMUpdateEvent]":
+    def dom_mutations(self, core: "Document") -> "list[DOMUpdateEvent]":
         return [e for e in core._events if isinstance(e, DOMUpdateEvent)]
 
-    def console(self, core: Any) -> "list[ConsoleEvent]":
+    def console(self, core: "Document") -> "list[ConsoleEvent]":
         return [e for e in core._events if isinstance(e, ConsoleEvent)]
 
     # -- interactions (IO: async def; the interface bridges via dispatch) -----
     async def click(
         self,
-        core: Any,
+        core: "Document",
         selector: str | None = None,
         *,
         timeout: float | None = None,
@@ -217,7 +220,7 @@ class LiveBacking(Backing):
 
     async def write(
         self,
-        core: Any,
+        core: "Document",
         selector: str,
         text: str,
         *,
@@ -235,7 +238,7 @@ class LiveBacking(Backing):
 
     async def wait_for(
         self,
-        core: Any,
+        core: "Document",
         selector: str | None = None,
         *,
         timeout: float | None = None,
@@ -265,7 +268,7 @@ class LiveBacking(Backing):
     # keeps the page for any live interaction ops (which are ``io`` and await fine).
     def select(
         self,
-        core: Any,
+        core: "Document",
         selector: str,
         *,
         index: int = 0,
@@ -278,31 +281,25 @@ class LiveBacking(Backing):
             return _html().select(
                 core, selector, index=index, optional=optional, error=error
             )
-        return cast(
-            "Document",
-            self._loop(core).run(
-                self._aselect(core, selector, index, RETURN if optional else error)
-            ),
+        return self._loop(core).run(
+            self._aselect(core, selector, index, RETURN if optional else error)
         )
 
-    def select_all(self, core: Any, selector: str) -> "list[Document]":
+    def select_all(self, core: "Document", selector: str) -> "list[Document]":
         if self._loop(core).on_loop_thread():
             return _html().select_all(core, selector)
-        return cast(
-            "list[Document]",
-            self._loop(core).run(self._aselect_all(core, selector)),
-        )
+        return self._loop(core).run(self._aselect_all(core, selector))
 
-    async def evaluate(self, core: Any, script: str) -> Any:
+    async def evaluate(self, core: "Document", script: str) -> Any:
         return await core._page.evaluate(script)
 
-    async def screenshot(self, core: Any, selector: str | None = None) -> "Document":
+    async def screenshot(self, core: "Document", selector: str | None = None) -> "Document":
         return await self._ashot(core, selector)
 
     # -- async bodies --------------------------------------------------------
     async def _aact(
         self,
-        core: Any,
+        core: "Document",
         action: str,
         *,
         selector: str | None = None,
@@ -347,7 +344,7 @@ class LiveBacking(Backing):
         await drain(core)
 
     async def _await_for(
-        self, core: Any, selector: str | None, timeout: float | None
+        self, core: "Document", selector: str | None, timeout: float | None
     ) -> None:
         if selector is not None:
             await core._page.wait_for_selector(
@@ -357,7 +354,7 @@ class LiveBacking(Backing):
             await core._page.wait_for_timeout(timeout * 1000)
         await drain(core)
 
-    async def _ashot(self, core: Any, selector: str | None) -> Any:
+    async def _ashot(self, core: "Document", selector: str | None) -> "Document":
         from . import Document
 
         target = core._page if selector is None else core._page.locator(selector).first
@@ -368,7 +365,7 @@ class LiveBacking(Backing):
         shot._client = core._client
         return shot
 
-    async def _aselect(self, core: Any, selector: str, index: int, error: Any) -> Any:
+    async def _aselect(self, core: "Document", selector: str, index: int, error: Any) -> "Document":
         from ...errors import RETURN
         from . import Document
 
@@ -404,11 +401,11 @@ class LiveBacking(Backing):
         ]
         return sub
 
-    async def _aselect_all(self, core: Any, selector: str) -> list[Any]:
+    async def _aselect_all(self, core: "Document", selector: str) -> "list[Document]":
         from . import Document
 
         loc = core._page.locator(selector)
-        out: list[Any] = []
+        out: "list[Document]" = []
         for i in range(await loc.count()):
             html = await loc.nth(i).evaluate("el => el.outerHTML")
             sub = Document(
