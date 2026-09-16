@@ -48,6 +48,27 @@ def test_iframe_and_shadow_dom_flags_from_the_static_tree():
     assert got["shadow_dom"].signals[0].stage == "static"
 
 
+def test_caas_content_service_marker_fires_spa_so_auto_renders():
+    # a page whose records are fetched by a content-service widget (e.g. Adobe Milo /
+    # a CaaS block) leaves only a shell in the served HTML; the static marker fires spa
+    # so browser="auto" knows to render it.
+    shell = (b"<html><body><div class='caas' data-caas></div>"
+             b"<script src='https://milo.adobe.com/libs/x.js'></script></body></html>")
+    f = flags_from_response(200, {"content-type": "text/html"}, {}, shell)
+    assert f["spa"].present
+    assert any("client-render marker" in s.reason for s in f["spa"].signals)
+
+
+def test_is_data_endpoint_tells_content_apis_from_analytics():
+    from webclient.signals.dom import _is_data_endpoint
+
+    assert _is_data_endpoint("https://milo.adobe.com/tools/caas?complexquery=x")  # CaaS API
+    assert _is_data_endpoint("https://api.other.com/v2/items.json")               # JSON API
+    assert not _is_data_endpoint("https://www.google-analytics.com/collect")      # analytics
+    assert not _is_data_endpoint("https://adobedtm.com/launch.min.js")            # tag manager
+    assert not _is_data_endpoint("https://cdn.example.com/logo.png")              # an asset
+
+
 def test_signals_package_imports_without_lxml_or_a_browser():
     # the detection package is isolated: importable + runnable with the native deps
     # unavailable, so a remote/thin context can read flags too.

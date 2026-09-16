@@ -26,10 +26,37 @@ def _xhr_events(ctx: Context) -> list[Any]:
     return [e for e in ctx.events if getattr(e, "resource_type", None) in ("xhr", "fetch")]
 
 
-def _injection(ctx: Context) -> "tuple[float, bool, int]":
-    """``(injected_ratio, injected_in_main, same_origin_xhr_count)`` from the render.
-    ``injected_ratio`` = NET text grown past the DOMContentLoaded baseline / final
-    text. All zero without a browser render."""
+#: URL fragments that mark an XHR/fetch as a DATA endpoint (an API returning records),
+#: not a page asset -- so a cross-origin content service (a CaaS/CDN) can be told apart
+#: from analytics/ad calls.
+_DATA_HINTS = (
+    "/api", "/graphql", "/gql", "/caas", "/content", "/feed", "/query", "/search",
+    "/rest", "/v1/", "/v2/", "/v3/", "/_next/data", "/wp-json", ".json",
+)
+#: hosts whose cross-origin XHR is analytics/ads/tag-management, never the page's data.
+_ANALYTICS_HOSTS = (
+    "google-analytics", "googletagmanager", "google.com/ads", "doubleclick",
+    "facebook", "segment.", "mixpanel", "hotjar", "optimizely", "adobedtm",
+    "demdex", "omtrdc", "scorecardresearch", "quantserve", "amplitude",
+)
+
+
+def _is_data_endpoint(url: str) -> bool:
+    """Whether a cross-origin XHR/fetch URL looks like a records/content API (a CaaS/CDN
+    data source) rather than analytics or an asset -- so composing main content from it
+    still reads as an SPA."""
+    low = url.lower()
+    host = (urlparse(low).hostname or "")
+    if any(a in host or a in low for a in _ANALYTICS_HOSTS):
+        return False
+    return any(h in low for h in _DATA_HINTS)
+
+
+def _injection(ctx: Context) -> "tuple[float, bool, int, int]":
+    """``(injected_ratio, injected_in_main, same_origin_xhr, cross_origin_data_xhr)`` from
+    the render. ``injected_ratio`` = NET text grown past the DOMContentLoaded baseline /
+    final text; the last count is cross-origin XHR that look like DATA endpoints (a CaaS/
+    CDN content API). All zero without a browser render."""
     mutations = [e for e in ctx.events if getattr(e, "kind", None) is not None and hasattr(e, "detail")]
     load_added = [
         e for e in mutations
@@ -37,22 +64,29 @@ def _injection(ctx: Context) -> "tuple[float, bool, int]":
     ]
     in_main = any((getattr(e, "detail", None) or {}).get("inMain") for e in load_added)
     page_host = (urlparse(ctx.final_url or ctx.url).hostname or "").lower()
-    same_origin = 0
+    same_origin = cross_data = 0
     for e in _xhr_events(ctx):
         req = getattr(e, "request", None)
-        if req is not None:
-            try:
-                if (urlparse(str(req.dispatch("url"))).hostname or "").lower() == page_host:
-                    same_origin += 1
-            except Exception:
-                pass
+        if req is None:
+            continue
+        try:
+            u = str(req.dispatch("url"))
+        except Exception:
+            continue
+        host = (urlparse(u).hostname or "").lower()
+        if not host:
+            continue
+        if host == page_host:
+            same_origin += 1
+        elif _is_data_endpoint(u):
+            cross_data += 1
     stats = ctx.render_stats or {}
     total = int(stats.get("text", 0)) or len(norm(ctx.text))
     if stats.get("dclText") is not None and total:
         ratio = round(max(0, total - int(stats["dclText"])) / total, 3)
     else:
         ratio = 0.0
-    return ratio, in_main, same_origin
+    return ratio, in_main, same_origin, cross_data
 
 
 # -- spa: rendered + network evidence (joins the static signals in request_static) --
@@ -60,7 +94,7 @@ def _injection(ctx: Context) -> "tuple[float, bool, int]":
 
 @detector(flag="spa", name="body_injected", stage="rendered")
 def _body_injected(ctx: Context) -> Hit | None:
-    ratio, _, _ = _injection(ctx)
+    ratio, _, _, _ = _injection(ctx)
     if ratio >= _SPA_RATIO:
         return Hit(0.9, f"{ratio:.0%} of the page's text was injected after the initial response", ratio)
     return None
@@ -68,9 +102,20 @@ def _body_injected(ctx: Context) -> Hit | None:
 
 @detector(flag="spa", name="xhr_composed", stage="network")
 def _xhr_composed(ctx: Context) -> Hit | None:
-    ratio, in_main, same_origin = _injection(ctx)
+    ratio, in_main, same_origin, _ = _injection(ctx)
     if in_main and same_origin >= 1 and ratio >= _SPA_MAIN_RATIO:
         return Hit(0.95, f"main content composed from {same_origin} same-origin XHR call(s)", same_origin)
+    return None
+
+
+@detector(flag="spa", name="xhr_composed_cross_origin", stage="network")
+def _xhr_composed_cross_origin(ctx: Context) -> Hit | None:
+    # main content built from a CROSS-origin data endpoint (a CaaS/CDN content API, e.g.
+    # Adobe Milo's milo.adobe.com) -- still an SPA, at a lower confidence than same-origin
+    # since a cross-origin data call is a slightly weaker signal.
+    ratio, in_main, same_origin, cross_data = _injection(ctx)
+    if in_main and same_origin == 0 and cross_data >= 1 and ratio >= _SPA_MAIN_RATIO:
+        return Hit(0.7, f"main content composed from {cross_data} cross-origin data endpoint(s)", cross_data)
     return None
 
 

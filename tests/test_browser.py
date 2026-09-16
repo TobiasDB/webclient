@@ -207,6 +207,24 @@ def test_browser_inlines_shadow_dom_and_same_origin_iframe(httpserver, wc):
     wc.release(doc)
 
 
+def test_auto_falls_back_to_the_static_hop_when_the_render_is_blocked(httpserver, wc, monkeypatch):
+    # under auto, a CaaS/SPA shell fires spa and escalates to a browser; if that render is
+    # blocked (anti-bot drops the browser), we fall back to the OK static hop instead of
+    # losing it -- a partial static page beats no document.
+    shell = ("<html><body><main><p>partial list</p></main>"
+             "<script src='https://milo.adobe.com/libs/x.js'></script></body></html>")
+    httpserver.expect_request("/caas").respond_with_data(shell, content_type="text/html")
+
+    async def blocked(ref, *a, **k):
+        raise RuntimeError("net::ERR_HTTP2_PROTOCOL_ERROR")  # anti-bot drops the browser
+
+    monkeypatch.setattr(wc, "_escalate_to_browser", blocked)
+    doc = wc.fetch(httpserver.url_for("/caas"), browser="auto", optional=True)
+    assert doc.ok and doc.status_code == 200  # the ok static hop, not a failure
+    assert doc.spa().present  # spa DID fire (it tried to render) -- and fell back
+    assert "partial list" in doc.text_content  # the static content survived
+
+
 def test_auto_stays_static_for_a_sparse_page(httpserver, wc):
     # a genuinely sparse static page the browser would not enrich (empty but no
     # bundle to run) is NOT escalated -- it stays on the static tier.

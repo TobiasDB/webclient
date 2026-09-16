@@ -327,13 +327,14 @@ def main() -> None:
         #      DOM, so the captured content (and the skeleton an agent reads) holds them,
         #      and the shadow_dom / iframe flags fire with the counts.
         deep = wc.fetch(f"{base}/shadow", browser="always")
+        deep_text = deep.text_content or ""
         print(
             "shadow/iframe:",
             {
                 "shadow_dom": (deep.shadow_dom().present, deep.shadow_dom().value),
                 "iframe": (deep.iframe().present, deep.iframe().value),
-                "shadow_inlined": "shadow record A" in deep.text_content,
-                "iframe_inlined": "iframe record" in deep.text_content,
+                "shadow_inlined": "shadow record A" in deep_text,
+                "iframe_inlined": "iframe record" in deep_text,
             },
         )
         wc.release(deep)

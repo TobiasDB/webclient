@@ -32,6 +32,10 @@ _FRAMEWORKS = (
     ("angular", "ng-version"), ("vue", "data-v-"), ("svelte", "svelte-"),
     ("gatsby", "___gatsby"), ("remix", "__remixContext"), ("astro", "astro-island"),
     ("aem-edge", "window.hlx"), ("aem-edge", "/scripts/aem.js"),
+    # content-as-a-service: a client widget fetches the records from a content API, so the
+    # served HTML is only a shell -- auto must render it to see the data (e.g. Adobe Milo).
+    ("aem-milo", "milo.adobe.com"), ("caas", "/tools/caas"), ("caas", "data-caas"),
+    ("contentful", "cdn.contentful.com"), ("sanity", ".sanity.io"),
 )
 _HYDRATION_BLOBS = (
     "__INITIAL_STATE__", "__APOLLO_STATE__", "__PRELOADED_STATE__",

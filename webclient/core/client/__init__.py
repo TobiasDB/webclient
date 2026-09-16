@@ -546,10 +546,25 @@ class WebClient(WebCore, IWebClient):
                 if want_browser:
                     if resp is not None:  # keep the static hop's navigation/network events
                         self._capture(doc, ref, resp)
-                    return await self._escalate_to_browser(
-                        ref, list(doc._events), doc.content,
-                        tiers=[*tiers, "browser"], keep_alive=keep_alive, wait=wait,
-                    )
+                    static_doc = doc  # the usable static hop to fall back to
+                    try:
+                        rendered = await self._escalate_to_browser(
+                            ref, list(doc._events), doc.content,
+                            tiers=[*tiers, "browser"], keep_alive=keep_alive, wait=wait,
+                        )
+                    except Exception:  # noqa: BLE001 - a blocked/failed render is not fatal
+                        rendered = None
+                    if rendered is not None and rendered.ok:
+                        return rendered  # the richer, browser-rendered document
+                    # The render failed or was blocked (e.g. anti-bot dropped the browser).
+                    # ``auto`` is "cheapest that WORKS", so fall back to the ok static hop
+                    # rather than lose it -- a partial static list beats no document. If the
+                    # static hop also failed, honour ``optional`` on its error.
+                    if static_doc.error is None:
+                        return static_doc
+                    if not optional:
+                        raise WebException(static_doc.error, document=static_doc)
+                    return static_doc
         if resp is not None:  # emit navigation/network events for the final doc
             self._capture(doc, ref, resp)
         if doc.error is not None and not optional:  # loud by default

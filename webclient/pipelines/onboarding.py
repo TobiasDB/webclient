@@ -655,6 +655,7 @@ def search_web(
         ).strip().splitlines()
         if crafted and crafted[0].strip():
             query = crafted[0].strip()
+    log.info("    search query: %r", query)  # the (LLM-crafted or default) term used
     return [
         Seed(url=h.url, title=h.title, why=h.snippet)
         for h in search(query, k)
