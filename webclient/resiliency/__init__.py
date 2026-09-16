@@ -4,7 +4,7 @@ and a remote resolve agree on what to escalate. See docs/design/resiliency.md.""
 
 from __future__ import annotations
 
-from .detect import Signals, classify
+from .detect import build_flag, static_flags, static_signals
 from .headers import policy_headers
 
-__all__ = ["Signals", "classify", "policy_headers"]
+__all__ = ["static_signals", "static_flags", "build_flag", "policy_headers"]

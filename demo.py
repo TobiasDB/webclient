@@ -290,16 +290,18 @@ def main() -> None:
         print("chain:      ", [a["op"] for a in live.ref().actions])
         wc.release(live)  # page back to the pool
 
-        # [signals] browser="auto" escalates a JS-gated page to a browser render on
-        #      the response's signals. The /spa page injects its content via JS, so
-        #      spa() fires (a browser remedy) and the transport trail shows the
-        #      static -> browser escalation.
+        # [flags] browser="auto" escalates a JS-gated page to a browser render on the
+        #      response's flags. The /spa page injects its content via JS, so the spa
+        #      flag fires (a browser remedy, built from static + rendered signals) and
+        #      the transport trail shows the static -> browser escalation.
         probed = wc.fetch(f"{base}/spa", browser="auto")
+        spa = probed.spa()
         print(
-            "signals:    ",
+            "flags:      ",
             {
-                "spa": probed.spa().present,
-                "reason": probed.spa().reason,
+                "spa": spa.present,
+                "confidence": spa.confidence,
+                "evidence": [s.name for s in spa.signals],
                 "tiers": probed.transport().escalation,
             },
         )

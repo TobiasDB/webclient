@@ -1,95 +1,122 @@
-"""Resiliency: pure response classification + the signal-driven escalation ladder.
+"""Resiliency: pure request+static flag detection + the flag-driven escalation ladder.
 
-Detection (:func:`webclient.resiliency.classify`) is pure and conservative; a
-resolved document surfaces it through the ``signals`` facet (anti_bot / blocked /
-spa / ...), and ``browser="auto"`` escalates on those signals (a proxy exit for a
-block, a browser render for JS-gated content).
+Detection (:func:`webclient.resiliency.static_flags`) is pure and conservative; a
+resolved document surfaces the conclusions through the ``flags`` facet (spa /
+anti_bot_present / anti_bot_triggered / login_present / login_required / …), and
+``browser="auto"`` acts on them: a login wall fails, an anti-bot challenge escalates
+(proxy / stealth), a SPA escalates to a browser render.
 """
 
 import pytest
 
-from webclient import WebClient
-from webclient.resiliency import classify
+from webclient import WebClient, WebException
+from webclient.resiliency import static_flags
 
 HTML = {"content-type": "text/html; charset=utf-8"}
 
 
+def _f(status, headers, cookies, body):
+    """The request/static flags of a raw response (a dict name -> Flag)."""
+    return static_flags(status, headers, cookies, body)
+
+
 def test_normal_page_detects_nothing():
     body = b"<html><body><h1>Hello</h1>" + b"real article content " * 60 + b"</body></html>"
-    s = classify(200, HTML, {}, body)
-    assert not s.any and not s.needs_browser
+    flags = _f(200, HTML, {}, body)
+    assert not any(f.present for f in flags.values())
 
 
-def test_cloudflare_challenge():
-    s = classify(503, {**HTML, "cf-ray": "1"}, ["__cf_bm"], b"Just a moment... checking your browser")
-    assert s.anti_bot == "cloudflare"
+def test_cloudflare_challenge_is_triggered_stealth():
+    f = _f(503, {**HTML, "cf-ray": "1"}, ["__cf_bm"], b"Just a moment... checking your browser")
+    ab = f["anti_bot_triggered"]
+    assert ab.present and ab.remedy == "stealth"  # a named vendor -> a stealth browser
+    assert {s.name for s in ab.signals} >= {"challenge_interstitial", "vendor_on_block"}
 
 
-def test_datadome_block():
-    s = classify(403, {**HTML, "x-datadome": "1"}, {}, b"blocked")
-    assert s.anti_bot == "datadome" and s.blocked
+def test_datadome_block_is_triggered():
+    f = _f(403, {**HTML, "x-datadome": "1"}, {}, b"blocked")
+    assert f["anti_bot_triggered"].present and f["anti_bot_triggered"].remedy == "stealth"
 
 
 @pytest.mark.parametrize("status", [403, 429, 503])
-def test_bare_block_status_is_a_generic_challenge(status):
-    # no vendor fingerprint at all -- the status code alone is anti-bot evidence.
-    s = classify(status, HTML, {}, b"nope")
-    assert s.anti_bot == "challenge"
+def test_bare_block_status_is_a_triggered_proxy(status):
+    # no vendor fingerprint -- the status alone triggers anti-bot; a fresh IP may help.
+    f = _f(status, HTML, {}, b"nope")
+    ab = f["anti_bot_triggered"]
+    assert ab.present and ab.remedy == "proxy"
+
+
+def test_cdn_fingerprint_on_a_200_is_present_not_triggered():
+    # cf-ray + __cf_bm on a real 200 page: the vendor is in FRONT (present) but is NOT
+    # challenging us (not triggered) -- the present/triggered distinction.
+    body = b"<html><body><h1>Fine</h1>" + b"real content " * 40 + b"</body></html>"
+    f = _f(200, {**HTML, "cf-ray": "1-x"}, ["__cf_bm"], body)
+    assert f["anti_bot_present"].present and f["anti_bot_present"].value == "cloudflare"
+    assert not f["anti_bot_triggered"].present
 
 
 def test_401_is_a_login_wall_not_an_anti_bot_challenge():
-    s = classify(401, HTML, {}, b"unauthorized")
-    assert s.anti_bot is None and s.login_wall
+    f = _f(401, HTML, {}, b"unauthorized")
+    assert f["login_required"].present and not f["anti_bot_triggered"].present
+
+
+def test_401_with_vendor_cookie_is_login_not_anti_bot():
+    # a 401 is an auth wall; a vendor cookie on it is "present" but not "triggered".
+    f = _f(401, {**HTML, "cf-ray": "1"}, ["__cf_bm"], b"unauthorized")
+    assert f["login_required"].present and not f["anti_bot_triggered"].present
 
 
 def test_ordinary_404_is_not_a_challenge():
-    s = classify(404, HTML, {}, b"<html><body>not found, sorry</body></html>")
-    assert s.anti_bot is None
+    f = _f(404, HTML, {}, b"<html><body>not found, sorry</body></html>")
+    assert not f["anti_bot_triggered"].present
 
 
-def test_spa_shell_needs_browser():
-    s = classify(200, HTML, {}, b'<html><body><div id="root"></div><script src="/a.js"></script></body></html>')
-    assert s.js_required and s.needs_browser
+def test_spa_shell_is_a_spa():
+    f = _f(200, HTML, {}, b'<html><body><div id="root"></div><script src="/a.js"></script></body></html>')
+    assert f["spa"].present and f["spa"].remedy == "browser"
 
 
-def test_bare_empty_page_flagged_but_not_browser_worthy():
-    # a truly empty page (no script) -- a browser tier would not fill it.
-    s = classify(200, HTML, {}, b"<html><body></body></html>")
-    assert s.empty and not s.needs_browser
+def test_bare_empty_page_is_not_a_spa():
+    # a truly empty page (no script / no shell) -- a browser tier would not fill it.
+    f = _f(200, HTML, {}, b"<html><body></body></html>")
+    assert not f["spa"].present
 
 
-def test_empty_with_script_needs_browser():
-    s = classify(200, HTML, {}, b"<html><body><script src='/a.js'></script></body></html>")
-    assert s.needs_browser
+def test_empty_with_script_is_a_spa():
+    f = _f(200, HTML, {}, b"<html><body><script src='/a.js'></script></body></html>")
+    assert f["spa"].present
 
 
-def test_cdn_header_on_a_normal_200_is_not_a_block():
-    # cf-ray sits on *every* Cloudflare-served page -- a 200 with real content
-    # must not be mistaken for a challenge.
-    body = b"<html><body><h1>Fine</h1>" + b"real content " * 40 + b"</body></html>"
-    s = classify(200, {**HTML, "cf-ray": "1-x"}, ["__cf_bm"], body)
-    assert s.anti_bot is None and not s.any
+def test_framework_marker_contributes_to_spa():
+    body = b'<html><head><script src="/_next/x.js"></script></head><body>hi</body></html>'
+    spa = _f(200, HTML, {}, body)["spa"]
+    assert any(s.name == "framework_marker" and s.value == "next" for s in spa.signals)
 
 
-def test_paywall_json_ld():
-    body = b'<script type="application/ld+json">{"isAccessibleForFree": false}</script>' + b"x" * 300
-    assert classify(200, HTML, {}, body).paywall
+def test_login_present_vs_required():
+    # a content page whose header has a sign-in form: login is PRESENT (a form exists)
+    # but not REQUIRED (there is plenty of other content -- not a wall).
+    body = (
+        b"<header><form><input type='password'></form></header>"
+        b"<main>" + b"real article content here " * 80 + b"</main>"
+    )
+    f = _f(200, HTML, {}, body)
+    assert f["login_present"].present and not f["login_required"].present
 
 
-def test_login_wall_password_field():
-    body = b"<form><input type='password'></form>" + b"content " * 50
-    assert classify(200, HTML, {}, body).login_wall
+def test_dedicated_login_page_is_required():
+    f = _f(200, HTML, {}, b"<h1>Sign in</h1><form><input type='password'></form>")
+    assert f["login_required"].present
 
 
-def test_401_with_vendor_cookie_is_login_wall_not_anti_bot():
-    # R-M6/L6: a 401 is an auth wall, not an anti-bot challenge -- a vendor cookie
-    # on it must not double-label it as anti-bot.
-    s = classify(401, {**HTML, "cf-ray": "1"}, ["__cf_bm"], b"unauthorized")
-    assert s.anti_bot is None and s.login_wall
+def test_conservative_no_false_positives():
+    # a link to /login + the word "subscribe" must NOT trip login_required
+    body = b'<a href="/login">Sign in</a> subscribe to our newsletter ' + b"article " * 80
+    f = _f(200, HTML, {}, body)
+    assert not f["login_required"].present and not f["anti_bot_triggered"].present
 
 
 def test_retriable_statuses_match_the_policy():
-    # L2: local retriability aligns with RetryPolicy.on_statuses (501/505 not retriable)
     from webclient.errors import error_for
 
     assert error_for(503).retriable and error_for(500).retriable
@@ -98,29 +125,7 @@ def test_retriable_statuses_match_the_policy():
     assert not error_for(404).retriable
 
 
-def test_login_form_in_header_is_not_a_login_wall():
-    # a content page whose header has a sign-in form must NOT be flagged (R-M8):
-    body = (
-        b"<header><form><input type='password'></form></header>"
-        b"<main>" + b"real article content here " * 80 + b"</main>"
-    )
-    s = classify(200, HTML, {}, body)
-    assert not s.login_wall  # lots of other content -> not a wall
-
-
-def test_dedicated_login_page_is_a_login_wall():
-    body = b"<h1>Sign in</h1><form><input type='password'></form>"
-    assert classify(200, HTML, {}, body).login_wall
-
-
-def test_conservative_no_false_positives():
-    # a link to /login and the word "subscribe" must NOT trip login/paywall
-    body = b'<a href="/login">Sign in</a> subscribe to our newsletter ' + b"article " * 80
-    s = classify(200, HTML, {}, body)
-    assert not s.login_wall and not s.paywall and not s.any
-
-
-# -- observe mode over a real fetch --------------------------------------------
+# -- the flags facet over a real fetch -----------------------------------------
 
 
 @pytest.fixture
@@ -129,27 +134,39 @@ def wc():
         yield client
 
 
-def test_static_fetch_reports_anti_bot_signal(httpserver, wc):
+def test_static_fetch_reports_the_anti_bot_flag(httpserver, wc):
     httpserver.expect_request("/blocked").respond_with_data(
-        "<html>blocked</html>",
-        status=403,
+        "<html>blocked</html>", status=403,
         headers={"x-datadome": "1", "Content-Type": "text/html"},
     )
     doc = wc.ref(httpserver.url_for("/blocked")).resolve(error=None, optional=True).collect()
-    ab = doc.anti_bot()  # the signals facet reads the response's own status/headers
-    assert ab.present and ab.value == "datadome"
+    ab = doc.anti_bot_triggered()  # the flags facet reads the response's own status/headers
+    assert ab.present and ab.remedy == "stealth"
 
 
-def test_static_fetch_of_normal_page_reports_no_signals(httpserver, wc):
+def test_static_fetch_of_normal_page_reports_no_flags(httpserver, wc):
     httpserver.expect_request("/ok").respond_with_data(
         "<html><body><h1>Fine</h1>" + "content " * 80 + "</body></html>",
         content_type="text/html",
     )
     doc = wc.fetch(httpserver.url_for("/ok"))
-    assert doc.signals() == []  # nothing notable (total facet, empty)
+    assert doc.flags() == []  # nothing notable (total facet, empty)
 
 
-# -- P3/P4: resolve policy declared to a proxy service as request headers -------
+def test_auto_fails_on_a_login_wall(httpserver, wc):
+    # browser="auto" reads login_required and FAILS -- no transport fixes credentials.
+    httpserver.expect_request("/wall").respond_with_data(
+        "<h1>Sign in</h1><form><input type='password'></form>", content_type="text/html",
+    )
+    with pytest.raises(WebException) as info:
+        wc.fetch(httpserver.url_for("/wall"), browser="auto")
+    assert info.value.error is not None and info.value.error.type == "LoginRequired"
+    # opt out (optional=True) -> the not-ok doc comes back, the flag still readable
+    doc = wc.ref(httpserver.url_for("/wall")).resolve(browser="auto", optional=True)
+    assert not doc.ok and doc.login_required().present
+
+
+# -- resolve policy declared to a proxy service as request headers -------------
 
 
 def test_resolve_policy_is_sent_as_proxy_headers(httpserver):
@@ -192,7 +209,7 @@ def test_no_resolve_sends_no_policy_headers(httpserver):
     assert not any(k.startswith("x-webclient-") for k in seen)
 
 
-# -- P2: the browser="auto" adaptive ladder (needs a real browser) -------------
+# -- the browser="auto" adaptive ladder (needs a real browser) -----------------
 
 _SPA = (
     "<html><body><div id='root'></div><script>"
@@ -205,7 +222,7 @@ _SPA = (
 def test_browser_auto_escalates_a_js_gated_page(httpserver, wc):
     httpserver.expect_request("/spa").respond_with_data(_SPA, content_type="text/html")
     url = httpserver.url_for("/spa")
-    # a plain static fetch: an empty SPA shell -> spa() fires with a browser remedy,
+    # a plain static fetch: an empty SPA shell -> spa flag fires with a browser remedy,
     # and it stayed on the static tier (no escalation requested)
     static = wc.fetch(url)
     assert static.spa().present and static.spa().remedy == "browser"
@@ -213,7 +230,7 @@ def test_browser_auto_escalates_a_js_gated_page(httpserver, wc):
     # browser="auto": the JS-gated page is escalated to a browser render
     auto = wc.fetch(url, browser="auto")
     assert "Loaded content" in (auto.text_content or "")  # JS ran
-    assert auto.transport().final_tier == "browser"  # the tier trail
+    assert auto.transport().final_tier == "browser"
     assert auto.transport().escalation == ["static", "browser"]
 
 
@@ -224,4 +241,4 @@ def test_browser_auto_stays_static_for_a_normal_page(httpserver, wc):
     )
     doc = wc.fetch(httpserver.url_for("/plain"), browser="auto")
     assert doc._page is None  # never launched a browser
-    assert doc.transport().final_tier == "static" and doc.signals() == []
+    assert doc.transport().final_tier == "static" and doc.flags() == []

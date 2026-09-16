@@ -147,11 +147,12 @@ def test_auto_escalates_js_injected_content(httpserver, wc):
     injected by script) to a browser render; the returned document is the fuller
     (browser-rendered) one, and its transport trail shows the escalation."""
     httpserver.expect_request("/inj").respond_with_data(INJECTED, content_type="text/html")
+    # the static empty shell is what the spa flag fires on (driving the escalation)
+    assert wc.fetch(httpserver.url_for("/inj")).spa().present
     doc = wc.fetch(httpserver.url_for("/inj"), browser="auto")
     assert "injected content word" in doc.text_content  # browser recovered it
     assert doc.transport().escalation == ["static", "browser"]
     assert doc.transport().final_tier == "browser"
-    assert doc.spa().present  # the JS-built content is flagged a SPA
 
 
 def test_auto_stays_static_for_a_sparse_page(httpserver, wc):
@@ -372,10 +373,10 @@ def test_browser_captures_real_status_and_headers(httpserver, wc):
         wc.release(doc)
 
 
-def test_browser_fetch_of_blocked_page_fires_signals(httpserver, wc):
-    """Because the real status + headers now reach the browser Document, the
-    ``signals`` access facet (which reads status/headers) fires on a browser fetch
-    of a blocked page -- impossible when the status was hard-coded 200 (Ask 1)."""
+def test_browser_fetch_of_blocked_page_fires_flags(httpserver, wc):
+    """Because the real status + headers now reach the browser Document, the ``flags``
+    access facet (which reads status/headers) fires on a browser fetch of a blocked
+    page -- impossible when the status was hard-coded 200 (Ask 1)."""
     httpserver.expect_request("/forbidden").respond_with_data(
         "<html><body>Forbidden</body></html>", status=403, content_type="text/html"
     )
@@ -383,8 +384,8 @@ def test_browser_fetch_of_blocked_page_fires_signals(httpserver, wc):
     try:
         assert doc.status_code == 403
         assert doc.transport().status_code == 403
-        assert doc.blocked().present  # a hard block (403)
-        assert doc.anti_bot().present  # a bare-status challenge
+        assert doc.anti_bot_triggered().present  # a bare-status 403 challenge
+        assert doc.anti_bot_triggered().remedy == "proxy"
     finally:
         wc.release(doc)
 
@@ -495,8 +496,8 @@ XHR_SPA = """
 
 def test_browser_feeds_dom_x_network_correlation_signals(httpserver, wc):
     """A real SPA fetch: the browser driver captures the DOM-mutation phase / inMain
-    / added detail AND the network resource_type the ``signals`` facet correlates,
-    so xhr_composed / body_injected fire with the right data (Ask 3)."""
+    / added detail AND the network resource_type the ``flags`` facet correlates,
+    so the spa flag's xhr_composed / body_injected signals fire (Ask 3)."""
     from webclient.models import NetworkEvent
 
     httpserver.expect_request("/xhrspa").respond_with_data(
@@ -526,9 +527,11 @@ def test_browser_feeds_dom_x_network_correlation_signals(httpserver, wc):
             for n in xhr
         )  # resource_type captured as fetch/xhr
 
-        # the correlation the driver's data feeds:
-        assert doc.xhr_composed().present
-        assert doc.body_injected().present
+        # the correlation the driver's data feeds -> both signals inside the spa flag:
+        spa = doc.spa()
+        names = {s.name for s in spa.signals}
+        assert spa.present and {"xhr_composed", "body_injected"} <= names
         assert any("/api/data" in c.url for c in doc.xhr_endpoints())
+        assert any("/api/data" in u for u in (spa.value or []))
     finally:
         wc.release(doc)

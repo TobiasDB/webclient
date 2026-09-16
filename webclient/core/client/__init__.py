@@ -31,7 +31,7 @@ from ...events import EventBus
 from ...models import NavigationEvent, NetworkEvent, PlanEvent
 from ...query.executor import aevaluate, astream, evaluate
 from ..document import Document
-from ...resiliency import Signals, classify, policy_headers
+from ...resiliency import policy_headers, static_flags
 from ..reference import Reference, from_url
 from ..reference.models import ProxyPolicy, Resolve
 from ..web_core import Backing, WebCore
@@ -77,16 +77,13 @@ def _wait_of(browser: Any, wait: "WaitConfig | None") -> "WaitConfig | None":
     return None
 
 
-def _remedy(sig: "Signals") -> "str | None":
-    """The transport escalation a static response's signals call for, or None (the
-    response is fine, or nothing the ladder can do -- a paywall / login wall). A
-    block / anti-bot challenge wants a fresh IP (``"proxy"``); JS-gated content wants
-    a render (``"browser"``)."""
-    if sig.anti_bot or sig.blocked:
-        return "proxy"  # rotate an exit past the block (declared to the proxy service)
-    if sig.needs_browser:
-        return "browser"  # render the client-built content (JS-gated)
-    return None
+
+
+def _flag_reason(flag: Any, default: str) -> str:
+    """The lead evidence line of a flag (its highest-confidence-first signal), or a
+    default -- used to phrase the error when ``auto`` fails on a login wall."""
+    sigs = getattr(flag, "signals", None) or []
+    return sigs[0].reason if sigs else default
 
 
 def _seed_urls(seeds: Any) -> list[str]:
@@ -480,48 +477,56 @@ class WebClient(WebCore, IWebClient):
             doc, resp = await self._afetch_once(ref, headers)
         self._register(doc, ref)
         doc._tiers = ["static"]
-        signals = self._observe(doc, resp)
-        # browser="auto": a signal-driven escalation ladder. Inspect the static
-        # response; escalate to the tier its signals call for (a fresh proxy exit for
-        # a block/anti-bot challenge, a browser render for JS-gated content), then
-        # re-inspect. Bounded: static -> (proxy) -> browser.
-        if mode == "auto" and doc.error is None and signals is not None:
-            tiers = ["static"]
-            if _remedy(signals) == "proxy":  # rotate an exit via the proxy service
-                tiers.append("proxy")
-                proxy_headers = {
-                    **policy_headers(Resolve(proxy=ProxyPolicy.auto())), **headers
-                }
-                doc, resp = await self._afetch_once(ref, proxy_headers)
-                self._register(doc, ref)
-                doc._tiers = list(tiers)
-                signals = self._observe(doc, resp)
-            if (
-                signals is not None
-                and doc.error is None
-                and _remedy(signals) == "browser"
-            ):
-                if resp is not None:  # keep the static hop's navigation/network events
-                    self._capture(doc, ref, resp)
-                return await self._escalate_to_browser(
-                    ref, list(doc._events), doc.content,
-                    tiers=[*tiers, "browser"], keep_alive=keep_alive, wait=wait,
+        flags = self._observe(doc, resp)
+        # browser="auto": a FLAG-driven escalation ladder. Read the request+static
+        # flags; a login wall fails (no transport fixes credentials), an anti-bot
+        # challenge escalates to a fresh proxy exit (then a stealth browser for a
+        # named vendor), a SPA escalates to a browser render. Re-read after each hop.
+        # Bounded: static -> (proxy) -> browser.
+        if mode == "auto" and doc.error is None and flags is not None:
+            if flags["login_required"].present:  # a credential wall -- fail loudly
+                doc.error = WebError(
+                    type="LoginRequired",
+                    message=_flag_reason(flags["login_required"], "a login wall blocks the content"),
                 )
+            else:
+                tiers = ["static"]
+                antibot = flags["anti_bot_triggered"]
+                if antibot.present and antibot.remedy in ("proxy", "stealth"):
+                    tiers.append("proxy")  # rotate an exit via the proxy service
+                    proxy_headers = {**policy_headers(Resolve(proxy=ProxyPolicy.auto())), **headers}
+                    doc, resp = await self._afetch_once(ref, proxy_headers)
+                    self._register(doc, ref)
+                    doc._tiers = list(tiers)
+                    flags = self._observe(doc, resp)
+                want_browser = flags is not None and doc.error is None and (
+                    flags["spa"].present  # render the client-built content
+                    # a named-vendor challenge a proxy didn't clear -> a stealth browser
+                    or (flags["anti_bot_triggered"].present
+                        and flags["anti_bot_triggered"].remedy == "stealth")
+                )
+                if want_browser:
+                    if resp is not None:  # keep the static hop's navigation/network events
+                        self._capture(doc, ref, resp)
+                    return await self._escalate_to_browser(
+                        ref, list(doc._events), doc.content,
+                        tiers=[*tiers, "browser"], keep_alive=keep_alive, wait=wait,
+                    )
         if resp is not None:  # emit navigation/network events for the final doc
             self._capture(doc, ref, resp)
         if doc.error is not None and not optional:  # loud by default
             raise WebException(doc.error, document=doc)
         return doc
 
-    def _observe(self, doc: Document, resp: Any) -> "Signals | None":
-        """Classify the static response into :class:`Signals` (anti-bot / JS-gated /
-        paywall / login wall / hard block) so ``afetch`` can decide whether -- and to
-        what tier -- to escalate. Pure detection (:mod:`webclient.resiliency.detect`),
-        so a remote resolve reads the same signals; the ``signals`` facet re-derives
-        them on read, so nothing is recorded here."""
+    def _observe(self, doc: Document, resp: Any) -> "dict[str, Any] | None":
+        """The request/static flags of this response (login / anti-bot / SPA), so
+        ``afetch`` can decide whether -- and to what tier -- to escalate. Pure detection
+        (:mod:`webclient.resiliency.detect`), so a remote resolve reads the same flags;
+        the ``flags`` facet re-derives them (and adds rendered/network evidence) on read."""
         if resp is None:
             return None
-        return classify(doc.status_code, resp.headers, doc._set_cookies, doc.content)
+        chain = [doc.url, doc.final_url] if doc.final_url and doc.final_url != doc.url else [doc.url]
+        return static_flags(doc.status_code, resp.headers, doc._set_cookies, doc.content, chain)
 
     async def _escalate_to_browser(
         self,

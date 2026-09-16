@@ -1,12 +1,12 @@
-"""Facet ops: transport / metadata / structure / signals -- deterministic
-projections of a resolved Document (keys-not-values), each a first-class Document
-op (there is no aggregating summary()). The ``signals`` facet reports self-describing
-:class:`Signal`\\ s (spa / anti_bot / blocked / ...) built from the response."""
+"""Facet ops: transport / metadata / structure / flags -- deterministic projections
+of a resolved Document, each a first-class Document op (there is no aggregating
+summary()). The ``flags`` facet reports :class:`Flag`\\ s (spa / anti_bot / login /
+pagination / forms / buttons), each built from tiered, confidence-scored signals."""
 
 import pytest
 
 from webclient import WebClient
-from webclient.core.document.models import Metadata, Signal, Structure, Transport
+from webclient.core.document.models import Flag, Metadata, Structure, Transport
 
 PAGE = """
 <html lang="en">
@@ -81,9 +81,9 @@ def test_structure_facet_maps_body_shape(page):
     assert s.word_count and s.reading_time_min == 1
 
 
-def test_spa_signal_reads_captured_browser_events():
-    # the spa signal reads DOM/network events a browser render captured -- no browser
-    # needed for the projection itself, so we seed the events directly.
+def test_spa_flag_from_framework_and_events():
+    # the spa flag joins static evidence (a framework marker) with the browser events;
+    # its value is the same-origin XHR endpoints (an agent can hit them directly).
     from webclient.core.document import Document
     from webclient.core.document.live import network_event
 
@@ -98,12 +98,12 @@ def test_spa_signal_reads_captured_browser_events():
         network_event("POST", "https://app.example/api/track", "fetch", doc),
     ]
     spa = doc.spa()
-    assert isinstance(spa, Signal) and spa.present  # a "next" framework marker
-    assert spa.remedy == "browser"  # a render would recover the client-built content
+    assert isinstance(spa, Flag) and spa.present and spa.remedy == "browser"
+    assert any(s.name == "framework_marker" for s in spa.signals)  # the "next" marker
     assert doc.framework() == "next"
-    eps = doc.xhr_endpoints()  # the SPA's data sources (an agent can hit them direct)
+    assert any("api/items" in u for u in (spa.value or []))  # endpoints on the flag
+    eps = doc.xhr_endpoints()
     assert {c.method for c in eps} == {"GET", "POST"}
-    assert any("api/items" in c.url for c in eps)
 
 
 def _load_mut(*, in_main=True):
@@ -117,13 +117,14 @@ def _load_mut(*, in_main=True):
     )
 
 
-def test_body_injected_signal_graded_by_net_text_not_reorg():
-    # the body_injected signal carries the injected ratio; same-origin XHRs ALONE
-    # don't flag it, and merely re-organising the DOM (net text unchanged) doesn't.
+def test_spa_body_injected_signal_graded_by_net_text_not_reorg():
+    # the body_injected signal (evidence inside the spa flag) carries the injected
+    # ratio; same-origin XHRs ALONE don't fire it, and DOM re-org (net text unchanged)
+    # doesn't either.
     from webclient.core.document import Document
     from webclient.core.document.live import network_event
 
-    # (a) XHRs + DOM churn but the text was already there at DCL -> NOT injected
+    # (a) XHRs + DOM churn but the text was already there at DCL -> NOT a SPA
     ssr = Document(kind="html", url="https://news.acme.com/",
                    content=b"<html><body>x</body></html>", status_code=200)
     ssr._render_stats = {"text": 1000, "dclText": 980}  # only 2% net-new after load
@@ -132,24 +133,22 @@ def test_body_injected_signal_graded_by_net_text_not_reorg():
         network_event("GET", "https://news.acme.com/b.json", "fetch", ssr),
         _load_mut(),
     ]
-    bi = ssr.body_injected()
-    assert not bi.present and bi.value < 0.4  # value carries the injected ratio
-    assert not ssr.spa()  # no SPA-family detector fired
+    assert not ssr.spa().present  # no SPA evidence fired
 
-    # (b) most of the text built after DCL -> body_injected fires -> spa rolls it up
+    # (b) most of the text built after DCL -> body_injected fires -> the spa flag is on
     doc = Document(kind="html", url="https://app.acme.com/",
                    content=b"<html><body></body></html>", status_code=200)
     doc._render_stats = {"text": 1000, "dclText": 100}  # 90% net-new after load
     doc._events = [_load_mut()]
-    bi = doc.body_injected()
-    assert bi.present and bi.value >= 0.4 and bi.remedy == "browser"
     spa = doc.spa()
-    assert spa.present and "body_injected" in spa.value  # the roll-up names its evidence
+    assert spa.present and spa.remedy == "browser"
+    bi = next(s for s in spa.signals if s.name == "body_injected")
+    assert bi.stage == "rendered" and bi.value >= 0.4  # the signal carries the ratio
 
 
-def test_xhr_composed_is_a_distinct_signal_for_the_same_conclusion():
-    # the actionable case: content injected INTO THE MAIN AREA from the page's own
-    # origin -> a separate signal from body_injected, both may fire for one SPA.
+def test_spa_xhr_composed_is_a_distinct_signal_for_the_same_conclusion():
+    # content injected INTO THE MAIN AREA from the page's own origin -> a separate
+    # signal from body_injected; several signals corroborate one flag.
     from webclient.core.document import Document
     from webclient.core.document.live import network_event
 
@@ -160,14 +159,13 @@ def test_xhr_composed_is_a_distinct_signal_for_the_same_conclusion():
         network_event("GET", "https://news.acme.com/blocks/hero.plain.html", "fetch", doc),
         _load_mut(in_main=True),
     ]
-    xc = doc.xhr_composed()
-    assert xc.present and "XHR" in xc.reason
-    assert any("hero.plain.html" in u for u in xc.value)  # the data endpoints
-    # both xhr_composed AND body_injected fire -> two signals, same conclusion
-    names = {s.name for s in doc.signals()}
-    assert {"xhr_composed", "body_injected"} <= names
+    spa = doc.spa()
+    names = {s.name for s in spa.signals}
+    assert spa.present and {"xhr_composed", "body_injected"} <= names  # both fire
+    xc = next(s for s in spa.signals if s.name == "xhr_composed")
+    assert xc.stage == "network"
 
-    # same injection but only THIRD-party data -> not a same-origin composition
+    # same injection but only THIRD-party data + a sub-threshold ratio -> not a SPA
     doc2 = Document(kind="html", url="https://blog.acme.com/",
                     content=b"<html><body></body></html>", status_code=200)
     doc2._render_stats = {"text": 1000, "dclText": 850}  # 15% net-new, third-party only
@@ -175,7 +173,7 @@ def test_xhr_composed_is_a_distinct_signal_for_the_same_conclusion():
         network_event("GET", "https://cdn.ads.example/w", "fetch", doc2),
         _load_mut(in_main=True),
     ]
-    assert not doc2.xhr_composed().present
+    assert not doc2.spa().present
 
 
 def test_third_party_only_xhr_does_not_flag_a_static_page_as_spa():
@@ -197,18 +195,25 @@ def test_third_party_only_xhr_does_not_flag_a_static_page_as_spa():
     assert not doc.spa().present  # only cross-origin analytics -> server-rendered
 
 
-def test_signals_is_a_total_facet_empty_on_a_normal_page(page):
-    # signals always applies; an ordinary page reports nothing (no dance, no error).
-    assert page.signals() == []
-    assert not page.spa() and not page.anti_bot() and not page.blocked()
+def test_flags_is_a_total_facet_empty_on_a_plain_page(httpserver):
+    # flags always applies; a plain content page (no forms / pagination / spa / login)
+    # reports nothing present -- no error, just an empty digest.
+    httpserver.expect_request("/plain").respond_with_data(
+        "<html><body><main><h1>Article</h1>" + "words " * 80 + "</main></body></html>",
+        content_type="text/html",
+    )
+    with WebClient() as wc:
+        doc = wc.fetch(httpserver.url_for("/plain"))
+        assert doc.flags() == []
+        assert not doc.spa() and not doc.anti_bot_present() and not doc.login_required()
 
 
-def test_metadata_and_structure_absent_on_json_but_signals_total(httpserver):
+def test_flags_facet_is_total_even_on_json(httpserver):
     httpserver.expect_request("/j").respond_with_json({"a": 1})
     with WebClient() as wc:
         doc = wc.fetch(httpserver.url_for("/j")).collect()
         assert doc.transport().kind == "json"  # transport applies to any kind
-        assert doc.has_op("signals")  # signals is total -- applies to any kind
+        assert doc.has_op("flags")  # flags is total -- applies to any kind
         # metadata/structure gate on an html/xml tree
         assert not doc.has_op("metadata")
         assert not doc.has_op("structure")

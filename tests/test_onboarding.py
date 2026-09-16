@@ -7,7 +7,15 @@ import json
 import pytest
 
 from webclient import WebClient, from_blob, wq
-from webclient.pipelines import Brief, SearchHit, onboard_company
+from webclient.core.document.models import Flag
+from webclient.pipelines import (
+    Brief,
+    Candidate,
+    SearchHit,
+    evaluate_candidate,
+    onboard_company,
+    write_resolve,
+)
 
 HOME = """
 <html><head><title>Acme</title></head><body>
@@ -115,3 +123,38 @@ def test_onboard_company_reports_when_no_seeds(site):
             llm=lambda p: "{}", search=search, browser=False,
         )
     assert not result.ok and result.reason == "no search seeds"
+
+
+def test_write_resolve_maps_flags_to_policy():
+    # the flags deterministically choose the transport policy for the source.
+    spa = write_resolve([Flag(name="spa", present=True, remedy="browser")])
+    assert spa.browser is not None and spa.browser.when == "always" and spa.proxy is None
+
+    stealth = write_resolve([Flag(name="anti_bot_triggered", present=True, remedy="stealth")])
+    assert stealth.browser is not None and stealth.proxy is not None
+    assert stealth.antibot is not None and stealth.antibot.level == "stealth"
+
+    proxy = write_resolve([Flag(name="anti_bot_triggered", present=True, remedy="proxy")])
+    assert proxy.proxy is not None and proxy.browser is None and proxy.antibot is None
+
+    assert write_resolve([]).browser is None  # a plain source needs nothing
+
+
+def test_evaluate_drops_a_login_walled_candidate(httpserver):
+    # a login wall blocks the dataset -> the candidate is dropped BEFORE the model is
+    # asked (the flag short-circuits), so no query is ever attempted against it.
+    httpserver.expect_request("/members").respond_with_data(
+        "<h1>Sign in</h1><form><input type='password'></form>", content_type="text/html",
+    )
+
+    def boom(prompt):  # the LLM must not be called for a walled candidate
+        raise AssertionError("evaluate should not ask the model about a login wall")
+
+    with WebClient() as wc:
+        ev = evaluate_candidate(
+            Candidate(url=httpserver.url_for("/members")),
+            Brief(description="member directory"),
+            wc=wc, llm=boom, browser="never",
+        )
+    assert not ev.dataset_present and ev.verdict == "login required"
+    assert "login_required" in ev.flags

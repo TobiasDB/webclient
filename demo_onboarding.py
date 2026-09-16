@@ -45,6 +45,7 @@ PRODUCTS = b"""
   <div class="product"><span class="name">Widget</span><span class="price">$10</span></div>
   <div class="product"><span class="name">Sprocket</span><span class="price">$20</span></div>
   <div class="product"><span class="name">Cog</span><span class="price">$30</span></div>
+  <nav class="pagination"><a rel="next" href="/products?p=2">next</a></nav>
 </main></body></html>
 """
 
@@ -130,19 +131,21 @@ def main() -> None:
         candidates = select_candidates(crawl, brief, llm=llm)
         out("candidates", [(c.tier, c.url.replace(base, "")) for c in candidates])
 
-        print("4. evaluate_candidates")
+        print("4. evaluate_candidates (reads the page's flags)")
         ev = evaluate_candidates(candidates, brief, wc=wc, llm=llm, browser="never")
         out("best", ev and {"url": ev.url.replace(base, ""), "queryable": ev.is_queryable,
                             "scrapability": ev.scrapability, "verdict": ev.verdict})
+        out("flags", ev and ev.flags)  # the detected flags drive the cascade below
+        out("paginated", ev and ev.has_pagination)
 
         assert ev is not None
-        print("5. write_reference (deterministic from the candidate)")
+        print("5. write_reference (the API endpoint if the SPA has one, else the URL)")
         ref = write_reference(ev, wc=wc)
         out("reference", ref.url)
 
-        print("6. write_resolve (deterministic from the page's signals)")
+        print("6. write_resolve (deterministic from the page's flags)")
         page = wc.fetch(ev.url)
-        resolve = write_resolve(page.signals())
+        resolve = write_resolve(page.flags())
         out("resolve", {"browser": resolve.browser, "proxy": resolve.proxy})
 
         print("7. write_query (model authors it from the skeleton)")

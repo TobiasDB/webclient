@@ -1,6 +1,6 @@
-"""Resolve policies (data) + the ``signals`` facet's access signals (their
-read-side): a resolved document classifies its own response into self-describing
-:class:`Signal`\\ s (anti_bot / blocked / paywall / login_wall)."""
+"""Resolve policies (data) + the ``flags`` facet's access flags (their read-side):
+a resolved document reads its own response into :class:`Flag`\\ s -- anti_bot_present
+/ anti_bot_triggered / login_present / login_required."""
 
 import pytest
 
@@ -45,28 +45,30 @@ def _doc(**kw):
     return Document(url="http://x/", kind="html", **kw)
 
 
-def test_signals_absent_on_a_normal_page():
-    doc = _doc(content=b"<html><title>T</title></html>")
-    assert doc.signals() == []  # a plain page reports nothing (total facet, empty)
-    assert not doc.anti_bot() and not doc.blocked()
+def test_flags_absent_on_a_normal_page():
+    doc = _doc(content=b"<html><title>T</title><body>hi</body></html>")
+    assert doc.flags() == []  # a plain page reports nothing present (total facet, empty)
+    assert not doc.anti_bot_triggered() and not doc.login_required()
 
 
-def test_anti_bot_signal_from_the_response():
+def test_anti_bot_triggered_flag_from_the_response():
     doc = _doc(status_code=403, response_headers={"x-datadome": "1"}, content=b"blocked")
-    ab = doc.anti_bot()  # a vendor challenge on a blocking status
+    ab = doc.anti_bot_triggered()  # a named vendor on a blocking status
     assert ab.present and ab.value == "datadome" and ab.remedy == "stealth"
-    assert doc.blocked().present  # a 403 is also a hard block
-    assert doc.anti_bot() in doc.signals()  # it shows in the digest
+    assert ab.name in {f.name for f in doc.flags()}  # it shows in the digest
+    # the vendor is present (a fingerprint), and here also triggered (a block)
+    assert doc.anti_bot_present().present and doc.anti_bot_present().value == "datadome"
 
 
-def test_bare_challenge_suggests_a_fresh_proxy_exit():
+def test_bare_challenge_triggered_suggests_a_fresh_proxy_exit():
     doc = _doc(status_code=429, content=b"slow down")
-    ab = doc.anti_bot()  # no named vendor -> a generic challenge
-    assert ab.present and ab.value == "challenge" and ab.remedy == "proxy"
+    ab = doc.anti_bot_triggered()  # no named vendor -> a generic challenge
+    assert ab.present and ab.remedy == "proxy"
+    assert not doc.anti_bot_present().present  # no vendor fingerprint, just a status
 
 
-def test_login_wall_signal_has_no_transport_remedy():
+def test_login_required_flag_has_no_transport_remedy():
     doc = _doc(status_code=401, content=b"unauthorized")
-    lw = doc.login_wall()
-    assert lw.present and lw.remedy is None  # needs credentials, not an escalation
-    assert not doc.anti_bot()  # a 401 is a login wall, not an anti-bot challenge
+    lr = doc.login_required()
+    assert lr.present and lr.remedy is None  # needs credentials, not an escalation
+    assert not doc.anti_bot_triggered()  # a 401 is a login wall, not an anti-bot block

@@ -11,13 +11,19 @@ wires them together:
                                 dataset) over a SPA that lists only part of it.
 3. :func:`select_candidates` -- rank the crawled pages by scrapability + relevance
                                 into must / should / could tiers.
-4. :func:`evaluate_candidate`-- for a candidate, read its skeleton + signals and have
+4. :func:`evaluate_candidate`-- for a candidate, read its skeleton + flags and have
                                 the model assess the dataset (present? sorted? complete?
                                 paginated? filtered? a subset? unstructured? drill-down?).
-5. :func:`write_reference`   -- the lazy ``Reference`` for the chosen candidate
-                                (deterministic given the candidate URL).
+5. :func:`write_reference`   -- the lazy ``Reference`` for the chosen candidate (its
+                                data-API endpoint when the SPA has one, else its URL).
 6. :func:`write_resolve`     -- the ``Resolve`` policy (deterministic given the page's
-                                ``signals`` -- their ``remedy`` maps to browser/proxy/stealth).
+                                ``flags`` -- spa/anti_bot_triggered map to browser/proxy/stealth).
+
+The chosen source then runs a flag-driven decision cascade (in ``onboard_company``):
+reference -> the API endpoint if the SPA has one -> a login wall stops it -> the
+resolve policy from spa/anti_bot_triggered -> the query, told to page when the
+pagination flag is set. So the flags choose the URL, the resolve args, whether a
+browser is needed, and whether to follow pagination.
 7. :func:`write_query`       -- the lazy web query, authored by the model from the page
                                 skeleton against the packaged query spec.
 
@@ -33,7 +39,7 @@ from typing import Any, Callable, Literal, Sequence
 
 from pydantic import BaseModel
 
-from ..core.document.models import Signal
+from ..core.document.models import Flag
 from ..core.reference.models import (
     AntiBotPolicy,
     BrowserPolicy,
@@ -107,6 +113,13 @@ class CandidateEval(BaseModel):
     drilldown_links: bool = False
     scrapability: int = 0  # 0-10; higher is easier/cleaner to scrape
     verdict: str = ""  # the model's one-line judgement
+    #: the detected flags on the page (name -> confidence), and, when the SPA is
+    #: backed by a same-origin data API, the endpoint to query INSTEAD of scraping.
+    flags: dict[str, float] = {}
+    api_endpoint: str | None = None
+    #: the dataset is reached only through interaction (forms / buttons), so a static
+    #: fetch or a single query will not surface it -- a browser session is needed.
+    interactive: bool = False
 
     @property
     def usable(self) -> bool:
@@ -178,6 +191,18 @@ def _ask_json(llm: LLM, prompt: str) -> Any:
 
 def _fields_line(brief: Brief) -> str:
     return f" Target fields: {', '.join(brief.fields)}." if brief.fields else ""
+
+
+#: the flags the pipeline reads to decide how to fetch, resolve and query a source.
+_DECISION_FLAGS = (
+    "spa", "anti_bot_triggered", "login_required", "pagination", "forms", "buttons",
+)
+
+
+def _read_flags(doc: Any) -> "dict[str, Flag]":
+    """The pipeline's decision flags for a document -- each read whether present or
+    not, so a stage can branch on ``.present`` / ``.remedy`` / ``.value``."""
+    return {name: getattr(doc, name)() for name in _DECISION_FLAGS}
 
 
 # --------------------------------------------------------------------------- #
@@ -311,7 +336,7 @@ def select_candidates(crawl: Any, brief: Brief, *, llm: LLM) -> list[Candidate]:
             {
                 "url": p.final_url or p.url,
                 "title": p.title,
-                "signals": [s.name for s in p.signals()],
+                "flags": [f.name for f in p.flags()],
             }
         )
     if not pages:
@@ -319,8 +344,8 @@ def select_candidates(crawl: Any, brief: Brief, *, llm: LLM) -> list[Candidate]:
     rows = _ask_json(
         llm,
         f"We want to scrape this dataset: {brief.description}.{_fields_line(brief)}\n"
-        "Here are the crawled pages (with detected signals like 'xhr_composed' = an "
-        "API-backed SPA, 'client_shell' = JS-rendered):\n"
+        "Here are the crawled pages (with detected flags like 'spa' = JS-rendered, "
+        "'pagination' = spans pages, 'login_required' = gated):\n"
         f"{json.dumps(pages, indent=0)}\n\n"
         "Pick the pages worth evaluating as the source to scrape. For each, give its "
         '"url", a "kind" ("api" | "page" | "spa"), a "tier" ("must" | "should" | '
@@ -355,14 +380,23 @@ def evaluate_candidate(
     doc = wc.fetch(candidate.url, browser=browser, optional=True)
     if not doc.ok:
         return CandidateEval(url=candidate.url, verdict="fetch failed")
+    flags = _read_flags(doc)  # the detected conclusions (spa / pagination / login / ...)
+    flag_map = {n: round(f.confidence, 2) for n, f in flags.items() if f.present}
+    # a login wall blocks the dataset -- no query reaches it; drop the candidate early.
+    if flags["login_required"].present:
+        return CandidateEval(url=candidate.url, verdict="login required", flags=flag_map)
     skeleton = doc.skeleton(max_lines=70)
-    signals = [{"name": s.name, "reason": s.reason} for s in doc.signals()]
-    endpoints = [c.url for c in doc.xhr_endpoints()] if doc.has_op("xhr_endpoints") else []
+    endpoints = [c.url for c in doc.xhr_endpoints()]
+    spa = flags["spa"]
+    # if a SPA is backed by same-origin XHR endpoints, the API is the real source --
+    # querying it beats scraping the rendered page. Record the first as a candidate.
+    api_endpoint = spa.value[0] if spa.present and isinstance(spa.value, list) and spa.value else None
+    interactive = flags["forms"].present or flags["buttons"].present
     parsed = _ask_json(
         llm,
         f"Dataset wanted: {brief.description}.{_fields_line(brief)}\n"
         f"Candidate URL: {candidate.url}\n"
-        f"Detected signals: {json.dumps(signals)}\n"
+        f"Detected flags (name: confidence): {json.dumps(flag_map)}\n"
         f"Observed data endpoints (XHR/fetch): {json.dumps(endpoints)}\n"
         f"Page skeleton:\n{skeleton}\n\n"
         "Assess this page as the source to scrape and reply with only a JSON object "
@@ -373,9 +407,11 @@ def evaluate_candidate(
         'what is here?), "mostly_unstructured" (bool), "drilldown_links" (bool), '
         '"scrapability" (int 0-10), "verdict" (one short sentence).',
     )
-    if not isinstance(parsed, dict):
-        return CandidateEval(url=candidate.url, verdict="could not evaluate")
-    return CandidateEval.model_validate({**parsed, "url": candidate.url})
+    data: dict[str, Any] = dict(parsed) if isinstance(parsed, dict) else {"verdict": "could not evaluate"}
+    # the flags are ground truth for structure -> they win over the model's guesses.
+    data["has_pagination"] = bool(data.get("has_pagination")) or flags["pagination"].present
+    data.update(url=candidate.url, flags=flag_map, api_endpoint=api_endpoint, interactive=interactive)
+    return CandidateEval.model_validate(data)
 
 
 def evaluate_candidates(
@@ -407,26 +443,31 @@ def evaluate_candidates(
 
 def write_reference(evaluation: CandidateEval, *, wc: WebClient) -> Reference:
     """The lazy ``Reference`` for the chosen source -- deterministic given the
-    candidate URL (params/query already baked into the URL the crawl found)."""
-    return wc.ref(evaluation.url)
+    candidate. When the SPA is backed by a same-origin data API (``api_endpoint``),
+    root the Reference at the ENDPOINT: querying the API beats scraping the rendered
+    page. Otherwise the candidate URL (query already baked in by the crawl)."""
+    return wc.ref(evaluation.api_endpoint or evaluation.url)
 
 
 # --------------------------------------------------------------------------- #
-# 6. write_resolve  (deterministic given the signals)
+# 6. write_resolve  (deterministic given the flags)
 # --------------------------------------------------------------------------- #
 
 
-def write_resolve(signals: Sequence[Signal]) -> Resolve:
-    """The ``Resolve`` policy for the source -- deterministic from its signals: each
-    signal's ``remedy`` maps to a tier (``browser`` -> render, ``proxy`` -> a rotating
-    exit, ``stealth`` -> a browser behind a proxy with anti-bot handling)."""
-    remedies = {s.remedy for s in signals if s.present and s.remedy}
-    needs_browser = bool(remedies & {"browser", "stealth"})
-    needs_proxy = bool(remedies & {"proxy", "stealth"})
+def write_resolve(flags: Sequence[Flag]) -> Resolve:
+    """The ``Resolve`` policy for the source -- deterministic from its flags. A
+    ``spa`` needs a browser render; an ``anti_bot_triggered`` needs its remedy
+    (``proxy`` for a bare block, ``stealth`` = a browser behind a proxy with anti-bot
+    handling for a named vendor). A login wall has no transport remedy."""
+    by = {f.name: f for f in flags if f.present}
+    spa = "spa" in by
+    triggered = by.get("anti_bot_triggered")
+    stealth = bool(triggered and triggered.remedy == "stealth")
+    proxy = bool(triggered and triggered.remedy in ("proxy", "stealth"))
     return Resolve(
-        browser=BrowserPolicy(when="always") if needs_browser else None,
-        proxy=ProxyPolicy.auto() if needs_proxy else None,
-        antibot=AntiBotPolicy.auto() if "stealth" in remedies else None,
+        browser=BrowserPolicy(when="always") if (spa or stealth) else None,
+        proxy=ProxyPolicy.auto() if proxy else None,
+        antibot=AntiBotPolicy.auto() if stealth else None,
     )
 
 
@@ -435,14 +476,19 @@ def write_resolve(signals: Sequence[Signal]) -> Resolve:
 # --------------------------------------------------------------------------- #
 
 
-def _query_prompt(brief: Brief, skeleton: str) -> str:
+def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False) -> str:
     # Deliberately narrow: the packaged query spec + the skeleton + the ask. Nothing
     # about fetching, resolving, or running -- only CSS selectors and the query DSL.
+    pager = (
+        "\nThe dataset spans multiple pages: also extract the next-page link "
+        '(a rel="next" anchor) as a field named "next" so the caller can follow it.'
+        if paginated else ""
+    )
     return (
         f"{lazy_query_guide()}\n\n"
         "----\n"
         "Using ONLY the query DSL above, write a lazy web query that extracts this "
-        f"dataset from the page: {brief.description}.{_fields_line(brief)}\n"
+        f"dataset from the page: {brief.description}.{_fields_line(brief)}{pager}\n"
         "Base your CSS selectors on this page skeleton:\n"
         f"{skeleton}\n\n"
         "Author the query rooted at wq.ref.resolve(), select the repeating records, "
@@ -458,14 +504,16 @@ def write_query(
     wc: WebClient,
     llm: LLM,
     browser: BrowserMode = "auto",
+    paginated: bool = False,
     retries: int = 1,
 ) -> QueryArtifact | None:
     """Have the model author a lazy query for the dataset from the page skeleton, then
     validate it by rebuilding it with :func:`from_blob`. Retries once on an invalid
-    blob. Returns ``None`` if no valid query could be authored."""
+    blob. Returns ``None`` if no valid query could be authored. ``paginated`` (from the
+    pagination flag) tells the author to also capture the next-page link."""
     doc = wc.fetch(candidate_url, browser=browser, optional=True)
     skeleton = doc.skeleton(max_lines=90) if doc.ok else ""
-    prompt = _query_prompt(brief, skeleton)
+    prompt = _query_prompt(brief, skeleton, paginated=paginated)
     for _ in range(retries + 1):
         blob = _json_blob(llm(prompt))
         try:
@@ -513,11 +561,22 @@ def onboard_company(
         result.evaluation = evaluation
         return result
     result.evaluation = evaluation
+    # -- the flag-driven decision cascade for the chosen source, in order ----------
+    # (1) reference: the data API if the SPA is backed by one, else the page URL.
     result.reference = write_reference(evaluation, wc=wc)
-    doc = wc.fetch(evaluation.url, browser=_mode(browser), optional=True)
-    result.resolve = write_resolve(doc.signals() if doc.ok else [])
+    query_url = evaluation.api_endpoint or evaluation.url
+    doc = wc.fetch(query_url, browser=_mode(browser), optional=True)
+    flags = _read_flags(doc) if doc.ok else {}
+    # (2) a login wall on the source itself -> no query reaches the data; stop.
+    if flags.get("login_required") is not None and flags["login_required"].present:
+        result.reason = "the source requires login"
+        return result
+    # (3) resolve policy: spa -> browser, anti_bot_triggered -> proxy/stealth.
+    result.resolve = write_resolve(list(flags.values()))
+    # (4) query: authored from the skeleton, told to page when the source paginates.
     result.query = write_query(
-        evaluation.url, brief, wc=wc, llm=llm, browser=_mode(browser)
+        query_url, brief, wc=wc, llm=llm, browser=_mode(browser),
+        paginated=evaluation.has_pagination,
     )
     result.ok = result.query is not None
     result.reason = "" if result.ok else "could not author a query"

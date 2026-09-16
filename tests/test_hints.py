@@ -16,7 +16,7 @@ from webclient.query.hints import (
     return_type,
     safe_type_check,
 )
-from webclient.core.document.models import Signal, Transport
+from webclient.core.document.models import Flag, Transport
 
 
 # -- safe_type_check (typeguard) --------------------------------------------
@@ -72,7 +72,7 @@ def test_text_content_prop_is_str():
 
 def test_facet_ops_resolve_their_models():
     assert return_type(Document, "transport") is Transport
-    assert return_type(Document, "spa") is Signal
+    assert return_type(Document, "spa") is Flag
 
 
 def test_reference_resolve_returns_document_core():

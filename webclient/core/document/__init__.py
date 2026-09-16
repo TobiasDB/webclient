@@ -27,7 +27,7 @@ from .status import StatusBacking
 from .transport import TransportBacking
 from .metadata import MetadataBacking
 from .structure import StructureBacking
-from .signals import SignalsBacking
+from .flags import FlagsBacking
 
 if TYPE_CHECKING:
     from ...surfaces.lazy import LazyDocument
@@ -87,7 +87,7 @@ class Document(WebCore, IDocument):
         TransportBacking(),
         MetadataBacking(),
         StructureBacking(),
-        SignalsBacking(),
+        FlagsBacking(),
     )
 
     @property
