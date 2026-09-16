@@ -348,12 +348,12 @@ class CandidateEval(BaseModel):
 
 class QueryArtifact(BaseModel):
     """The authored lazy query, ready to reload and run. ``blob`` rebuilds it with
-    ``from_blob``; ``plan`` is the same chain as a plan dict (``from_plan``-loadable /
-    the wire form). The blob bakes in the reference + the browser tier, but NOT the
-    ``proxy`` / ``antibot`` policy (a lazy ``resolve`` can't yet encode those) -- so for an
-    anti-bot source the ``resolve`` field below carries the full fetch policy the caller must
-    apply. ``tested`` reports that the EXTRACTION ran against the source fetched at authoring
-    time (it does not re-fetch the blob under its own policy)."""
+    ``from_blob`` and is SELF-CONTAINED: it bakes in the reference + the FULL fetch policy
+    (browser tier AND proxy/antibot for an anti-bot source), so ``from_blob(blob).collect()``
+    re-fetches under the same policy it was authored with. ``plan`` is the same chain as a
+    plan dict (``from_plan``-loadable / the wire form). ``tested`` reports that the EXTRACTION
+    ran against the source fetched at authoring time (the shipped blob is verified end-to-end
+    by the pipeline's tests)."""
 
     blob: str  # the portable lazy-query blob (rebuildable with from_blob)
     describe: str  # a readable one-line rendering of the chain
@@ -1198,13 +1198,18 @@ def _executable_query(doc_expr: Any, url: str, resolve: "Resolve | None") -> Any
     query rooted at the source reference with a ``resolve`` step baked in, so
     ``from_blob(blob).collect()`` fetches + resolves + extracts with no context --
     executable exactly as output. The model supplies only the extraction; this function
-    (no LLM) supplies the reference + resolve. The browser tier comes from the resolve
-    policy (proxy/antibot are transport concerns a lazy ``.resolve()`` can't encode)."""
+    (no LLM) supplies the reference + resolve. When the source needs proxy / antibot, the
+    FULL policy is baked in (``resolve(policy=...)``) so the blob re-fetches with it; a
+    plain source just bakes the browser tier."""
     from ..query.expr import Expr
     from ..query.plan import Plan
 
-    tier = resolve.browser.when if (resolve is not None and resolve.browser is not None) else None
-    rooted = wq.reference(url).resolve(browser=tier) if tier else wq.reference(url).resolve()
+    ref = wq.reference(url)
+    if resolve is not None and (resolve.proxy is not None or resolve.antibot is not None):
+        rooted = ref.resolve(policy=resolve.model_dump(mode="json"))  # full policy in the blob
+    else:
+        tier = resolve.browser.when if (resolve is not None and resolve.browser is not None) else None
+        rooted = ref.resolve(browser=tier) if tier else ref.resolve()
     steps = [*rooted._plan.steps, *_extraction_steps(doc_expr)]
     return Expr(Plan(root="Reference", source=rooted._plan.source, steps=steps), doc_expr._client)
 

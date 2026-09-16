@@ -1023,6 +1023,29 @@ def test_write_query_retries_an_unprojected_query_with_feedback(httpserver):
     assert 'matched 3 record(s)' in prompts[1] and ".project()" in prompts[1]
 
 
+def test_executable_query_bakes_the_full_resolve_policy(httpserver):
+    # F2: a proxy/antibot source bakes the FULL Resolve into the blob (not just the browser
+    # tier), so the shipped query re-fetches WITH the policy instead of un-proxied.
+    from webclient import from_blob, wq
+    from webclient.core.reference.models import AntiBotPolicy, BrowserPolicy, ProxyPolicy, Resolve
+    from webclient.pipelines.onboarding import _executable_query
+
+    r = Resolve(proxy=ProxyPolicy.auto(), antibot=AntiBotPolicy(level="stealth"),
+                browser=BrowserPolicy(when="always"))
+    doc_q = wq.doc.select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project()
+    exe = _executable_query(doc_q, "https://x/p", r)
+    blob = exe.to_blob()
+    assert "proxy" in blob and "antibot" in blob and "stealth" in blob  # full policy encoded
+    # survives a round-trip, and the resolve step still carries the policy
+    rt = from_blob(blob)
+    step = next(s for s in rt._plan.steps if s.kind == "call" and s.kwargs.get("policy"))
+    assert step.kwargs["policy"].value.get("antibot", {}).get("level") == "stealth"
+
+    # a plain source keeps the lean form (just the browser tier, no policy blob)
+    plain = _executable_query(doc_q, "https://x/p", Resolve(browser=BrowserPolicy(when="always")))
+    assert "policy=" not in plain.explain() and ".resolve(" in plain.explain()
+
+
 def test_output_query_is_self_contained_and_executable(httpserver):
     # the join of the LLM's extraction with the reference + resolve is deterministic and
     # produces a SELF-CONTAINED blob: from_blob(blob).collect() (no context) fetches,
