@@ -349,16 +349,23 @@ class CandidateEval(BaseModel):
 class QueryArtifact(BaseModel):
     """The authored lazy query, ready to reload and run. ``blob`` rebuilds it with
     ``from_blob``; ``plan`` is the same chain as a plan dict (``from_plan``-loadable /
-    the wire form). It is TESTED at authoring time -- run against the source -- so
-    ``tested`` / ``row_count`` / ``sample`` report whether it actually extracts rows."""
+    the wire form). The blob bakes in the reference + the browser tier, but NOT the
+    ``proxy`` / ``antibot`` policy (a lazy ``resolve`` can't yet encode those) -- so for an
+    anti-bot source the ``resolve`` field below carries the full fetch policy the caller must
+    apply. ``tested`` reports that the EXTRACTION ran against the source fetched at authoring
+    time (it does not re-fetch the blob under its own policy)."""
 
     blob: str  # the portable lazy-query blob (rebuildable with from_blob)
     describe: str  # a readable one-line rendering of the chain
     plan: dict[str, Any] = {}  # the plan dict (from_plan-loadable; the wire form)
-    tested: bool = False  # did it run against the source without error?
+    tested: bool = False  # did the EXTRACTION run against the fetched source without error?
     complete: bool = False  # tested + rows have content + every REQUIRED field populated
     row_count: int = 0  # how many rows it produced when tested
     sample: list[Any] = []  # up to 5 produced rows (as data), shown as a table
+    #: the FULL fetch policy (browser/proxy/antibot) for this source, serialised. The blob
+    #: bakes only the browser tier; a source needing proxy/antibot must be re-fetched with
+    #: this policy (the blob alone would re-fetch un-proxied and get blocked).
+    resolve: dict[str, Any] = {}
     #: the source URLs this one query runs against, unioned. Usually one, but a dataset
     #: split across distinct URLs (e.g. /products/cloud + /products/onprem -- NOT
     #: pagination) lists them all; :func:`run_query` resolves the query per base and
@@ -728,11 +735,15 @@ def search_web(
     """Seed URLs for ``company`` + ``brief``. The query is ``"<company> <brief>"`` by
     default; pass ``llm`` to craft a sharper query AND to verify each result really belongs
     to ``company`` (dropping look-alike companies with a similar name). If the whole first
-    result set is the wrong company, the search retries ONCE with a disambiguating query."""
+    result set is the wrong company, the search retries ONCE with a disambiguating query.
+    FAIL-OPEN: if verification would drop EVERY result on both tries, the raw results are
+    returned anyway rather than sinking the company on a stubborn/erroneous LLM judgement."""
+    raw: list[Seed] = []
     for attempt in range(2):
         query = _search_query(brief, company, llm, disambiguate=(attempt > 0))
         log.info("    search query: %r", query)
         seeds = [Seed(url=h.url, title=h.title, why=h.snippet) for h in search(query, k) if h.url]
+        raw = raw or seeds  # remember the first non-empty result set for the fail-open path
         kept = _seeds_for_company(seeds, company, brief, llm)
         if kept:
             if len(kept) < len(seeds):
@@ -740,7 +751,9 @@ def search_web(
             return kept
         if seeds:  # results came back but none were this company -- try a stricter query
             log.info("    no result belongs to %s -- retrying the search, stricter", company)
-    return []
+    if raw:  # verification killed everything -- crawl the raw seeds rather than give up
+        log.info("    verification dropped all results for %s -- using the raw seeds", company)
+    return raw
 
 
 # --------------------------------------------------------------------------- #
@@ -1067,16 +1080,25 @@ def evaluate_candidates(
 ) -> CandidateEval | None:
     """Evaluate candidates best-tier-first until a usable source is found (returns
     it) or the options run out (returns the best-scoring evaluation seen, or None).
-    Prefers a queryable source when scores tie."""
+    Prefers a queryable source, but by a WEIGHTED score -- a much cleaner scrapeable page
+    can still beat a marginally-queryable messy one (see :func:`_candidate_score`)."""
     best: CandidateEval | None = None
     for c in candidates:
         ev = evaluate_candidate(c, brief, wc=wc, llm=llm, browser=browser)
-        rank = (ev.is_queryable, ev.scrapability)
-        if best is None or rank > (best.is_queryable, best.scrapability):
+        if best is None or _candidate_score(ev) > _candidate_score(best):
             best = ev
         if ev.usable and ev.is_queryable:
             return ev  # a queryable source clean enough to scrape -- stop early
     return best
+
+
+def _candidate_score(ev: CandidateEval) -> float:
+    """Rank a candidate: scrapability (0-10) plus a queryable BONUS -- so a queryable source
+    is preferred, but not absolutely (a scrapability-10 page beats a scrapability-1 API). A
+    source without the dataset is never preferred over one that has it."""
+    if not ev.dataset_present:
+        return -1.0
+    return ev.scrapability + (4 if ev.is_queryable else 0)
 
 
 # --------------------------------------------------------------------------- #
@@ -1515,6 +1537,7 @@ def write_query(
             complete=bool(tested and good and not missing),  # every required field populated
             row_count=len(good),
             sample=list(good[:5]),
+            resolve=(resolve.model_dump(mode="json") if resolve is not None else {}),
             base_urls=bases,
         )
         if art.complete:
@@ -1646,6 +1669,34 @@ def _parse_date(s: str) -> "Any":
     return None
 
 
+#: leaf field names (or suffixes) that denote a date/time -- matched on the LAST dotted
+#: segment (so "date"/"price.date" match, but "runtime"/"timezone" do not).
+_DATE_LEAVES = ("date", "published", "pubdate", "datetime", "timestamp", "time", "year",
+                "updated", "created")
+
+
+def _date_field_paths(brief: Brief) -> "list[str]":
+    """The brief's field PATHS (dotted) whose leaf is a date-like field -- including nested
+    ones (``event.date``), matched on the leaf segment, not a loose substring anywhere."""
+    out: list[str] = []
+    for f in brief.fields:
+        leaf = f.split(".")[-1].lower()
+        if leaf in _DATE_LEAVES or leaf.endswith(("date", "_at")):
+            out.append(f)
+    return out
+
+
+def _dig(row: Any, path: str) -> Any:
+    """Follow a dotted ``path`` into a (possibly nested) row dict; ``None`` if any hop is
+    missing or not a dict."""
+    cur = row
+    for seg in path.split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(seg)
+    return cur
+
+
 def _timeliness(rows: "list[Any]", brief: Brief) -> "tuple[str, bool]":
     """TIMELINESS for a dated dataset: is the newest row recent RELATIVE TO how often rows
     appear? Returns ``(note, stale)``. ``stale`` is True when the gap from the newest item
@@ -1657,13 +1708,12 @@ def _timeliness(rows: "list[Any]", brief: Brief) -> "tuple[str, bool]":
     import datetime
     import statistics
 
-    date_cols = [f.split(".")[0] for f in brief.fields
-                 if any(w in f.lower() for w in ("date", "publish", "time", "year"))]
-    if not date_cols:
+    date_paths = _date_field_paths(brief)  # dotted paths whose LEAF is a date-like field
+    if not date_paths:
         return "", False
     dates = sorted(
-        {d for r in rows if isinstance(r, dict) for c in date_cols
-         if isinstance(r.get(c), str) and (d := _parse_date(r[c])) is not None},
+        {d for r in rows if isinstance(r, dict) for p in date_paths
+         if isinstance((v := _dig(r, p)), str) and (d := _parse_date(v)) is not None},
         reverse=True,
     )
     if not dates:
