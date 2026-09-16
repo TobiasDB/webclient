@@ -346,13 +346,20 @@ def main() -> None:
     outdir = Path(a.resume) if a.resume else Path("harness_runs") / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # route the pipeline's log lines to the running thread's buffer (per-company .log)
+    # route the pipeline's log lines to the running thread's buffer (per-company .log).
+    # Attach to the onboarding logger (where the pipeline logs) AND its parent (other
+    # pipeline submodules), both propagate=False: this both captures the logs and makes
+    # the pipeline's own _ensure_logging see a handler already present, so it doesn't add
+    # a console handler that would leak to stdout.
     router = _ThreadLogRouter()
     router.setFormatter(logging.Formatter("%(message)s"))
-    lg = logging.getLogger("webclient.pipelines")
-    lg.handlers[:] = [router]
-    lg.setLevel(logging.DEBUG if a.verbose else logging.INFO)
-    lg.propagate = False
+    for name in ("webclient.pipelines", "webclient.pipelines.onboarding"):
+        lg = logging.getLogger(name)
+        lg.handlers[:] = [router]
+        lg.setLevel(logging.DEBUG if a.verbose else logging.INFO)
+        lg.propagate = False
+    for noisy in ("httpx", "httpcore", "urllib3", "playwright", "asyncio", "werkzeug"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)  # keep the console + logs clean
 
     records: list[dict] = []
     todo: list[tuple[str, str, list[str]]] = []
