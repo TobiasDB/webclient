@@ -87,6 +87,21 @@ _MAX_LISTING_CHARS = 6_000     # the frontier listing for pick_edges
 _MAX_PAGES_CHARS = 10_000      # the crawled-pages JSON for select_candidates
 
 
+def _skeleton_for(doc: Any) -> str:
+    """The page skeleton to hand the model, clipped to budget. A big, repetitive page (a
+    modern SPA whose records are hundreds of hashed-class siblings -- e.g. a pricing/blog grid
+    that server-renders every item) blows past the budget as raw structure, so the record
+    pattern is invisible in the clipped view. When the faithful skeleton is too large, re-render
+    with ``collapse=True`` -- consecutive STRUCTURALLY-IDENTICAL siblings fold to one
+    representative + ``×N`` -- so the repeating record and its fields are legible and the model
+    can write a ``select_all`` for it. Small pages keep the faithful, every-sibling view."""
+    kind = "json" if doc.kind == "json" else "html"
+    skel = doc.skeleton(max_lines=_FULL_SKELETON)
+    if len(skel) > _MAX_SKELETON_CHARS:  # too big to read raw -> fold identical siblings
+        skel = doc.skeleton(max_lines=_FULL_SKELETON, collapse=True)
+    return _clip(skel, _MAX_SKELETON_CHARS, "skeleton", kind=kind)
+
+
 def _clip(text: str, max_chars: int, what: str = "input", *, kind: str = "head") -> str:
     """Keep ``text`` within ``max_chars`` so a huge page can't blow the prompt, trimming
     where the LEAST useful content is for that content type:
@@ -807,6 +822,21 @@ def _is_docs_url(url: str) -> bool:
     return any(hint in path for hint in _DOCS_HINTS)
 
 
+#: URL fragments that mark a feed / data endpoint (a page that IS the dataset, not one
+#: that links to it) -- used alongside the sniffed ``kind`` so a served-as-text feed counts.
+_DATA_DOC_HINTS = (".rss", ".atom", "/rss", "/feed", "/atom", ".json", "/api/", "/api.")
+
+
+def _is_data_doc(card: Any) -> bool:
+    """Whether a crawled page IS a data document -- a JSON/XML body (sniffed ``kind``), or a
+    feed/API URL. Such a page holds the dataset directly, so it should be a candidate outright
+    rather than left to the LLM filter (which judges only url+title and tends to drop it)."""
+    if getattr(card, "kind", "html") in ("json", "xml"):
+        return True
+    u = (getattr(card, "final_url", None) or card.url).lower()
+    return any(h in u for h in _DATA_DOC_HINTS)
+
+
 def _reg_domain(url: str) -> str:
     """The registrable domain (eTLD+1) of ``url`` -- the identity we bind the crawl to,
     so ``news.adobe.com`` / ``www.adobe.com`` / ``milo.adobe.com`` all read as ``adobe.com``."""
@@ -969,12 +999,13 @@ def _log_crawl_progress(crawl: Any, seen_pages: int, seen_fails: int) -> "tuple[
 def select_candidates(crawl: Any, brief: Brief, *, llm: LLM) -> list[Candidate]:
     """Rank the crawled pages into must / should / could-evaluate candidates by
     scrapability + likely relevance to the dataset."""
-    # crawl.pages are lean PageCards by default (url / title / flags already projected)
+    # crawl.pages are lean PageCards by default (url / title / kind / flags projected).
     # hard-ban documentation pages: even if one was fetched (a seed / a stray pick), it
     # is never a scrapable dataset, so it can't become a candidate.
+    usable = [p for p in crawl.pages if not _is_docs_url(p.final_url or p.url)]
     pages = [
-        {"url": p.final_url or p.url, "title": p.title, "flags": p.flags}
-        for p in crawl.pages if not _is_docs_url(p.final_url or p.url)
+        {"url": p.final_url or p.url, "title": p.title, "kind": p.kind, "flags": p.flags}
+        for p in usable
     ]
     if not pages:
         return []
@@ -992,6 +1023,25 @@ def select_candidates(crawl: Any, brief: Brief, *, llm: LLM) -> list[Candidate]:
         if isinstance(r, dict) and r.get("url"):
             note = str(r.get("reason") or r.get("note") or "")  # the model's WHY
             out.append(Candidate.model_validate({**r, "url": str(r["url"]), "note": note}))
+    picked = {c.url for c in out}
+    # A fetched DATA DOCUMENT (a JSON/XML feed or an API response) IS the dataset -- it is not
+    # a page that "leads to" data, it holds it. The LLM filter judges only url+title+flags and
+    # routinely drops a raw feed/JSON seed, so force it in as a MUST candidate (evaluate_candidate
+    # is still the backstop that confirms the data is present).
+    for p in usable:
+        u = p.final_url or p.url
+        if u not in picked and _is_data_doc(p):
+            out.append(Candidate(url=u, tier="must",
+                                 note="a data document (feed / JSON / API) — the dataset itself"))
+            picked.add(u)
+    # FAIL OPEN: the filter is an LLM and can return nothing on pages it should have kept
+    # (variance, or a parse miss on the cheapest model). If it picked nothing yet we DID crawl
+    # usable pages, keep the top few so the run still evaluates a real source rather than dying
+    # at "no candidate pages" (evaluate_candidate then judges whether the dataset is actually there).
+    if not out and usable:
+        for p in usable[:3]:
+            out.append(Candidate(url=(p.final_url or p.url), tier="could",
+                                 note="fail-open: candidate filter returned nothing — kept for evaluation"))
     _rank = {"must": 0, "should": 1, "could": 2}
     out.sort(key=lambda c: _rank.get(c.tier, 3))
     for c in out:
@@ -1029,7 +1079,7 @@ def evaluate_candidate(
     if flags["login_required"].present:
         return CandidateEval(url=candidate.url, verdict="login required",
                              flags=flag_map, flag_signals=flag_signals)
-    skeleton = _clip(doc.skeleton(max_lines=_FULL_SKELETON), _MAX_SKELETON_CHARS, "skeleton", kind=("json" if doc.kind == "json" else "html"))
+    skeleton = _skeleton_for(doc)
     endpoints = [c.url for c in doc.xhr_endpoints()]
     interactive = flags["forms"].present or flags["buttons"].present
     parsed = _ask_json(
@@ -1352,18 +1402,33 @@ def _no_rows_hint(expr: Any, doc: Any) -> str:
     came out (wrong field selectors / missing ``.project()``). Guides the retry."""
     sel = _row_selector(expr)
     n = _selector_match_count(sel, doc)
+    ops = {s.name for s in expr._plan.steps if s.kind == "get"}
+    projected = "project" in ops  # did the query actually extract+project fields?
     if n == 0:
         return (
             f'Your record selector "{sel}" matched NO elements on this page, so nothing was'
             " extracted. Look again at the skeleton and pick a selector that matches ONE"
             " element per record (a repeated tag/class you can see in the skeleton)."
         )
+    if n and not projected:
+        # the record selector matched, but the query never extracted -- the classic "selected
+        # elements, forgot to pull fields" -- so it produced 0 DATA rows.
+        return (
+            f'Your record selector "{sel}" matched {n} record(s), but your query only SELECTED'
+            " them -- it never extracted fields, so it produced 0 data rows. Add"
+            " .extract(col=wq.doc.select(...).attr(...), ...) for each field and END with"
+            " .project()."
+        )
     if n:
         return (
-            f'Your record selector "{sel}" matched {n} record(s), but none of your fields'
-            " produced a value -- your .extract(...) FIELD selectors do not match anything"
-            " inside a record, or you did not .project(). Re-check each field selector"
-            " against the skeleton (they are relative to the record), and END with .project()."
+            f'Your record selector "{sel}" matched {n} element(s), but NONE of your field'
+            " selectors found a value inside them. Two likely causes: (1) the record selector is"
+            " too broad -- it matched a WRAPPER, not one record each. Prefer a SEMANTIC anchor: a"
+            ' repeated <article>/<li>/<tr>, or [class*="product"]/[class*="post"] describing the'
+            ' record -- NOT a hashed build class (e.g. ".AMTIxG_grid", ".css-1a2b3c"), which names'
+            " a styling box, not a record. (2) your field selectors are right relative to the"
+            " record but match nothing in it. Use the record HTML below: pick the element that"
+            " wraps exactly ONE record, then field selectors you can SEE inside it."
         )
     return (
         "Your query ran but extracted 0 data rows: it MUST .select_all(<record selector>),"
@@ -1521,14 +1586,25 @@ def write_query(
     ``extra_urls`` are further base URLs the same query also runs against;
     ``resolve`` bakes the fetch policy (browser tier) into the executable query."""
     doc = wc.fetch(candidate_url, browser=browser, optional=True)
-    skeleton = _clip(doc.skeleton(max_lines=_FULL_SKELETON), _MAX_SKELETON_CHARS, "skeleton", kind=("json" if doc.kind == "json" else "html")) if doc.ok else ""
+    skeleton = _skeleton_for(doc) if doc.ok else ""
     prompt = _query_prompt(brief, skeleton, paginated=paginated)
     bases = [candidate_url, *extra_urls]
     best: QueryArtifact | None = None
     ask = prompt
-    for _ in range(retries + 1):
+    for attempt in range(retries + 1):
+        # A retry re-asks with the failure hint appended -- but an identical ask re-hits the
+        # model's prompt cache and returns the SAME failing query (observed: 3 near-identical
+        # attempts). Prefix each retry with a UNIQUE, escalating instruction so the prompt
+        # differs (cache-busting) AND the model is pushed to change its RECORD anchor, not just
+        # nudge fields -- the usual reason it is stuck.
+        call_ask = ask if attempt == 0 else (
+            f"[attempt {attempt + 1} of {retries + 1}] The previous quer{'y' if attempt == 1 else 'ies'} "
+            "above did NOT work. Produce a query that is MATERIALLY DIFFERENT -- change the "
+            ".select_all(...) RECORD selector to a different, more semantic anchor (not the same "
+            "one with tweaked fields), and do not repeat a query you already tried.\n\n" + ask
+        )
         try:
-            reply = llm(ask)
+            reply = llm(call_ask)
         except LlmError as exc:  # a bad-request / exhausted-retry API error
             log.warning("query authoring LLM call failed: %s", exc)
             break
@@ -1775,8 +1851,7 @@ def review_query(result: OnboardingResult, artifacts: _RunArtifacts, brief: Brie
     if q is None:
         return None
     doc = artifacts.query_doc
-    skeleton = _clip(doc.skeleton(max_lines=_FULL_SKELETON), _MAX_SKELETON_CHARS, "skeleton",
-                     kind=("json" if doc.kind == "json" else "html")) if (doc is not None and doc.ok) else "(unavailable)"
+    skeleton = _skeleton_for(doc) if (doc is not None and doc.ok) else "(unavailable)"
     sample = json.dumps(list(q.sample)[:8], default=str, indent=2)
     tnote, stale = _timeliness(list(q.sample), brief)  # is the LATEST data present, per cadence?
     data = _ask_json(llm, render_prompt(

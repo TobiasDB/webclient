@@ -31,7 +31,7 @@ OUT = ROOT / "harness_runs" / "overnight"
 LEDGER = OUT / "ledger.json"
 
 NEW_BRIEFS = ["job-postings", "github-releases", "changelog",
-              "pricing-plans", "podcast-episodes", "docs-pages"]
+              "pricing-plans", "podcast-episodes"]
 CURRENT_BRIEFS = ["product-catalogue", "quotes", "countries", "blog", "ir-news"]
 
 # brief key -> candidate untested live seeds (label, url). Deliberately diverse shapes:
@@ -65,13 +65,6 @@ POOL: dict[str, list[tuple[str, str]]] = {
         ("realpython", "https://realpython.com/podcasts/rpp/"),
         ("syntax", "https://syntax.fm/"),
         ("shoptalk", "https://shoptalkshow.com/episodes/"),
-    ],
-    "docs-pages": [
-        ("python", "https://docs.python.org/3/"),
-        ("django", "https://docs.djangoproject.com/en/stable/"),
-        ("astro", "https://docs.astro.build/en/getting-started/"),
-        ("redis", "https://redis.io/docs/latest/"),
-        ("fastapi", "https://fastapi.tiangolo.com/"),
     ],
     "job-postings": [
         ("weworkremotely", "https://weworkremotely.com/categories/remote-programming-jobs"),

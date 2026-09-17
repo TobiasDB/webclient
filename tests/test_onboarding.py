@@ -141,6 +141,37 @@ def test_onboard_company_reports_when_no_seeds(site):
     assert not result.ok and result.reason == "no search seeds"
 
 
+def test_select_candidates_forces_data_docs_and_fails_open():
+    from webclient.core.document.models import PageCard
+    from webclient.pipelines.onboarding import select_candidates
+
+    brief = Brief(description="news", fields=["title", "date"])
+
+    class _Crawl:  # a stand-in for the finished Crawl (only .pages is read)
+        pass
+
+    def empty_llm(_prompt: str) -> str:
+        return "[]"  # the candidate filter returns NOTHING (the cheapest-model variance case)
+
+    # a plain page + an RSS feed: the feed is a data document -> forced in as a MUST candidate
+    # even though the LLM filter picked nothing.
+    crawl = _Crawl()
+    crawl.pages = [
+        PageCard(url="https://acme.com/news", kind="html", title="Newsroom"),
+        PageCard(url="https://acme.com/feed.rss", kind="xml", title="RSS"),
+    ]
+    cands = select_candidates(crawl, brief, llm=empty_llm)
+    feed = next((c for c in cands if c.url.endswith("feed.rss")), None)
+    assert feed is not None and feed.tier == "must"
+
+    # no data docs + an empty filter -> FAIL OPEN: keep the crawled page(s) for evaluation
+    crawl2 = _Crawl()
+    crawl2.pages = [PageCard(url="https://acme.com/press", kind="html", title="Press")]
+    cands2 = select_candidates(crawl2, brief, llm=empty_llm)
+    assert [c.url for c in cands2] == ["https://acme.com/press"]
+    assert cands2[0].tier == "could"
+
+
 def test_skeleton_surfaces_an_injected_json_island():
     # records inlined in a <script type=application/json> island are invisible in the DOM
     # skeleton (scripts are stripped) -- they must be surfaced so the model uses .as_json().
