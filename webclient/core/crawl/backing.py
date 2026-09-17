@@ -106,23 +106,26 @@ class CrawlBacking(Backing):
     async def _pump(
         self, core: "Crawl", choose: "Callable[[], list[Edge]]"
     ) -> "list[Any]":
-        """One round, atomic under the step lock: select+claim the edges (``choose`` runs
-        under the lock so concurrent rounds can't pick the same edges or over-claim the
-        page budget), fetch each, and append the retained projections. Returns the pages
-        produced this round (for the stream to yield)."""
+        """One round: CLAIM edges under the step lock (``choose`` + budget + frontier removal is
+        atomic, and the claim is RESERVED via ``_inflight`` so concurrent rounds can't over-claim
+        the page budget), then FETCH the claimed edges CONCURRENTLY -- the step lock is NOT held
+        across the fetch, so the client's page pool actually fetches in parallel. ``_fetch_edge``'s
+        shared-state mutations (``_expand``/history/failures) are synchronous, so parallel edges
+        don't interleave them. Commits the retained pages + releases the reservation under the lock.
+        Returns the pages produced this round (for the stream to yield)."""
         async with self._lock(core):
             chosen = choose()
-            room = max(0, core.config.max_pages - len(core.pages))
+            room = max(0, core.config.max_pages - len(core.pages) - core._inflight)
             to_fetch = chosen[:room]
             taken = {e.url for e in to_fetch}
             core.frontier = [e for e in core.frontier if e.url not in taken]
-            produced: list[Any] = []
-            for edge in to_fetch:
-                page = await self._fetch_edge(core, edge)
-                if page is not None:
-                    core.pages.append(page)
-                    produced.append(page)
-            return produced
+            core._inflight += len(to_fetch)  # reserve the budget for the in-flight fetches
+        results = await asyncio.gather(*(self._fetch_edge(core, edge) for edge in to_fetch))
+        async with self._lock(core):
+            produced = [p for p in results if p is not None]
+            core.pages.extend(produced)
+            core._inflight -= len(to_fetch)
+        return produced
 
     async def _fetch_edge(self, core: "Crawl", edge: Edge) -> Any:
         """Fetch one edge, expand the frontier from its DOM, and return its retained

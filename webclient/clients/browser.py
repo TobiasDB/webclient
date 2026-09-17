@@ -247,6 +247,17 @@ class BrowserClient(Client):
 
         page.on("console", _on_console)
         page.on("request", _on_request)
+        try:
+            return await self._open_body(page, url, wait, scripts, replay, console, network)
+        finally:  # ALWAYS remove the listeners -- a mid-open failure must not leave them on a
+            # reused page (they would survive and double-count console/network into SPA detection).
+            page.remove_listener("console", _on_console)
+            page.remove_listener("request", _on_request)
+
+    async def _open_body(
+        self, page: Any, url: str, wait: Any, scripts: Any, replay: Any,
+        console: list[Any], network: list[Any],
+    ) -> "PageResult":
         # the main-document Response -- the REAL status/headers of the navigation
         # (Playwright hands it back from ``goto``). ``None`` for a non-HTTP nav.
         response = await page.goto(url, wait_until="domcontentloaded")
@@ -313,8 +324,6 @@ class BrowserClient(Client):
         for s in scripts:  # drain scripts clear buffers after replay (result ignored)
             if s.phase == "drain":
                 await page.evaluate(s.source)
-        page.remove_listener("console", _on_console)  # don't accumulate on a reused page
-        page.remove_listener("request", _on_request)
         return result
 
     async def aclose(self) -> None:

@@ -96,11 +96,33 @@ def _is_locale(seg: str) -> bool:
     return False
 
 
+#: bare 2-letter codes that ARE locale codes but read just as naturally as a content path
+#: segment (a region/section/word) -- e.g. ``/ca/products`` (California/Canada, not Catalan),
+#: ``/us/news``, ``/in/…``. Folding these as a leading PATH locale would collapse two distinct
+#: pages into one dedup key and DROP the second, so a bare occurrence is NOT folded (missing a
+#: page is worse than crawling a locale duplicate). A regioned form (``ca-es``) is unambiguous
+#: and still folds; subdomain folding (``ca.site.com``) is unaffected.
+_AMBIGUOUS_PATH_LOCALE = frozenset(
+    {"is", "in", "it", "no", "so", "to", "or", "at", "be", "as", "am", "by", "do",
+     "he", "hi", "me", "us", "we", "id", "ca", "an", "go", "my", "oh", "ok", "up"}
+)
+
+
+def _is_path_locale(seg: str) -> bool:
+    """Whether a leading PATH segment is safe to fold as a locale: a regioned ``lang-country``
+    pair always is; a bare code is only if it isn't an ambiguous content-like code."""
+    s = seg.lower()
+    if "-" in s or "_" in s:
+        return _is_locale(seg)
+    return s in _LOCALE_CODES and s not in _AMBIGUOUS_PATH_LOCALE
+
+
 def _strip_locale_path(path: str) -> str:
     """Drop a leading locale segment (``/en/news`` -> ``/news``) so a page's
-    localised copies dedup to one target."""
+    localised copies dedup to one target -- but never a bare ambiguous code that is more
+    likely a content section (see :data:`_AMBIGUOUS_PATH_LOCALE`)."""
     segs = path.split("/")  # path starts "/", so segs[0] == ""
-    if len(segs) > 1 and _is_locale(segs[1]):
+    if len(segs) > 1 and _is_path_locale(segs[1]):
         return "/" + "/".join(segs[2:])
     return path
 

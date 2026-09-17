@@ -62,6 +62,10 @@ class Crawl(WebCore, ICrawl):
     #: same ``len(pages)`` before appending, so each claims the full remaining budget
     #: and ``max_pages`` is blown past. Lazily created on the crawl's own loop.
     _step_lock: Any = PrivateAttr(default=None)  # asyncio.Lock (lazy, loop-bound)
+    #: pages claimed by a round but not yet appended -- reserved under the step lock so the
+    #: page budget stays correct while a round fetches its claimed edges CONCURRENTLY (outside
+    #: the lock), and concurrent rounds don't both claim the same remaining budget.
+    _inflight: int = PrivateAttr(default=0)
     #: set on a remote handle -- the id of the server-side crawl this mirrors, so
     #: ``step``/``run`` round-trip to it (empty on a local crawl).
     _crawl_id: str = PrivateAttr(default="")

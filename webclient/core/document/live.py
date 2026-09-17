@@ -325,10 +325,12 @@ class LiveBacking(Backing):
             self._aselect(core, selector, index, RETURN if optional else error)
         )
 
-    def select_all(self, core: "Document", selector: str) -> "list[Document]":
+    def select_all(
+        self, core: "Document", selector: str, *, limit: int | None = None, offset: int = 0
+    ) -> "list[Document]":
         if self._loop(core).on_loop_thread():
-            return _html().select_all(core, selector)
-        return self._loop(core).run(self._aselect_all(core, selector))
+            return _html().select_all(core, selector, limit=limit, offset=offset)
+        return self._loop(core).run(self._aselect_all(core, selector, limit=limit, offset=offset))
 
     async def evaluate(self, core: "Document", script: str, *, mutates: bool = True) -> Any:
         """Run ``script`` in the live page and return its result. ``mutates`` (default
@@ -448,12 +450,16 @@ class LiveBacking(Backing):
         ]
         return sub
 
-    async def _aselect_all(self, core: "Document", selector: str) -> "list[Document]":
+    async def _aselect_all(
+        self, core: "Document", selector: str, *, limit: int | None = None, offset: int = 0
+    ) -> "list[Document]":
         from . import Document
 
         loc = core._page.locator(selector)
+        total = await loc.count()
+        stop = total if limit is None else min(total, offset + limit)
         out: "list[Document]" = []
-        for i in range(await loc.count()):
+        for i in range(offset, stop):
             html = await loc.nth(i).evaluate("el => el.outerHTML")
             sub = Document(
                 url=core.url,
