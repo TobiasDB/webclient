@@ -59,6 +59,18 @@ def test_caas_content_service_marker_fires_spa_so_auto_renders():
     assert any("client-render marker" in s.reason for s in f["spa"].signals)
 
 
+def test_large_document_flag_is_content_size_based():
+    # a flag that fires purely on CONTENT SIZE (independent of any skeleton), so a caller knows a
+    # skeleton of the page will be trimmed/collapsed to fit a budget. Its value is the size.
+    big = b"<html><body>" + b"<p>lots of real content here </p>" * 12000 + b"</body></html>"
+    f = flags_from_response(200, {"content-type": "text/html"}, {}, big)
+    assert f["large_document"].present and f["large_document"].value == len(big.decode())
+    assert f["large_document"].signals[0].stage == "static"
+    # a small page does not
+    small = flags_from_response(200, {"content-type": "text/html"}, {}, b"<html><body><p>hi</p></body></html>")
+    assert not small["large_document"].present
+
+
 def test_is_data_endpoint_tells_content_apis_from_analytics():
     from webclient.signals.dom import _is_data_endpoint
 

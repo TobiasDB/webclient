@@ -33,7 +33,7 @@ class FlagsBacking(Backing):
     provides = frozenset(
         {"flags", "spa", "anti_bot_present", "anti_bot_triggered", "login_present",
          "login_required", "pagination", "forms", "buttons", "shadow_dom", "iframe",
-         "framework", "xhr_endpoints"}
+         "large_document", "framework", "xhr_endpoints"}
     )
     gate = "ok"
 
@@ -96,6 +96,13 @@ class FlagsBacking(Backing):
     def buttons(self, core: "Document") -> Flag:
         """Interactive buttons on the page. ``value`` is a sample of button labels."""
         return self._flags(core)["buttons"]
+
+    def large_document(self, core: "Document") -> Flag:
+        """The document is LARGE -- its decoded body is big enough that a skeleton/outline of it
+        gets trimmed or collapsed to fit a token budget, so a query author sees a reduced view.
+        A property of the CONTENT SIZE alone (independent of any skeleton); ``value`` is the size
+        in characters."""
+        return self._flags(core)["large_document"]
 
     def shadow_dom(self, core: "Document") -> Flag:
         """The page hides content in shadow DOM -- invisible to a plain HTML snapshot.

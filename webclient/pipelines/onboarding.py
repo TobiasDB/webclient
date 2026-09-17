@@ -678,7 +678,7 @@ def _fields_line(brief: Brief) -> str:
 #: the flags the pipeline reads to decide how to fetch, resolve and query a source.
 _DECISION_FLAGS = (
     "spa", "shadow_dom", "iframe", "anti_bot_triggered", "login_required",
-    "pagination", "forms", "buttons",
+    "pagination", "forms", "buttons", "large_document",
 )
 
 

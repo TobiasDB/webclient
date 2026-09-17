@@ -105,11 +105,35 @@ def _antibot_value(signals: "list[Signal]", ctx: Context) -> str | None:
     return next((s.value for s in signals if isinstance(s.value, str)), None)
 
 
+#: decoded-body size (chars) at/above which a page is "large" -- the DOM (and any skeleton
+#: derived from it) is big enough that a skeleton view will be trimmed/collapsed to fit a budget.
+#: This flag is a property of the CONTENT SIZE alone, independent of any skeleton rendering.
+_LARGE_DOC_CHARS = 300_000
+
+
+def _large_doc_value(signals: "list[Signal]", ctx: Context) -> "int | None":
+    """The decoded-body size behind the flag (chars), so a caller sees HOW large."""
+    return next((s.value for s in signals if isinstance(s.value, int)), None)
+
+
 flag("spa", remedy="browser", value=_spa_endpoints)
 flag("anti_bot_present", value=_antibot_value)
 flag("anti_bot_triggered", remedy=_antibot_remedy, value=_antibot_value)
 flag("login_present")
 flag("login_required")
+flag("large_document", value=_large_doc_value)
+
+
+@detector(flag="large_document", name="large_body", stage="static")
+def _large_body(ctx: Context) -> Hit | None:
+    """A LARGE document -- the decoded body is big enough that a skeleton of it will be
+    trimmed/collapsed to fit a token budget, so a query author sees only a reduced view. Based on
+    CONTENT SIZE, not on the skeleton. Confidence grows with size."""
+    n = len(ctx.text)
+    if n < _LARGE_DOC_CHARS:
+        return None
+    conf = min(0.95, 0.6 + (n - _LARGE_DOC_CHARS) / 2_000_000)
+    return Hit(round(conf, 2), f"{n:,} chars of content (a skeleton of it will be trimmed)", n)
 
 
 # -- spa (static evidence) ----------------------------------------------------
