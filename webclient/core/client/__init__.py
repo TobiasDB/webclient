@@ -485,13 +485,15 @@ class WebClient(WebCore, IWebClient):
                 doc._client = self
                 self._register(doc, ref)
                 return doc
-        # The X-WebClient-* policy headers (rate/retry/proxy) are read by OUR downstream proxy /
-        # unblocker service. On a DIRECT connection (no proxy in the path) they would leak to the
-        # TARGET site and flag us as a scraper, so attach them ONLY when a proxy is actually used;
-        # otherwise a plain fetch carries no WebClient-identifying headers. Explicit headers win.
-        using_proxy = (pol is not None and pol.proxy is not None) or bool(self.browser_config.proxy)
+        # The X-WebClient-* policy headers are read by OUR special proxy / unblocker service --
+        # engaged via a ``ProxyPolicy`` (``Resolve.proxy``). They must reach ONLY that service:
+        # on a direct connection, or through a FIXED third-party proxy (``BrowserConfig.proxy``,
+        # which just forwards), they would land on the target site and flag us as a scraper. So
+        # attach them only when our service is engaged; otherwise the fetch carries no
+        # WebClient-identifying headers. Explicit ref/default headers still win.
+        using_service = pol is not None and pol.proxy is not None
         headers = {
-            **(policy_headers(pol) if using_proxy else {}),
+            **(policy_headers(pol) if using_service else {}),
             **self.default_headers,
             **ref.headers,
         }

@@ -1682,15 +1682,17 @@ def _repair_selector(selector: str, classes: "set[str]") -> "str | None":
         best, cand = 0.0, None
         for c in classes:
             r = difflib.SequenceMatcher(None, tok, c).ratio()
-            # a genuine plural / one-off typo: one is a prefix of the other, BOTH are reasonably
-            # long, and the lengths are close -- NOT a tiny class that happens to prefix a longer
-            # word (".nodate" must NOT snap to a real ".n").
+            # a genuine plural / one-off typo: one is a prefix of the other, BOTH are non-trivial,
+            # and the lengths are close -- NOT a tiny class that happens to prefix a longer word
+            # (".nodate" must NOT snap to a real ".n").
             if ((c.startswith(tok) or tok.startswith(c))
-                    and min(len(tok), len(c)) >= 4 and abs(len(tok) - len(c)) <= 2):
+                    and min(len(tok), len(c)) >= 3 and abs(len(tok) - len(c)) <= 3):
                 r = max(r, 0.9)
             if r > best:
                 best, cand = r, c
-        if cand and best >= 0.82:  # confident enough to swap the token for the real class
+        # a bit relaxed: the repaired query + its data are still validated and reviewed downstream,
+        # which catches a wrong swap -- so we can afford to try a slightly looser near-match.
+        if cand and best >= 0.75:  # swap the mistyped token for the real class
             new = _re.sub(rf"(?<![\w-]){_re.escape(tok)}(?![\w-])", cand, new)
     return new if new != selector else None
 
