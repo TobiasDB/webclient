@@ -1609,6 +1609,125 @@ def run_query(artifact: QueryArtifact, *, wc: WebClient) -> list[Any]:
     return out
 
 
+def _artifact_from(
+    expr: Any, doc: Any, brief: Brief, candidate_url: str,
+    resolve: "Resolve | None", bases: "list[str]",
+) -> "tuple[QueryArtifact, list[Any]]":
+    """Test one authored query against the source and build its :class:`QueryArtifact` (the
+    self-contained, runnable blob + validation verdict + timeliness flag). Shared by the
+    one-shot and staged authors. Returns ``(artifact, extracted_rows)``."""
+    tested, rows = _test_query(expr, doc) if doc.ok else (False, [])
+    good = _populated_rows(rows)
+    missing = _empty_required_fields(good, brief)  # required leaves empty on every row
+    tnote, stale = _timeliness(good, brief)  # over ALL rows; a FLAG, never a ship blocker
+    exe = _executable_query(expr, candidate_url, resolve)  # self-contained + runnable
+    art = QueryArtifact(
+        blob=exe.to_blob(),
+        describe=exe.explain(),
+        plan=exe._plan.model_dump(mode="json"),
+        tested=tested,
+        complete=bool(tested and good and not missing),  # every required leaf populated
+        row_count=len(good),
+        sample=list(good[:5]),
+        resolve=(resolve.model_dump(mode="json") if resolve is not None else {}),
+        base_urls=bases,
+        timeliness=tnote,
+        stale=stale,
+    )
+    return art, rows
+
+
+# --------------------------------------------------------------------------- #
+# staged query authoring: build the extraction in VALIDATED stages -- pick the record
+# container, then read each field's selector+accessor from ONE record's HTML -- and let
+# PYTHON assemble the query from the returned selectors (data, never model code). A safer,
+# higher-ceiling "manual agentic loop" than one blind shot (no tool calls needed).
+# --------------------------------------------------------------------------- #
+
+#: opt-in: try the staged author before the one-shot author. Off by default until it is proven
+#: on the live harness; the one-shot loop remains the fallback for either path.
+_STAGED_QUERY = False
+
+
+def _apply_accessor(node: Any, spec: "dict[str, Any]") -> Any:
+    """Apply a field accessor (text / attr / regex) from a validated spec to a selected node."""
+    acc = str(spec.get("accessor") or "text")
+    if acc == "attr":
+        return node.attr(str(spec.get("attr") or "text"))
+    if acc == "regex":
+        return node.regex(str(spec.get("pattern") or ".+"), group=int(spec.get("group") or 0))
+    return node.attr("text")
+
+
+def _build_field_expr(spec: "dict[str, Any]") -> Any:
+    """Build ONE field's sub-expression from a selector spec (data, not code): a nested
+    ``branch`` (a sub-extract per leaf), a ``resolve`` (follow the record's link to a detail
+    page), or a plain ``select`` + accessor. Optionality is threaded so a missing optional
+    field yields null instead of raising."""
+    optional = bool(spec.get("optional"))
+    branch = spec.get("branch")
+    if isinstance(branch, dict):
+        base = wq.doc.select(str(spec.get("selector") or ":scope"), optional=optional)
+        return base.extract(**{k: _build_field_expr(v) for k, v in branch.items()
+                               if isinstance(v, dict)}).project()
+    res = spec.get("resolve")
+    if isinstance(res, dict):
+        link = wq.doc.select(str(res.get("link_selector") or spec.get("selector") or "a"),
+                             optional=optional)
+        detail = link.attr("href").resolve().select(str(res.get("selector") or "*"), optional=optional)
+        return _apply_accessor(detail, res)
+    node = wq.doc.select(str(spec.get("selector") or ":scope"), optional=optional)
+    return _apply_accessor(node, spec)
+
+
+def _author_query_staged(doc: Any, brief: Brief, *, llm: LLM) -> Any:
+    """Author the extraction in VALIDATED stages and assemble it in Python:
+      1. CONTAINER -- ask which selector(s) match the repeating record; keep the first that
+         actually matches an element on the page.
+      2. FIELDS -- from ONE record's HTML, ask each field's relative selector + accessor (or a
+         resolve to a detail page); build each field's sub-expression from the returned spec.
+    Returns an assembled ``wq.doc`` Expr (validated by the caller via :func:`_artifact_from`), or
+    ``None`` if a stage produced nothing usable (the caller falls back to the one-shot author)."""
+    if not doc.ok:
+        return None
+    skeleton = _skeleton_for(doc)
+    cdata = _ask_json(llm, render_prompt(
+        "query_containers", description=brief.description,
+        fields_line=_fields_line(brief), skeleton=skeleton))
+    containers = [c for c in (cdata.get("containers", []) if isinstance(cdata, dict) else [])
+                  if isinstance(c, str) and c.strip()]
+    container = next((c for c in containers if (_selector_match_count(c, doc) or 0) > 0), None)
+    if not container:
+        return None
+    probe = wq.doc.select_all(container).extract(_=wq.doc.attr("text")).project()
+    record_html = _sample_record_html(probe, doc)
+    if not record_html:
+        return None
+    fdata = _ask_json(llm, render_prompt(
+        "query_fields", description=brief.description,
+        fields_line=_fields_line(brief), record_html=record_html))
+    if not isinstance(fdata, dict):
+        return None
+    optional_tops = {p.split(".")[0] for p in brief.optional}
+    fields: dict[str, Any] = {}
+    for name in _required_columns(brief) + [t for t in optional_tops]:
+        spec = fdata.get(name)
+        if not isinstance(spec, dict):
+            if name in optional_tops:
+                continue  # a genuinely absent optional field -> omit the column
+            return None   # a required field with no spec -> staged authoring failed
+        try:
+            fields[name] = _build_field_expr(spec)
+        except Exception:  # noqa: BLE001 - a spec we can't build -> abandon staged authoring
+            return None
+    if not fields:
+        return None
+    try:
+        return wq.doc.select_all(container).extract(**fields).project()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def write_query(
     candidate_url: str,
     brief: Brief,
@@ -1621,6 +1740,7 @@ def write_query(
     extra_urls: Sequence[str] = (),
     resolve: "Resolve | None" = None,
     doc: Any = None,
+    staged: "bool | None" = None,
 ) -> QueryArtifact | None:
     """Have the model author the DOCUMENT-level extraction from the page skeleton, test
     it against the fetched source (``from_blob`` + run -> it must extract DATA rows), and
@@ -1637,6 +1757,21 @@ def write_query(
     prompt = _query_prompt(brief, skeleton, paginated=paginated)
     bases = [candidate_url, *extra_urls]
     best: QueryArtifact | None = None
+    # STAGED authoring first (opt-in): pick+validate the container, then read each field from one
+    # record's HTML and assemble the query in Python. A complete result ships; anything else falls
+    # through to the one-shot author below (which also gets it as a fallback candidate).
+    if (staged if staged is not None else _STAGED_QUERY) and doc.ok:
+        try:
+            sexpr = _author_query_staged(doc, brief, llm=llm)
+        except LlmError as exc:
+            log.warning("staged query authoring LLM call failed: %s", exc)
+            sexpr = None
+        if sexpr is not None:
+            art, _rows = _artifact_from(sexpr, doc, brief, candidate_url, resolve, bases)
+            log.info("    staged author: complete=%s, %d row(s)", art.complete, art.row_count)
+            if art.complete:
+                return art
+            best = art  # keep as the fallback; the one-shot loop may still beat it
     ask = prompt
     for attempt in range(retries + 1):
         # A retry re-asks with the failure hint appended -- but an identical ask re-hits the
@@ -1675,31 +1810,7 @@ def write_query(
                 " field with .extract(col=...), and END with .project(). Re-write it."
             )
             continue
-        tested, rows = _test_query(expr, doc) if doc.ok else (False, [])
-        # VALIDATE the extraction actually pulled content, not just that it ran: keep only
-        # rows with a non-empty field, and require every non-optional field to have come out
-        # somewhere. A query that matched a container but whose field selectors match nothing
-        # (a guess, or content that isn't in the HTML) is NOT a success.
-        good = _populated_rows(rows)
-        missing = _empty_required_fields(good, brief)
-        # timeliness is assessed over ALL extracted rows (date-sorted inside _timeliness), not
-        # the 5-row DOM-ordered sample -- so a feed whose newest item isn't first isn't misread
-        # as stale. It is stored as a FLAG for the human, never a ship blocker.
-        tnote, stale = _timeliness(good, brief)
-        exe = _executable_query(expr, candidate_url, resolve)  # self-contained + runnable
-        art = QueryArtifact(
-            blob=exe.to_blob(),
-            describe=exe.explain(),
-            plan=exe._plan.model_dump(mode="json"),
-            tested=tested,
-            complete=bool(tested and good and not missing),  # every required field populated
-            row_count=len(good),
-            sample=list(good[:5]),
-            resolve=(resolve.model_dump(mode="json") if resolve is not None else {}),
-            base_urls=bases,
-            timeliness=tnote,
-            stale=stale,
-        )
+        art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases)
         if art.complete:
             return art  # rows with real, complete content -- accept it
         best = best or art  # keep the first rebuildable one as a fallback (NOT complete)

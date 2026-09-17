@@ -141,6 +141,48 @@ def test_onboard_company_reports_when_no_seeds(site):
     assert not result.ok and result.reason == "no search seeds"
 
 
+def test_staged_query_author_assembles_and_validates(httpserver):
+    # the staged author picks+validates the container, then reads each field's selector/accessor
+    # from ONE record's HTML, and PYTHON assembles the query (selectors as data, not model code).
+    from webclient.pipelines.onboarding import write_query
+
+    cards = "".join(
+        f'<article class="product"><span class="name">P{i}</span>'
+        f'<span class="stars" data-rating="{r}"></span>'
+        f'<span class="price">USD {p} / each</span></article>'
+        for i, (r, p) in enumerate([("Four", "39.95"), ("Five", "1,299.00"), ("Three", "89.00")])
+    )
+    httpserver.expect_request("/shop").respond_with_data(
+        f'<html><body><nav>menu</nav><main><div class="grid">{cards}</div></main></body></html>',
+        content_type="text/html",
+    )
+
+    def llm(prompt: str) -> str:
+        if "REPEATING RECORD CONTAINER" in prompt:            # stage 1: container
+            return '{"containers": ["article.product"]}'
+        if "extracting fields from ONE record" in prompt:     # stage 2: field selectors
+            return (
+                '{"name": {"selector": "[class*=name]", "accessor": "text"},'
+                ' "rating": {"selector": "[data-rating]", "accessor": "attr", "attr": "data-rating"},'
+                ' "price": {"branch": {"value": {"selector": ".price", "accessor": "regex",'
+                '   "pattern": "[0-9.,]+", "group": 0},'
+                '  "unit": {"selector": ".price", "accessor": "regex", "pattern": "/ (\\\\w+)", "group": 1}},'
+                '  "selector": ":scope"}}'
+            )
+        return "{}"
+
+    with WebClient() as wc:
+        art = write_query(
+            httpserver.url_for("/shop"),
+            Brief(description="products", fields=["name", "price.value", "price.unit", "rating"]),
+            wc=wc, llm=llm, browser="never", staged=True,
+        )
+    assert art is not None and art.complete and art.row_count == 3
+    row = art.sample[0]
+    assert row["name"] == "P0" and row["rating"] == "Four"
+    assert row["price"] == {"value": "39.95", "unit": "each"}
+
+
 def test_select_candidates_forces_data_docs_and_fails_open():
     from webclient.core.document.models import PageCard
     from webclient.pipelines.onboarding import select_candidates
