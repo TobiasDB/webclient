@@ -561,25 +561,24 @@ def _acme_search(site):
     return search
 
 
-def test_review_gate_fails_the_pipeline_on_a_bad_crawl(site):
-    # the crawl review is an INTEGRAL gate: a failing crawl review fails the whole run and
-    # stops it before selecting/querying -- not an after-the-fact grade.
+def test_a_failing_stage_review_is_a_flag_not_a_gate(site):
+    # reviews are INFORMATION for the human, not hard gates: a failing crawl review is recorded
+    # but the run CONTINUES and still ships a working query (ship is driven by the deterministic
+    # extraction, not a model's opinion).
     products_url = site.url_for("/products")
     llm = _pipeline_stub(products_url, reviews={
-        "CRAWL stage": '{"pass": false, "verdict":"poor","score":2,"issues":["missed the catalogue"],"summary":"crawl never reached the products"}',
-        "FAILED": '{"verdict":"crawl","score":8,"issues":["seed the /products page"],"summary":"crawl did not reach the data"}',
+        "CRAWL stage": '{"pass": false, "verdict":"poor","score":2,"issues":["missed the catalogue"],"summary":"crawl looked thin"}',
     })
     with WebClient() as wc:
         result = onboard_company(
             "Acme", Brief(description="the company's products", fields=["name", "price"]),
             wc=wc, llm=llm, search=_acme_search(site), browser=False, review=True,
         )
-    assert not result.ok and result.reason.startswith("crawl review failed")
     by = {r.stage: r for r in result.reviews}
-    assert "crawl" in by and not by["crawl"].passed      # the gate that stopped it
-    assert "select" not in by and "query" not in by      # never got past the crawl
-    assert "failure" in by                               # a diagnosis was added to the summary
-    assert result.query is None                          # no query authored
+    assert "crawl" in by and not by["crawl"].passed      # recorded as a FLAG
+    assert result.ok                                     # ...but the run was NOT abandoned
+    assert result.query is not None and result.query.complete
+    assert not result.reason                             # not failed by the review
 
 
 def test_review_passes_let_the_pipeline_complete(site):
@@ -601,15 +600,15 @@ def test_review_passes_let_the_pipeline_complete(site):
     assert result.query is not None and result.query.row_count == 3
 
 
-def test_query_review_gate_fails_an_otherwise_running_query(site):
-    # a query can RUN yet not match the brief; the query review gates it, so the run is not
-    # ok even though the query extracted rows.
+def test_query_review_is_recorded_but_does_not_fail_a_working_query(site):
+    # a query can RUN and extract valid data yet be graded low by the model; the query review is
+    # RECORDED as a flag for the human, but it does NOT discard a working query -- ship is
+    # decided by the deterministic extraction (complete rows), not the model's opinion.
     products_url = site.url_for("/products")
     ok = '{"pass": true, "verdict":"good","score":9,"issues":[],"summary":"ok"}'
     llm = _pipeline_stub(products_url, reviews={
         "CRAWL stage": ok, "SELECT stage": ok,
         "QUERY stage": '{"pass": false, "verdict":"poor","score":3,"issues":["price is the wrong field"],"summary":"output does not match the brief"}',
-        "FAILED": '{"verdict":"query","score":7,"issues":["fix the price selector"],"summary":"query output wrong"}',
     })
     with WebClient() as wc:
         result = onboard_company(
@@ -617,9 +616,9 @@ def test_query_review_gate_fails_an_otherwise_running_query(site):
             wc=wc, llm=llm, search=_acme_search(site), browser=False, review=True,
         )
     assert result.query is not None and result.query.row_count == 3  # the query DID run
-    assert not result.ok and result.reason.startswith("query review failed")  # but the gate failed it
+    assert result.ok and not result.reason              # ...and ships despite the low review
     by = {r.stage: r for r in result.reviews}
-    assert not by["query"].passed and "failure" in by
+    assert "query" in by and not by["query"].passed     # recorded as a FLAG
 
 
 def test_optional_schema_fields_are_marked_and_rendered():

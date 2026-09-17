@@ -388,6 +388,12 @@ class QueryArtifact(BaseModel):
     #: pagination) lists them all; :func:`run_query` resolves the query per base and
     #: concatenates the rows.
     base_urls: list[str] = []
+    #: a TIMELINESS flag for the human review: the note from :func:`_timeliness` over ALL
+    #: extracted rows (e.g. "newest 2026-09-14, within cadence" / "the most recent data is
+    #: missing"), and whether it read as stale. Informational only -- a stale flag never
+    #: blocks a working query from shipping.
+    timeliness: str = ""
+    stale: bool = False
 
 
 class Review(BaseModel):
@@ -576,20 +582,33 @@ def _strip_fences(text: str) -> str:
 
 
 def _json_blob(text: str) -> str:
-    """The first balanced JSON object/array in ``text`` (models like to wrap it in
-    prose). Falls back to the whole stripped string."""
+    """The first balanced JSON object/array in ``text`` (models like to wrap it in prose).
+    STRING-AWARE: a brace/bracket inside a JSON string value (``"the } brace"``, or a selector
+    like ``[class*="price"]`` in a reason) does not miscount depth. Falls back to the whole
+    stripped string."""
     t = _strip_fences(text)
     starts = [i for i in (t.find("{"), t.find("[")) if i != -1]
     if not starts:
         return t
     start = min(starts)
-    open_ch = t[start]
-    close_ch = "}" if open_ch == "{" else "]"
     depth = 0
+    in_str = False
+    escaped = False
     for i in range(start, len(t)):
-        if t[i] == open_ch:
+        ch = t[i]
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
             depth += 1
-        elif t[i] == close_ch:
+        elif ch in "}]":
             depth -= 1
             if depth == 0:
                 return t[start : i + 1]
@@ -1491,9 +1510,7 @@ def _populated_rows(rows: "list[Any]") -> "list[Any]":
 
 
 def _required_columns(brief: Brief) -> "list[str]":
-    """The top-level schema field names that must be populated (non-optional). The query's
-    ``.extract(col=...)`` columns are named after these, so we can check each really came
-    out with content."""
+    """The top-level schema field names that must be populated (non-optional)."""
     opt = {p.split(".")[0] for p in brief.optional}
     req: list[str] = []
     for f in brief.fields:
@@ -1503,15 +1520,34 @@ def _required_columns(brief: Brief) -> "list[str]":
     return req
 
 
+def _required_leaf_paths(brief: Brief) -> "list[str]":
+    """The required LEAF field paths (dotted). A leaf is a field with no deeper field under
+    it (``price.value`` / ``price.unit`` are leaves; ``price`` is their branch). A leaf is
+    optional if IT or any ancestor is marked optional. Used to validate nested extractions:
+    a query that produced ``price = {"value":"","unit":""}`` populated the branch but NONE of
+    its required leaves, which the old top-level check missed."""
+    fields = list(brief.fields)
+    opt = set(brief.optional)
+    leaves = [f for f in fields if not any(g != f and g.startswith(f + ".") for g in fields)]
+    req: list[str] = []
+    for leaf in leaves:
+        parts = leaf.split(".")
+        ancestors = [".".join(parts[: i + 1]) for i in range(len(parts))]
+        if not any(a in opt for a in ancestors):  # leaf or an ancestor optional -> skip
+            req.append(leaf)
+    return req
+
+
 def _empty_required_fields(rows: "list[Any]", brief: Brief) -> "list[str]":
-    """Required columns that are EMPTY (or absent) across every row -- their selectors
-    matched no content, so the query is only a partial guess. Empty when the rows carry
-    every required field. Skipped when the brief has no schema (nothing to check)."""
-    req = _required_columns(brief)
+    """Required LEAF paths that are EMPTY (or absent) across every row -- their selectors
+    matched no content, so the query is only a partial guess. Recurses into nested rows via
+    :func:`_dig`, so an empty nested leaf (``price.value``) is caught even when its branch dict
+    is present. Empty when the rows carry every required leaf; skipped with no schema."""
+    req = _required_leaf_paths(brief)
     dict_rows = [r for r in rows if isinstance(r, dict)]
     if not req or not dict_rows:
         return []
-    return [c for c in req if not any(_nonempty(r.get(c)) for r in dict_rows)]
+    return [p for p in req if not any(_nonempty(_dig(r, p)) for r in dict_rows)]
 
 
 def _content_hint(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> str:
@@ -1584,6 +1620,7 @@ def write_query(
     retries: int = 4,
     extra_urls: Sequence[str] = (),
     resolve: "Resolve | None" = None,
+    doc: Any = None,
 ) -> QueryArtifact | None:
     """Have the model author the DOCUMENT-level extraction from the page skeleton, test
     it against the fetched source (``from_blob`` + run -> it must extract DATA rows), and
@@ -1592,8 +1629,10 @@ def write_query(
     runs as is (:func:`_executable_query`). Retries with feedback on an invalid or
     non-extracting query. ``paginated`` tells the author to capture the next-page link;
     ``extra_urls`` are further base URLs the same query also runs against;
-    ``resolve`` bakes the fetch policy (browser tier) into the executable query."""
-    doc = wc.fetch(candidate_url, browser=browser, optional=True)
+    ``resolve`` bakes the fetch policy (browser tier) into the executable query. ``doc`` is the
+    already-fetched source (from the flag-read step) -- reused so we don't re-fetch it."""
+    if doc is None:
+        doc = wc.fetch(candidate_url, browser=browser, optional=True)
     skeleton = _skeleton_for(doc) if doc.ok else ""
     prompt = _query_prompt(brief, skeleton, paginated=paginated)
     bases = [candidate_url, *extra_urls]
@@ -1643,6 +1682,10 @@ def write_query(
         # (a guess, or content that isn't in the HTML) is NOT a success.
         good = _populated_rows(rows)
         missing = _empty_required_fields(good, brief)
+        # timeliness is assessed over ALL extracted rows (date-sorted inside _timeliness), not
+        # the 5-row DOM-ordered sample -- so a feed whose newest item isn't first isn't misread
+        # as stale. It is stored as a FLAG for the human, never a ship blocker.
+        tnote, stale = _timeliness(good, brief)
         exe = _executable_query(expr, candidate_url, resolve)  # self-contained + runnable
         art = QueryArtifact(
             blob=exe.to_blob(),
@@ -1654,6 +1697,8 @@ def write_query(
             sample=list(good[:5]),
             resolve=(resolve.model_dump(mode="json") if resolve is not None else {}),
             base_urls=bases,
+            timeliness=tnote,
+            stale=stale,
         )
         if art.complete:
             return art  # rows with real, complete content -- accept it
@@ -1674,6 +1719,14 @@ def write_query(
 # --------------------------------------------------------------------------- #
 
 
+def _as_bool(v: Any) -> bool:
+    """Coerce a model's truthy/falsey field to bool, treating the STRING tokens a cheap model
+    emits ("false"/"no"/"0"/"") as False -- so ``"pass": "false"`` isn't read as truthy."""
+    if isinstance(v, str):
+        return v.strip().lower() not in ("false", "no", "0", "", "none", "null")
+    return bool(v)
+
+
 def _review_from_json(stage: str, data: Any) -> "Review | None":
     """Build a :class:`Review` from a model's JSON judgement (``verdict`` / ``score`` /
     ``issues`` / ``summary``). ``None`` if the model gave nothing usable."""
@@ -1689,7 +1742,7 @@ def _review_from_json(stage: str, data: Any) -> "Review | None":
     return Review(
         stage=stage,
         verdict=str(data.get("verdict") or ""),
-        passed=bool(data.get("pass", True)),  # absent -> don't block (default pass)
+        passed=_as_bool(data.get("pass", True)),  # absent -> default pass; a stringy "false" is False
         score=max(0, min(10, score)),
         issues=[str(i) for i in issues][:10],
         summary=str(data.get("summary") or ""),
@@ -1775,6 +1828,20 @@ def _parse_date(s: str) -> "Any":
             return datetime.datetime.strptime(s, fmt).date()
         except ValueError:
             pass
+    # RFC 822 (RSS <pubDate>: "Tue, 09 Sep 2026 13:00:00 GMT") -- a primary onboarding target.
+    try:
+        from email.utils import parsedate_to_datetime
+
+        dt = parsedate_to_datetime(s)
+        if dt is not None:
+            return dt.date()
+    except (TypeError, ValueError):
+        pass
+    # ISO 8601 with a time / offset (Atom <updated>: "2026-09-14T10:30:00Z").
+    try:
+        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).date()
+    except ValueError:
+        pass
     m = re.search(r"(\d{4})-(\d{2})-(\d{2})", s)
     if m:
         try:
@@ -1861,26 +1928,27 @@ def review_query(result: OnboardingResult, artifacts: _RunArtifacts, brief: Brie
     doc = artifacts.query_doc
     skeleton = _skeleton_for(doc) if (doc is not None and doc.ok) else "(unavailable)"
     sample = json.dumps(list(q.sample)[:8], default=str, indent=2)
-    tnote, stale = _timeliness(list(q.sample), brief)  # is the LATEST data present, per cadence?
+    # timeliness was assessed over ALL rows at authoring time (stored on the artifact); reuse it
+    # rather than recomputing from the 5-row sample (which can miss the newest item).
+    tnote = q.timeliness or "(no date field to assess timeliness)"
     data = _ask_json(llm, render_prompt(
         "review_query",
         description=brief.description, fields_line=_fields_line(brief),
         query=q.describe, row_count=str(q.row_count), tested=str(q.tested),
         sample=_clip(sample, _MAX_LISTING_CHARS, "sample rows"),
-        timeliness=tnote or "(no date field to assess timeliness)",
+        timeliness=tnote,
         # completeness is KEPT but DISABLED by default -- flip _CHECK_COMPLETENESS to gate on it
         completeness=(_COMPLETENESS_BLOCK if _CHECK_COMPLETENESS else _COMPLETENESS_OFF),
         skeleton=skeleton,
     ))
     review = _review_from_json("query", data)
-    if stale:  # ENSURE the timeliness gate deterministically, whatever the model said
-        review = review or Review(stage="query", verdict="poor")
-        review.passed = False
-        review.verdict = review.verdict or "poor"
-        if tnote and tnote not in review.issues:
-            review.issues = [tnote, *review.issues][:10]
+    if q.stale:  # surface staleness as a FLAG on the review (never abandons the query)
+        review = review or Review(stage="query", verdict="partial")
+        review.passed = False  # recorded as "flagged" by _note_review, not a hard gate
+        if q.timeliness and q.timeliness not in review.issues:
+            review.issues = [q.timeliness, *review.issues][:10]
         if not review.summary:
-            review.summary = "the most recent data is missing (fails timeliness)"
+            review.summary = "the most recent data may be missing (timeliness flag)"
     return review
 
 
@@ -1903,23 +1971,21 @@ def review_failure(result: OnboardingResult, artifacts: _RunArtifacts, brief: Br
     return _review_from_json("failure", data)
 
 
-def _gate(result: OnboardingResult, review: "Review | None") -> bool:
-    """Record a stage review and GATE the pipeline on it: append it to ``result.reviews``
-    and return whether the run may CONTINUE. A review that did not pass fails the run here
-    (``ok=False`` + a reason naming the stage), so the review is integral -- a bad crawl /
-    selection / query stops the pipeline, it is not graded after the fact. ``None`` (the
-    review was skipped or the model gave nothing) does not gate."""
+def _note_review(result: OnboardingResult, review: "Review | None") -> None:
+    """Record a stage review as INFORMATION for the human, without abandoning the run. The
+    review (an LLM judgement, or the deterministic timeliness assessment) is appended to
+    ``result.reviews`` and traced, but a non-passing review NO LONGER fails the pipeline: it is
+    a FLAG, not a hard gate. Whether a run ships is decided by the DETERMINISTIC extraction
+    result (``q.complete`` -- real rows, every required field populated), not by a model's
+    opinion or a timeliness note -- so a useful warning ("the data looks stale", "the crawl
+    was thin") is surfaced for review instead of throwing away a working query. ``None`` (the
+    review was skipped) records nothing."""
     if review is None:
-        return True
+        return
     result.reviews.append(review)
     _trace(result, "%s review: %s%s", review.stage,
-           "passed" if review.passed else "FAILED",
+           "passed" if review.passed else "flagged",
            f" — {review.summary}" if review.summary else "")
-    if not review.passed:
-        result.ok = False
-        result.reason = f"{review.stage} review failed" + (f": {review.summary}" if review.summary else "")
-        return False
-    return True
 
 
 def diagnose_failure(result: OnboardingResult, artifacts: _RunArtifacts, *, brief: Brief, llm: LLM) -> None:
@@ -2013,10 +2079,9 @@ def _onboard_company(
     )
     artifacts.crawl = crawl
     note("crawled %d page(s), %d failed", len(crawl.pages), len(crawl.failures))
-    # GATE: the crawl review is an integral stage -- a crawl that didn't reach the data
-    # fails the run here rather than pressing on to select a source that isn't there.
-    if review and not _gate(result, review_crawl(artifacts, brief, llm=llm)):
-        return result
+    # the crawl review is a FLAG for the human, not a gate -- record it and press on.
+    if review:
+        _note_review(result, review_crawl(artifacts, brief, llm=llm))
     candidates = select_candidates(
         crawl, brief, llm=llm, seed_urls=[s.url for s in artifacts.seeds if s.url]
     )
@@ -2037,9 +2102,9 @@ def _onboard_company(
         "chose %s (queryable=%s, scrapability=%d)",
         evaluation.url, evaluation.is_queryable, evaluation.scrapability,
     )
-    # GATE: the selection review -- were the right URLs picked and the best source chosen?
-    if review and not _gate(result, review_select(result, artifacts, brief, llm=llm)):
-        return result
+    # the selection review is a FLAG for the human, not a gate -- record it and press on.
+    if review:
+        _note_review(result, review_select(result, artifacts, brief, llm=llm))
     # -- the flag-driven decision cascade for the chosen source, in order ----------
     # (1) reference: the data API if the SPA is backed by one, else the page URL.
     result.reference = write_reference(evaluation, wc=wc)
@@ -2055,10 +2120,13 @@ def _onboard_company(
     result.resolve = write_resolve(list(flags.values()))
     fired = [n for n, f in flags.items() if f.present]
     note("flags fired: %s; authoring the query", ", ".join(fired) or "none")
-    # (4) query: authored from the skeleton, told to page when the source paginates.
+    # (4) query: authored from the skeleton, told to page when the source paginates. The source
+    # was already fetched above (for the flags) -- reuse that Document so write_query doesn't
+    # re-fetch (a browser/proxy re-fetch is real budget + latency, and can drift the skeleton).
     result.query = write_query(
         query_url, brief, wc=wc, llm=llm, browser=_mode(browser),
         paginated=evaluation.has_pagination, resolve=result.resolve,
+        doc=doc if doc.ok else None,
     )
     if isinstance(llm, LlmClient):
         result.cost_usd = llm.spent_usd
@@ -2077,10 +2145,11 @@ def _onboard_company(
         result.reason = "could not author a query"
     if q is not None:
         note("query authored (tested=%s, %d row[s])", q.tested, q.row_count)
-    # GATE: the query review -- does the output match the brief, are the selectors right,
-    # is it complete? A failing review fails the run even if the query technically ran.
-    if review and result.ok:
-        _gate(result, review_query(result, artifacts, brief, llm=llm))
+    # the query review + the deterministic timeliness assessment are FLAGS for the human
+    # (recorded on result.reviews), not gates: a working query is never discarded because a
+    # model graded it low or the data looks stale.
+    if review and q is not None:
+        _note_review(result, review_query(result, artifacts, brief, llm=llm))
     return result
 
 
