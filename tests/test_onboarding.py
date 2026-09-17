@@ -65,12 +65,11 @@ def test_onboard_company_finds_and_queries_the_dataset(site):
     )
 
     def search(query, k):  # a stub SearchFn: seed at the company home page
-        assert "widget" in query.lower() or "product" in query.lower()
+        # the query is deterministic: "<company> <brief.search>"
+        assert query == "Acme products"
         return [SearchHit(url=site.url_for("/"), title="Acme", snippet="widgets")]
 
     def llm(prompt: str) -> str:  # a scripted model, routed by prompt content
-        if "web-search query" in prompt:
-            return "acme products widgets"
         if "frontier links" in prompt:  # pick the /products link by its listing index
             for line in prompt.splitlines():
                 s = line.strip()
@@ -98,7 +97,8 @@ def test_onboard_company_finds_and_queries_the_dataset(site):
 
     with WebClient() as wc:
         result = onboard_company(
-            "Acme", Brief(description="the company's products", fields=["name", "price"]),
+            "Acme",
+            Brief(description="the company's products", fields=["name", "price"], search="products"),
             wc=wc, llm=llm, search=search, browser=False,
         )
 
@@ -380,23 +380,23 @@ def test_seeds_for_company_fails_open_without_a_usable_judgement():
 def test_search_web_retries_stricter_when_all_seeds_are_the_wrong_company():
     from webclient.pipelines.onboarding import search_web
 
-    calls = {"n": 0}
+    queries: list[str] = []
 
     def search(query, k):
-        calls["n"] += 1
-        if calls["n"] == 1:  # the first query pulls the look-alike company
+        queries.append(query)
+        if len(queries) == 1:  # the first query pulls the look-alike company
             return [SearchHit(url="https://squareup.com/", title="Square")]
         return [SearchHit(url="https://squarepoint.com/", title="Squarepoint Capital")]
 
     def llm(prompt):
-        if "web-search query" in prompt:  # craft (and, on retry, disambiguate) the query
-            return "squarepoint capital official" if "DIFFERENT company" in prompt else "squarepoint"
         if "belong" in prompt:  # verify: the right one belongs only in the second set
             return '{"belong": [0]}' if "https://squarepoint.com" in prompt else '{"belong": []}'
         return "{}"
 
-    seeds = search_web(Brief(description="ir news"), "Squarepoint", search=search, llm=llm)
-    assert calls["n"] == 2  # it retried the search with a stricter query
+    brief = Brief(description="ir news", search="capital", look=["hedge fund"])
+    seeds = search_web(brief, "Squarepoint", search=search, llm=llm)
+    assert len(queries) == 2 and queries[0] != queries[1]  # retried with a stricter query
+    assert queries[0] == "Squarepoint capital"  # deterministic: company + the brief's qualifier
     assert [s.url for s in seeds] == ["https://squarepoint.com/"]
 
 
@@ -412,14 +412,14 @@ def test_search_web_broadens_and_retries_on_no_results():
         return [] if len(queries) == 1 else [SearchHit(url="https://acme.com/blog", title="Acme")]
 
     def llm(prompt):
-        if "web-search query" in prompt:
-            return "acme newsroom" if "NO results" in prompt else "acme very specific rare phrase"
         if "belong" in prompt:
             return '{"belong": [0]}'
         return "{}"
 
-    seeds = search_web(Brief(description="blog", look=["the blog"]), "Acme", search=search, llm=llm)
-    assert len(queries) == 2 and queries[0] != queries[1]  # a DIFFERENT term on retry
+    brief = Brief(description="blog", look=["the blog"], search="press releases")
+    seeds = search_web(brief, "Acme", search=search, llm=llm)
+    assert queries[0] == "Acme press releases"  # deterministic: company + the brief's qualifier
+    assert len(queries) == 2 and queries[0] != queries[1]  # a BROADER term on retry
     assert [s.url for s in seeds] == ["https://acme.com/blog"]
 
 
@@ -466,9 +466,6 @@ def test_evaluate_drops_a_login_walled_candidate(httpserver):
 def test_prompt_templates_load_and_render():
     # every prompt file loads and renders; the routing substrings the pipeline (and
     # the scripted stub llm) rely on survive the move to data.
-    assert "web-search query" in render_prompt(
-        "search_query", company="Acme", description="products", fields_line=""
-    )
     assert "frontier links" in render_prompt(
         "pick_edges", company="Acme", description="d", fields_line="", listing="0. http://x"
     )
@@ -491,7 +488,7 @@ def test_prompt_templates_load_and_render():
 def test_render_prompt_requires_every_placeholder():
     # a missing variable fails loudly rather than shipping a half-filled prompt.
     with pytest.raises(KeyError):
-        render_prompt("search_query", company="Acme")  # no description / fields_line
+        render_prompt("select_candidates", description="d")  # no fields_line / pages_json
 
 
 # --------------------------------------------------------------------------- #

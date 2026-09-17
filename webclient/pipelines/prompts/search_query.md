@@ -1,2 +1,0 @@
-Write a single web-search query (no quotes, no prose) that would find the following for the company named EXACTLY '$company': $description.$fields_line
-Make the query specific to THIS company: if its name could be confused with a different, better-known company, add a distinguishing word (its industry, "official", or a term from the description) so the results are for '$company' and not a look-alike.

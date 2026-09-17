@@ -1,6 +1,7 @@
 ---
 name: changelog
 title: Product changelog
+search: changelog release notes
 schema:
   - date: the date of the changelog entry (e.g. 2026-09-14, Sep 14 2026)
   - title: the entry's headline / what changed (e.g. "Dark mode", "Fixed CSV export")

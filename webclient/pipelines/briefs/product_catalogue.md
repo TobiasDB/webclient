@@ -1,6 +1,7 @@
 ---
 name: product-catalogue
 title: Product Catalogue
+search: products
 schema:
   - name: the product's display name
   - sku: the stock-keeping unit / product code, if shown

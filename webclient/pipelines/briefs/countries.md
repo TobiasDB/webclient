@@ -1,6 +1,7 @@
 ---
 name: countries
 title: Countries
+search: list of countries
 schema:
   - name: the country name
   - capital?: the capital city, when shown (e.g. Paris, Tokyo)

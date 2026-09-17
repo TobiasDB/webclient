@@ -1,6 +1,7 @@
 ---
 name: github-releases
 title: Software releases
+search: github releases
 schema:
   - version: the release version / tag name (e.g. v1.4.0)
   - date: the release / published date (e.g. Sep 9 2026, 2026-09-09)

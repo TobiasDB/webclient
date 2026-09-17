@@ -1,6 +1,7 @@
 ---
 name: quotes
 title: Quotes
+search: quotes
 schema:
   - text: the quote text
   - author: who said or wrote it

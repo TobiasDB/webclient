@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Sequence
 
@@ -214,6 +215,8 @@ class Brief(BaseModel):
     optional: list[str] = []  # field paths that MAY be absent on a page (mark with a `?`)
     name: str = ""  # a short slug id (e.g. "product-catalogue")
     title: str = ""  # a human title
+    search: str = ""  # deterministic web-search qualifier: "<company> <search>" (e.g.
+    # "investor relations news"); a literal "{company}" in it is substituted instead of prepended
     look: list[str] = []  # natural-language guides: what kinds of pages to head for
     ignore: list[str] = []  # natural-language guides: what kinds of pages to skip
     crawl: dict[str, Any] = {}  # pipeline crawl overrides (max_pages/depth/rounds/browser)
@@ -239,9 +242,10 @@ class Brief(BaseModel):
         """Build a :class:`Brief` from a markdown document with YAML frontmatter. Keys:
         ``name`` / ``title``; ``schema`` (a list of ``path: description`` items -- dotted
         paths nest, the text is that field's description; a bare string is a field with
-        no description); ``look`` / ``ignore`` (NL guide lines); ``crawl`` (a mapping of
-        pipeline crawl overrides -- ``max_pages`` / ``depth`` / ``rounds`` / ``browser``);
-        ``description`` (else the body)."""
+        no description); ``search`` (a deterministic web-search qualifier appended after the
+        company name, e.g. ``investor relations news``); ``look`` / ``ignore`` (NL guide
+        lines); ``crawl`` (a mapping of pipeline crawl overrides -- ``max_pages`` / ``depth``
+        / ``rounds`` / ``browser``); ``description`` (else the body)."""
         front, body = _parse_frontmatter(text)
 
         def as_list(v: Any) -> list[str]:
@@ -256,6 +260,7 @@ class Brief(BaseModel):
             optional=optional,
             name=str(front.get("name") or ""),
             title=str(front.get("title") or ""),
+            search=str(front.get("search") or ""),
             look=as_list(front.get("look")),
             ignore=as_list(front.get("ignore")),
             crawl=crawl if isinstance(crawl, dict) else {},
@@ -704,14 +709,19 @@ def ddg_search(query: str, k: int = 6) -> "list[SearchHit]":
             "web search needs the 'ddgs' package (pip install ddgs), or pass your "
             "own search=... callable to search_web()/onboard_company()."
         ) from exc
+    # `backend` names the search engine(s) ddgs queries: "auto" lets it fall through its list
+    # (duckduckgo, google, bing, brave, ...). Override with the WEBCLIENT_SEARCH_BACKEND env var.
+    backend = os.environ.get("WEBCLIENT_SEARCH_BACKEND", "auto")
     try:
         with DDGS() as ddgs:
-            rows = ddgs.text(query, max_results=k) or []
+            rows = ddgs.text(query, max_results=k, backend=backend) or []
     except Exception as exc:  # noqa: BLE001 - ddgs raises on rate limits / no results / timeouts;
         # a search backend hiccup is not fatal -- return no seeds so the caller can retry with a
         # different term (see search_web) instead of crashing the whole onboarding run.
-        log.info("    web search error for %r: %s -- treating as no results", query, exc)
+        log.info("    web search error for %r (backend=%s): %s -- treating as no results",
+                 query, backend, exc)
         return []
+    log.info("    web search via ddgs (backend=%s): %d result(s) for %r", backend, len(rows), query)
     return [
         SearchHit(
             url=str(r.get("href") or r.get("url") or ""),
@@ -723,40 +733,30 @@ def ddg_search(query: str, k: int = 6) -> "list[SearchHit]":
     ]
 
 
-#: appended to the search-query prompt on a retry, when the first results were a look-alike
-_DISAMBIGUATE = (
-    "\n\nThe previous search returned a DIFFERENT company with a similar name, not this one."
-    " Rewrite the query so it is UNAMBIGUOUS for this exact company -- add a distinguishing"
-    " word (its industry, headquarters, 'official', or a term from the description)."
-)
-#: appended on a retry when the previous query returned NO results -- broaden, don't narrow.
-_BROADEN = (
-    "\n\nThe previous search returned NO results. Rewrite the query BROADER and simpler -- fewer"
-    " words, just the company's name plus ONE key term (its site type: 'newsroom', 'blog',"
-    " 'press releases', 'products'); drop quotes, rare phrases and any exact-match operators."
-)
+def _apply_search_term(company: str, term: str) -> str:
+    """``"<company> <term>"``, or ``term`` with a literal ``{company}`` placeholder filled in.
+    Empty ``term`` -> the bare company name."""
+    term = term.strip()
+    if not term:
+        return company.strip()
+    if "{company}" in term:
+        return term.replace("{company}", company).strip()
+    return f"{company} {term}".strip()
 
 
-def _search_query(
-    brief: Brief, company: str, llm: "LLM | None", *, mode: str = "normal"
-) -> str:
-    """The web-search query for ``company``. ``mode`` steers a retry: ``"disambiguate"`` narrows
-    (a look-alike came back), ``"broaden"`` simplifies (no results came back). The model crafts
-    it; falls back to ``"<company> <brief>"`` (or, when broadening, ``"<company> <look-hint>"``)."""
-    query = f"{company} {brief.description}".strip()
-    if mode == "broaden":  # a simpler default when we got nothing: name + a site-type hint
-        hint = (brief.look[0] if brief.look else "") or brief.title or brief.name
-        query = f"{company} {hint}".strip() or company
-    if llm is not None:
-        extra = _DISAMBIGUATE if mode == "disambiguate" else (_BROADEN if mode == "broaden" else "")
-        prompt = render_prompt(
-            "search_query", company=company, description=brief.description,
-            fields_line=_fields_line(brief),
-        ) + extra
-        crafted = llm(prompt).strip().splitlines()
-        if crafted and crafted[0].strip():
-            query = crafted[0].strip()
-    return query
+def _search_query(brief: Brief, company: str, *, mode: str = "normal") -> str:
+    """The web-search query for ``company`` -- DETERMINISTIC, from the brief's ``search``
+    qualifier: ``"<company> <brief.search>"`` (e.g. ``"Adobe investor relations news"``).
+    ``mode`` steers a retry: ``"broaden"`` drops the qualifier for the bare company name (plus a
+    site-type hint); ``"disambiguate"`` adds a distinguishing hint when a look-alike came back."""
+    if mode == "broaden":  # got nothing -- simplest possible: name + one site-type hint
+        hint = (brief.look[0] if brief.look else "") or ""
+        return f"{company} {hint}".strip() or company.strip()
+    query = _apply_search_term(company, brief.search)
+    if mode == "disambiguate":  # a look-alike came back -- add a distinguishing hint
+        hint = (brief.look[0] if brief.look else "") or brief.title
+        query = f"{query} {hint}".strip()
+    return query or company.strip()
 
 
 def _seeds_for_company(seeds: "list[Seed]", company: str, brief: Brief, llm: "LLM | None") -> "list[Seed]":
@@ -791,17 +791,18 @@ def search_web(
     k: int = 6,
     llm: LLM | None = None,
 ) -> list[Seed]:
-    """Seed URLs for ``company`` + ``brief``. The query is ``"<company> <brief>"`` by
-    default; pass ``llm`` to craft a sharper query AND to verify each result really belongs
-    to ``company`` (dropping look-alike companies with a similar name). If the whole first
-    result set is the wrong company, the search retries ONCE with a disambiguating query.
-    FAIL-OPEN: if verification would drop EVERY result on both tries, the raw results are
-    returned anyway rather than sinking the company on a stubborn/erroneous LLM judgement."""
+    """Seed URLs for ``company`` + ``brief``. The query is DETERMINISTIC -- ``"<company>
+    <brief.search>"`` (the brief's ``search`` qualifier). Pass ``llm`` to verify each result
+    really belongs to ``company`` (dropping look-alike companies with a similar name). If the
+    whole first result set is the wrong company, the search retries with a disambiguating hint;
+    no results -> it broadens to the bare company name. FAIL-OPEN: if verification would drop
+    EVERY result on both tries, the raw results are returned anyway rather than sinking the
+    company on a stubborn/erroneous LLM judgement."""
     raw: list[Seed] = []
     mode = "normal"
     tried: set[str] = set()
     for _attempt in range(3):
-        query = _search_query(brief, company, llm, mode=mode)
+        query = _search_query(brief, company, mode=mode)
         if query in tried:  # don't re-issue the same query -- force a simpler, different one
             query = f"{company} {(brief.look[0] if brief.look else brief.name or brief.title)}".strip() or company
         tried.add(query)

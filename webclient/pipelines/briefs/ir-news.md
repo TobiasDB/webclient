@@ -1,6 +1,7 @@
 ---
 name: ir-news
 title: Investor-Relations News
+search: investor relations news
 schema:
   - title: the headline of the news item / press release
   - date: the publication date (as shown on the page)

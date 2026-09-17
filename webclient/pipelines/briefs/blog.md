@@ -1,6 +1,7 @@
 ---
 name: blog
 title: Blog posts
+search: blog
 schema:
   - title: the post title
   - date: the publication date

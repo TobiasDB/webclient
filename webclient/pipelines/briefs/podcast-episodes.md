@@ -1,6 +1,7 @@
 ---
 name: podcast-episodes
 title: Podcast episodes
+search: podcast episodes
 schema:
   - title: the episode title
   - date?: the publish date, when shown (e.g. 2026-09-14, Sep 14 2026)

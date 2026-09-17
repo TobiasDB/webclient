@@ -1,6 +1,7 @@
 ---
 name: job-postings
 title: Job postings
+search: careers job openings
 schema:
   - title: the job / role title (e.g. Senior Backend Engineer, Product Designer)
   - location: where the role is based (e.g. London, Remote — US, Berlin/Hybrid)

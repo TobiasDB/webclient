@@ -1,6 +1,7 @@
 ---
 name: pricing-plans
 title: Pricing plans
+search: pricing plans
 schema:
   - plan: the plan / tier name (e.g. Free, Pro, Enterprise)
   - price: the plan's price as shown (e.g. $20, Custom)
