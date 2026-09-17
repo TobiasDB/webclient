@@ -18,6 +18,7 @@ draws on your plan's usage/rate limits and is slow (one CLI turn per call).
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import sys
 from typing import TYPE_CHECKING, Any
@@ -30,6 +31,8 @@ if TYPE_CHECKING:
     import httpx
 
     from webclient.pipelines.llm import Budget, LlmClient
+
+log = logging.getLogger("claude_adapter")
 
 # a minimal system prompt so Claude Code answers like a raw completion, not a coding agent
 _SYSTEM = (
@@ -169,6 +172,7 @@ def claude_shim_client(
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     if len(sys.argv) < 3:
         sys.exit("usage: claude_llm_adapter.py <brief> <company> [<company> ...]")
     brief_name, companies = sys.argv[1], sys.argv[2:]
@@ -177,13 +181,13 @@ def main() -> None:
 
     def llm(prompt: str) -> str:
         calls["n"] += 1
-        print(f"  [llm call #{calls['n']}] ~{len(prompt)//4} tok in", file=sys.stderr)
+        log.info("  [llm call #%d] ~%d tok in", calls["n"], len(prompt) // 4)
         return claude_code_llm(prompt)
 
     with WebClient() as wc:
         results = onboard(companies, brief, wc=wc, llm=llm, search=ddg_search, review=True)
     ok = sum(1 for r in results if r.ok)
-    print(f"\ndone: {ok}/{len(results)} onboarded via Claude Code ({calls['n']} llm calls)")
+    log.info("done: %d/%d onboarded via Claude Code (%d llm calls)", ok, len(results), calls["n"])
 
 
 if __name__ == "__main__":

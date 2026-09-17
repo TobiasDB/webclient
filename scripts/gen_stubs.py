@@ -18,6 +18,7 @@ plus the Collection element-op lift. Nothing is duplicated in a table here.
 from __future__ import annotations
 
 import inspect
+import logging
 import sys
 import types as _types
 import typing
@@ -106,6 +107,9 @@ _SKIP_FIELDS = {Reference: set[str](), Document: set[str]()}
 
 
 # -- type classification (was webclient/typeinfo.py; only the generator uses it)
+
+
+log = logging.getLogger("gen_stubs")
 
 
 def _is_model(tp: Any) -> bool:
@@ -584,11 +588,12 @@ def main(check: bool) -> int:
             else:
                 path.write_text(text[:lo] + body + text[hi:])
     if check and stale:
-        print("stale generated stubs:\n  " + "\n  ".join(stale))
+        log.error("stale generated stubs:\n  %s", "\n  ".join(stale))
         return 1
-    print("stubs up to date" if check else "stubs regenerated")
+    log.info("stubs up to date" if check else "stubs regenerated")
     return 0
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     sys.exit(main(check="--check" in sys.argv))

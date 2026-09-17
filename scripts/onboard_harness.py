@@ -31,6 +31,7 @@ import io
 import json
 import logging
 import re
+import sys
 import threading
 import time
 from importlib.resources import files
@@ -45,6 +46,8 @@ from webclient.pipelines import Brief, SearchHit, onboard_company
 # so parallel runs stay separable without separate processes.
 _local = threading.local()
 
+
+log = logging.getLogger("harness")
 
 class _ThreadLogRouter(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
@@ -342,7 +345,7 @@ def _run_case(wc: WebClient, llm, case: tuple[str, str, list[str]], outdir: Path
     rows = (rec.get("query") or {}).get("row_count", 0)
     ds = rec.get("dataset_rows")
     extra = f", dataset {ds} rows" if ds is not None else ""
-    print(f"  {'✓' if rec['ok'] else '✗'} {company} × {brief_key}  ({rows} rows{extra}, {rec['secs']:.0f}s)")
+    log.info(f"  {'✓' if rec['ok'] else '✗'} {company} × {brief_key}  ({rows} rows{extra}, {rec['secs']:.0f}s)")
     return rec
 
 
@@ -388,11 +391,12 @@ def _aggregate(records: list[dict], outdir: Path) -> None:
     )
     md = claude_code_llm(prompt)
     (outdir / "aggregate.md").write_text(md)
-    print("\n" + "=" * 80 + "\nAGGREGATE REVIEW (harness_runs/.../aggregate.md)\n" + "=" * 80)
-    print(md)
+    log.info("\n" + "=" * 80 + "\nAGGREGATE REVIEW (harness_runs/.../aggregate.md)\n" + "=" * 80)
+    log.info(md)
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     ap = argparse.ArgumentParser(description="parallel onboarding harness (curated URLs + Claude Code)")
     ap.add_argument("--brief", action="append", help="only these brief key(s)")
     ap.add_argument("--only", action="append", help="only these compan(y/ies)")
@@ -446,18 +450,18 @@ def main() -> None:
         _client = claude_shim_client(
             model=a.model, budget=Budget(max_usd=a.budget) if a.budget else Budget())
         base_llm = _client
-        print(f"LLM: claude -p via in-process Messages shim (priced as {_client.model}, cheapest "
+        log.info(f"LLM: claude -p via in-process Messages shim (priced as {_client.model}, cheapest "
               "CLI model) — budget-tracked; heavy nested processes, keep --parallel low")
     elif os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_BASE_URL"):
         from webclient.pipelines import Budget, LlmClient, cheapest_model
         _client = LlmClient(budget=Budget(max_usd=a.budget) if a.budget else Budget(),
                             model=a.model or cheapest_model())
         base_llm = _client
-        print(f"LLM: Anthropic API ({_client.model}) — lightweight, no nested processes")
+        log.info(f"LLM: Anthropic API ({_client.model}) — lightweight, no nested processes")
     else:
         from claude_llm_adapter import CHEAPEST_CLI_MODEL, claude_code_llm
         base_llm = lambda prompt: claude_code_llm(prompt, model=CHEAPEST_CLI_MODEL)  # noqa: E731
-        print(f"LLM: local Claude Code (claude -p, {CHEAPEST_CLI_MODEL}) — heavy nested processes; "
+        log.info(f"LLM: local Claude Code (claude -p, {CHEAPEST_CLI_MODEL}) — heavy nested processes; "
               "keep --parallel low (set ANTHROPIC_API_KEY, or --shim for budget tracking)")
 
     calls = {"n": 0}
@@ -506,7 +510,7 @@ def main() -> None:
     bc = BrowserConfig(pool_pages=pool_pages, pool_http=max(10, a.parallel * 3),
                        headless=not a.headful, channel=a.channel,
                        proxy=a.proxy)  # stealth is on by default
-    print(f"{len(cases)} case(s): {len(records)} reused, {len(todo)} to run · {a.parallel} concurrent "
+    log.info(f"{len(cases)} case(s): {len(records)} reused, {len(todo)} to run · {a.parallel} concurrent "
           f"sessions on 1 browser ({pool_pages}-page pool, headless={not a.headful}, "
           f"channel={a.channel or 'chromium'}) · crawl≤{a.max_pages}p/{a.rounds}r -> {outdir}")
 
@@ -524,19 +528,19 @@ def main() -> None:
     (outdir / "summary.json").write_text(json.dumps(records, indent=2, default=str))
     _write_index(records, outdir)  # a readable index linking every per-company report
 
-    print(f"\n{'='*96}\nHARNESS RESULTS  ->  {outdir}\n{'='*96}")
-    print(f"{'company':22} {'brief':18} {'ok':3} {'rows':5} {'secs':5} reviews / reason")
-    print("-" * 96)
+    log.info(f"\n{'='*96}\nHARNESS RESULTS  ->  {outdir}\n{'='*96}")
+    log.info(f"{'company':22} {'brief':18} {'ok':3} {'rows':5} {'secs':5} reviews / reason")
+    log.info("-" * 96)
     for r in records:
         rows = (r.get("query") or {}).get("row_count", 0)
         revs = ", ".join(f"{v['stage']}{'✓' if v['passed'] else '✗'}" for v in r["reviews"]) or "-"
         detail = revs if r["ok"] else r["reason"]
-        print(f"{r['company'][:22]:22} {r['brief'][:18]:18} {'✓' if r['ok'] else '✗':3} "
+        log.info(f"{r['company'][:22]:22} {r['brief'][:18]:18} {'✓' if r['ok'] else '✗':3} "
               f"{rows:<5} {r.get('secs', 0):<5.0f} {detail[:44]}")
     ok = sum(1 for r in records if r["ok"])
-    print("-" * 96)
-    print(f"{ok}/{len(records)} onboarded")
-    print(f"READ THIS FIRST -> {outdir}/index.md   (per-company reports + how to test each query)")
+    log.info("-" * 96)
+    log.info(f"{ok}/{len(records)} onboarded")
+    log.info(f"READ THIS FIRST -> {outdir}/index.md   (per-company reports + how to test each query)")
 
     if a.aggregate and records:
         _aggregate(records, outdir)

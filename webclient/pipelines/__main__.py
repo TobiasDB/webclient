@@ -108,8 +108,9 @@ def main(argv: "Sequence[str] | None" = None) -> int:
     )
 
     brief = _load_brief(args.brief)
-    print(f"brief: {brief.title or brief.name or args.brief} "
-          f"({len(brief.fields)} field[s]) -> {len(args.companies)} company(ies)")
+    log = logging.getLogger("webclient.pipelines")  # shows at INFO alongside the pipeline logs
+    log.info("brief: %s (%d field[s]) -> %d company(ies)",
+             brief.title or brief.name or args.brief, len(brief.fields), len(args.companies))
 
     budget = Budget(max_usd=args.budget)
     llm = _build_llm(args, budget, parser)
@@ -123,8 +124,8 @@ def main(argv: "Sequence[str] | None" = None) -> int:
     # the pipeline logs each company's full summary (source / scores / flags /
     # reference / resolve / query + sample table / spend); here we add only the totals.
     ok = sum(r.ok for r in results)
-    print(f"\ndone: {ok}/{len(results)} onboarded · spent ${budget.spent_usd:.4f}"
-          f" over {budget.calls} call(s)")
+    log.info("done: %d/%d onboarded · spent $%.4f over %d call(s)",
+             ok, len(results), budget.spent_usd, budget.calls)
     return 0 if ok else 1
 
 

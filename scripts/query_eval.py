@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import threading
@@ -33,6 +34,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from messy_html import all_scenarios  # noqa: E402
 
 from webclient import WebClient  # noqa: E402
+log = logging.getLogger("query_eval")
+
 from webclient.pipelines.onboarding import (  # noqa: E402
     Brief,
     run_query,
@@ -86,18 +89,18 @@ def _make_llm(shim: bool, model: str | None):
         from claude_llm_adapter import claude_shim_client
 
         client = claude_shim_client(model=model)
-        print(f"LLM: claude -p via in-process Messages shim (priced as {client.model}, "
+        log.info(f"LLM: claude -p via in-process Messages shim (priced as {client.model}, "
               f"cheapest CLI model)")
         return client
     if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_BASE_URL"):
         from webclient.pipelines import Budget, LlmClient, cheapest_model
 
         client = LlmClient(budget=Budget(), model=model or cheapest_model())
-        print(f"LLM: Anthropic API ({client.model})")
+        log.info(f"LLM: Anthropic API ({client.model})")
         return client
     from claude_llm_adapter import CHEAPEST_CLI_MODEL, claude_code_llm
 
-    print(f"LLM: local Claude Code (claude -p, {CHEAPEST_CLI_MODEL}) — heavy; "
+    log.info(f"LLM: local Claude Code (claude -p, {CHEAPEST_CLI_MODEL}) — heavy; "
           "run few scenarios at a time (use --shim for budget-tracked calls)")
     return lambda prompt: claude_code_llm(prompt, model=CHEAPEST_CLI_MODEL)
 
@@ -132,6 +135,7 @@ def run_scenario(sc, wc: WebClient, llm) -> dict:
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--only", nargs="*", default=None, help="run only these scenario names")
     ap.add_argument("--json", type=Path, default=None, help="write full results as JSON here")
@@ -146,23 +150,23 @@ def main() -> int:
     results = []
     with WebClient() as wc:
         for sc in scenarios:
-            print(f"\n=== {sc.name} ===")
+            log.info(f"\n=== {sc.name} ===")
             res = run_scenario(sc, wc, llm)
             results.append(res)
             if res["ok"]:
-                print(f"  PASS  (model wrote a correct query; complete={res.get('complete')})")
+                log.info(f"  PASS  (model wrote a correct query; complete={res.get('complete')})")
             else:
-                print(f"  FAIL  {res.get('why', '')}")
+                log.info(f"  FAIL  {res.get('why', '')}")
                 if "rows" in res:
-                    print("    query:", (res.get("query") or "").replace("\n", " ")[:200])
-                    print("    got :", json.dumps(res["rows"], default=str)[:400])
-                    print("    exp :", json.dumps(res["expected"], default=str)[:400])
+                    log.info("    query: %s", (res.get("query") or "").replace("\n", " ")[:200])
+                    log.info("    got : %s", json.dumps(res["rows"], default=str)[:400])
+                    log.info("    exp : %s", json.dumps(res["expected"], default=str)[:400])
 
     n_ok = sum(1 for r in results if r["ok"])
-    print(f"\n{n_ok}/{len(results)} scenarios: model authored a correct query")
+    log.info(f"\n{n_ok}/{len(results)} scenarios: model authored a correct query")
     if a.json:
         a.json.write_text(json.dumps(results, indent=2, default=str))
-        print(f"wrote {a.json}")
+        log.info(f"wrote {a.json}")
     return 0 if n_ok == len(results) else 1
 
 

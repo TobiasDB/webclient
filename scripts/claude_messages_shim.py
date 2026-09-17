@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,6 +31,8 @@ from typing import Any
 # the shim lives in scripts/, so its sibling adapter is importable when run as a script
 from claude_llm_adapter import _SYSTEM, claude_code_result
 from webclient.pipelines.llm import LlmError
+
+log = logging.getLogger("claude_shim")
 
 
 def _prompt_from(messages: list[dict[str, Any]]) -> str:
@@ -84,7 +87,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         prompt = _prompt_from(body.get("messages") or [])
         model = str(body.get("model") or "claude-code")
-        print(f"  [shim] /v1/messages  ~{len(prompt)//4} tok in  ({model})", file=sys.stderr)
+        log.info("  [shim] /v1/messages  ~%d tok in  (%s)", len(prompt) // 4, model)
         try:
             env = claude_code_result(prompt, system=_system_from(body))
         except LlmError as exc:  # surface as an Anthropic error so LlmClient reports it
@@ -109,13 +112,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     ap = argparse.ArgumentParser(description="Messages-API shim over `claude -p`")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8787)
     args = ap.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"claude Messages-API shim on http://{args.host}:{args.port}/v1/messages "
-          f"(point --base-url here; any api key works)", file=sys.stderr)
+    log.info("claude Messages-API shim on http://%s:%s/v1/messages "
+             "(point --base-url here; any api key works)", args.host, args.port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

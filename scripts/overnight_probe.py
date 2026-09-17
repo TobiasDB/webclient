@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import logging
 import re
 import sys
 import traceback
@@ -26,6 +27,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
+
+log = logging.getLogger("overnight")
 
 OUT = ROOT / "harness_runs" / "overnight"
 LEDGER = OUT / "ledger.json"
@@ -238,6 +241,7 @@ def _append_summary(led: dict) -> None:
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--status", action="store_true", help="print the ledger summary, run nothing")
     a = ap.parse_args()
@@ -245,17 +249,17 @@ def main() -> int:
     led = _ledger()
     if a.status:
         ok = sum(1 for r in led["results"] if r["ok"])
-        print(f"overnight: {ok}/{len(led['results'])} onboarded · "
+        log.info(f"overnight: {ok}/{len(led['results'])} onboarded · "
               f"new={led['counts']['new']} current={led['counts']['current']} · "
               f"{len(led['done'])} sites tested")
         return 0
 
     pick = _pick(led)
     if pick is None:
-        print("overnight: pool exhausted — every candidate site has been tested. Nothing to do.")
+        log.info("overnight: pool exhausted — every candidate site has been tested. Nothing to do.")
         return 0
     category, key, label, url = pick
-    print(f"overnight: probing [{category}] {key} × {label}  ({url})")
+    log.info(f"overnight: probing [{category}] {key} × {label}  ({url})")
     try:
         rec = _run(category, key, label, url)
     except Exception as exc:  # noqa: BLE001 - never let one bad site break the loop
@@ -276,7 +280,7 @@ def main() -> int:
     _save_ledger(led)
     _write_run(rec)
     _append_summary(led)
-    print(f"overnight: {'OK' if rec['ok'] else 'FAIL'} — {rec['rows']} row(s), "
+    log.info(f"overnight: {'OK' if rec['ok'] else 'FAIL'} — {rec['rows']} row(s), "
           f"${rec['cost_usd']}, {rec['elapsed_s']}s — {rec['reason'] or 'onboarded'}")
     return 0
 
