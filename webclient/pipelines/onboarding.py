@@ -1216,12 +1216,23 @@ def _candidate_score(ev: CandidateEval) -> float:
 # --------------------------------------------------------------------------- #
 
 
+def _source_url(evaluation: CandidateEval) -> str:
+    """The URL to root the reference + query at. Prefer an observed data API (``api_endpoint``)
+    over the page ONLY when the page is a client-rendered SHELL (the ``spa`` flag fired) whose
+    records come from that API. A directly-scrapable page -- data already in the served/rendered
+    HTML -- is queried as the PAGE ITSELF even if it also fired an XHR (a secondary fetch,
+    analytics, or a model mis-pick), so we never reference an XHR when the page was the right
+    source (the query was authored + tested against this URL)."""
+    if evaluation.api_endpoint and evaluation.flags.get("spa"):
+        return evaluation.api_endpoint
+    return evaluation.url
+
+
 def write_reference(evaluation: CandidateEval, *, wc: WebClient) -> Reference:
-    """The lazy ``Reference`` for the chosen source -- deterministic given the
-    candidate. When the SPA is backed by a same-origin data API (``api_endpoint``),
-    root the Reference at the ENDPOINT: querying the API beats scraping the rendered
-    page. Otherwise the candidate URL (query already baked in by the crawl)."""
-    return wc.ref(evaluation.api_endpoint or evaluation.url)
+    """The lazy ``Reference`` for the chosen source -- deterministic given the candidate. Rooted
+    at the page URL, or at a same-origin data API only when the page is an SPA shell backed by it
+    (see :func:`_source_url`)."""
+    return wc.ref(_source_url(evaluation))
 
 
 # --------------------------------------------------------------------------- #
@@ -2353,9 +2364,10 @@ def _onboard_company(
     if review:
         _note_review(result, review_select(result, artifacts, brief, llm=llm))
     # -- the flag-driven decision cascade for the chosen source, in order ----------
-    # (1) reference: the data API if the SPA is backed by one, else the page URL.
+    # (1) reference + query URL: the same source -- a same-origin data API only when the page is
+    # an SPA shell backed by it, otherwise the page itself (see _source_url).
     result.reference = write_reference(evaluation, wc=wc)
-    query_url = evaluation.api_endpoint or evaluation.url
+    query_url = _source_url(evaluation)
     doc = wc.fetch(query_url, browser=_mode(browser), optional=True)
     artifacts.query_doc = doc
     flags = _read_flags(doc) if doc.ok else {}

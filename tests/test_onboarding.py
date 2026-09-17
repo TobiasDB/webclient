@@ -154,6 +154,25 @@ def test_parse_query_rewrites_css_child_combinator_to_descendant():
     assert "//ul/li" in q2.explain()
 
 
+def test_reference_prefers_the_page_over_an_xhr_unless_the_page_is_a_spa_shell():
+    # a directly-scrapable page that ALSO fired an XHR must be referenced/queried as the PAGE,
+    # not the XHR (the regression); an observed data API is used only for an SPA shell.
+    from webclient.pipelines.onboarding import CandidateEval, _source_url, write_reference
+
+    page = "https://site.com/products"
+    api = "https://site.com/api/products.json"
+
+    scrapable = CandidateEval(url=page, dataset_present=True, api_endpoint=api, flags={})  # no spa
+    assert _source_url(scrapable) == page  # the page, NOT the XHR
+
+    spa_shell = CandidateEval(url=page, dataset_present=True, api_endpoint=api,
+                              flags={"spa": 0.9})  # a client-rendered shell backed by the API
+    assert _source_url(spa_shell) == api
+
+    with WebClient() as wc:
+        assert str(write_reference(scrapable, wc=wc).url) == page
+
+
 def test_write_query_auto_repairs_a_near_miss_field_selector(httpserver):
     # the model writes an almost-correct query but mistypes a high-entropy class (widget vs
     # widgets); the pipeline swaps the mistyped class for the nearest real one in the record and
