@@ -1,4 +1,6 @@
-We searched the web for the company named EXACTLY '$company' (dataset wanted: $description). Some results may be for a DIFFERENT company that just has a similar name (for example "Square" / squareup.com when we asked for "Squarepoint") — those do NOT belong to '$company'.
+We searched the web for the company named EXACTLY '$company' (dataset wanted: $description).$fields_line
+
+Some results may be for a DIFFERENT company that just has a similar name (for example "Square" / squareup.com when we asked for "Squarepoint") — those do NOT belong to '$company'.
 
 Search results:
 $seeds

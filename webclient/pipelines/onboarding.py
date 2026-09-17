@@ -462,12 +462,13 @@ def _ensure_logging() -> None:
 
 
 def _trace(result: OnboardingResult, message: str, *args: Any) -> None:
-    """Emit one pipeline step -- always printed (see :func:`_ensure_logging`) -- and
-    append it to the result's ``steps`` trace, prefixed with the running LLM spend so
-    the cost is visible as it accrues."""
+    """Emit one pipeline step -- always printed (see :func:`_ensure_logging`) -- and append it to
+    the result's ``steps`` trace. The running LLM spend is shown as a prefix ONLY once it is
+    non-zero (so an untracked/free run isn't cluttered with ``[$0.0000]`` on every line)."""
     rendered = message % args if args else message
     result.steps.append(rendered)
-    log.info("[$%.4f] %s: %s", result.cost_usd, result.company, rendered)
+    prefix = f"[${result.cost_usd:.4f}] " if result.cost_usd else ""
+    log.info("%s%s: %s", prefix, result.company, rendered)
 
 
 def _cell(value: Any) -> str:
@@ -624,7 +625,6 @@ def _ask_json(llm: LLM, prompt: str, *, retries: int = 1) -> Any:
     ``retries`` times. ``None`` if it still can't produce valid JSON."""
     ask = prompt
     for attempt in range(retries + 1):
-        log.debug("LLM prompt ~%d tokens", len(ask) // 4)
         try:
             reply = llm(ask)
         except LlmError as exc:  # a bad-request / exhausted-retry API error -- don't crash
@@ -769,6 +769,7 @@ def _seeds_for_company(seeds: "list[Seed]", company: str, brief: Brief, llm: "LL
     listing = "\n".join(f"{i}. {s.url}  [{s.title}]  {s.why}"[:300] for i, s in enumerate(seeds))
     data = _ask_json(llm, render_prompt(
         "verify_seeds", company=company, description=brief.description,
+        fields_line=_fields_line(brief),  # the brief guides every decision, this one included
         seeds=_clip(listing, _MAX_LISTING_CHARS, "seed results"),
     ))
     belong = data.get("belong") if isinstance(data, dict) else None
@@ -1019,7 +1020,7 @@ def crawl_from_seeds(
             break
         picks = _pick_edges(llm, brief, candidates, company=company)
         if not picks and round_i == 0:
-            log.info("    model picked no seeds -- fetching the filtered seeds")
+            log.info("    model chose no frontier links this round — fetching the seed(s) directly")
             picks = [e.url for e in candidates]
         if not picks:
             break
@@ -1812,6 +1813,19 @@ def _repair_query(expr: Any, doc: Any) -> Any:
     return Expr(Plan.model_validate(plan), expr._client)
 
 
+def _short_fail_reason(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> str:
+    """A ONE-LINE reason a query didn't extract cleanly -- for the log (the full, multi-line
+    hint goes to the model, not the console). Keeps the retry trace legible."""
+    good = _populated_rows(rows)
+    if not good:
+        n = _selector_match_count(_row_selector(expr), doc)
+        return f"0 rows (record selector matched {n if n is not None else '?'})"
+    empty = _empty_required_fields(good, brief)
+    if empty:
+        return f"required field(s) {', '.join(empty)} empty on every row"
+    return f"{len(good)} row(s) but incomplete"
+
+
 def _artifact_from(
     expr: Any, doc: Any, brief: Brief, candidate_url: str,
     resolve: "Resolve | None", bases: "list[str]",
@@ -1895,58 +1909,55 @@ def write_query(
     best: QueryArtifact | None = None
     author = _Author(llm, prompt)  # the page rides in the OPENING; retries send only feedback
     follow_up: "str | None" = None
-    for _attempt in range(retries + 1):
+    tries = retries + 1
+    for attempt in range(tries):
+        tag = f"    query {attempt + 1}/{tries}"
         try:
             reply = author.send(follow_up)
         except LlmError as exc:  # a bad-request / exhausted-retry API error
-            log.warning("query authoring LLM call failed: %s", exc)
+            log.warning("%s: LLM call failed (%s)", tag, exc)
             break
         try:
             expr = _parse_query(reply)  # load the written wq.doc chain (or a raw blob)
         except Exception as exc:  # noqa: BLE001 - unparsable query code -> retry with feedback
-            # surface WHAT the model said so an all-unparseable run is diagnosable, not a
-            # silent "could not author a query"
-            log.info("    query reply not parseable (%s) -- retrying; reply: %.160r", exc, reply.strip())
+            log.info("%s: reply was not a valid query (%s) — retrying", tag, exc)
+            log.debug("      unparseable reply: %.200r", reply.strip())  # the detail, at debug
             follow_up = ("Your previous reply was not a valid query. Reply with ONLY the query"
                          " code -- a single wq.doc... chain, nothing else.")
             continue
         # a real extraction MUST select the records -- a query with no select_all/select
-        # can't extract anything (it would wrap to `reference(url).resolve()` with nothing
-        # after). Reject it before it can look like a 0-row "success".
+        # can't extract anything, so reject it before it looks like a 0-row "success".
         ops = {s.name for s in expr._plan.steps if s.kind == "get"}
         if not ({"select", "select_all"} & ops):
-            log.info("    query has no selection -- retrying with feedback")
+            log.info("%s: no record selection — retrying", tag)
             follow_up = ("Your previous query had NO selection so it extracts nothing. You MUST"
                          " select the repeating record with .select_all(...), pull each field with"
                          " .extract(col=...), and END with .project(). Re-write it.")
             continue
         art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases)
         if art.complete:
-            return art  # rows with real, complete content -- accept it
-        # AUTO-REPAIR near-miss field selectors before giving up: a one-char class typo
-        # (widget vs widgets) makes an otherwise-correct query fail: swap the mistyped class for
-        # the nearest real one in the record and re-validate. The REPAIRED query is what ships.
+            log.info("%s: ✓ complete — %d row(s)", tag, art.row_count)
+            return art
+        # AUTO-REPAIR a near-miss field selector (a one-char class typo: widget vs widgets) by
+        # swapping in the nearest real class present in the record, then re-validate.
         repaired = _repair_query(expr, doc)
         if repaired is not None:
             rart, _rrows = _artifact_from(repaired, doc, brief, candidate_url, resolve, bases)
             if rart.complete:
-                log.info("    query completed after auto-repairing a field selector")
+                log.info("%s: ✓ complete after auto-repairing a selector — %d row(s)", tag, rart.row_count)
                 return rart
             art = rart if rart.row_count > art.row_count else art  # keep the better fallback
         best = best or art  # keep the first rebuildable one as a fallback (NOT complete)
-        # ran but did not truly extract: diagnose WHY (wrong record selector / empty fields /
-        # a required field never populated / content not in the HTML) and hand the model a
-        # concrete, human-readable hint. Push it toward a MATERIALLY DIFFERENT record anchor
-        # (repeating the same one with tweaked fields is the usual failure).
-        hint = _content_hint(expr, rows, brief, doc)
-        log.info("    query did not extract valid content -- retrying with feedback: %s", hint)
+        # a concise reason on the console; the full, multi-line diagnostic hint goes to the model.
+        log.info("%s: %s — retrying", tag, _short_fail_reason(expr, rows, brief, doc))
         follow_up = (
             "That query did not extract the dataset. Produce a MATERIALLY DIFFERENT query --"
             " change the .select_all(...) RECORD selector to a more semantic anchor, don't just"
-            f" tweak the fields.\n\nYour previous query was:\n{expr.explain()}\n\n{hint}"
+            f" tweak the fields.\n\nYour previous query was:\n{expr.explain()}\n\n"
+            f"{_content_hint(expr, rows, brief, doc)}"
         )
     if best is None:  # every attempt failed to author a usable query -- say so loudly
-        log.warning("    could not author any query in %d attempt(s)", retries + 1)
+        log.warning("    could not author a working query in %d attempt(s)", tries)
     return best
 
 
