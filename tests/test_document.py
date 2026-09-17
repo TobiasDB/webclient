@@ -196,6 +196,30 @@ def test_xml_element_select_is_case_insensitive_fallback():
     assert not items[0].select("author", optional=True).ok
 
 
+def test_list_valued_field_projects_to_a_list():
+    # a field that uses select_all(...) inside extract collects EVERY match into a JSON list
+    # (all URLs / tags in a record), not a single value.
+    from webclient import wq
+
+    html = (b"<main>"
+            b"<article class='rec'><h2>A</h2>"
+            b"<a href='/a1'>1</a><a href='/a2'>2</a><span class='t'>x</span><span class='t'>y</span></article>"
+            b"<article class='rec'><h2>B</h2><a href='/b1'>1</a><span class='t'>z</span></article>"
+            b"</main>")
+    doc = make_doc(content=html)
+    rows = list(
+        wq.doc.select_all("article.rec").extract(
+            title=wq.doc.select("h2").attr("text"),
+            urls=wq.doc.select_all("a").attr("href"),
+            tags=wq.doc.select_all(".t").attr("text"),
+        ).project().collect(doc)
+    )
+    assert rows == [
+        {"title": "A", "urls": ["https://example.com/a1", "https://example.com/a2"], "tags": ["x", "y"]},
+        {"title": "B", "urls": ["https://example.com/b1"], "tags": ["z"]},
+    ]
+
+
 def test_rss_item_fields_extract_from_a_real_world_feed_shape():
     # a real-world RSS shape (à la neon.com/blog/rss.xml): namespaced siblings, a CDATA
     # description, two <category>s, and the URL cleanly in <guid>. title/description/category/

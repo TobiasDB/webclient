@@ -88,7 +88,7 @@ def _project_value(value: Any) -> Any:
         return _project_value(value.get())
     if isinstance(value, Reference):
         return value.dispatch("url")  # the URL string (pure derive, no IO)
-    if isinstance(value, list):
+    if isinstance(value, (list, Collection)):  # a LIST-valued field (e.g. select_all(...).attr(...))
         return [_project_value(v) for v in value]
     return value
 

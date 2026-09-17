@@ -71,6 +71,12 @@ nested, each with a short description. Map it mechanically:
   code/attribute field → `.attr("data-…")`; plain text → `.attr("text")`.
 - **A numeric / split field** → `.regex(...)` on the element's text to pull just the
   number or unit.
+- **A LIST-valued field** (the schema field is a list — e.g. all the links, tags, or images
+  in one record) → use **`.select_all(...)`** for that field (instead of `.select(...)`) with an
+  accessor, and it projects to a JSON **list** of values:
+  `urls=wq.doc.select_all("a").attr("href")` → `["/a1","/a2"]`;
+  `tags=wq.doc.select_all(".tag").attr("text")` → `["x","y"]`. (`.select(...)` gives one value;
+  `.select_all(...)` gives the list.)
 - **A nested field** (a schema path like `price.value` / `price.unit`, i.e. a branch with
   children) → the column is its own **sub-`extract`** that ends in its own `.project()`:
   `price=wq.doc.select(".price").extract(value=…, unit=…).project()`, so the output JSON nests

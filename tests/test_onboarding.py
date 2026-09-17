@@ -141,6 +141,18 @@ def test_onboard_company_reports_when_no_seeds(site):
     assert not result.ok and result.reason == "no search seeds"
 
 
+def test_sample_table_collapses_newlines_so_columns_dont_shift():
+    # an output-summary bug: a value with a newline (an RSS description) broke the aligned
+    # sample table so LATER columns rendered shifted/empty. Cells now collapse whitespace.
+    from webclient.pipelines.onboarding import _cell, _render_table
+
+    assert _cell("line1\nline2\twith  spaces") == "line1 line2 with spaces"
+    rows = [{"title": "A", "desc": "multi\nline\ndesc", "link": "https://x/a", "cat": "News"}]
+    body = _render_table(rows)[-1]  # the single data row
+    assert "\n" not in body                              # the row is a SINGLE line
+    assert all(v in body for v in ("A", "multi line desc", "https://x/a", "News"))  # nothing shifted/empty
+
+
 def test_write_query_keeps_the_page_in_context_across_retries(httpserver):
     # a conversation-capable llm gets the PAGE (guide + skeleton) once as the opening turn; each
     # retry is a short follow-up, so the page is not re-submitted every attempt.

@@ -471,8 +471,11 @@ def _trace(result: OnboardingResult, message: str, *args: Any) -> None:
 
 
 def _cell(value: Any) -> str:
-    """One table cell -- JSON for a nested value, truncated so the table stays legible."""
-    s = json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
+    """One table cell -- JSON for a nested value, whitespace COLLAPSED for a string (a newline
+    in a value, e.g. an RSS description, would otherwise break the table's alignment so later
+    columns look empty), truncated so the table stays legible."""
+    s = (json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list))
+         else " ".join(str(value).split()))
     return s if len(s) <= 40 else s[:39] + "…"
 
 

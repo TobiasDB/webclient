@@ -199,10 +199,17 @@ def _md_table(sample: list) -> str:
         for k in r:
             if k not in cols:
                 cols.append(k)
+    def _cell(v: object) -> str:
+        # collapse ALL whitespace (newlines/tabs) to single spaces and escape pipes -- a value
+        # with a newline (an RSS description, a multi-line summary) would otherwise break the
+        # markdown row so later columns render shifted/empty.
+        s = " ".join(str(v).split())
+        s = s.replace("|", "\\|")
+        return (s[:60] + "…") if len(s) > 60 else s
+
     head = "| " + " | ".join(cols) + " |\n| " + " | ".join("---" for _ in cols) + " |"
     body = "\n".join(
-        "| " + " | ".join(str(r.get(c, "")).replace("|", "\\|")[:60] for c in cols) + " |"
-        for r in dicts
+        "| " + " | ".join(_cell(r.get(c, "")) for c in cols) + " |" for r in dicts
     )
     return head + "\n" + body
 
