@@ -196,6 +196,17 @@ def test_xml_element_select_is_case_insensitive_fallback():
     assert not items[0].select("author", optional=True).ok
 
 
+def test_attribute_values_strip_surrounding_whitespace():
+    # an accessor reads a value, not its padding: attr("text") normalises (already did), and a
+    # raw HTML attribute / a JSON string value now trims surrounding whitespace too.
+    html = make_doc(content=b'<time datetime="  2026-09-14  "> Sep 14 </time>')
+    assert html.select("time").attr("text").get() == "Sep 14"           # text: normalised
+    assert html.select("time").attr("datetime").get() == "2026-09-14"   # raw attr: trimmed
+    js = make_doc(kind="json", content=b'{"date": "  2026-09-14  ", "n": 5}')
+    assert js.select("date").attr("value").get() == "2026-09-14"        # json string: trimmed
+    assert js.select("n").attr("value").get() == 5                       # non-string untouched
+
+
 def test_list_valued_field_projects_to_a_list():
     # a field that uses select_all(...) inside extract collects EVERY match into a JSON list
     # (all URLs / tags in a record), not a single value.

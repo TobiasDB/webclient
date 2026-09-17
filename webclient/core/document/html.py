@@ -883,7 +883,7 @@ class HtmlBacking(Backing):
             if not optional and (error or current_policy()) is RAISE:
                 raise select_error(f"no attribute {name!r}")
             return Field(None, ok=False)
-        return Field(value)
+        return Field(value.strip() if isinstance(value, str) else value)  # trim surrounding ws
 
     def text_content(self, core: "Document") -> "str | None":
         """The element's visible text, whitespace-normalised (``None`` on a miss). The

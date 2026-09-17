@@ -14,6 +14,12 @@ if TYPE_CHECKING:
     from . import Document
 
 
+def _strip(v: Any) -> Any:
+    """Trim surrounding whitespace from a string leaf (an accessor reads a value, not its
+    padding); non-strings pass through unchanged."""
+    return v.strip() if isinstance(v, str) else v
+
+
 def _json_type(v: Any) -> str:
     """The shape name of a JSON scalar (objects/arrays are rendered structurally)."""
     if v is None:
@@ -200,9 +206,9 @@ class JsonBacking(Backing):
             return Field(None, ok=False)
         data = self._data(core)
         if name == "value":  # the node's own value
-            return Field(data)
+            return Field(_strip(data))
         if isinstance(data, dict) and name in data:
-            return Field(data[name])
+            return Field(_strip(data[name]))
         # a missing key: same contract as html attr -- raise (structured) by default,
         # a not-ok Field under optional / RETURN. (Never silently return the node.)
         if not optional and (error or current_policy()) is RAISE:
@@ -213,7 +219,7 @@ class JsonBacking(Backing):
         if core._missing:
             return None
         value = self._data(core)
-        return value if isinstance(value, str) else _json.dumps(value)
+        return value.strip() if isinstance(value, str) else _json.dumps(value)
 
 
 __all__ = ["JsonBacking"]
