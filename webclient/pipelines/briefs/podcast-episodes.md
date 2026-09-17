@@ -3,9 +3,9 @@ name: podcast-episodes
 title: Podcast episodes
 schema:
   - title: the episode title
-  - date?: the publish date, when shown
+  - date?: the publish date, when shown (e.g. 2026-09-14, Sep 14 2026)
   - url?: a link to the episode
-  - number?: the episode number, if shown
+  - number?: the episode number, if shown (e.g. 142, S3E5, #88)
 look:
   - the podcast episodes / archive page
   - the podcast RSS feed if one is exposed

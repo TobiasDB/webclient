@@ -3,9 +3,9 @@ name: countries
 title: Countries
 schema:
   - name: the country name
-  - capital?: the capital city, when shown
-  - population?: the population, when shown
-  - area?: the land area, when shown
+  - capital?: the capital city, when shown (e.g. Paris, Tokyo)
+  - population?: the population, when shown (e.g. 67,390,000)
+  - area?: the land area, when shown (e.g. 551,695 km², 244820)
 look:
   - a page or table listing countries and their facts
   - a countries data API / JSON endpoint if one is exposed

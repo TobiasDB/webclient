@@ -2,9 +2,9 @@
 name: job-postings
 title: Job postings
 schema:
-  - title: the job / role title
-  - location: where the role is based (city / remote)
-  - department?: the team or department, if shown
+  - title: the job / role title (e.g. Senior Backend Engineer, Product Designer)
+  - location: where the role is based (e.g. London, Remote — US, Berlin/Hybrid)
+  - department?: the team or department, if shown (e.g. Engineering, Sales, Design)
   - url?: a link to the full job posting
 look:
   - the careers / jobs / open-roles page, or a jobs board (Greenhouse, Lever, Ashby)

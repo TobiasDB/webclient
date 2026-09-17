@@ -28,6 +28,26 @@ Inside `extract`, `wq.doc` is the **current row**; at the top of the chain it is
 `.url`); `.attr("data-…")` gives that HTML attribute. `.regex(pattern)` pulls a
 substring out of an element's text (`group=1` for the first capture group).
 
+### Reading a value from an ATTRIBUTE, not the text
+
+Many values live in an **attribute**, not the visible text — and `.attr("text")` returns
+nothing for them. When the value you need is not the element's text, read the attribute by
+name. Look at the skeleton: the element's real attributes are shown (`<span data-rating="Four">`,
+`<time datetime="2026-09-14">`, `<a href="/p/1">`, `<meta content="...">`, `<data value="42">`).
+
+| the value is… | read it with | example element |
+| --- | --- | --- |
+| a rating / code / flag in a `data-*` attr | `.attr("data-rating")` | `<span class="stars" data-rating="Four"></span>` (text is empty!) |
+| a machine date | `.attr("datetime")` | `<time datetime="2026-09-14">Sep 14</time>` |
+| a link / URL | `.attr("href")` (or `src`) | `<a href="/p/1">…</a>` |
+| a numeric value in an attr | `.attr("value")` / `.attr("data-value")` | `<data value="42">forty-two</data>` |
+| a hidden/meta value | `.attr("content")` | `<meta itemprop="price" content="19.99">` |
+| an image alt / aria label | `.attr("alt")` / `.attr("aria-label")` | `<img alt="Red mug">` |
+
+Rule of thumb: if the visible text is NOT the value (e.g. a star widget, an icon, a
+formatted-vs-machine date), the value is almost always in an attribute — pick the attribute
+whose name matches the meaning. Only `.regex()` the **text**; it can't reach an attribute.
+
 ## Syntax rules
 
 - **Conditions use symbols, not words.** In a `filter`, compare with `==` `!=` `<`
@@ -51,9 +71,15 @@ nested, each with a short description. Map it mechanically:
   code/attribute field → `.attr("data-…")`; plain text → `.attr("text")`.
 - **A numeric / split field** → `.regex(...)` on the element's text to pull just the
   number or unit.
-- **A nested field** (has children) → the column is a **sub-`extract`**:
-  `price=wq.doc.select(".price").extract(value=…, unit=…).project()`, so the output
-  JSON nests exactly like the schema.
+- **A nested field** (a schema path like `price.value` / `price.unit`, i.e. a branch with
+  children) → the column is its own **sub-`extract`** that ends in its own `.project()`:
+  `price=wq.doc.select(".price").extract(value=…, unit=…).project()`, so the output JSON nests
+  exactly like the schema. Two rules: (1) the sub-extract's leaf selectors are **relative to the
+  branch container** you selected (`value`/`unit` are found INSIDE `.price`); (2) every REQUIRED
+  leaf must resolve to real content — a branch that comes back `{"value":"","unit":""}` counts as
+  empty, so pick a leaf selector/accessor (text, `.regex(...)`, or an `.attr(...)`) that actually
+  hits the value. If a leaf lives on the detail page, resolve to it (see the nested-resolve
+  example) — a nested branch can itself contain a `.resolve()`.
 
 ### When records have no wrapper (flat sibling runs)
 
@@ -228,9 +254,12 @@ wq.doc.select("script#__DATA__").as_json().select_all("catalog.items").extract(
 ).project()
 ```
 
-**An RSS/XML feed** is parsed like HTML — records are `<item>`s, fields are child tags
-(`.select("title").attr("text")`, `.select("pubDate").attr("text")`). **XML tag names are
-case-SENSITIVE** (unlike HTML): match `pubDate`, not `pubdate`, exactly as the feed spells it.
+**An RSS/XML feed** is parsed like HTML. In **RSS** the records are `<item>`s and the fields are
+child tags (`.select("title").attr("text")`, `.select("pubDate").attr("text")`, `.select("link")`
+or `.select("guid")` for the URL). In **Atom** the records are `<entry>`s, the URL is
+`.select("link").attr("href")`, and the date is `<published>` / `<updated>` — so check whether the
+feed uses `<item>` (RSS) or `<entry>` (Atom) before choosing the record selector. Tag names are
+matched case-insensitively (`pubdate` finds `<pubDate>`), but write them as the feed spells them.
 
 ### 4. A field that lives on the DETAIL page (nested resolve)
 

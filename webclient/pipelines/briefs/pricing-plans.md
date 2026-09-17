@@ -4,8 +4,8 @@ title: Pricing plans
 schema:
   - plan: the plan / tier name (e.g. Free, Pro, Enterprise)
   - price: the plan's price as shown (e.g. $20, Custom)
-  - period?: the billing period (per month / per year / per seat), if shown
-  - highlight?: the headline feature or tagline for the plan, when present
+  - period?: the billing period, if shown (e.g. per month, per year, per seat)
+  - highlight?: the headline feature or tagline for the plan, when present (e.g. "Unlimited projects", "Best for teams")
 look:
   - the pricing / plans page
 ignore:
