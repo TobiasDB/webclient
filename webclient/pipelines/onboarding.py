@@ -1637,95 +1637,27 @@ def _artifact_from(
     return art, rows
 
 
-# --------------------------------------------------------------------------- #
-# staged query authoring: build the extraction in VALIDATED stages -- pick the record
-# container, then read each field's selector+accessor from ONE record's HTML -- and let
-# PYTHON assemble the query from the returned selectors (data, never model code). A safer,
-# higher-ceiling "manual agentic loop" than one blind shot (no tool calls needed).
-# --------------------------------------------------------------------------- #
+class _Author:
+    """Drives the query-authoring turns. The PAGE (guide + skeleton + brief) is the OPENING
+    message; each retry sends only the short feedback. If the model keeps a conversation (an
+    :class:`LlmClient` exposes ``.conversation()``), the page stays in context and is re-read
+    from cache instead of re-submitted every attempt; a plain ``Callable[[str], str]`` has no
+    memory, so the page is re-sent with each turn (the fallback -- same behaviour as before)."""
 
-#: opt-in: try the staged author before the one-shot author. Off by default until it is proven
-#: on the live harness; the one-shot loop remains the fallback for either path.
-_STAGED_QUERY = False
+    def __init__(self, llm: LLM, opening: str) -> None:
+        conv = getattr(llm, "conversation", None)
+        self._chat: Any = conv() if callable(conv) else None
+        self._llm = llm
+        self._opening = opening
+        self._opened = False
 
-
-def _apply_accessor(node: Any, spec: "dict[str, Any]") -> Any:
-    """Apply a field accessor (text / attr / regex) from a validated spec to a selected node."""
-    acc = str(spec.get("accessor") or "text")
-    if acc == "attr":
-        return node.attr(str(spec.get("attr") or "text"))
-    if acc == "regex":
-        return node.regex(str(spec.get("pattern") or ".+"), group=int(spec.get("group") or 0))
-    return node.attr("text")
-
-
-def _build_field_expr(spec: "dict[str, Any]") -> Any:
-    """Build ONE field's sub-expression from a selector spec (data, not code): a nested
-    ``branch`` (a sub-extract per leaf), a ``resolve`` (follow the record's link to a detail
-    page), or a plain ``select`` + accessor. Optionality is threaded so a missing optional
-    field yields null instead of raising."""
-    optional = bool(spec.get("optional"))
-    branch = spec.get("branch")
-    if isinstance(branch, dict):
-        base = wq.doc.select(str(spec.get("selector") or ":scope"), optional=optional)
-        return base.extract(**{k: _build_field_expr(v) for k, v in branch.items()
-                               if isinstance(v, dict)}).project()
-    res = spec.get("resolve")
-    if isinstance(res, dict):
-        link = wq.doc.select(str(res.get("link_selector") or spec.get("selector") or "a"),
-                             optional=optional)
-        detail = link.attr("href").resolve().select(str(res.get("selector") or "*"), optional=optional)
-        return _apply_accessor(detail, res)
-    node = wq.doc.select(str(spec.get("selector") or ":scope"), optional=optional)
-    return _apply_accessor(node, spec)
-
-
-def _author_query_staged(doc: Any, brief: Brief, *, llm: LLM) -> Any:
-    """Author the extraction in VALIDATED stages and assemble it in Python:
-      1. CONTAINER -- ask which selector(s) match the repeating record; keep the first that
-         actually matches an element on the page.
-      2. FIELDS -- from ONE record's HTML, ask each field's relative selector + accessor (or a
-         resolve to a detail page); build each field's sub-expression from the returned spec.
-    Returns an assembled ``wq.doc`` Expr (validated by the caller via :func:`_artifact_from`), or
-    ``None`` if a stage produced nothing usable (the caller falls back to the one-shot author)."""
-    if not doc.ok:
-        return None
-    skeleton = _skeleton_for(doc)
-    cdata = _ask_json(llm, render_prompt(
-        "query_containers", description=brief.description,
-        fields_line=_fields_line(brief), skeleton=skeleton))
-    containers = [c for c in (cdata.get("containers", []) if isinstance(cdata, dict) else [])
-                  if isinstance(c, str) and c.strip()]
-    container = next((c for c in containers if (_selector_match_count(c, doc) or 0) > 0), None)
-    if not container:
-        return None
-    probe = wq.doc.select_all(container).extract(_=wq.doc.attr("text")).project()
-    record_html = _sample_record_html(probe, doc)
-    if not record_html:
-        return None
-    fdata = _ask_json(llm, render_prompt(
-        "query_fields", description=brief.description,
-        fields_line=_fields_line(brief), record_html=record_html))
-    if not isinstance(fdata, dict):
-        return None
-    optional_tops = {p.split(".")[0] for p in brief.optional}
-    fields: dict[str, Any] = {}
-    for name in _required_columns(brief) + [t for t in optional_tops]:
-        spec = fdata.get(name)
-        if not isinstance(spec, dict):
-            if name in optional_tops:
-                continue  # a genuinely absent optional field -> omit the column
-            return None   # a required field with no spec -> staged authoring failed
-        try:
-            fields[name] = _build_field_expr(spec)
-        except Exception:  # noqa: BLE001 - a spec we can't build -> abandon staged authoring
-            return None
-    if not fields:
-        return None
-    try:
-        return wq.doc.select_all(container).extract(**fields).project()
-    except Exception:  # noqa: BLE001
-        return None
+    def send(self, follow_up: "str | None" = None) -> str:
+        if self._chat is not None:  # stateful: the page once, then just the follow-up
+            msg = self._opening if not self._opened else (follow_up or "Try again.")
+            self._opened = True
+            return str(self._chat.send(msg))
+        # stateless callable: no memory -> the page must ride along every turn
+        return self._llm(self._opening if not follow_up else f"{self._opening}\n\n{follow_up}")
 
 
 def write_query(
@@ -1740,53 +1672,29 @@ def write_query(
     extra_urls: Sequence[str] = (),
     resolve: "Resolve | None" = None,
     doc: Any = None,
-    staged: "bool | None" = None,
 ) -> QueryArtifact | None:
     """Have the model author the DOCUMENT-level extraction from the page skeleton, test
     it against the fetched source (``from_blob`` + run -> it must extract DATA rows), and
     return the best :class:`QueryArtifact`. The stored ``blob`` is the SELF-CONTAINED
     executable query -- the extraction wrapped in ``reference(url).resolve(...)`` so it
     runs as is (:func:`_executable_query`). Retries with feedback on an invalid or
-    non-extracting query. ``paginated`` tells the author to capture the next-page link;
-    ``extra_urls`` are further base URLs the same query also runs against;
-    ``resolve`` bakes the fetch policy (browser tier) into the executable query. ``doc`` is the
-    already-fetched source (from the flag-read step) -- reused so we don't re-fetch it."""
+    non-extracting query -- the page is sent ONCE and each retry is a short follow-up when the
+    model keeps a conversation (see :func:`_author`), else re-sent. ``paginated`` tells the
+    author to capture the next-page link; ``extra_urls`` are further base URLs the same query
+    also runs against; ``resolve`` bakes the fetch policy (browser tier) into the executable
+    query. ``doc`` is the already-fetched source (from the flag-read step) -- reused so we
+    don't re-fetch it."""
     if doc is None:
         doc = wc.fetch(candidate_url, browser=browser, optional=True)
     skeleton = _skeleton_for(doc) if doc.ok else ""
     prompt = _query_prompt(brief, skeleton, paginated=paginated)
     bases = [candidate_url, *extra_urls]
     best: QueryArtifact | None = None
-    # STAGED authoring first (opt-in): pick+validate the container, then read each field from one
-    # record's HTML and assemble the query in Python. A complete result ships; anything else falls
-    # through to the one-shot author below (which also gets it as a fallback candidate).
-    if (staged if staged is not None else _STAGED_QUERY) and doc.ok:
+    author = _Author(llm, prompt)  # the page rides in the OPENING; retries send only feedback
+    follow_up: "str | None" = None
+    for _attempt in range(retries + 1):
         try:
-            sexpr = _author_query_staged(doc, brief, llm=llm)
-        except LlmError as exc:
-            log.warning("staged query authoring LLM call failed: %s", exc)
-            sexpr = None
-        if sexpr is not None:
-            art, _rows = _artifact_from(sexpr, doc, brief, candidate_url, resolve, bases)
-            log.info("    staged author: complete=%s, %d row(s)", art.complete, art.row_count)
-            if art.complete:
-                return art
-            best = art  # keep as the fallback; the one-shot loop may still beat it
-    ask = prompt
-    for attempt in range(retries + 1):
-        # A retry re-asks with the failure hint appended -- but an identical ask re-hits the
-        # model's prompt cache and returns the SAME failing query (observed: 3 near-identical
-        # attempts). Prefix each retry with a UNIQUE, escalating instruction so the prompt
-        # differs (cache-busting) AND the model is pushed to change its RECORD anchor, not just
-        # nudge fields -- the usual reason it is stuck.
-        call_ask = ask if attempt == 0 else (
-            f"[attempt {attempt + 1} of {retries + 1}] The previous quer{'y' if attempt == 1 else 'ies'} "
-            "above did NOT work. Produce a query that is MATERIALLY DIFFERENT -- change the "
-            ".select_all(...) RECORD selector to a different, more semantic anchor (not the same "
-            "one with tweaked fields), and do not repeat a query you already tried.\n\n" + ask
-        )
-        try:
-            reply = llm(call_ask)
+            reply = author.send(follow_up)
         except LlmError as exc:  # a bad-request / exhausted-retry API error
             log.warning("query authoring LLM call failed: %s", exc)
             break
@@ -1796,7 +1704,8 @@ def write_query(
             # surface WHAT the model said so an all-unparseable run is diagnosable, not a
             # silent "could not author a query"
             log.info("    query reply not parseable (%s) -- retrying; reply: %.160r", exc, reply.strip())
-            ask = prompt + "\n\nYour previous reply was not a valid query. Reply with ONLY the query code -- a single wq.doc... chain, nothing else."
+            follow_up = ("Your previous reply was not a valid query. Reply with ONLY the query"
+                         " code -- a single wq.doc... chain, nothing else.")
             continue
         # a real extraction MUST select the records -- a query with no select_all/select
         # can't extract anything (it would wrap to `reference(url).resolve()` with nothing
@@ -1804,11 +1713,9 @@ def write_query(
         ops = {s.name for s in expr._plan.steps if s.kind == "get"}
         if not ({"select", "select_all"} & ops):
             log.info("    query has no selection -- retrying with feedback")
-            ask = (
-                prompt + "\n\nYour previous query had NO selection so it extracts nothing."
-                " You MUST select the repeating record with .select_all(...), pull each"
-                " field with .extract(col=...), and END with .project(). Re-write it."
-            )
+            follow_up = ("Your previous query had NO selection so it extracts nothing. You MUST"
+                         " select the repeating record with .select_all(...), pull each field with"
+                         " .extract(col=...), and END with .project(). Re-write it.")
             continue
         art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases)
         if art.complete:
@@ -1816,10 +1723,15 @@ def write_query(
         best = best or art  # keep the first rebuildable one as a fallback (NOT complete)
         # ran but did not truly extract: diagnose WHY (wrong record selector / empty fields /
         # a required field never populated / content not in the HTML) and hand the model a
-        # concrete, human-readable hint.
+        # concrete, human-readable hint. Push it toward a MATERIALLY DIFFERENT record anchor
+        # (repeating the same one with tweaked fields is the usual failure).
         hint = _content_hint(expr, rows, brief, doc)
         log.info("    query did not extract valid content -- retrying with feedback: %s", hint)
-        ask = prompt + f"\n\nYour previous query was:\n{expr.explain()}\n\n{hint}"
+        follow_up = (
+            "That query did not extract the dataset. Produce a MATERIALLY DIFFERENT query --"
+            " change the .select_all(...) RECORD selector to a more semantic anchor, don't just"
+            f" tweak the fields.\n\nYour previous query was:\n{expr.explain()}\n\n{hint}"
+        )
     if best is None:  # every attempt failed to author a usable query -- say so loudly
         log.warning("    could not author any query in %d attempt(s)", retries + 1)
     return best

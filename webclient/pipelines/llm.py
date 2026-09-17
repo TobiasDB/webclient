@@ -311,11 +311,21 @@ class LlmClient:
                 time.sleep(wait)
         self._last_call = time.monotonic()
 
+    def conversation(self) -> "_Conversation":
+        """A multi-turn conversation over this client: the FIRST user message is prompt-cached
+        (``cache_control``), so a long shared prefix (a page skeleton + guide) is sent once and
+        each follow-up turn re-reads it from cache instead of re-submitting it -- the model keeps
+        the page in context across retries. Budget is charged per turn like :meth:`__call__`."""
+        return _Conversation(self)
+
     def _complete(self, prompt: str) -> tuple[str, Usage]:
+        return self._complete_messages([{"role": "user", "content": prompt}])
+
+    def _complete_messages(self, messages: "list[dict[str, Any]]") -> tuple[str, Usage]:
         payload: dict[str, Any] = {
             "model": self.model,
             "max_tokens": self.max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
         }
         if self.system is not None:
             payload["system"] = self.system
@@ -387,6 +397,35 @@ class LlmClient:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+
+@dataclass
+class _Conversation:
+    """A running multi-turn conversation over an :class:`LlmClient`. The opening user message is
+    marked with ``cache_control`` so its (large) content is prompt-cached; subsequent
+    :meth:`send` turns append only the short follow-up, and the cached opening is re-read rather
+    than re-sent -- keeping a page/skeleton in context across authoring retries cheaply."""
+
+    client: "LlmClient"
+    messages: "list[dict[str, Any]]" = field(default_factory=list)
+
+    def send(self, text: str) -> str:
+        """Add ``text`` as the next user turn, complete it, and return the reply (budget-charged
+        and capped like a normal call). The first turn is cache-marked."""
+        self.client.budget.ensure()
+        if not self.messages:  # the opening turn: cache-mark it so retries don't re-send it
+            self.messages.append({
+                "role": "user",
+                "content": [{"type": "text", "text": text,
+                             "cache_control": {"type": "ephemeral"}}],
+            })
+        else:
+            self.messages.append({"role": "user", "content": text})
+        reply, usage = self.client._complete_messages(self.messages)
+        self.client.last_usage = usage
+        self.client.budget.charge(usage, self.client.price())
+        self.messages.append({"role": "assistant", "content": reply})
+        return reply
 
 
 __all__ = [
