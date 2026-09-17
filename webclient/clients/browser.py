@@ -417,12 +417,13 @@ class BrowserFactory(ClientFactory):
 
     def __init__(
         self, *, headless: bool = True, stealth: bool = True, fingerprint: bool = False,
-        channel: "str | None" = None,
+        channel: "str | None" = None, proxy: "str | None" = None,
     ) -> None:
         self.headless = headless
         self.stealth = stealth
         self.fingerprint = fingerprint
         self.channel = channel  # None = bundled chromium; "chrome" = installed Google Chrome
+        self.proxy = proxy  # a proxy URL routing all browser traffic (same one httpx uses)
         self._pw: Any = None
         self._browser: Any = None
         self._major = "141"  # the real engine major version, read on first launch
@@ -439,6 +440,8 @@ class BrowserFactory(ClientFactory):
             }
             if self.channel:  # drive real Google Chrome (latest stable) instead of chromium
                 launch["channel"] = self.channel
+            if self.proxy:  # route ALL browser traffic through the proxy (Playwright parses auth)
+                launch["proxy"] = {"server": self.proxy}
             self._browser = await self._pw.chromium.launch(**launch)
             try:  # match the spoofed UA version to the ACTUAL engine
                 self._major = (self._browser.version or "").split(".")[0] or self._major

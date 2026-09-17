@@ -174,6 +174,11 @@ class BrowserConfig(BaseModel, frozen=True):
     pool_pages: int = 4
     #: how many concurrent HTTP clients the pool may lease at once.
     pool_http: int = 10
+    #: a proxy URL (``http://[user:pass@]host:port`` / ``socks5://…``) routing ALL of the
+    #: client's traffic -- both the httpx fetches AND the browser -- through the same proxy.
+    #: ``None`` = a direct connection. (A per-fetch anti-bot ``Resolve.proxy`` pool is separate;
+    #: this is the always-on client-wide proxy.)
+    proxy: str | None = None
 
     @classmethod
     def auto(cls) -> "BrowserConfig":

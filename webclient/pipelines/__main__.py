@@ -92,6 +92,8 @@ def main(argv: "Sequence[str] | None" = None) -> int:
                         help="rate-limit the LLM: min seconds between calls")
     parser.add_argument("--max-pages", type=int, default=20, help="crawl page budget")
     parser.add_argument("--no-browser", action="store_true", help="static-only crawl")
+    parser.add_argument("--proxy", default=None,
+                        help="proxy URL for ALL http + browser traffic (http://[user:pass@]host:port)")
     parser.add_argument("--review", action="store_true",
                         help="run the meta-review stage (grades the run; costs extra calls)")
     parser.add_argument("-v", "--verbose", action="count", default=0,
@@ -111,7 +113,8 @@ def main(argv: "Sequence[str] | None" = None) -> int:
 
     budget = Budget(max_usd=args.budget)
     llm = _build_llm(args, budget, parser)
-    with WebClient() as wc, llm:
+    from ..core.reference.models import BrowserConfig
+    with WebClient(browser_config=BrowserConfig(proxy=args.proxy)) as wc, llm:
         results = onboard(
             args.companies, brief, wc=wc, llm=llm, search=ddg_search,
             max_pages=args.max_pages, browser=not args.no_browser, budget=budget,

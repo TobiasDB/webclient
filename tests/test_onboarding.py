@@ -340,6 +340,29 @@ def test_search_web_retries_stricter_when_all_seeds_are_the_wrong_company():
     assert [s.url for s in seeds] == ["https://squarepoint.com/"]
 
 
+def test_search_web_broadens_and_retries_on_no_results():
+    # NO results (empty, or a backend error) -> retry with a BROADER/different query, not the
+    # narrowing disambiguation.
+    from webclient.pipelines.onboarding import search_web
+
+    queries: list[str] = []
+
+    def search(query, k):
+        queries.append(query)
+        return [] if len(queries) == 1 else [SearchHit(url="https://acme.com/blog", title="Acme")]
+
+    def llm(prompt):
+        if "web-search query" in prompt:
+            return "acme newsroom" if "NO results" in prompt else "acme very specific rare phrase"
+        if "belong" in prompt:
+            return '{"belong": [0]}'
+        return "{}"
+
+    seeds = search_web(Brief(description="blog", look=["the blog"]), "Acme", search=search, llm=llm)
+    assert len(queries) == 2 and queries[0] != queries[1]  # a DIFFERENT term on retry
+    assert [s.url for s in seeds] == ["https://acme.com/blog"]
+
+
 def test_write_resolve_maps_flags_to_policy():
     # the flags deterministically choose the transport policy for the source.
     spa = write_resolve([Flag(name="spa", present=True, remedy="browser")])

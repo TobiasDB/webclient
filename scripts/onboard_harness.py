@@ -410,6 +410,7 @@ def main() -> None:
     # browser hardening
     ap.add_argument("--headful", action="store_true", help="headless OFF (needs a display; less bot-detectable)")
     ap.add_argument("--channel", default=None, help="browser channel, e.g. 'chrome' for real Google Chrome")
+    ap.add_argument("--proxy", default=None, help="proxy URL for ALL http + browser traffic (http://[user:pass@]host:port)")
     ap.add_argument("--max", type=int, default=0, help="stop after N cases (0 = all)")
     ap.add_argument("--resume", metavar="DIR", help="reuse finished cases in DIR; run only the rest")
     ap.add_argument("--no-browser", action="store_true")
@@ -503,7 +504,8 @@ def main() -> None:
     # right way to parallelise (not one browser process per company).
     pool_pages = a.pool or (a.parallel + 2)
     bc = BrowserConfig(pool_pages=pool_pages, pool_http=max(10, a.parallel * 3),
-                       headless=not a.headful, channel=a.channel)  # stealth is on by default
+                       headless=not a.headful, channel=a.channel,
+                       proxy=a.proxy)  # stealth is on by default
     print(f"{len(cases)} case(s): {len(records)} reused, {len(todo)} to run · {a.parallel} concurrent "
           f"sessions on 1 browser ({pool_pages}-page pool, headless={not a.headful}, "
           f"channel={a.channel or 'chromium'}) · crawl≤{a.max_pages}p/{a.rounds}r -> {outdir}")

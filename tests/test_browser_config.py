@@ -79,3 +79,18 @@ def test_stealth_fingerprints_are_internally_consistent():
         js = _identity_js(fp)  # the injected script uses this identity's own values
         assert fp["platform"] in js and fp["gpu_vendor"] in js and str(fp["cores"]) in js
     assert _DEFAULT_FP["platform"] == "Linux x86_64"  # default identity is coherent with the host
+
+
+def test_client_wide_proxy_reaches_http_and_browser_factories():
+    # one BrowserConfig.proxy routes BOTH the httpx client and the browser through the same proxy.
+    from webclient import WebClient
+    from webclient.core.reference.models import BrowserConfig
+
+    with WebClient(browser_config=BrowserConfig(proxy="http://user:pw@127.0.0.1:8888")) as wc:
+        factories = wc.pool._factories
+        assert factories["http"].proxy == "http://user:pw@127.0.0.1:8888"
+        assert factories["page"].proxy == "http://user:pw@127.0.0.1:8888"
+    # default = no proxy (a direct connection)
+    with WebClient() as wc2:
+        assert wc2.pool._factories["http"].proxy is None
+        assert wc2.pool._factories["page"].proxy is None

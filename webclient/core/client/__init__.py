@@ -250,10 +250,10 @@ class WebClient(WebCore, IWebClient):
         bc = self.browser_config
         self._pool = ClientPool(
             {
-                "http": HTTPXFactory(),
+                "http": HTTPXFactory(proxy=bc.proxy),  # same client-wide proxy for httpx...
                 "page": BrowserFactory(
                     headless=bc.headless, stealth=bc.stealth, fingerprint=bc.fingerprint,
-                    channel=bc.channel,
+                    channel=bc.channel, proxy=bc.proxy,  # ...and the browser
                 ),
             },
             limits={"http": bc.pool_http, "page": bc.pool_pages},

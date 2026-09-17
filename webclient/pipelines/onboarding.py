@@ -704,8 +704,14 @@ def ddg_search(query: str, k: int = 6) -> "list[SearchHit]":
             "web search needs the 'ddgs' package (pip install ddgs), or pass your "
             "own search=... callable to search_web()/onboard_company()."
         ) from exc
-    with DDGS() as ddgs:
-        rows = ddgs.text(query, max_results=k) or []
+    try:
+        with DDGS() as ddgs:
+            rows = ddgs.text(query, max_results=k) or []
+    except Exception as exc:  # noqa: BLE001 - ddgs raises on rate limits / no results / timeouts;
+        # a search backend hiccup is not fatal -- return no seeds so the caller can retry with a
+        # different term (see search_web) instead of crashing the whole onboarding run.
+        log.info("    web search error for %r: %s -- treating as no results", query, exc)
+        return []
     return [
         SearchHit(
             url=str(r.get("href") or r.get("url") or ""),
@@ -723,17 +729,30 @@ _DISAMBIGUATE = (
     " Rewrite the query so it is UNAMBIGUOUS for this exact company -- add a distinguishing"
     " word (its industry, headquarters, 'official', or a term from the description)."
 )
+#: appended on a retry when the previous query returned NO results -- broaden, don't narrow.
+_BROADEN = (
+    "\n\nThe previous search returned NO results. Rewrite the query BROADER and simpler -- fewer"
+    " words, just the company's name plus ONE key term (its site type: 'newsroom', 'blog',"
+    " 'press releases', 'products'); drop quotes, rare phrases and any exact-match operators."
+)
 
 
-def _search_query(brief: Brief, company: str, llm: "LLM | None", *, disambiguate: bool = False) -> str:
-    """The web-search query for ``company`` -- the model crafts a sharper one (told to
-    disambiguate a look-alike name on a retry); falls back to ``"<company> <brief>"``."""
+def _search_query(
+    brief: Brief, company: str, llm: "LLM | None", *, mode: str = "normal"
+) -> str:
+    """The web-search query for ``company``. ``mode`` steers a retry: ``"disambiguate"`` narrows
+    (a look-alike came back), ``"broaden"`` simplifies (no results came back). The model crafts
+    it; falls back to ``"<company> <brief>"`` (or, when broadening, ``"<company> <look-hint>"``)."""
     query = f"{company} {brief.description}".strip()
+    if mode == "broaden":  # a simpler default when we got nothing: name + a site-type hint
+        hint = (brief.look[0] if brief.look else "") or brief.title or brief.name
+        query = f"{company} {hint}".strip() or company
     if llm is not None:
+        extra = _DISAMBIGUATE if mode == "disambiguate" else (_BROADEN if mode == "broaden" else "")
         prompt = render_prompt(
             "search_query", company=company, description=brief.description,
             fields_line=_fields_line(brief),
-        ) + (_DISAMBIGUATE if disambiguate else "")
+        ) + extra
         crafted = llm(prompt).strip().splitlines()
         if crafted and crafted[0].strip():
             query = crafted[0].strip()
@@ -778,18 +797,28 @@ def search_web(
     FAIL-OPEN: if verification would drop EVERY result on both tries, the raw results are
     returned anyway rather than sinking the company on a stubborn/erroneous LLM judgement."""
     raw: list[Seed] = []
-    for attempt in range(2):
-        query = _search_query(brief, company, llm, disambiguate=(attempt > 0))
+    mode = "normal"
+    tried: set[str] = set()
+    for _attempt in range(3):
+        query = _search_query(brief, company, llm, mode=mode)
+        if query in tried:  # don't re-issue the same query -- force a simpler, different one
+            query = f"{company} {(brief.look[0] if brief.look else brief.name or brief.title)}".strip() or company
+        tried.add(query)
         log.info("    search query: %r", query)
         seeds = [Seed(url=h.url, title=h.title, why=h.snippet) for h in search(query, k) if h.url]
+        if not seeds:  # NO results (empty, or a backend error) -- BROADEN and retry a different term
+            log.info("    no results for %r -- retrying the search, broader", query)
+            mode = "broaden"
+            continue
         raw = raw or seeds  # remember the first non-empty result set for the fail-open path
         kept = _seeds_for_company(seeds, company, brief, llm)
         if kept:
             if len(kept) < len(seeds):
                 log.info("    %d/%d result(s) belong to %s", len(kept), len(seeds), company)
             return kept
-        if seeds:  # results came back but none were this company -- try a stricter query
-            log.info("    no result belongs to %s -- retrying the search, stricter", company)
+        # results came back but none were this company -- try a stricter, disambiguating query
+        log.info("    no result belongs to %s -- retrying the search, stricter", company)
+        mode = "disambiguate"
     if raw:  # verification killed everything -- crawl the raw seeds rather than give up
         log.info("    verification dropped all results for %s -- using the raw seeds", company)
     return raw
