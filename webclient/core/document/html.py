@@ -217,24 +217,29 @@ _MAX_CLASSES = 8  # cap utility-class soup (tailwind &c.) so a node stays token-
 
 #: CSS-in-JS / CSS-module class prefixes -- always generated, never a stable selector hook.
 _NOISE_CLASS_PREFIX = ("css-", "sc-", "jsx-", "emotion-", "chakra-", "mui", "makestyles", "jss")
-_HASH_SEG = re.compile(r"[A-Za-z0-9]{6,}")
+_HEX_SEG = re.compile(r"[0-9a-f]*[0-9][0-9a-f]*")  # hex chars incl. at least one digit
 
 
 def _is_noise_class(tok: str) -> bool:
     """Whether a class token is a HIGH-ENTROPY generated name (a CSS-module / hashed build
-    class like ``AMTIxG_grid``, ``css-1a2b3c``, ``jsx-1837462``) rather than a semantic hook.
-    Such tokens bloat the skeleton and mislead the model into anchoring on names that change
-    every build -- so they are dropped from the outline, keeping meaningful classes
-    (``product-card``, ``price``, ``post-title``)."""
-    if len(tok) < 4:
-        return False  # short classes are almost always meaningful (nav, btn, col, row)
+    class like ``css-1a2b3c``, ``jsx-1837462``, ``Button_a1B2c``) rather than a semantic hook.
+    Kept deliberately CONSERVATIVE -- it is far worse to drop a real selector hook than to keep
+    a bit of noise -- so it fires only on an unmistakable hash shape and spares numbered or
+    PascalCase semantic names (``heading2``, ``results2024``, ``ProductCardItem``, ``USMap``):
+      * a known CSS-in-JS / CSS-module prefix (``css-``/``sc-``/``jsx-``/``emotion-``/…), or
+      * MIXED case AND a digit in the same token (``Button_a1B2`` -- webpack/vite hashes), or
+      * a long hex run as its own ``-``/``_`` segment (``b3f9a1c2ef``)."""
+    if len(tok) < 5:
+        return False  # short classes are almost always meaningful (nav, btn, col, row, h1)
     if tok.lower().startswith(_NOISE_CLASS_PREFIX):
         return True
-    uppers = sum(c.isupper() for c in tok)
-    if uppers >= 3 or (uppers and any(c.isdigit() for c in tok)):
-        return True  # camel/Pascal hash (AMTIxG…) or mixed-case+digit -> generated
-    for seg in re.split(r"[-_]", tok):  # a hash segment: 6+ chars mixing letters AND digits
-        if len(seg) >= 6 and any(c.isalpha() for c in seg) and any(c.isdigit() for c in seg):
+    has_upper = any(c.isupper() for c in tok)
+    has_lower = any(c.islower() for c in tok)
+    has_digit = any(c.isdigit() for c in tok)
+    if has_upper and has_lower and has_digit:
+        return True  # mixed-case AND a digit -> a generated hash, never a hand-written class
+    for seg in re.split(r"[-_]", tok):  # a bare hex hash segment (emotion/styled hashes)
+        if len(seg) >= 8 and _HEX_SEG.fullmatch(seg):
             return True
     return False
 

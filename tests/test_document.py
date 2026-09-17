@@ -162,16 +162,16 @@ def test_skeleton_drops_hashed_classes_and_optionally_chrome():
     html = (
         b'<html><body>'
         b'<nav class="site-nav"><a href="/">Home</a></nav>'
-        b'<main><article class="post css-1a2b3c AMTIxG_grid jsx-1837462">'
-        b'<h2 class="post-title emotion-9xk2">Hello</h2></article></main>'
+        b'<main><article class="post css-1a2b3c Grid_a1B2c jsx-1837462">'
+        b'<h2 class="post-title heading2 emotion-9xk2">Hello</h2></article></main>'
         b'<footer class="site-footer"><a href="/tos">Terms</a></footer>'
         b'</body></html>'
     )
     doc = make_doc(content=html)
     skel = doc.skeleton()
-    # semantic classes kept, high-entropy build classes dropped
-    assert "post-title" in skel and "post" in skel
-    assert "css-1a2b3c" not in skel and "AMTIxG_grid" not in skel and "emotion-9xk2" not in skel
+    # semantic classes kept (including numbered/PascalCase names), hashed build classes dropped
+    assert "post-title" in skel and "post" in skel and "heading2" in skel
+    assert "css-1a2b3c" not in skel and "Grid_a1B2c" not in skel and "emotion-9xk2" not in skel
     # by default the chrome is present; drop_chrome removes nav/footer landmarks
     assert "site-nav" in skel and "site-footer" in skel
     lean = doc.skeleton(drop_chrome=True)

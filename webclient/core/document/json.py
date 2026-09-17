@@ -139,7 +139,10 @@ class JsonBacking(Backing):
         limit: int | None = None,
         offset: int = 0,
     ) -> "list[Document]":
-        node = self.select(core, path)
+        # optional: a missing path (or a non-array node) is an EMPTY collection, not an error --
+        # matching HtmlBacking.select_all's "an empty match is still a collection" contract, so a
+        # fan_out over the result doesn't raise and cancel its siblings.
+        node = self.select(core, path, optional=True)
         data = None if node._missing else node._element
         items = list(data) if isinstance(data, list) else []
         items = items[offset:]
