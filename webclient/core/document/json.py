@@ -114,6 +114,7 @@ class JsonBacking(Backing):
         max_siblings: int = 200,
         legend: bool = True,
         collapse: bool = False,
+        drop_chrome: bool = False,
         annotate_origin: bool = True,
     ) -> str:
         """A token-lean JSON shape outline (keys + value types, arrays as ``[N]`` with

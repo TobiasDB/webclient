@@ -215,6 +215,34 @@ _SKELETON_ATTRS = (
 )
 _MAX_CLASSES = 8  # cap utility-class soup (tailwind &c.) so a node stays token-lean
 
+#: CSS-in-JS / CSS-module class prefixes -- always generated, never a stable selector hook.
+_NOISE_CLASS_PREFIX = ("css-", "sc-", "jsx-", "emotion-", "chakra-", "mui", "makestyles", "jss")
+_HASH_SEG = re.compile(r"[A-Za-z0-9]{6,}")
+
+
+def _is_noise_class(tok: str) -> bool:
+    """Whether a class token is a HIGH-ENTROPY generated name (a CSS-module / hashed build
+    class like ``AMTIxG_grid``, ``css-1a2b3c``, ``jsx-1837462``) rather than a semantic hook.
+    Such tokens bloat the skeleton and mislead the model into anchoring on names that change
+    every build -- so they are dropped from the outline, keeping meaningful classes
+    (``product-card``, ``price``, ``post-title``)."""
+    if len(tok) < 4:
+        return False  # short classes are almost always meaningful (nav, btn, col, row)
+    if tok.lower().startswith(_NOISE_CLASS_PREFIX):
+        return True
+    uppers = sum(c.isupper() for c in tok)
+    if uppers >= 3 or (uppers and any(c.isdigit() for c in tok)):
+        return True  # camel/Pascal hash (AMTIxG…) or mixed-case+digit -> generated
+    for seg in re.split(r"[-_]", tok):  # a hash segment: 6+ chars mixing letters AND digits
+        if len(seg) >= 6 and any(c.isalpha() for c in seg) and any(c.isdigit() for c in seg):
+            return True
+    return False
+
+
+def _semantic_classes(classes: "list[str]") -> "list[str]":
+    """The meaningful class tokens, dropping high-entropy generated ones (:func:`_is_noise_class`)."""
+    return [c for c in classes if not _is_noise_class(c)]
+
 
 def _kept_children(el: Any) -> "list[Any]":
     """Child *elements* worth showing: real tags (not comments/PIs) that aren't
@@ -236,7 +264,7 @@ def _selector_sig(el: Any) -> str:
     eid = el.get("id")
     if eid:
         parts.append(f'id="{_norm(eid)}"')
-    classes = (el.get("class") or "").split()
+    classes = _semantic_classes(str(el.get("class") or "").split())  # drop hashed build classes
     if classes:
         shown = " ".join(classes[:_MAX_CLASSES])
         if len(classes) > _MAX_CLASSES:
@@ -345,6 +373,21 @@ def _json_islands(root: Any, *, max_islands: int = 4, preview_lines: int = 12) -
     return out
 
 
+#: page-chrome landmarks -- navigation / footer / sidebar, by tag or ARIA role. Dropped from
+#: the skeleton under ``drop_chrome`` so a huge page's records aren't buried under menus. A bare
+#: ``<header>`` tag is NOT dropped (an <article>/<section> header holds the record's title); only
+#: an explicit ``role="banner"`` page header is.
+_CHROME_TAGS = frozenset({"nav", "footer", "aside"})
+_CHROME_ROLES = frozenset({"navigation", "contentinfo", "complementary", "search", "banner"})
+
+
+def _is_chrome(el: Any) -> bool:
+    if _tag(el).rsplit("}", 1)[-1] in _CHROME_TAGS:
+        return True
+    role = (el.get("role") or "").strip().lower() if hasattr(el, "get") else ""
+    return role in _CHROME_ROLES
+
+
 def _skeleton(
     root: Any,
     *,
@@ -354,6 +397,7 @@ def _skeleton(
     max_siblings: int = 200,
     legend: bool = True,
     collapse: bool = False,
+    drop_chrome: bool = False,
     static_html: "bytes | None" = None,
     xhr_endpoints: "list[str] | None" = None,
 ) -> str:
@@ -388,6 +432,8 @@ def _skeleton(
             lines.append("  " * depth + "…")
             return
         children = _kept_children(el)
+        if drop_chrome:  # drop nav/footer/sidebar landmarks so records aren't buried
+            children = [c for c in children if not _is_chrome(c)]
         i = 0
         shown = 0
         while i < len(children):
@@ -636,14 +682,18 @@ class HtmlBacking(Backing):
         max_siblings: int = 200,
         legend: bool = True,
         collapse: bool = False,
+        drop_chrome: bool = False,
         annotate_origin: bool = True,
     ) -> str:
         """A token-lean DOM skeleton -- an indented HTML open-tag outline with the
         bloat (scripts/styles/svg/…) removed and leaf text hinted, every sibling
-        shown faithfully. Keeps every id and class path so an LLM can write CSS
+        shown faithfully. Keeps every id and semantic class so an LLM can write CSS
         selectors for the page cheaply (feed this instead of raw HTML, then use the
-        selectors with ``select``/``select_all``/``extract``). ``collapse=True``
-        merges structurally-identical siblings to ``×N`` for very repetitive pages.
+        selectors with ``select``/``select_all``/``extract``); high-entropy hashed build
+        classes (``css-1a2b3c``/``AMTIxG_grid``) are dropped as noise. ``collapse=True``
+        merges structurally-identical siblings to ``×N`` for very repetitive pages;
+        ``drop_chrome=True`` omits nav/footer/sidebar landmarks so a huge page's records
+        aren't buried under menus.
 
         On a browser-rendered document (``browser="auto"``/``"always"``) with a
         static baseline, nodes that were NOT in the server's initial HTML are marked
@@ -659,6 +709,7 @@ class HtmlBacking(Backing):
             max_siblings=max_siblings,
             legend=legend,
             collapse=collapse,
+            drop_chrome=drop_chrome,
             static_html=static_html,
             xhr_endpoints=xhr,
         )

@@ -97,8 +97,10 @@ def _skeleton_for(doc: Any) -> str:
     can write a ``select_all`` for it. Small pages keep the faithful, every-sibling view."""
     kind = "json" if doc.kind == "json" else "html"
     skel = doc.skeleton(max_lines=_FULL_SKELETON)
-    if len(skel) > _MAX_SKELETON_CHARS:  # too big to read raw -> fold identical siblings
-        skel = doc.skeleton(max_lines=_FULL_SKELETON, collapse=True)
+    if len(skel) > _MAX_SKELETON_CHARS:
+        # too big to read raw -> fold identical siblings AND drop nav/footer/sidebar chrome so
+        # the record region isn't clipped away under menus (hashed classes are always dropped).
+        skel = doc.skeleton(max_lines=_FULL_SKELETON, collapse=True, drop_chrome=True)
     return _clip(skel, _MAX_SKELETON_CHARS, "skeleton", kind=kind)
 
 
@@ -996,9 +998,13 @@ def _log_crawl_progress(crawl: Any, seen_pages: int, seen_fails: int) -> "tuple[
 # --------------------------------------------------------------------------- #
 
 
-def select_candidates(crawl: Any, brief: Brief, *, llm: LLM) -> list[Candidate]:
+def select_candidates(
+    crawl: Any, brief: Brief, *, llm: LLM, seed_urls: "Sequence[str]" = ()
+) -> list[Candidate]:
     """Rank the crawled pages into must / should / could-evaluate candidates by
-    scrapability + likely relevance to the dataset."""
+    scrapability + likely relevance to the dataset. A SEED that is itself a data document
+    (a feed/JSON the caller pointed us at) is forced in as a candidate -- but only a seed,
+    never every feed a site happens to expose."""
     # crawl.pages are lean PageCards by default (url / title / kind / flags projected).
     # hard-ban documentation pages: even if one was fetched (a seed / a stray pick), it
     # is never a scrapable dataset, so it can't become a candidate.
@@ -1024,15 +1030,17 @@ def select_candidates(crawl: Any, brief: Brief, *, llm: LLM) -> list[Candidate]:
             note = str(r.get("reason") or r.get("note") or "")  # the model's WHY
             out.append(Candidate.model_validate({**r, "url": str(r["url"]), "note": note}))
     picked = {c.url for c in out}
-    # A fetched DATA DOCUMENT (a JSON/XML feed or an API response) IS the dataset -- it is not
-    # a page that "leads to" data, it holds it. The LLM filter judges only url+title+flags and
-    # routinely drops a raw feed/JSON seed, so force it in as a MUST candidate (evaluate_candidate
-    # is still the backstop that confirms the data is present).
+    # A SEED that is itself a DATA DOCUMENT (a JSON/XML feed or an API response the caller
+    # pointed us at) IS the dataset -- it holds the records, it doesn't "lead to" them. The LLM
+    # filter judges only url+title and routinely drops a raw feed/JSON, so force the SEED in as a
+    # MUST candidate. Restricted to seeds ON PURPOSE: a site can expose many feeds (per-category,
+    # comments, ...) and force-including every discovered feed would flood the candidates.
+    seeds = set(seed_urls)
     for p in usable:
         u = p.final_url or p.url
-        if u not in picked and _is_data_doc(p):
+        if u not in picked and _is_data_doc(p) and (u in seeds or p.url in seeds):
             out.append(Candidate(url=u, tier="must",
-                                 note="a data document (feed / JSON / API) — the dataset itself"))
+                                 note="a seeded data document (feed / JSON / API) — the dataset itself"))
             picked.add(u)
     # FAIL OPEN: the filter is an LLM and can return nothing on pages it should have kept
     # (variance, or a parse miss on the cheapest model). If it picked nothing yet we DID crawl
@@ -2009,7 +2017,9 @@ def _onboard_company(
     # fails the run here rather than pressing on to select a source that isn't there.
     if review and not _gate(result, review_crawl(artifacts, brief, llm=llm)):
         return result
-    candidates = select_candidates(crawl, brief, llm=llm)
+    candidates = select_candidates(
+        crawl, brief, llm=llm, seed_urls=[s.url for s in artifacts.seeds if s.url]
+    )
     artifacts.candidates = list(candidates)
     if not candidates:
         result.reason = "no candidate pages"

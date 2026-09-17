@@ -153,16 +153,20 @@ def test_select_candidates_forces_data_docs_and_fails_open():
     def empty_llm(_prompt: str) -> str:
         return "[]"  # the candidate filter returns NOTHING (the cheapest-model variance case)
 
-    # a plain page + an RSS feed: the feed is a data document -> forced in as a MUST candidate
-    # even though the LLM filter picked nothing.
+    # a SEEDED feed is a data document -> forced in as a MUST candidate even though the LLM
+    # filter picked nothing; a NON-seed feed the crawl merely discovered is NOT forced in
+    # (a site can expose many feeds -- only what we were pointed at counts).
     crawl = _Crawl()
     crawl.pages = [
         PageCard(url="https://acme.com/news", kind="html", title="Newsroom"),
-        PageCard(url="https://acme.com/feed.rss", kind="xml", title="RSS"),
+        PageCard(url="https://acme.com/feed.rss", kind="xml", title="RSS"),          # the seed
+        PageCard(url="https://acme.com/comments/feed", kind="xml", title="Comments"),  # a stray feed
     ]
-    cands = select_candidates(crawl, brief, llm=empty_llm)
+    cands = select_candidates(crawl, brief, llm=empty_llm,
+                              seed_urls=["https://acme.com/feed.rss"])
     feed = next((c for c in cands if c.url.endswith("feed.rss")), None)
     assert feed is not None and feed.tier == "must"
+    assert not any(c.url.endswith("comments/feed") for c in cands)  # stray feed NOT forced in
 
     # no data docs + an empty filter -> FAIL OPEN: keep the crawled page(s) for evaluation
     crawl2 = _Crawl()

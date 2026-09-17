@@ -158,6 +158,27 @@ def test_json_select_and_attr_value():
     assert doc.select("items[1].n").text_content == "2"
 
 
+def test_skeleton_drops_hashed_classes_and_optionally_chrome():
+    html = (
+        b'<html><body>'
+        b'<nav class="site-nav"><a href="/">Home</a></nav>'
+        b'<main><article class="post css-1a2b3c AMTIxG_grid jsx-1837462">'
+        b'<h2 class="post-title emotion-9xk2">Hello</h2></article></main>'
+        b'<footer class="site-footer"><a href="/tos">Terms</a></footer>'
+        b'</body></html>'
+    )
+    doc = make_doc(content=html)
+    skel = doc.skeleton()
+    # semantic classes kept, high-entropy build classes dropped
+    assert "post-title" in skel and "post" in skel
+    assert "css-1a2b3c" not in skel and "AMTIxG_grid" not in skel and "emotion-9xk2" not in skel
+    # by default the chrome is present; drop_chrome removes nav/footer landmarks
+    assert "site-nav" in skel and "site-footer" in skel
+    lean = doc.skeleton(drop_chrome=True)
+    assert "site-nav" not in lean and "site-footer" not in lean
+    assert "post-title" in lean  # the record survives
+
+
 def test_xml_element_select_is_case_insensitive_fallback():
     # XML tag names are case-sensitive, but scrapers/LLMs lowercase them and RSS/Atom feeds
     # spell them pubDate/lastBuildDate/... . A lowercased bare tag must still resolve.
