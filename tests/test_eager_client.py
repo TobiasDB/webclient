@@ -27,7 +27,7 @@ def test_core_is_a_context_managed_eager_client(site):
     with WebClient() as c:
         doc = c.fetch(site.url_for("/"))  # eager -> a Document (its core)
         assert isinstance(doc, Document) and doc.ok
-        assert doc.select("h1").text_content == "Hi"  # dispatch on the resolved core
+        assert doc.select("h1").attr("text") == "Hi"  # dispatch on the resolved core
         assert isinstance(doc.select("a").attr("href"), Reference)  # href narrows
     assert c._closed  # __exit__ closed the client
 
@@ -35,7 +35,7 @@ def test_core_is_a_context_managed_eager_client(site):
 def test_eager_select_all_fans_out_to_a_collection(site):
     with WebClient() as c:
         doc = c.fetch(site.url_for("/"))
-        titles = doc.select_all(".card").select(".t").text_content()
+        titles = doc.select_all(".card").select(".t").attr("text")
         assert titles == ["Aeropress", "Grinder"]
 
 
@@ -54,8 +54,8 @@ def test_document_extract_is_the_single_element_form(site):
     with WebClient() as c:
         doc = c.fetch(site.url_for("/"))
         staged = doc.extract(
-            heading=wq.doc.select("h1").text_content,
-            first=wq.doc.select(".t").text_content,
+            heading=wq.doc.select("h1").attr("text"),
+            first=wq.doc.select(".t").attr("text"),
         )
         assert staged is doc  # extract returns the document itself
         row = staged.project()

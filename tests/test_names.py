@@ -42,7 +42,7 @@ def test_ref_roundtrips_request_and_action_chain(site, wc):
     rebuilt.actions.append({"op": "click", "args": ["#go"]})
     again = Reference.model_validate_json(rebuilt.model_dump_json())
     assert again.model_dump() == rebuilt.model_dump()  # binding is private state
-    assert wc.fetch(again).collect().select("h1").text_content == "2"
+    assert wc.fetch(again).collect().select("h1").attr("text") == "2"
 
 
 def test_derived_references_are_unnamed_and_rooted(site, wc):
@@ -75,7 +75,7 @@ def test_failed_fetch_is_a_not_ok_document(site, wc):
     doc = wc.ref(site.url_for("/missing")).resolve(error=RETURN).collect()
     assert doc.ok is False and doc.error is not None
     assert doc.error.type == "HTTPStatus" and "404" in doc.message
-    assert doc.is_ok().get() is False
+    assert doc.is_ok() is False
 
 
 def test_name_scope_is_thread_safe_under_concurrent_add_get():

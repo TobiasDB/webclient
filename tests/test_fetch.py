@@ -25,7 +25,7 @@ def test_fetch_html_document(httpserver, wc):
     doc = wc.ref(httpserver.url_for("/page")).resolve().collect()
     assert doc.ok and doc.kind == "html"
     assert doc.encoding == "utf-8"
-    assert doc.select(".t").text_content == "Hello"
+    assert doc.select(".t").attr("text") == "Hello"
     assert doc.elapsed is not None
     assert doc.id and wc.document(doc.id) is doc
 
@@ -36,7 +36,7 @@ def test_fetch_sniffs_json(httpserver, wc):
     assert doc.kind == "json"
     import json as _j
 
-    assert _j.loads(doc.text_content) == {"n": 1}
+    assert _j.loads(doc.attr("text")) == {"n": 1}
 
 
 def test_fetch_records_navigation_event(httpserver, wc):
@@ -166,7 +166,7 @@ def test_fetch_sends_headers_params_and_method(httpserver, wc):
     doc = ref.replace(headers={"x-app": "demo"}).resolve().collect()
     import json as _j
 
-    assert _j.loads(doc.text_content) == {"ok": True}
+    assert _j.loads(doc.attr("text")) == {"ok": True}
 
 
 def test_reload_refetches(httpserver, wc):
@@ -181,7 +181,7 @@ def test_reload_refetches(httpserver, wc):
     httpserver.expect_request("/count").respond_with_handler(handler)
     doc = wc.ref(httpserver.url_for("/count")).resolve().collect()
     again = doc.reload()
-    assert doc.text_content == "hit 1" and again.text_content == "hit 2"
+    assert doc.attr("text") == "hit 1" and again.attr("text") == "hit 2"
     assert again.id != doc.id
 
 

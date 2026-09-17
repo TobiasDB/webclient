@@ -45,9 +45,9 @@ def test_fetch_markdown_and_links_tools(httpserver, wc):
 
 def test_validate_and_run_plan_tools(httpserver, wc):
     httpserver.expect_request("/p").respond_with_data(PAGE, content_type="text/html")
-    blob = ref.resolve().select("h1").text_content.to_blob()
+    blob = ref.resolve().select("h1").attr("text").to_blob()
     v = dispatch("validate_plan", {"blob": blob}, wc)
-    assert v["valid"] and v["describe"] == "Reference.resolve().select('h1').text_content"
+    assert v["valid"] and v["describe"] == "Reference.resolve().select('h1').attr('text')"
     out = dispatch("run_plan", {"blob": blob, "url": httpserver.url_for("/p")}, wc)
     assert out == "Aeropress"
 

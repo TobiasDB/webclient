@@ -32,7 +32,7 @@ def stranded_streams(wc):
 
 def plan():
     return (
-        ref.resolve().select_all(".c").extract(n=doc.select("a").text_content).project()
+        ref.resolve().select_all(".c").extract(n=doc.select("a").attr("text")).project()
     )
 
 

@@ -64,10 +64,10 @@ def test_select_and_select_all():
     assert typing.get_origin(got) is list and typing.get_args(got) == (Document,)
 
 
-def test_text_content_prop_is_str():
+def test_title_prop_is_str():
     # the backing declares str | None; the eager tier collapses the union to str
     # later (in the recorder's annotation mapping), but the raw resolution keeps it
-    assert return_type(Document, "text_content") == (str | None)
+    assert return_type(Document, "title") == (str | None)
 
 
 def test_facet_ops_resolve_their_models():
@@ -101,7 +101,7 @@ def test_attr_return_type_splits_call_ops_from_value_attrs():
     assert attr_return_type(Document, "attr") is CALL_OP
     assert attr_return_type(Document, "render") is CALL_OP
     # prop ops / class @property / data fields -> the value type
-    assert attr_return_type(Document, "text_content") == (str | None)
+    assert attr_return_type(Document, "title") == (str | None)
     assert attr_return_type(Document, "ok") is bool
     assert attr_return_type(Document, "status_code") is int
     with pytest.raises(AttributeError):

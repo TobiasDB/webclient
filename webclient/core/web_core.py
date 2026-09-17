@@ -324,7 +324,7 @@ class WebCore:
 
             logging.getLogger("webclient").warning(
                 "remote client made %d per-op round-trips; batch a chain or "
-                "fan-out with .lazy -- e.g. doc.lazy.select(...).text_content"
+                "fan-out with .lazy -- e.g. doc.lazy.select(...).attr('text')"
                 ".collect() -- to run it in one round-trip",
                 hops,
             )
@@ -445,6 +445,10 @@ def _wrap_result(value: Any, owner: Any = None, force_collection: bool = False) 
             client = owner if hasattr(owner, "loop") else getattr(owner, "_client", None)
             root = getattr(owner, "name", "") or getattr(owner, "root", "")
             return Collection(list(value), client=client, root=root)
+    if isinstance(value, Field):
+        # the eager tier returns raw values, never a Field -- Field is a lazy/recorder
+        # wrapper. Unwrap a scalar leaf (attr/regex/is_ok/...) to its value (None on a miss).
+        return value.get()
     return value
 
 

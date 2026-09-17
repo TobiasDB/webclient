@@ -32,7 +32,7 @@ def test_session_cookies_persist_across_fetches(httpserver, wc):
     session.ref(httpserver.url_for("/login")).resolve().collect()
     assert session.cookies == {"token": "abc123"}
     doc = session.ref(httpserver.url_for("/whoami")).resolve().collect()
-    assert doc.text_content == "cookie=abc123"
+    assert doc.attr("text") == "cookie=abc123"
 
 
 def test_session_captures_cookie_set_during_a_redirect(httpserver, wc):
@@ -84,7 +84,7 @@ def test_sessions_are_isolated(httpserver, wc):
     s1, s2 = wc.session(), wc.session()
     s1.ref(httpserver.url_for("/login")).resolve().collect()
     doc = s2.ref(httpserver.url_for("/whoami")).resolve().collect()
-    assert doc.text_content == "cookie=None"  # s1's cookie must not leak into s2
+    assert doc.attr("text") == "cookie=None"  # s1's cookie must not leak into s2
 
 
 def test_session_headers_merge_over_client_defaults(httpserver):
@@ -95,7 +95,7 @@ def test_session_headers_merge_over_client_defaults(httpserver):
     with WebClient(default_headers={"x-app": "client"}) as wc:
         session = wc.session(headers={"x-app": "session"})
         assert (
-            session.ref(httpserver.url_for("/echo")).resolve().collect().text_content
+            session.ref(httpserver.url_for("/echo")).resolve().collect().attr("text")
             == "session"
         )
 

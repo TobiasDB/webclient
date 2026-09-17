@@ -56,7 +56,7 @@ class RegexBacking(Backing):
         ``group`` picks a capture group (``0`` = the whole match, an int index, or a
         named group); ``flags`` is any of ``"imsx"``. Empty ``Field`` when nothing
         matches (so ``.is_empty()`` / a lenient extract works)."""
-        text = core.text_content or ""
+        text = core.dispatch("attr", "text", optional=True).get() or ""
         m = _compile(pattern, flags).search(text)
         value = _group(m, group) if m is not None else None
         return Field(value, ok=value is not None)
@@ -66,7 +66,7 @@ class RegexBacking(Backing):
     ) -> "list[str]":
         """Every match of ``pattern`` in the document's text (the chosen ``group`` of
         each), in order -- e.g. all prices on a page. Empty list when none match."""
-        text = core.text_content or ""
+        text = core.dispatch("attr", "text", optional=True).get() or ""
         out: list[str] = []
         for m in _compile(pattern, flags).finditer(text):
             g = _group(m, group)

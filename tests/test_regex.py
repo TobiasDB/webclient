@@ -12,15 +12,15 @@ def _doc(html: bytes) -> Document:
 def test_regex_first_match_and_capture_group():
     d = _doc(b'<span class="price">Price 30 unit $ per 1TB / month</span>')
     price = d.select(".price")
-    assert price.regex(r"\d+").get() == "30"  # whole match (group 0)
-    assert price.regex(r"(\d+)\s*unit", group=1).get() == "30"  # a capture group
-    assert price.regex(r"unit\s*(\S+)", group=1).get() == "$"  # the unit
+    assert price.regex(r"\d+") == "30"  # whole match (group 0)
+    assert price.regex(r"(\d+)\s*unit", group=1) == "30"  # a capture group
+    assert price.regex(r"unit\s*(\S+)", group=1) == "$"  # the unit
 
 
-def test_regex_missing_is_an_empty_field():
+def test_regex_missing_is_none():
+    # eager: a non-match is a lenient miss -> None (Field is a lazy-tier wrapper only).
     d = _doc(b"<p>nothing numeric here</p>")
-    field = d.regex(r"\d+")
-    assert not field.ok and field.is_empty()
+    assert d.regex(r"\d+") is None
 
 
 def test_regex_all_returns_every_match():
@@ -30,7 +30,7 @@ def test_regex_all_returns_every_match():
 
 def test_regex_flags():
     d = _doc(b"<p>HELLO world</p>")
-    assert d.regex(r"hello", flags="i").get() == "HELLO"
+    assert d.regex(r"hello", flags="i") == "HELLO"
 
 
 def test_regex_in_a_nested_extract():

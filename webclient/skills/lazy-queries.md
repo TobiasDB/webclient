@@ -24,9 +24,15 @@ Inside `extract`, `wq.doc` is the **current row**; at the top of the chain it is
 
 <!-- OP-REFERENCE -->
 
-`.attr("text")` gives an element's text; `.attr("href"|"src")` gives a link (has
-`.url`); `.attr("data-…")` gives that HTML attribute. `.regex(pattern)` pulls a
-substring out of an element's text (`group=1` for the first capture group).
+`.attr("text")` gives an element's text; `.attr("text:own")` gives ONLY its direct text
+(excluding child elements); `.attr("href"|"src")` gives a link (has `.url`);
+`.attr("data-…")` gives that HTML attribute. `.regex(pattern)` pulls a substring out of an
+element's text (`group=1` for the first capture group).
+
+`.attr(name, pattern)` extracts a substring from ANY attribute or the text by regex — e.g.
+`.attr("text", r"\$([\d.]+)", group=1)` pulls `19.99` out of `Only $19.99!`, and
+`.attr("content", r"(\d+)")` pulls a number out of a `content=` attribute. A non-match is an
+empty value (never an error), so it composes inside `.extract(...)`.
 
 ### Reading a value from an ATTRIBUTE, not the text
 
@@ -46,7 +52,8 @@ name. Look at the skeleton: the element's real attributes are shown (`<span data
 
 Rule of thumb: if the visible text is NOT the value (e.g. a star widget, an icon, a
 formatted-vs-machine date), the value is almost always in an attribute — pick the attribute
-whose name matches the meaning. Only `.regex()` the **text**; it can't reach an attribute.
+whose name matches the meaning. To pull a substring out of an attribute (or the text), pass a
+regex: `.attr(name, pattern, group=…)`.
 
 ## Syntax rules
 

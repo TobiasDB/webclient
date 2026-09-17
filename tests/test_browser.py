@@ -51,8 +51,8 @@ def app(httpserver, wc):
 def test_browser_fetch_returns_live_document(app):
     assert isinstance(app, LiveDocument)
     assert app.ok and app.kind == "html"
-    assert app.select("h2").text_content == "Card One"
-    assert app.select('//div[@id="c2"]/h2').text_content == "Card Two"  # xpath
+    assert app.select("h2").attr("text") == "Card One"
+    assert app.select('//div[@id="c2"]/h2').attr("text") == "Card Two"  # xpath
 
 
 def test_browser_render_emits_a_navigation_event(app):
@@ -69,14 +69,14 @@ def test_browser_render_emits_a_navigation_event(app):
 def test_click_mutates_dom_and_records_everything(app):
     app.click("#c1 button")
     app.wait_for(".added", timeout=5.0)
-    assert app.select(".added").text_content == "added-one"
+    assert app.select(".added").attr("text") == "added-one"
     assert [a.action for a in app.action_events if a.action == "click"] == ["click"]
     assert any(isinstance(e, DOMUpdateEvent) for e in app.dom_mutations)
 
 
 def test_write_and_live_state(app):
     app.write("#name", "Ada")
-    assert app.select("#out").text_content == "Ada"
+    assert app.select("#out").attr("text") == "Ada"
     assert app.evaluate("document.querySelector('#name').value") == "Ada"
 
 
@@ -89,8 +89,8 @@ def test_evaluate_mutation_refreshes_captured_content(app):
         "document.querySelector('#c2').insertAdjacentHTML('beforeend',"
         "\"<div class='zonk'>zonk-word</div>\")"
     )
-    assert app.select(".zonk").text_content == "zonk-word"  # the live DOM has it
-    assert "zonk-word" in app.text_content  # ...and so does the captured snapshot
+    assert app.select(".zonk").attr("text") == "zonk-word"  # the live DOM has it
+    assert "zonk-word" in app.attr("text")  # ...and so does the captured snapshot
     assert "zonk-word" in app.html()
 
 
@@ -141,11 +141,11 @@ def test_reload_reproduces_state(httpserver, wc):
     fresh = live.reload()  # re-resolves + replays the action chain
     try:
         assert fresh.select(".added", error=RETURN).ok
-        assert fresh.select("#out").text_content == "Bob"
+        assert fresh.select("#out").attr("text") == "Bob"
         # the reloaded doc's HTML-surface ops (which read the captured content, not
         # the live page) must also reflect the replayed state -- the snapshot is
         # taken AFTER replay, not the pre-replay shell.
-        assert "added-one" in fresh.text_content
+        assert "added-one" in fresh.attr("text")
         assert "added-one" in fresh.html()
     finally:
         wc.release(fresh)
@@ -175,7 +175,7 @@ def test_auto_escalates_js_injected_content(httpserver, wc):
     # the static empty shell is what the spa flag fires on (driving the escalation)
     assert wc.fetch(httpserver.url_for("/inj")).spa().present
     doc = wc.fetch(httpserver.url_for("/inj"), browser="auto")
-    assert "injected content word" in doc.text_content  # browser recovered it
+    assert "injected content word" in doc.attr("text")  # browser recovered it
     assert doc.transport().escalation == ["static", "browser"]
     assert doc.transport().final_tier == "browser"
 
@@ -198,7 +198,7 @@ def test_browser_inlines_shadow_dom_and_same_origin_iframe(httpserver, wc):
       </main></body></html>"""
     httpserver.expect_request("/sh").respond_with_data(page, content_type="text/html")
     doc = wc.fetch(httpserver.url_for("/sh"), browser="always")
-    text = doc.text_content
+    text = doc.attr("text")
     assert "SHADOW-RECORD-1" in text and "FRAME-RECORD" in text  # inlined into the light DOM
     assert "SHADOW-RECORD" in doc.skeleton() and "FRAME-RECORD" in doc.skeleton()
     shadow, frame = doc.shadow_dom(), doc.iframe()
@@ -222,7 +222,7 @@ def test_auto_falls_back_to_the_static_hop_when_the_render_is_blocked(httpserver
     doc = wc.fetch(httpserver.url_for("/caas"), browser="auto", optional=True)
     assert doc.ok and doc.status_code == 200  # the ok static hop, not a failure
     assert doc.spa().present  # spa DID fire (it tried to render) -- and fell back
-    assert "partial list" in doc.text_content  # the static content survived
+    assert "partial list" in doc.attr("text")  # the static content survived
 
 
 def test_auto_stays_static_for_a_sparse_page(httpserver, wc):
@@ -242,7 +242,7 @@ def test_auto_escalation_does_not_leak_the_page(httpserver, wc):
     before = wc.pool.stats().pages_free
     doc = wc.fetch(httpserver.url_for("/inj"), browser="auto")
     assert wc.pool.stats().pages_free == before  # page already returned
-    assert "injected content word" in doc.text_content  # content survives release
+    assert "injected content word" in doc.attr("text")  # content survives release
 
 
 def test_auto_returns_static_when_content_is_already_present(httpserver, wc):
@@ -251,7 +251,7 @@ def test_auto_returns_static_when_content_is_already_present(httpserver, wc):
     httpserver.expect_request("/plain").respond_with_data(PLAIN, content_type="text/html")
     doc = wc.fetch(httpserver.url_for("/plain"), browser="auto")
     assert doc._page is None and doc.transport().final_tier == "static"
-    assert "real static content" in doc.text_content
+    assert "real static content" in doc.attr("text")
 
 
 def test_crawl_browser_captures_xhr_endpoints_into_frontier(httpserver, wc):
@@ -352,13 +352,13 @@ def test_execute_plan_with_browser_always_selects_on_engine_loop(httpserver, wc)
     httpserver.expect_request("/e").respond_with_data(page, content_type="text/html")
     url = httpserver.url_for("/e")
 
-    single = wq.ref.resolve(browser="always").select("#h").text_content
+    single = wq.ref.resolve(browser="always").select("#h").attr("text")
     assert wc.execute(single, wc.ref(url)).get() == "Hi"
 
     rows = (
         wq.ref.resolve(browser="always")
         .select_all(".card")
-        .extract(t=wq.doc.select(".t").text_content)
+        .extract(t=wq.doc.select(".t").attr("text"))
         .project()
     )
     assert wc.execute(rows, wc.ref(url)) == [{"t": "A"}, {"t": "B"}]
@@ -375,7 +375,7 @@ def test_plan_auto_releases_browser_pages(httpserver, wc):
     url = httpserver.url_for("/r")
     before = wc.pool._held.get("page", 0)
     for _ in range(3):
-        wc.execute(wq.ref.resolve(browser="always").select("#h").text_content, wc.ref(url))
+        wc.execute(wq.ref.resolve(browser="always").select("#h").attr("text"), wc.ref(url))
     assert wc.pool._held.get("page", 0) == before  # every plan page released
 
 
@@ -484,7 +484,7 @@ def test_wait_selector_reaches_the_dom_state(httpserver, wc):
     )
     try:
         assert doc.select("#late", error=RETURN).ok
-        assert "late-content" in doc.text_content
+        assert "late-content" in doc.attr("text")
     finally:
         wc.release(doc)
 
@@ -499,7 +499,7 @@ def test_wait_domcontentloaded_snapshots_early(httpserver, wc):
         wait=WaitConfig(event=WaitEvent.DOMCONTENTLOADED, timeout=5.0),
     )
     try:
-        assert "base" in doc.text_content  # the served DOM is there
+        assert "base" in doc.attr("text")  # the served DOM is there
         assert doc.select("#late", error=RETURN).ok is False  # not injected yet
     finally:
         wc.release(doc)
@@ -527,7 +527,7 @@ def test_wait_timeout_raises_by_default_and_returns_partial(httpserver, wc):
     )
     try:
         assert doc.ok  # returned what rendered so far
-        assert "base" in doc.text_content
+        assert "base" in doc.attr("text")
         assert doc.select("#never", error=RETURN).ok is False
     finally:
         wc.release(doc)

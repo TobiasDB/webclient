@@ -43,7 +43,7 @@ def test_search_is_just_an_expression(httpserver, wc):
         .select_all(".result")
         .limit(2)
         .extract(
-            title=doc.select(".result__a").text_content,
+            title=doc.select(".result__a").attr("text"),
             url=doc.select(".result__a").attr("href"),
         )
         .collect()
@@ -82,7 +82,7 @@ def test_project_into_a_pydantic_model(httpserver, wc):
         wc.ref(httpserver.url_for("/s"))
         .resolve()
         .select_all(".result")
-        .extract(title=doc.select(".result__a").text_content)
+        .extract(title=doc.select(".result__a").attr("text"))
         .collect()
         .project(Hit)
     )

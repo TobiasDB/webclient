@@ -31,12 +31,12 @@ def make_doc(**overrides) -> Document:
 
 def test_text_uses_declared_encoding_first():
     doc = make_doc(content="café".encode("latin-1"), encoding="latin-1")
-    assert doc.text_content == "café"
+    assert doc.attr("text") == "café"
 
 
 def test_text_detects_encoding_when_undeclared():
     doc = make_doc(content="décor première café".encode("latin-1"), encoding=None)
-    assert "café" in doc.text_content
+    assert "café" in doc.attr("text")
 
 
 def test_ok_is_2xx():
@@ -48,17 +48,17 @@ def test_ok_is_2xx():
 
 
 def test_select_css():
-    assert make_doc().select(".card .title").text_content == "First Card"
+    assert make_doc().select(".card .title").attr("text") == "First Card"
 
 
 def test_select_xpath():
     node = make_doc().select('//div[@class="card"][2]//h2')
-    assert node.text_content == "Second Card"
+    assert node.attr("text") == "Second Card"
 
 
 def test_select_index_and_negative_index():
     doc = make_doc()
-    assert make_doc().select(".card", index=1).attr("data-rank").get() == "2"
+    assert make_doc().select(".card", index=1).attr("data-rank") == "2"
     assert (
         doc.select(".card", index=-1).attr("data-rank") == "3"
     )  # Field == -> Field[bool], truthy eagerly
@@ -84,7 +84,7 @@ def test_empty_select_all_is_a_collection_not_a_bare_list():
     empty = d.select_all(".no-such-thing")
     assert isinstance(empty, Collection) and len(empty) == 0
     # the row-shaping ops apply (and yield []) instead of AttributeError-ing
-    assert empty.extract(t=ldoc.select(".title").text_content).project() == []
+    assert empty.extract(t=ldoc.select(".title").attr("text")).project() == []
 
 
 def test_empty_links_is_a_collection():
@@ -112,7 +112,7 @@ def test_optional_is_a_universal_lenient_spelling():
     doc = make_doc()
     assert not doc.select(".nope", optional=True).ok
     node = doc.select(".card .title")
-    assert node.attr("data-nope", optional=True).ok is False
+    assert node.attr("data-nope", optional=True) is None
 
 
 def test_link_attr_on_a_missing_element_is_a_reference_not_a_field():
@@ -138,9 +138,9 @@ def test_select_all_limit_offset():
     doc = make_doc()
     assert len(doc.select_all(".card")) == 3
     cards = doc.select_all(".card", limit=2, offset=1)
-    assert [n.attr("data-rank").get() for n in cards] == ["2", "3"]
-    lifted = cards.attr("data-rank")  # element op -> Collection
-    assert len(lifted) == 2 and [f.get() for f in lifted] == ["2", "3"]
+    assert [n.attr("data-rank") for n in cards] == ["2", "3"]
+    lifted = cards.attr("data-rank")  # element op fans out to a list of raw values
+    assert len(lifted) == 2 and lifted == ["2", "3"]
 
 
 def test_select_on_treeless_kind_raises_typed_error():
@@ -153,9 +153,9 @@ def test_select_on_treeless_kind_raises_typed_error():
 
 def test_json_select_and_attr_value():
     doc = make_doc(kind="json", content=b'{"items": [{"n": 1}, {"n": 2}], "name": "x"}')
-    assert doc.select("name").attr("value").get() == "x"
-    assert [d.attr("n").get() for d in doc.select_all("items")] == [1, 2]
-    assert doc.select("items[1].n").text_content == "2"
+    assert doc.select("name").attr("value") == "x"
+    assert [d.attr("n") for d in doc.select_all("items")] == [1, 2]
+    assert doc.select("items[1].n").attr("text") == "2"
 
 
 def test_skeleton_drops_hashed_classes_and_optionally_chrome():
@@ -190,8 +190,8 @@ def test_xml_element_select_is_case_insensitive_fallback():
     items = doc.select_all("item")
     assert len(items) == 2
     # exact case AND lowercased both resolve the mixed-case <pubDate>
-    assert items[0].select("pubDate").attr("text").get() == "Mon, 01 Sep 2026"
-    assert items[0].select("pubdate").attr("text").get() == "Mon, 01 Sep 2026"
+    assert items[0].select("pubDate").attr("text") == "Mon, 01 Sep 2026"
+    assert items[0].select("pubdate").attr("text") == "Mon, 01 Sep 2026"
     # a genuinely absent tag still misses (the fallback doesn't invent matches)
     assert not items[0].select("author", optional=True).ok
 
@@ -200,11 +200,11 @@ def test_attribute_values_strip_surrounding_whitespace():
     # an accessor reads a value, not its padding: attr("text") normalises (already did), and a
     # raw HTML attribute / a JSON string value now trims surrounding whitespace too.
     html = make_doc(content=b'<time datetime="  2026-09-14  "> Sep 14 </time>')
-    assert html.select("time").attr("text").get() == "Sep 14"           # text: normalised
-    assert html.select("time").attr("datetime").get() == "2026-09-14"   # raw attr: trimmed
+    assert html.select("time").attr("text") == "Sep 14"           # text: normalised
+    assert html.select("time").attr("datetime") == "2026-09-14"   # raw attr: trimmed
     js = make_doc(kind="json", content=b'{"date": "  2026-09-14  ", "n": 5}')
-    assert js.select("date").attr("value").get() == "2026-09-14"        # json string: trimmed
-    assert js.select("n").attr("value").get() == 5                       # non-string untouched
+    assert js.select("date").attr("value") == "2026-09-14"        # json string: trimmed
+    assert js.select("n").attr("value") == 5                       # non-string untouched
 
 
 def test_list_valued_field_projects_to_a_list():
@@ -249,13 +249,13 @@ def test_rss_item_fields_extract_from_a_real_world_feed_shape():
            b"<content:encoded>full body</content:encoded></item></channel></rss>")
     doc = make_doc(kind="xml", content=xml)
     it = doc.select_all("item")[0]
-    assert it.select("title").attr("text").get() == "Post A"
-    assert it.select("description").attr("text").get() == "Body of A here"     # CDATA read
-    assert it.select("guid").attr("text").get() == "https://x/blog/a"          # robust URL
-    assert it.select("category").attr("text").get() == "Product"               # first of two
-    assert it.select("pubDate").attr("text").get() == "Mon, 14 Sep 2026 12:00:00 GMT"
+    assert it.select("title").attr("text") == "Post A"
+    assert it.select("description").attr("text") == "Body of A here"     # CDATA read
+    assert it.select("guid").attr("text") == "https://x/blog/a"          # robust URL
+    assert it.select("category").attr("text") == "Product"               # first of two
+    assert it.select("pubDate").attr("text") == "Mon, 14 Sep 2026 12:00:00 GMT"
     # the namespaced self-referential <atom:link> in the channel is not the item URL
-    assert it.select("category", index=1).attr("text").get() == "News"
+    assert it.select("category", index=1).attr("text") == "News"
 
 
 def test_as_json_reparses_an_injected_json_island():
@@ -268,7 +268,7 @@ def test_as_json_reparses_an_injected_json_island():
     doc = make_doc(content=html)  # kind html
     data = doc.select("script#__DATA__").as_json()
     assert data.kind == "json"
-    assert [d.attr("sku").get() for d in data.select_all("catalog.items")] == ["A-1", "B-2"]
+    assert [d.attr("sku") for d in data.select_all("catalog.items")] == ["A-1", "B-2"]
     # a missed select .as_json() is a not-ok document, not a crash
     assert not doc.select("script#nope", optional=True).as_json().ok
 
@@ -278,7 +278,7 @@ def test_as_json_reparses_an_injected_json_island():
 
 def test_element_text_is_whitespace_normalized():
     el = make_doc().select(".card .title")
-    assert el.text_content == "First Card"
+    assert el.attr("text") == "First Card"
     assert isinstance(el, Document) and el.kind == "html"
     # a selected element's markup is serialised on demand via html() (its .content --
     # the raw response bytes -- is empty; the element isn't a fetched response).
@@ -287,7 +287,7 @@ def test_element_text_is_whitespace_normalized():
 
 def test_element_select_is_scoped_to_element():
     card = make_doc().select(".card", index=2)
-    assert card.select(".status").text_content == "Inactive"
+    assert card.select(".status").attr("text") == "Inactive"
     assert card.status_code == 200 and card.url == "https://example.com/list"
 
 
@@ -315,10 +315,10 @@ def test_attr_is_the_universal_accessor_text_and_html():
     # "text" attribute); attr("html") is the element's markup.
     doc = make_doc(content=b'<html><body><p class="x">Hi <b>there</b></p></body></html>')
     p = doc.select(".x")
-    assert p.attr("text").get() == p.text_content == "Hi there"
-    assert "<b>there</b>" in p.attr("html").get()
+    assert p.attr("text") == p.attr("text") == "Hi there"
+    assert "<b>there</b>" in p.attr("html")
     # still resolves a real attribute
-    assert p.attr("class").get() == "x"
+    assert p.attr("class") == "x"
 
 
 def test_region_reports_the_landmark_an_element_sits_in():
@@ -343,8 +343,8 @@ def test_attr_missing_raises_unless_policy_returns():
     node = make_doc().select(".card .title")
     with pytest.raises(LookupError):
         node.attr("data-nope")
-    missing = node.attr("data-nope", error=RETURN)
-    assert not missing.ok and missing.value is None
+    # eager: a softened miss is raw None (Field is a lazy-tier wrapper only)
+    assert node.attr("data-nope", error=RETURN) is None
 
 
 def test_attr_href_resolves_to_reference_against_document():
@@ -378,15 +378,15 @@ def test_json_data():
     )
     import json as _j
 
-    assert _j.loads(doc.text_content) == {"a": [1, 2]}
+    assert _j.loads(doc.attr("text")) == {"a": [1, 2]}
 
 
 def test_xml_selection_and_lenient_parse():
     xml = b"<feed><entry><title>One</title></entry><entry><title>Two</title>"
     doc = Document(kind="xml", hostname="e.com", content=xml, status_code=200)
-    titles = [n.text_content for n in doc.select_all("//entry/title")]
+    titles = [n.attr("text") for n in doc.select_all("//entry/title")]
     assert titles == ["One", "Two"]  # unclosed tags recovered
-    assert doc.select("entry title").text_content == "One"  # css works too
+    assert doc.select("entry title").attr("text") == "One"  # css works too
 
 
 def test_events_of_by_class_and_topic_prefix():

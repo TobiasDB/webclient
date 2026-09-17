@@ -99,11 +99,10 @@ def _json_elements(value: Any) -> list[Element]:
 
 class JsonBacking(Backing):
     """Dotted-path ops for json. A selected node is a Document holding the
-    sub-value; ``attr('value')`` / ``text_content`` read it."""
+    sub-value; ``attr('value')`` (typed) / ``attr('text')`` (as a string) read it."""
 
     provides = frozenset({"select", "select_all", "attr", "render", "elements", "skeleton"})
     collections = frozenset({"select_all"})
-    props = frozenset({"text_content"})
     gate = "tree"
 
     def elements(self, core: "Document") -> "list[Element]":
@@ -198,28 +197,32 @@ class JsonBacking(Backing):
         return core._sub(value)
 
     def attr(
-        self, core: "Document", name: str, *, optional: bool = False, error: Any = None
+        self, core: "Document", name: str, pattern: str | None = None, *,
+        group: int | str | None = None, optional: bool = False, error: Any = None,
     ) -> "Field[Any]":
-        from ...errors import RAISE, current_policy, select_error
+        """A value off this JSON node: ``"value"`` is the node's own value (kept typed --
+        a number stays a number); ``"text"`` is its value as a string (a scalar as text,
+        an object/array as JSON); any other ``name`` is a key of an object node. ``pattern``
+        extracts a substring by regex (see :meth:`HtmlBacking.attr`); a non-match is a miss."""
+        from .html import _regex_field
 
         if core._missing:
             return Field(None, ok=False)
         data = self._data(core)
-        if name == "value":  # the node's own value
-            return Field(_strip(data))
+        if name == "value":  # the node's own value, kept typed
+            return _regex_field(_strip(data), pattern, group)
+        if name == "text":  # the node's value as a string
+            text = data.strip() if isinstance(data, str) else _json.dumps(data)
+            return _regex_field(text, pattern, group)
         if isinstance(data, dict) and name in data:
-            return Field(_strip(data[name]))
+            return _regex_field(_strip(data[name]), pattern, group)
         # a missing key: same contract as html attr -- raise (structured) by default,
         # a not-ok Field under optional / RETURN. (Never silently return the node.)
+        from ...errors import RAISE, current_policy, select_error
+
         if not optional and (error or current_policy()) is RAISE:
             raise select_error(f"no key {name!r}")
         return Field(None, ok=False)
-
-    def text_content(self, core: "Document") -> "str | None":
-        if core._missing:
-            return None
-        value = self._data(core)
-        return value.strip() if isinstance(value, str) else _json.dumps(value)
 
 
 __all__ = ["JsonBacking"]

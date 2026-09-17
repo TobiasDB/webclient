@@ -66,8 +66,8 @@ def test_fetch_json_document(httpserver, wc):
     httpserver.expect_request("/api").respond_with_json({"items": [{"n": 1}, {"n": 2}]})
     doc = wc.fetch(httpserver.url_for("/api"))
     assert doc.kind == "json"
-    assert doc.select("items[1].n").text_content == "2"
-    assert doc.select("items[0].n").attr("value").get() == 1
+    assert doc.select("items[1].n").attr("text") == "2"
+    assert doc.select("items[0].n").attr("value") == 1
     els = doc.render("elements")
     assert any(e.id == "items[0].n" and e.text == "1" for e in els)
 
@@ -79,10 +79,10 @@ def test_json_attr_missing_key_is_a_miss_not_the_whole_node(wc, httpserver):
 
     httpserver.expect_request("/j").respond_with_json({"product": {"name": "Widget"}})
     node = wc.fetch(httpserver.url_for("/j")).select("product")
-    assert node.attr("name").get() == "Widget"  # present key
+    assert node.attr("name") == "Widget"  # present key
     with pytest.raises(WebException):
         node.attr("price")  # missing key raises (structured), not Field(whole node)
-    assert node.attr("price", optional=True).ok is False  # lenient -> not-ok
+    assert node.attr("price", optional=True) is None  # lenient -> None
 
 
 def test_fetch_xml_document(httpserver, wc):
@@ -96,7 +96,7 @@ def test_fetch_xml_document(httpserver, wc):
     doc = wc.fetch(httpserver.url_for("/feed"))
     assert doc.kind == "xml"
     # xml is served by the tree backing: select + text_content work
-    titles = [t.text_content for t in doc.select_all("title")]
+    titles = [t.attr("text") for t in doc.select_all("title")]
     assert titles == ["First", "Second"]
 
 
@@ -122,7 +122,7 @@ def test_meta_charset_is_honoured_for_non_utf8(httpserver, wc):
     )
     httpserver.expect_request("/cp").respond_with_data(body, content_type="text/html")
     doc = wc.fetch(httpserver.url_for("/cp"))
-    assert "привет" in doc.select("p").text_content
+    assert "привет" in doc.select("p").attr("text")
 
 
 def test_html_degrades_on_a_bogus_charset(wc, httpserver):
@@ -157,7 +157,7 @@ def test_http_charset_header_is_honoured(httpserver, wc):
         body, content_type="text/html; charset=windows-1251"
     )
     doc = wc.fetch(httpserver.url_for("/hc"))
-    assert "привет" in doc.select("p").text_content
+    assert "привет" in doc.select("p").attr("text")
 
 
 def test_namespaced_xml_is_parsed_as_xml(httpserver, wc):
@@ -172,7 +172,7 @@ def test_namespaced_xml_is_parsed_as_xml(httpserver, wc):
     )
     doc = wc.fetch(httpserver.url_for("/atom"))
     assert doc.kind == "xml"
-    assert "Hello Atom" in doc.text_content
+    assert "Hello Atom" in doc.attr("text")
 
 
 def test_binary_transport_facet_still_works(httpserver, wc):
@@ -195,7 +195,7 @@ def test_expect_hint_forces_json_on_a_mislabelled_endpoint(httpserver, wc):
     assert wc.fetch(url).kind == "html"                        # mislabelled -> wrong
     hinted = wc.fetch(url, expect="json")                      # the hint corrects it
     assert hinted.kind == "json"
-    assert hinted.select("n").attr("value").get() == 5
+    assert hinted.select("n").attr("value") == 5
 
 
 def test_expect_defaults_to_none_and_does_not_misguide(httpserver, wc):
@@ -213,7 +213,7 @@ def test_mislabelled_json_does_not_crash(httpserver, wc):
     )
     doc = wc.fetch(httpserver.url_for("/badjson"))
     assert doc.kind == "json"
-    assert doc.text_content == "null"  # no crash: empty data
+    assert doc.attr("text") == "null"  # no crash: empty data
     assert not doc.select("anything", optional=True).ok
 
 

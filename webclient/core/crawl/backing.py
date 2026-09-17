@@ -313,7 +313,7 @@ class CrawlBacking(Backing):
             url = str(a.attr("href").url)
             if _ext(_path(url)) in _RESOURCE_EXT:  # a resource link, not a page
                 continue
-            text = (a.text_content or "").strip()
+            text = (a.attr("text") or "").strip()
             self._add_edge(core, url, text, depth, self._link_score(core, text, url, a.region))
         self._sort_frontier(core)
 

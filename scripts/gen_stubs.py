@@ -231,7 +231,9 @@ def _render(tp: Any, tier: str) -> str:
         return f"Lazy[{listed}]" if tier == "client" else listed
     if typing.get_origin(inner) is Field:  # a value leaf
         base = _name(_element_type(inner))
-        return f"Field[{base}]" if sync else f"LazyField[{base}]"
+        # the eager/async tiers return the RAW value (optional -- a miss is None); only
+        # the lazy recorder wraps it in a (chainable) LazyField.
+        return f"{base} | None" if sync else f"LazyField[{base}]"
     base = _name(inner)  # a plain scalar or a pydantic data model
     if sync:
         # preserve optionality for a plain scalar value (e.g. text_content/title ->
@@ -400,8 +402,10 @@ def _lift(
         lifted = f"{box}[{inner}]"
     elif ret.startswith(f"{field}["):
         lifted = f"{box}[{ret}]"
-    elif ret in _SCALAR.values():  # an eager scalar stays raw -> wrap on lift
-        lifted = f"{box}[{field}[{ret}]]"
+    elif ret.split(" | ")[0] in _SCALAR.values():  # a raw scalar (eager) or scalar leaf
+        # eager fans out to a plain list of RAW values (no Field on the eager tier);
+        # lazy wraps each in a chainable LazyField.
+        lifted = f"list[{ret}]" if tier == "eager" else f"{box}[{field}[{ret}]]"
     else:
         return None  # Any / list / dict -- nothing sensible to lift
     if tier != "eager" and is_prop:  # recorded as a bare attribute access

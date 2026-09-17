@@ -229,21 +229,21 @@ def main() -> None:
             "|",
             missing.message,
             "| is_ok:",
-            missing.is_ok().get(),
+            missing.is_ok(),
             "| empty:",
             bool(missing.is_empty()),
         )
 
         # [M1] Selection: css or xpath, elements only; index/optional knobs.
         for card in shop.select_all(".card"):
-            title = card.select(".title").text_content
-            price = card.select("./span[@class='price']").text_content  # xpath
+            title = card.select(".title").attr("text")
+            price = card.select("./span[@class='price']").attr("text")  # xpath
             link = card.select("a").attr("href")  # -> Reference
             # [M2] Follow the link: json selection uses a dotted path.
             item = link.resolve()
             print(
                 f"card:        {title} {price} -> "
-                f"{item.select('name').text_content} (stock {item.select('stock.count').text_content})"
+                f"{item.select('name').attr("text")} (stock {item.select('stock.count').attr("text")})"
             )
 
         # [render] One render(format) surface, dispatched to the backing for
@@ -294,7 +294,7 @@ def main() -> None:
         live = wc.ref(f"{base}/app").resolve(browser=True)
         live.write("#qty", "3").click("#add")
         live.wait_for("#cart li", timeout=5.0)
-        print("live dom:   ", live.select("#cart li").text_content)
+        print("live dom:   ", live.select("#cart li").attr("text"))
         print("console:    ", [e.text for e in live.console])
         print("dom events: ", len(live.dom_mutations), "mutations captured")
 
@@ -327,7 +327,7 @@ def main() -> None:
         #      DOM, so the captured content (and the skeleton an agent reads) holds them,
         #      and the shadow_dom / iframe flags fire with the counts.
         deep = wc.fetch(f"{base}/shadow", browser="always")
-        deep_text = deep.text_content or ""
+        deep_text = deep.attr("text") or ""
         print(
             "shadow/iframe:",
             {
@@ -379,8 +379,8 @@ def main() -> None:
         .resolve()
         .select_all(".card")
         .extract(
-            title=wq.doc.select(".title").text_content,
-            price=wq.doc.select(".price").text_content,
+            title=wq.doc.select(".title").attr("text"),
+            price=wq.doc.select(".price").attr("text"),
             link=wq.doc.select("a").attr("href"),
         )
         .filter(wq.doc.field("price") != "")
@@ -400,7 +400,7 @@ def main() -> None:
         #      wc.lazy is a lazy recorder bound to THIS client (companion to
         #      collect()). wc.lazy.ref(url) roots a client-bound plan.
         print("collect:    ", plan.collect()[0]["title"])
-        bound = wc.lazy.ref(f"{base}/").resolve().select(".title").text_content
+        bound = wc.lazy.ref(f"{base}/").resolve().select(".title").attr("text")
         print("wc.lazy:    ", bound.collect().get())
 
         # [§8] Polars-style free wq.when()/filter() on the lazy surface.
@@ -409,8 +409,8 @@ def main() -> None:
             wq.ref.resolve()
             .select_all(".card")
             .extract(
-                title=wq.doc.select(".title").text_content,
-                tier=wq.when(wq.doc.select(".price").text_content != "")
+                title=wq.doc.select(".title").attr("text"),
+                tier=wq.when(wq.doc.select(".price").attr("text") != "")
                 .then("priced")
                 .otherwise("free"),
             )
@@ -423,9 +423,9 @@ def main() -> None:
         priced = (
             wq.filter(
                 wq.ref.resolve().select_all(".card"),
-                wq.doc.select(".price").text_content != "",
+                wq.doc.select(".price").attr("text") != "",
             )
-            .extract(title=wq.doc.select(".title").text_content)
+            .extract(title=wq.doc.select(".title").attr("text"))
             .project()
         )
         print("free filter:", [r["title"] for r in priced.collect(wc.ref(f"{base}/"))])
@@ -437,9 +437,9 @@ def main() -> None:
             wq.ref.resolve()
             .select_all(".card")
             .extract(
-                title=wq.doc.select(".title").text_content,
+                title=wq.doc.select(".title").attr("text"),
                 link=wq.doc.select("a.link").attr("href"),
-                missing=wq.doc.select(".nope", error=RETURN).text_content,  # loud by default; opt out
+                missing=wq.doc.select(".nope", error=RETURN).attr("text"),  # loud by default; opt out
             )
             .extract(
                 name=wq.doc.reference("link").resolve().select("name").attr("value"),
@@ -469,7 +469,7 @@ def main() -> None:
         # [P3] Eager and lazy agree: the same extract on a resolved page.
         page = wc.ref(f"{base}/").resolve()
         cards = page.select_all(".card").extract(
-            title=wq.doc.select(".title").text_content
+            title=wq.doc.select(".title").attr("text")
         )
         print("eager:      ", cards.name, "->", [r["title"] for r in cards.project()])
 
@@ -477,7 +477,7 @@ def main() -> None:
         #      document); a Collection just fans it out. On a lone Document it
         #      returns the document and project() renders one row (a dict).
         overview = page.extract(
-            title=wq.doc.select(".title").text_content,
+            title=wq.doc.select(".title").attr("text"),
             link=wq.doc.select(".card a").attr("href"),
         ).project()
         print("doc row:    ", overview)
@@ -490,7 +490,7 @@ def main() -> None:
             .select_all(".card")
             .limit(2)
             .extract(
-                title=wq.doc.select(".title").text_content,
+                title=wq.doc.select(".title").attr("text"),
                 url=wq.doc.select("a").attr("href"),
             )
             .project()
@@ -512,7 +512,7 @@ def main() -> None:
 
         # [D] Serialisable expressions: an LLM writes a lazy plan, encodes it to a
         #     short blob, and rebuilds + validates + pretty-prints it before running.
-        expr = wq.doc.select(".title").text_content
+        expr = wq.doc.select(".title").attr("text")
         blob = expr.to_blob()
         print("expr blob:   ", blob)
         print("expr rebuilt:", from_blob(blob).explain())
@@ -541,11 +541,11 @@ def main() -> None:
     async def _async_demo() -> tuple:
         async with AsyncWebClient() as ac:
             document = await ac.fetch(f"{base}/")  # await at the IO boundary
-            first = (await ac.ref(f"{base}/").resolve()).select(".title").text_content
+            first = (await ac.ref(f"{base}/").resolve()).select(".title").attr("text")
             rows = await (
                 wq.ref.resolve()
                 .select_all(".card")
-                .extract(title=wq.doc.select(".title").text_content)
+                .extract(title=wq.doc.select(".title").attr("text"))
                 .project()
                 .acollect(ac.ref(f"{base}/"))
             )
@@ -584,7 +584,7 @@ def main() -> None:
             "/execute",
             headers=auth,
             json={
-                "plan": wq.doc.select_all(".title").text_content._plan.model_dump(),
+                "plan": wq.doc.select_all(".title").attr("text")._plan.model_dump(),
                 "document_id": did,
             },
         ).json()
@@ -592,7 +592,7 @@ def main() -> None:
         plan = (
             wq.ref.resolve()
             .select_all(".card")
-            .extract(title=wq.doc.select(".title").text_content)
+            .extract(title=wq.doc.select(".title").attr("text"))
             .project()
             ._plan
         )
@@ -636,13 +636,13 @@ def main() -> None:
         # batch it through .lazy: one recorded plan, one round-trip.
         print(
             "remote select: ",
-            remote_doc.lazy.select_all(".title").text_content.collect(),
+            remote_doc.lazy.select_all(".title").attr("text").collect(),
         )
         # identical plan API -- runs server-side, no local browser/lxml
         same_plan = (
             wq.ref.resolve()
             .select_all(".card")
-            .extract(title=wq.doc.select(".title").text_content)
+            .extract(title=wq.doc.select(".title").attr("text"))
             .project()
         )
         print("remote plan:   ", same_plan.collect(rc.ref(f"{base}/")))

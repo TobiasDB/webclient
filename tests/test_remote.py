@@ -176,7 +176,7 @@ def test_eager_doc_ops_round_trip(remote):
     assert isinstance(d, Document)  # a real Document handle, not a special type
     assert d.ok and d.kind == "html"  # inline metadata, no round-trip
     assert d.title == "Shop"  # a prop op -> one round-trip
-    assert d.select(".title").text_content == "Aeropress"  # eager: a value, not a plan
+    assert d.select(".title").attr("text") == "Aeropress"  # eager: a value, not a plan
     href = d.select("a").attr("href")  # a single narrowed op -> a real Reference
     assert isinstance(href, Reference) and href.url.endswith("/i/1")
     # a multi-element fan-out is not per-element addressable server-side -- batch
@@ -199,8 +199,8 @@ def test_lazy_batches_doc_ops_into_one_call(remote):
     rc, server = remote
     d = rc.fetch(server.url_for("/cards"))
     # d.lazy records the whole chain and runs it in ONE round-trip
-    assert d.lazy.select(".title").text_content.collect() == "Aeropress"
-    assert d.lazy.select_all(".title").text_content.collect() == ["Aeropress", "Grinder"]
+    assert d.lazy.select(".title").attr("text").collect() == "Aeropress"
+    assert d.lazy.select_all(".title").attr("text").collect() == ["Aeropress", "Grinder"]
     hrefs = d.lazy.select_all("a").attr("href").collect()
     assert all(u.url.startswith("http") for u in hrefs)
 
@@ -211,7 +211,7 @@ def test_plan_execution_is_portable(remote):
         ref.resolve()
         .select_all(".card")
         .extract(
-            title=doc.select(".title").text_content, link=doc.select("a").attr("href")
+            title=doc.select(".title").attr("text"), link=doc.select("a").attr("href")
         )
         .extract(name=doc.reference("link").resolve().select("name").attr("value"))
         .project()
@@ -225,7 +225,7 @@ def test_plan_matches_local_client(remote, httpserver):
     plan = (
         ref.resolve()
         .select_all(".card")
-        .extract(title=doc.select(".title").text_content)
+        .extract(title=doc.select(".title").attr("text"))
         .project()
     )
     remote_rows = sorted(
@@ -282,7 +282,7 @@ def test_remote_needs_no_browser_or_lxml():
         "    return _real(name, *a, **k)\n"
         "builtins.__import__ = guard\n"
         "from webclient import RemoteWebClient, doc, ref\n"
-        "plan = ref.resolve().select_all('.card').extract(t=doc.select('.t').text_content)\n"
+        "plan = ref.resolve().select_all('.card').extract(t=doc.select('.t').attr('text'))\n"
         "assert plan._plan.root == 'Reference'\n"
         "import sys\n"
         "assert 'lxml' not in sys.modules and 'playwright' not in sys.modules\n"

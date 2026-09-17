@@ -189,16 +189,16 @@ def main() -> None:
             "3. TARGETED EXTRACTION -- select / attr / region",
             "pull exact values once the model knows the selector.",
         )
-        call('doc.select("h1").text_content')
-        out(doc.select("h1").text_content)
-        call('doc.select(".price").text_content')
-        out(doc.select(".price").text_content)
+        call('doc.select("h1").attr("text")')
+        out(doc.select("h1").attr("text"))
+        call('doc.select(".price").attr("text")')
+        out(doc.select(".price").attr("text"))
         call('doc.select("a.cta").attr("href").url    # relative -> absolute')
         out(doc.select("a.cta").attr("href").url)
         call('doc.select("a.cta").region              # which page landmark?')
         out(doc.select("a.cta").region)
-        call('[a.text_content for a in doc.select_all("nav a")]')
-        out([a.text_content for a in doc.select_all("nav a")])
+        call('[a.attr("text") for a in doc.select_all("nav a")]')
+        out([a.attr("text") for a in doc.select_all("nav a")])
 
         # 4 -------------------------------------------------------------------
         panel(
@@ -218,8 +218,8 @@ def main() -> None:
         api = wc.fetch(f"{base}/api/item/3").collect()
         call('api.kind    # sniffed from the response, not the URL')
         out(api.kind)
-        call('api.select("stock.count").text_content')
-        out(api.select("stock.count").text_content)
+        call('api.select("stock.count").attr("text")')
+        out(api.select("stock.count").attr("text"))
 
         # 6 -------------------------------------------------------------------
         panel(

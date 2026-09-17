@@ -29,19 +29,19 @@ def test_async_fetch_execute_and_stream(httpserver):
             assert document.ok and document.title == "Shop"
             # in-memory ops on the resolved document are synchronous
             titles = document.select_all(".title")
-            assert [t.text_content for t in titles] == ["Aeropress", "Grinder"]
+            assert [t.attr("text") for t in titles] == ["Aeropress", "Grinder"]
 
             # IO ops on the async surface are awaitable, so a chain stays async:
             # ref -> resolve, and doc -> select -> resolve
             page = await ac.ref(url).resolve()
-            assert page.select(".title").text_content == "Aeropress"
+            assert page.select(".title").attr("text") == "Aeropress"
 
             # a deeper IO chain: a lazy plan, realised with acollect() (ac.ref(url)
             # is an eager Reference context)
             rows = await (
                 ref.resolve()
                 .select_all(".card")
-                .extract(t=doc.select(".title").text_content)
+                .extract(t=doc.select(".title").attr("text"))
                 .project()
                 .acollect(ac.ref(url))
             )
@@ -51,7 +51,7 @@ def test_async_fetch_execute_and_stream(httpserver):
                 row
                 async for row in ref.resolve()
                 .select_all(".title")
-                .text_content.astream(ac.ref(url))
+                .attr("text").astream(ac.ref(url))
             ]
             assert sorted(streamed) == ["Aeropress", "Grinder"]
 

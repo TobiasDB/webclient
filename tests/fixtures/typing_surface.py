@@ -48,10 +48,10 @@ assert_type(wq.ref, LazyReference)
 assert_type(wq.many, LazyCollection[LazyDocument])
 
 assert_type(wq.doc.select("a").select_all("li"), LazyCollection[LazyDocument])
-assert_type(wq.doc.text_content, LazyField[str])
+assert_type(wq.doc.attr("text"), LazyField[str])
 assert_type(wq.doc.attr("href"), LazyReference)  # link attrs narrow
 assert_type(wq.doc.attr("name"), LazyField[str])
-assert_type(wq.doc.attr("href").resolve().text_content, LazyField[str])
+assert_type(wq.doc.attr("href").resolve().attr("text"), LazyField[str])
 assert_type(wq.doc.field("x"), LazyField[Any])  # recorder-only helpers
 assert_type(wq.doc.reference("x"), LazyReference)
 assert_type(wq.ref.resolve(), LazyDocument)
@@ -59,26 +59,26 @@ assert_type(wq.ref.resolve(), LazyDocument)
 # wq.reference(url) roots a lazy plan at a URL
 assert_type(wq.reference("https://e.com"), LazyReference)
 assert_type(
-    wq.reference("https://e.com").resolve().select("a").text_content, LazyField[str]
+    wq.reference("https://e.com").resolve().select("a").attr("text"), LazyField[str]
 )
 
 # the lazy collection lift keeps element ops (fan-out), then the row-shaping ops
 assert_type(wq.many.select("a"), LazyCollection[LazyDocument])
-assert_type(wq.many.text_content, LazyCollection[LazyField[str]])
+assert_type(wq.many.attr("text"), LazyCollection[LazyField[str]])
 assert_type(wq.doc.select_all(".t").attr("name"), LazyCollection[LazyField[str]])
 # a lone lazy document extracts a row too (single-element form of the collection op)
-assert_type(wq.doc.extract(t=wq.doc.text_content), LazyDocument)
-assert_type(wq.doc.extract(t=wq.doc.text_content).project(), Lazy[dict[str, Any]])
+assert_type(wq.doc.extract(t=wq.doc.attr("text")), LazyDocument)
+assert_type(wq.doc.extract(t=wq.doc.attr("text")).project(), Lazy[dict[str, Any]])
 assert_type(wq.many.filter(wq.doc.field("x")), LazyCollection[LazyDocument])
-assert_type(wq.many.extract(name=wq.doc.text_content), LazyCollection[LazyDocument])
+assert_type(wq.many.extract(name=wq.doc.attr("text")), LazyCollection[LazyDocument])
 
 # extract -> project -> a Lazy[list[dict]] handle you collect (or introspect)
-_rows = wq.ref.resolve().select_all(".card").extract(t=wq.doc.text_content).project()
+_rows = wq.ref.resolve().select_all(".card").extract(t=wq.doc.attr("text")).project()
 assert_type(_rows, Lazy[list[dict[str, Any]]])
 assert_type(_rows.collect(), list[dict[str, Any]])
 assert_type(_rows._plan, Plan)  # introspection is typed
-assert_type(wq.doc.select(".t").text_content.collect(), Field[str])
-assert_type(wq.doc.select(".t").text_content._plan, Plan)
+assert_type(wq.doc.select(".t").attr("text").collect(), Field[str])
+assert_type(wq.doc.select(".t").attr("text")._plan, Plan)
 
 
 # -- eager materialised tier: from genuinely eager values --------------------
@@ -86,16 +86,16 @@ _wc = WebClient()
 _page = _wc.fetch("https://e.com").collect()
 assert_type(_page, Document)
 assert_type(_page.select("a").select_all("li"), Collection[Document])
-assert_type(_page.text_content, str | None)  # lenient miss -> None
+assert_type(_page.attr("text"), str | None)  # eager: the raw text, None on a miss
 assert_type(_page.attr("href"), Reference)
 assert_type(_page.render("markdown"), str)
 assert_type(_page.render("elements"), list[Element])
 assert_type(_page.render("links"), Collection[Reference])
 
 # a lone Document is a "collection of one": extract stages a row, project renders it
-assert_type(_page.extract(t=wq.doc.text_content), Document)
-assert_type(_page.extract(t=wq.doc.text_content).project(), dict[str, Any])
-assert_type(_page.extract(t=wq.doc.text_content).project(_Row), _Row)
+assert_type(_page.extract(t=wq.doc.attr("text")), Document)
+assert_type(_page.extract(t=wq.doc.attr("text")).project(), dict[str, Any])
+assert_type(_page.extract(t=wq.doc.attr("text")).project(_Row), _Row)
 
 _cards = _page.select_all(".card")
 assert_type(_cards, Collection[Document])
@@ -118,24 +118,24 @@ assert_type(_wc.fetch("https://e.com").transport(), Transport)
 assert_type(
     _wc.fetch("https://e.com")
     .select_all(".card")
-    .extract(t=wq.doc.text_content)
+    .extract(t=wq.doc.attr("text"))
     .project(),
     list[dict[str, Any]],
 )
 assert_type(_wc.fetch("https://e.com").select(".t"), Document)
 assert_type(_wc.fetch("https://e.com").attr("href"), Reference)
-assert_type(_wc.fetch("https://e.com").text_content, str | None)
+assert_type(_wc.fetch("https://e.com").attr("text"), str | None)
 assert_type(_wc.fetch("https://e.com").collect(), Document)  # collect() is identity
 assert_type(_wc.ref("https://e.com").resolve(), Document)
 assert_type(
-    _wc.ref("https://e.com").resolve().select(".t").text_content, str | None
+    _wc.ref("https://e.com").resolve().select(".t").attr("text"), str | None
 )
 
 # -- .lazy: the batching/deferring recorder on the same client ---------------
 assert_type(_wc.lazy.ref("https://e.com"), LazyReference)
 assert_type(_wc.lazy.fetch("https://e.com"), LazyDocument)
 assert_type(_wc.lazy.fetch("https://e.com").select(".t"), LazyDocument)
-assert_type(_wc.lazy.fetch("https://e.com").text_content.collect(), Field[str])
+assert_type(_wc.lazy.fetch("https://e.com").attr("text").collect(), Field[str])
 assert_type(_wc.lazy.ref("https://e.com").resolve().collect(), Document)
 
 _ac = AsyncWebClient()
@@ -148,11 +148,11 @@ async def _async_surface() -> None:
     assert_type(await _ac.fetch("https://e.com"), AsyncDocument)
     assert_type(await _ac.ref("https://e.com").resolve(), AsyncDocument)
     _adoc = await _ac.fetch("https://e.com")
-    assert_type(_adoc.text_content, str | None)  # in-memory ops stay sync
+    assert_type(_adoc.attr("text"), str | None)  # in-memory ops stay sync
     assert_type(_adoc.select(".t"), AsyncDocument)
     assert_type(await _adoc.select("a").attr("href").resolve(), AsyncDocument)
     # deeper batching still available via .lazy plans
     assert_type(await _ac.lazy.ref("https://e.com").resolve().acollect(), Document)
     assert_type(
-        await _ac.lazy.fetch("https://e.com").text_content.acollect(), Field[str]
+        await _ac.lazy.fetch("https://e.com").attr("text").acollect(), Field[str]
     )

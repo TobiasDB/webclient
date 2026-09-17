@@ -2,7 +2,7 @@
 
 Core Fields = the resolved response (the surface's data). Backings = per-medium
 op providers, one module each: :mod:`.html` (HtmlBacking -- css/xpath select,
-attr, text_content, render), :mod:`.json` (JsonBacking -- dotted path),
+attr (incl. attr("text")), render), :mod:`.json` (JsonBacking -- dotted path),
 :mod:`.status` (StatusBacking -- ok/error/is_ok/reload), the facet backings
 (:mod:`.transport`/:mod:`.metadata`/:mod:`.structure`/:mod:`.signals`),
 :mod:`.events` (EventBacking) and :mod:`..live` (LiveBacking). A selected

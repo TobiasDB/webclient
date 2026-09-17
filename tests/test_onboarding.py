@@ -60,8 +60,8 @@ def test_onboard_company_finds_and_queries_the_dataset(site):
     # asking the model to hand-serialize a blob.
     code = (
         'wq.doc.select_all(".product").extract('
-        'name=wq.doc.select(".name").text_content, '
-        'price=wq.doc.select(".price").text_content).project()'
+        'name=wq.doc.select(".name").attr("text"), '
+        'price=wq.doc.select(".price").attr("text")).project()'
     )
 
     def search(query, k):  # a stub SearchFn: seed at the company home page
@@ -658,8 +658,8 @@ def _pipeline_stub(products_url, *, reviews):
     """A scripted model for the whole pipeline over the ``site`` fixture; ``reviews`` maps a
     review-stage marker (e.g. "CRAWL stage") to the JSON reply to give for it."""
     code = ('wq.doc.select_all(".product").extract('
-            'name=wq.doc.select(".name").text_content, '
-            'price=wq.doc.select(".price").text_content).project()')
+            'name=wq.doc.select(".name").attr("text"), '
+            'price=wq.doc.select(".price").attr("text")).project()')
 
     def llm(prompt: str) -> str:
         # review markers first -- they are specific ("SELECT stage" etc.) and a review
@@ -826,7 +826,7 @@ def test_nested_extract_outputs_nested_json():
     )
     d._client = default_client()
     row = d.select(".product").extract(
-        name=wq.doc.select(".name").text_content,
+        name=wq.doc.select(".name").attr("text"),
         price=wq.doc.select(".price").extract(
             value=wq.doc.regex(r"[\d.]+"),
             unit=wq.doc.regex(r"[\d.]+\s*(\S+)", group=1),
@@ -852,7 +852,7 @@ def test_query_runs_across_multiple_base_urls(httpserver):
     # it into a self-contained reference+resolve query, run against each base by re-root.
     doc_query = (
         wq.doc.select_all(".product")
-        .extract(name=wq.doc.select(".name").text_content).project()
+        .extract(name=wq.doc.select(".name").attr("text")).project()
     )
     exe = _executable_query(doc_query, httpserver.url_for("/cloud"), None)
     art = QueryArtifact(

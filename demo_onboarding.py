@@ -122,8 +122,8 @@ def main() -> None:
     # skeleton, as a wq.doc chain, and the pipeline evals it -- loading it as written)
     code = (
         'wq.doc.select_all(".product").extract('
-        'name=wq.doc.select(".name").text_content, '
-        'price=wq.doc.select(".price").text_content).project()'
+        'name=wq.doc.select(".name").attr("text"), '
+        'price=wq.doc.select(".price").attr("text")).project()'
     )
     search, llm = make_stubs(base, code)
 

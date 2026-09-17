@@ -1,4 +1,4 @@
-"""HtmlBacking: tree ops for html/xml (select/attr/text_content) plus the
+"""HtmlBacking: tree ops for html/xml (select/attr, incl. attr("text")) plus the
 markdown / text / elements / links render helpers -- all html-only."""
 
 from __future__ import annotations
@@ -218,6 +218,30 @@ _MAX_CLASSES = 8  # cap utility-class soup (tailwind &c.) so a node stays token-
 #: CSS-in-JS / CSS-module class prefixes -- always generated, never a stable selector hook.
 _NOISE_CLASS_PREFIX = ("css-", "sc-", "jsx-", "emotion-", "chakra-", "mui", "makestyles", "jss")
 _HEX_SEG = re.compile(r"[0-9a-f]*[0-9][0-9a-f]*")  # hex chars incl. at least one digit
+
+
+def _regex_extract(value: str, pattern: str, group: "int | str | None") -> "str | None":
+    """Search ``value`` for ``pattern`` and return the requested ``group`` (an index or
+    named group; ``None`` -> group 1 when the pattern captures, else the whole match).
+    ``None`` when the pattern does not match, or the group is absent."""
+    m = re.search(pattern, value)
+    if m is None:
+        return None
+    if group is not None:
+        try:
+            return m.group(group)
+        except IndexError:  # a bad group index / unknown group name
+            return None
+    return m.group(1) if m.groups() else m.group(0)
+
+
+def _regex_field(value: Any, pattern: "str | None", group: "int | str | None") -> "Field[str]":
+    """Wrap an extracted ``value`` as a ``Field``, applying an optional regex ``pattern``.
+    A ``None`` value or a non-matching pattern is a LENIENT miss (an empty ``Field``) so it
+    composes with ``extract``/``filter`` -- it never raises."""
+    if value is not None and pattern is not None:
+        value = _regex_extract(value if isinstance(value, str) else str(value), pattern, group)
+    return Field(value) if value is not None else Field(None, ok=False)
 
 
 def _is_noise_class(tok: str) -> bool:
@@ -601,7 +625,7 @@ class HtmlBacking(Backing):
          "markdown", "text", "html", "links", "elements", "skeleton"}
     )
     collections = frozenset({"select_all", "links"})  # return a Collection of cores
-    props = frozenset({"text_content", "title", "region"})
+    props = frozenset({"title", "region"})
     gate = "tree"
 
     def region(self, core: "Document") -> str:
@@ -847,21 +871,32 @@ class HtmlBacking(Backing):
     ) -> "Reference": ...  # type: ignore[overload-overlap]  # noqa: E501
     @overload
     def attr(
-        self, core: "Document", name: str, *, optional: bool = False, error: Any = None
+        self, core: "Document", name: str, pattern: str | None = None, *,
+        group: int | str | None = None, optional: bool = False, error: Any = None,
     ) -> "Field[str]": ...  # noqa: E501
 
     def attr(
-        self, core: "Document", name: str, *, optional: bool = False, error: Any = None
+        self, core: "Document", name: str, pattern: str | None = None, *,
+        group: int | str | None = None, optional: bool = False, error: Any = None,
     ) -> Any:
         """The one element accessor -- give me ``name`` from this node. A real HTML
         attribute (``class``, ``data-id``, …) as a ``Field``; the link attrs
         ``href``/``src``/``action`` as a resolvable ``Reference``; the pseudo-attrs
-        ``"text"`` (the element's text, same as ``text_content``) and ``"html"`` (its
-        markup). ``optional=True`` for an attribute that may be absent."""
-        if name == "text":
-            return Field(self.text_content(core))
+        ``"text"`` (all of the element's text), ``"text:own"`` (only its DIRECT text,
+        excluding child elements) and ``"html"`` (its markup).
+
+        ``pattern`` extracts a substring by regex: the value is searched (not
+        anchored), and the ``group`` (an index or a named group; default: group 1 when
+        the pattern has groups, else the whole match) is returned. The text pseudo-attrs
+        and a regex non-match are LENIENT (an empty ``Field``, never an error) -- only an
+        absent REAL attribute raises by default (soften it with ``optional=True`` /
+        ``error=``), since asking for a missing attribute is the true mistake."""
+        if name in ("text", "text:own"):
+            raw = None if core._missing else self._text(core, own=name == "text:own")
+            return _regex_field(raw, pattern, group)
         if name == "html":
-            return Field(None if core._missing else self.render(core, "html"))
+            raw = None if core._missing else self.render(core, "html")
+            return _regex_field(raw, pattern, group)
         if core._missing:
             # honour the declared type: a link attr is a Reference even on a miss
             # (an empty, not-ok one whose ``.url`` is "" -- never a Field, so
@@ -877,20 +912,24 @@ class HtmlBacking(Backing):
             ref = from_url(urljoin(core.final_url or core.url, _clean_href(value)))
             ref._client = core._client  # inherit the client so it resolves
             return ref
-        if value is None:  # absent attribute
+        if value is None:  # absent attribute -> raise (structured) by default
             from ...errors import RAISE, current_policy, select_error
 
             if not optional and (error or current_policy()) is RAISE:
                 raise select_error(f"no attribute {name!r}")
             return Field(None, ok=False)
-        return Field(value.strip() if isinstance(value, str) else value)  # trim surrounding ws
+        return _regex_field(value.strip() if isinstance(value, str) else value, pattern, group)
 
-    def text_content(self, core: "Document") -> "str | None":
-        """The element's visible text, whitespace-normalised (``None`` on a miss). The
-        same as ``attr("text")``; a property, so no ``()``."""
+    def _text(self, core: "Document", *, own: bool = False) -> "str | None":
+        """The element's visible text, whitespace-normalised (``None`` on a miss).
+        ``own`` restricts it to the node's DIRECT text (its own text + child tails),
+        excluding descendant elements' text."""
         if core._missing:
             return None
         el = core._element if core._element is not None else self._tree(core)
+        if own:
+            parts = [el.text or ""] + [c.tail or "" for c in el]
+            return _norm("".join(parts))
         return _norm("".join(el.itertext()))
 
 

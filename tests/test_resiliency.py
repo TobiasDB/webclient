@@ -229,7 +229,7 @@ def test_browser_auto_escalates_a_js_gated_page(httpserver, wc):
     assert static.transport().final_tier == "static"
     # browser="auto": the JS-gated page is escalated to a browser render
     auto = wc.fetch(url, browser="auto")
-    assert "Loaded content" in (auto.text_content or "")  # JS ran
+    assert "Loaded content" in (auto.attr("text") or "")  # JS ran
     assert auto.transport().final_tier == "browser"
     assert auto.transport().escalation == ["static", "browser"]
 

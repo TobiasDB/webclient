@@ -143,7 +143,7 @@ def test_json_query():
         status_code=200,
         content=b'{"items": [{"name": "n0"}, {"name": "n1"}]}',
     )
-    assert doc.select("items[1].name").text_content == "n1"
+    assert doc.select("items[1].name").attr("text") == "n1"
 
 
 def test_unknown_format_raises():
@@ -171,7 +171,7 @@ def test_custom_backing_overrides_builtin_render():
         doc._client = wc.core  # a core (the surface IS a core now; no unwrapping)
         assert doc.render("markdown") == "UPPER"  # overridden
         assert "<html" in doc.render("html").lower()  # other formats: super()
-        assert doc.select("h1").text_content == "Big News"  # select still built-in
+        assert doc.select("h1").attr("text") == "Big News"  # select still built-in
 
 
 def test_latest_registered_backing_wins():

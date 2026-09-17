@@ -65,7 +65,7 @@ def extract(
     """Extract rows from ``url``: ``result`` is the CSS selector for each row
     element, and ``fields`` maps output keys to a CSS selector whose text is that
     column's value. Returns a list of plain dicts."""
-    exprs = {name: doc.select(sel).text_content for name, sel in fields.items()}
+    exprs = {name: doc.select(sel).attr("text") for name, sel in fields.items()}
     rows = _client(client).fetch(url, **kw).select_all(result)
     if limit is not None:
         rows = rows.limit(limit)
