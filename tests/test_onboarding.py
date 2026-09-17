@@ -141,6 +141,47 @@ def test_onboard_company_reports_when_no_seeds(site):
     assert not result.ok and result.reason == "no search seeds"
 
 
+def test_parse_query_rewrites_css_child_combinator_to_descendant():
+    from webclient.pipelines.onboarding import _parse_query
+
+    q = _parse_query('wq.doc.select_all("ul.list > li.item").extract('
+                     'name=wq.doc.select("div.card > span.n").attr("text")).project()')
+    ex = q.explain()
+    assert ">" not in ex                                   # the strict child combinator is gone
+    assert "ul.list li.item" in ex and "div.card span.n" in ex
+    # XPath (which legitimately uses /) is left untouched
+    q2 = _parse_query('wq.doc.select_all("//ul/li").extract(n=wq.doc.select(".n").attr("text")).project()')
+    assert "//ul/li" in q2.explain()
+
+
+def test_write_query_auto_repairs_a_near_miss_field_selector(httpserver):
+    # the model writes an almost-correct query but mistypes a high-entropy class (widget vs
+    # widgets); the pipeline swaps the mistyped class for the nearest real one in the record and
+    # ships the REPAIRED query -- no wasted retry, no failed onboarding.
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/p").respond_with_data(
+        "<main>" + "".join(
+            f'<article class="product"><span class="widgets">W{i}</span>'
+            f'<span class="price">{i}0</span></article>' for i in range(3)
+        ) + "</main>",
+        content_type="text/html",
+    )
+
+    def llm(prompt: str) -> str:  # one shot, with the near-miss ".widget"
+        return ('wq.doc.select_all("article.product").extract('
+                'name=wq.doc.select(".widget").attr("text"),'
+                ' price=wq.doc.select(".price").attr("text")).project()')
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/p"),
+                          Brief(description="products", fields=["name", "price"]),
+                          wc=wc, llm=llm, browser="never", retries=0)
+    assert art is not None and art.complete and art.row_count == 3
+    assert ".widgets" in art.describe            # the selector was repaired to the real class
+    assert art.sample[0]["name"] == "W0"
+
+
 def test_sample_table_collapses_newlines_so_columns_dont_shift():
     # an output-summary bug: a value with a newline (an RSS description) broke the aligned
     # sample table so LATER columns rendered shifted/empty. Cells now collapse whitespace.

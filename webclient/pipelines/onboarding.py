@@ -1425,8 +1425,8 @@ def _parse_query(reply: str) -> Any:
         expr = _eval_query_ast(ast.parse(code, mode="eval"), wq)
         if not isinstance(expr, Expr):
             raise TypeError(f"query is a {type(expr).__name__}, not a wq.doc chain")
-        return expr
-    return from_blob(_json_blob(reply))  # fallback: the model returned a raw blob
+        return _normalize_selectors(expr)  # CSS '>' child combinator -> safer descendant space
+    return _normalize_selectors(from_blob(_json_blob(reply)))  # fallback: a raw blob
 
 
 def _row_selector(expr: Any) -> "str | None":
@@ -1641,6 +1641,175 @@ def run_query(artifact: QueryArtifact, *, wc: WebClient) -> list[Any]:
     return out
 
 
+#: class tokens in a selector: ``.foo`` / ``tag.foo`` / ``[class*="foo"]`` / ``[class~=foo]``.
+_SEL_CLASS = __import__("re").compile(r'\.([A-Za-z_][\w-]*)|\[class[*~^$|]?=["\']?([A-Za-z_][\w-]*)')
+
+
+def _record_classes(record: Any) -> "set[str]":
+    """Every class token present in a record's subtree -- the real hooks a field selector could
+    use, so a near-miss selector (``.widget`` for a real ``widgets``) can be repaired to one."""
+    out: set[str] = set()
+    try:
+        el = record._element
+        nodes = [el, *el.iter()] if el is not None else []
+    except Exception:  # noqa: BLE001
+        return out
+    for node in nodes:
+        cls = node.get("class") if hasattr(node, "get") else None
+        if isinstance(cls, str):
+            out.update(cls.split())
+    return out
+
+
+def _selector_hits(record: Any, selector: str) -> bool:
+    """Whether ``selector`` matches at least one element inside the record (relative to it)."""
+    return (_selector_match_count(selector, record) or 0) > 0
+
+
+def _repair_selector(selector: str, classes: "set[str]") -> "str | None":
+    """Repair a class-based selector whose class token isn't present, by swapping in the NEAREST
+    real class in the record -- fixing a plural/typo/mis-transcribed high-entropy class
+    (``widget``->``widgets``, ``prodcut``->``product``). Returns the repaired selector, or None
+    if no token needs (or has) a close-enough real match."""
+    import difflib
+    import re as _re
+
+    new = selector
+    for m in _SEL_CLASS.finditer(selector):
+        tok = m.group(1) or m.group(2)
+        if not tok or tok in classes:
+            continue  # this class token already exists -- leave it
+        best, cand = 0.0, None
+        for c in classes:
+            r = difflib.SequenceMatcher(None, tok, c).ratio()
+            # a genuine plural / one-off typo: one is a prefix of the other, BOTH are reasonably
+            # long, and the lengths are close -- NOT a tiny class that happens to prefix a longer
+            # word (".nodate" must NOT snap to a real ".n").
+            if ((c.startswith(tok) or tok.startswith(c))
+                    and min(len(tok), len(c)) >= 4 and abs(len(tok) - len(c)) <= 2):
+                r = max(r, 0.9)
+            if r > best:
+                best, cand = r, c
+        if cand and best >= 0.82:  # confident enough to swap the token for the real class
+            new = _re.sub(rf"(?<![\w-]){_re.escape(tok)}(?![\w-])", cand, new)
+    return new if new != selector else None
+
+
+def _iter_field_select_args(plan: "dict[str, Any]") -> "list[dict[str, Any]]":
+    """Every field-selector arg node (``{"value": "<selector>"}``) inside the extract sub-plans of
+    a query plan (recursing into nested sub-extracts). NOT the top-level record selector -- only
+    the FIELD selectors, which is what a repair targets. Each returned dict can be mutated in place."""
+    out: list[dict[str, Any]] = []
+
+    def walk(p: "dict[str, Any]", *, in_field: bool) -> None:
+        steps = p.get("steps", [])
+        for i, s in enumerate(steps):
+            if in_field and s.get("kind") == "get" and s.get("name") in ("select", "select_all"):
+                nxt = steps[i + 1] if i + 1 < len(steps) else None
+                if nxt and nxt.get("kind") == "call" and nxt.get("args"):
+                    arg = nxt["args"][0]
+                    if isinstance(arg, dict) and isinstance(arg.get("value"), str):
+                        out.append(arg)
+            if s.get("kind") == "call":  # descend into field sub-plans (extract kwargs / args)
+                for v in list(s.get("kwargs", {}).values()) + list(s.get("args", [])):
+                    if isinstance(v, dict) and isinstance(v.get("plan"), dict):
+                        walk(v["plan"], in_field=True)
+
+    walk(plan, in_field=False)
+    return out
+
+
+def _iter_all_select_args(plan: "dict[str, Any]") -> "list[dict[str, Any]]":
+    """Every ``select``/``select_all`` selector arg node in a plan -- the record selector AND all
+    field selectors (recursing into sub-extracts). Each dict can be mutated in place."""
+    out: list[dict[str, Any]] = []
+
+    def walk(p: "dict[str, Any]") -> None:
+        steps = p.get("steps", [])
+        for i, s in enumerate(steps):
+            if s.get("kind") == "get" and s.get("name") in ("select", "select_all"):
+                nxt = steps[i + 1] if i + 1 < len(steps) else None
+                if nxt and nxt.get("kind") == "call" and nxt.get("args"):
+                    arg = nxt["args"][0]
+                    if isinstance(arg, dict) and isinstance(arg.get("value"), str):
+                        out.append(arg)
+            if s.get("kind") == "call":
+                for v in list(s.get("kwargs", {}).values()) + list(s.get("args", [])):
+                    if isinstance(v, dict) and isinstance(v.get("plan"), dict):
+                        walk(v["plan"])
+
+    walk(plan)
+    return out
+
+
+#: the strict CSS child combinator, with any surrounding whitespace.
+_CHILD_COMBINATOR = __import__("re").compile(r"\s*>\s*")
+
+
+def _normalize_selectors(expr: Any) -> Any:
+    """Make a loaded query's CSS selectors more robust: replace the strict child combinator ``>``
+    with a descendant space -- a direct-child selector (``ul > li``) breaks the moment a wrapper
+    is inserted, whereas the descendant form (``ul li``) still matches, and for extraction the
+    two almost always mean the same set. XPath selectors (starting with ``/`` // ``.//``) are left
+    untouched. Returns the same expr if nothing changed, else a rebuilt one."""
+    import copy as _copy
+
+    plan = _copy.deepcopy(expr._plan.model_dump(mode="json"))
+    changed = False
+    for arg in _iter_all_select_args(plan):
+        sel = arg["value"]
+        if isinstance(sel, str) and ">" in sel and not sel.lstrip().startswith(("/", ".//")):
+            fixed = _CHILD_COMBINATOR.sub(" ", sel).strip()
+            if fixed != sel:
+                arg["value"] = fixed
+                changed = True
+    if not changed:
+        return expr
+    from ..query.expr import Expr
+    from ..query.plan import Plan
+
+    return Expr(Plan.model_validate(plan), expr._client)
+
+
+def _repair_query(expr: Any, doc: Any) -> Any:
+    """Repair a query whose FIELD selectors have near-miss class typos: for each field selector
+    that matches nothing inside a matched record, swap the mistyped class for the nearest real one
+    present in the record (see :func:`_repair_selector`), rebuild the query, and hand it back for
+    re-validation. Returns a repaired Expr, or None if nothing safe to repair. Deterministic and
+    conservative -- only high-confidence class swaps that then actually match are applied."""
+    import copy as _copy
+
+    row_sel = _row_selector(expr)
+    if not row_sel or not getattr(doc, "ok", False):
+        return None
+    try:
+        record = wq.doc.select(row_sel).collect(doc)  # the first matched record
+    except Exception:  # noqa: BLE001
+        return None
+    if not getattr(record, "ok", False):
+        return None
+    classes = _record_classes(record)
+    if not classes:
+        return None
+    plan = _copy.deepcopy(expr._plan.model_dump(mode="json"))
+    changed = False
+    for arg in _iter_field_select_args(plan):
+        sel = arg["value"]
+        if _selector_hits(record, sel):
+            continue  # this field selector already matches -- nothing to fix
+        fixed = _repair_selector(sel, classes)
+        if fixed and _selector_hits(record, fixed):  # the repair actually matches now
+            log.info("    repaired field selector %r -> %r", sel, fixed)
+            arg["value"] = fixed
+            changed = True
+    if not changed:
+        return None
+    from ..query.expr import Expr
+    from ..query.plan import Plan
+
+    return Expr(Plan.model_validate(plan), expr._client)
+
+
 def _artifact_from(
     expr: Any, doc: Any, brief: Brief, candidate_url: str,
     resolve: "Resolve | None", bases: "list[str]",
@@ -1752,6 +1921,16 @@ def write_query(
         art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases)
         if art.complete:
             return art  # rows with real, complete content -- accept it
+        # AUTO-REPAIR near-miss field selectors before giving up: a one-char class typo
+        # (widget vs widgets) makes an otherwise-correct query fail: swap the mistyped class for
+        # the nearest real one in the record and re-validate. The REPAIRED query is what ships.
+        repaired = _repair_query(expr, doc)
+        if repaired is not None:
+            rart, _rrows = _artifact_from(repaired, doc, brief, candidate_url, resolve, bases)
+            if rart.complete:
+                log.info("    query completed after auto-repairing a field selector")
+                return rart
+            art = rart if rart.row_count > art.row_count else art  # keep the better fallback
         best = best or art  # keep the first rebuildable one as a fallback (NOT complete)
         # ran but did not truly extract: diagnose WHY (wrong record selector / empty fields /
         # a required field never populated / content not in the HTML) and hand the model a

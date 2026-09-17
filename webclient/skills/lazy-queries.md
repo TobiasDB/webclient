@@ -154,7 +154,10 @@ Avoid:
 Techniques:
 - **Anchor on a stable container, then a semantic leaf:** `.product-card .price`.
 - **Attribute *contains* for partly-stable classes:** `[class*="teaser"]`,
-  `[href*="/product/"]`.
+  `[href*="/product/"]`. Prefer this over an exact `.class` when the class is long or you're
+  unsure of the exact spelling — `[class*="widget"]` matches `widget`, `widgets` and
+  `widget-card` alike, so a plural or a one-character slip still hits. (The pipeline also
+  auto-repairs a near-miss class to the nearest real one, but a stable stem avoids the miss.)
 - **XPath to match on text:** `//button[normalize-space()="Add to cart"]`.
 - **Check breadth:** a `select_all` should match exactly the records you mean.
 
