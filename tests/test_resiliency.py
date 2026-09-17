@@ -242,3 +242,24 @@ def test_browser_auto_stays_static_for_a_normal_page(httpserver, wc):
     doc = wc.fetch(httpserver.url_for("/plain"), browser="auto")
     assert doc._page is None  # never launched a browser
     assert doc.transport().final_tier == "static" and doc.flags() == []
+
+
+def test_no_webclient_headers_leak_on_a_direct_connection(httpserver):
+    # the X-WebClient-* policy headers are for OUR proxy service; on a DIRECT connection (no proxy)
+    # they must NOT be sent to the target site (they would flag us as a scraper), even when a
+    # rate/retry policy is configured.
+    from werkzeug.wrappers import Response
+
+    from webclient.core.reference.models import RatePolicy, Resolve
+
+    seen: dict[str, str] = {}
+
+    def handler(request):
+        seen.update({k.lower(): v for k, v in request.headers.items()})
+        return Response("<html><body>ok content here</body></html>", content_type="text/html")
+
+    httpserver.expect_request("/p").respond_with_handler(handler)
+    # a resolve with rate/retry but NO proxy -> a direct fetch
+    with WebClient(resolve=Resolve(rate=RatePolicy(rps=2.0))) as wc:
+        wc.fetch(httpserver.url_for("/p"))
+    assert not any(k.startswith("x-webclient-") for k in seen)  # nothing WebClient-branded leaked
