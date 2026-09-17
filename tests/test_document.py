@@ -196,6 +196,33 @@ def test_xml_element_select_is_case_insensitive_fallback():
     assert not items[0].select("author", optional=True).ok
 
 
+def test_rss_item_fields_extract_from_a_real_world_feed_shape():
+    # a real-world RSS shape (à la neon.com/blog/rss.xml): namespaced siblings, a CDATA
+    # description, two <category>s, and the URL cleanly in <guid>. title/description/category/
+    # guid/pubDate all extract; <link> is the unreliable one (guid is the robust URL source).
+    xml = (b"<?xml version='1.0'?>"
+           b"<rss xmlns:dc='http://purl.org/dc/elements/1.1/'"
+           b" xmlns:content='http://purl.org/rss/1.0/modules/content/'"
+           b" xmlns:atom='http://www.w3.org/2005/Atom'>"
+           b"<channel><atom:link href='https://x/feed' rel='self'/>"
+           b"<item><title>Post A</title>"
+           b"<description><![CDATA[Body of A here]]></description>"
+           b"<guid isPermaLink='true'>https://x/blog/a</guid>"
+           b"<category>Product</category><category>News</category>"
+           b"<dc:creator>Jo</dc:creator>"
+           b"<pubDate>Mon, 14 Sep 2026 12:00:00 GMT</pubDate>"
+           b"<content:encoded>full body</content:encoded></item></channel></rss>")
+    doc = make_doc(kind="xml", content=xml)
+    it = doc.select_all("item")[0]
+    assert it.select("title").attr("text").get() == "Post A"
+    assert it.select("description").attr("text").get() == "Body of A here"     # CDATA read
+    assert it.select("guid").attr("text").get() == "https://x/blog/a"          # robust URL
+    assert it.select("category").attr("text").get() == "Product"               # first of two
+    assert it.select("pubDate").attr("text").get() == "Mon, 14 Sep 2026 12:00:00 GMT"
+    # the namespaced self-referential <atom:link> in the channel is not the item URL
+    assert it.select("category", index=1).attr("text").get() == "News"
+
+
 def test_as_json_reparses_an_injected_json_island():
     # data injected into the page as a <script type=application/json> blob, not as DOM:
     # select the script, .as_json() reparses its text into a JSON document, then dotted-path.

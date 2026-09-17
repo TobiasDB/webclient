@@ -255,11 +255,14 @@ wq.doc.select("script#__DATA__").as_json().select_all("catalog.items").extract(
 ```
 
 **An RSS/XML feed** is parsed like HTML. In **RSS** the records are `<item>`s and the fields are
-child tags (`.select("title").attr("text")`, `.select("pubDate").attr("text")`, `.select("link")`
-or `.select("guid")` for the URL). In **Atom** the records are `<entry>`s, the URL is
-`.select("link").attr("href")`, and the date is `<published>` / `<updated>` — so check whether the
-feed uses `<item>` (RSS) or `<entry>` (Atom) before choosing the record selector. Tag names are
-matched case-insensitively (`pubdate` finds `<pubDate>`), but write them as the feed spells them.
+child tags (`.select("title").attr("text")`, `.select("pubDate").attr("text")`). For the item URL
+prefer **`.select("guid").attr("text")`** over `<link>`: many feeds ship a malformed or empty
+`<link>` (an Atom-style `<link href="…"/>` with the URL in the attribute, or an unclosed `<link>`),
+whereas `<guid>` reliably carries the URL as its own text — if `<link>` comes back empty or wrong,
+switch to `<guid>` (or `.select("link").attr("href")` for the Atom form). In **Atom** the records
+are `<entry>`s, the URL is `.select("link").attr("href")`, and the date is `<published>` /
+`<updated>` — so check whether the feed uses `<item>` (RSS) or `<entry>` (Atom) first. Tag names
+match case-insensitively (`pubdate` finds `<pubDate>`), but write them as the feed spells them.
 
 ### 4. A field that lives on the DETAIL page (nested resolve)
 
