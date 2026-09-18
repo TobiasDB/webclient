@@ -1,5 +1,5 @@
 """Feature B: plan/expr visualization -- the two read-only renderers over the
-``Plan`` IR (``webclient.query.viz`` + the thin ``Expr.explain_tree()`` /
+``Plan`` IR (``webclient.query.viz`` + the thin ``Expr.explain()`` /
 ``Expr.wireframe()`` methods). Built via the ``wq`` recorder, read off
 ``expr._plan`` -- never executed."""
 
@@ -39,11 +39,11 @@ def test_explain_is_an_indented_op_tree_with_args():
 
 def test_explain_via_expr_method_matches_the_free_function():
     q = _representative()
-    assert q.explain_tree() == explain(q._plan)
-    # the one-line explain() is unchanged (still the round-trippable describe form)
-    assert q.explain() == q._plan.describe()
-    assert "\n" not in q.explain()  # one line
-    assert "\n" in q.explain_tree()  # a tree
+    assert q.explain() == explain(q._plan)  # explain() IS the visual tree
+    assert "\n" in q.explain()  # a multi-line tree
+    # describe() is the one-line, round-trippable serialization form (a different mechanism)
+    assert q.describe() == q._plan.describe()
+    assert "\n" not in q.describe()  # one line
 
 
 def test_explain_reference_root_and_link_follow_recursion():

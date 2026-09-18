@@ -70,9 +70,9 @@ def test_sequence_is_one_plan_with_ordered_step_ops(url):
     assert ("get", "step") in names
     assert names.count(("get", "step")) == 1
     # it round-trips through the readable form like any other plan
-    from webclient import from_explain
+    from webclient import from_describe
 
-    assert [(s.kind, s.name) for s in from_explain(seq.explain())._plan.steps] == names
+    assert [(s.kind, s.name) for s in from_describe(seq.describe())._plan.steps] == names
 
 
 def test_page_is_held_across_the_sequence_and_released_at_the_end(wc, url):

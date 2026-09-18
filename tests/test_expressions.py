@@ -98,10 +98,10 @@ def test_describe_is_human_readable():
     assert text == "reference('https://e.com/').resolve().select_all('.c')"
 
 
-def test_explain_round_trips_through_from_explain():
-    # explain()/describe() is the inverse of from_explain: an expression rebuilds
-    # from its human-readable form, not only from to_blob.
-    from webclient import from_explain, wq
+def test_describe_round_trips_through_from_describe():
+    # describe() (the one-line form) is the inverse of from_describe: an expression rebuilds
+    # from its human-readable form, not only from to_blob. (explain() is the visual tree.)
+    from webclient import from_describe, wq
 
     for expr in [
         reference("https://e.com/x?q=1").resolve().select_all(".c"),
@@ -115,16 +115,16 @@ def test_explain_round_trips_through_from_explain():
         .project(),
         doc.select(".status").attr("text") == "In stock",
     ]:
-        back = from_explain(expr.explain())
+        back = from_describe(expr.describe())
         assert back._plan == expr._plan  # exact rebuild from the readable form
-        assert back.explain() == expr.explain()  # stable
+        assert back.describe() == expr.describe()  # stable
 
 
-def test_from_explain_rejects_a_private_name():
-    from webclient import from_explain
+def test_from_describe_rejects_a_private_name():
+    from webclient import from_describe
 
     with pytest.raises(ValueError, match="private name"):
-        from_explain("Document.__class__")
+        from_describe("Document.__class__")
 
 
 def test_blob_roundtrips_and_rebuilds_the_expression():
@@ -137,7 +137,7 @@ def test_blob_roundtrips_and_rebuilds_the_expression():
     assert isinstance(json.loads(blob), dict)  # a plain JSON object, no compression
     back = from_blob(blob)
     assert back._plan == expr._plan  # exact rebuild
-    assert back.explain() == expr.explain()  # and pretty-prints the same
+    assert back.describe() == expr.describe()  # and pretty-prints the same
 
 
 def test_blob_is_accepted_by_from_plan_and_validated():

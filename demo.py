@@ -407,11 +407,11 @@ def main() -> None:
     print("\nlazy plan:  ", plan._plan.describe()[:60], "...")
     print("wire form:  ", plan._plan.model_dump_json()[:70], "...")
 
-    # [viz] Read-only plan visualization: explain_tree() renders a SQL-EXPLAIN
+    # [viz] Read-only plan visualization: explain() renders a SQL-EXPLAIN
     #       indented step tree, wireframe() a self-contained HTML picture of the
     #       pipeline (page frames / selector boxes / field chips / output card).
     print("explain:")
-    for line in plan.explain_tree().splitlines():
+    for line in plan.explain().splitlines():
         print("   ", line)
     print("wireframe:   ", f"{len(plan.wireframe())} bytes of self-contained HTML")
 
@@ -541,7 +541,7 @@ def main() -> None:
         expr = wq.doc.select(".title").attr("text")
         blob = expr.to_blob()
         print("expr blob:   ", blob)
-        print("expr rebuilt:", from_blob(blob).explain())
+        print("expr rebuilt:", from_blob(blob).describe())
 
         # [#3] Hunt a site's real sitemap.xml URLs (none served here -> []).
         print("sitemaps:    ", [r.url for r in wc.sitemap(f"{base}/")])

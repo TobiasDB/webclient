@@ -49,8 +49,8 @@ class Lazy(Generic[T]):
     def stream(self, context: Any = ...) -> "Iterator[Any]": ...
     def astream(self, context: Any = ...) -> "AsyncIterator[Any]": ...
     def to_blob(self) -> str: ...  # the whole chain as a compact, rebuildable blob
-    def explain(self) -> str: ...  # a readable one-line rendering of the chain
-    def explain_tree(self) -> str: ...  # a SQL-EXPLAIN-style indented step tree
+    def describe(self) -> str: ...  # a readable one-line rendering (round-trips via from_describe)
+    def explain(self) -> str: ...  # a SQL-EXPLAIN-style indented step tree (visualization)
     def wireframe(self) -> str: ...  # a self-contained HTML wireframe of the plan
 
 

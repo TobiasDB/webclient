@@ -146,12 +146,12 @@ def test_parse_query_rewrites_css_child_combinator_to_descendant():
 
     q = _parse_query('wq.doc.select_all("ul.list > li.item").extract('
                      'name=wq.doc.select("div.card > span.n").attr("text")).project()')
-    ex = q.explain()
+    ex = q.describe()
     assert ">" not in ex                                   # the strict child combinator is gone
     assert "ul.list li.item" in ex and "div.card span.n" in ex
     # XPath (which legitimately uses /) is left untouched
     q2 = _parse_query('wq.doc.select_all("//ul/li").extract(n=wq.doc.select(".n").attr("text")).project()')
-    assert "//ul/li" in q2.explain()
+    assert "//ul/li" in q2.describe()
 
 
 def test_reference_prefers_the_page_over_an_xhr_unless_the_page_is_a_spa_shell():
@@ -856,7 +856,7 @@ def test_query_runs_across_multiple_base_urls(httpserver):
     )
     exe = _executable_query(doc_query, httpserver.url_for("/cloud"), None)
     art = QueryArtifact(
-        blob=exe.to_blob(), describe=exe.explain(),
+        blob=exe.to_blob(), describe=exe.describe(),
         base_urls=[httpserver.url_for("/cloud"), httpserver.url_for("/onprem")],
     )
     with WebClient() as wc:
@@ -1224,7 +1224,7 @@ def test_executable_query_bakes_the_full_resolve_policy(httpserver):
 
     # a plain source keeps the lean form (just the browser tier, no policy blob)
     plain = _executable_query(doc_q, "https://x/p", Resolve(browser=BrowserPolicy(when="always")))
-    assert "policy=" not in plain.explain() and ".resolve(" in plain.explain()
+    assert "policy=" not in plain.describe() and ".resolve(" in plain.describe()
 
 
 def test_output_query_is_self_contained_and_executable(httpserver):
@@ -1243,7 +1243,7 @@ def test_output_query_is_self_contained_and_executable(httpserver):
     # the model supplies ONLY the document-level extraction
     doc_q = wq.doc.select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project()
     exe = _executable_query(doc_q, url, Resolve())
-    assert exe.explain().startswith(f"reference('{url}').resolve()")  # reference+resolve baked in
+    assert exe.describe().startswith(f"reference('{url}').resolve()")  # reference+resolve baked in
     with WebClient() as wc:
         rows = from_blob(exe.to_blob(), wc).collect()  # no context -- self-contained
     assert rows == [{"n": "P0"}, {"n": "P1"}, {"n": "P2"}]
@@ -1259,8 +1259,8 @@ def test_executable_query_strips_stray_navigation_from_the_model():
     stray = wq.ref.resolve().select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project()
     exe = _executable_query(stray, "https://x/p", Resolve())
     # exactly one resolve, then the extraction (no double resolve)
-    assert exe.explain().count(".resolve(") == 1
-    assert exe.explain().startswith("reference('https://x/p').resolve().select_all")
+    assert exe.describe().count(".resolve(") == 1
+    assert exe.describe().startswith("reference('https://x/p').resolve().select_all")
 
 
 def test_docs_pages_are_hard_banned_from_the_crawl():
@@ -1472,11 +1472,11 @@ def test_parse_query_loads_written_code_and_falls_back_to_a_blob():
 
     code = 'wq.doc.select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project()'
     want = "Document.select_all('.r').extract(n=Document.select('.n').attr('text')).project()"
-    assert _parse_query(code).explain() == want
-    assert _parse_query(f"here is the query:\n```python\n{code}\n```").explain() == want  # fenced + prose
-    assert _parse_query("query = " + code).explain() == want  # leading assignment dropped
+    assert _parse_query(code).describe() == want
+    assert _parse_query(f"here is the query:\n```python\n{code}\n```").describe() == want  # fenced + prose
+    assert _parse_query("query = " + code).describe() == want  # leading assignment dropped
     blob = wq.doc.select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project().to_blob()
-    assert _parse_query(blob).explain() == want  # raw-blob fallback still works
+    assert _parse_query(blob).describe() == want  # raw-blob fallback still works
     with pytest.raises(Exception):
         _parse_query("just some prose, not a query")
 

@@ -40,7 +40,7 @@ from .events import (
     PlanEvent,
 )
 from .guides import lazy_query_guide
-from .query.expr import from_blob, from_explain, from_plan
+from .query.expr import from_blob, from_describe, from_plan
 from .core.remote import RemoteWebClientCore
 from .surfaces import (
     AsyncDocument,
@@ -101,7 +101,7 @@ __all__ = [
     "from_url",
     "from_plan",
     "from_blob",
-    "from_explain",
+    "from_describe",
     "lazy_query_guide",
     "default_client",
     "Collection",

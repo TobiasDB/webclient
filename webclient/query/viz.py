@@ -14,7 +14,7 @@ and renders it two ways:
   badge and ``project`` an output card.
 
 Both are pure functions of a ``Plan`` -- siloed from the cores/executor. The thin
-``Expr.wireframe()`` / ``Expr.explain_tree()`` methods just call in here.
+``Expr.wireframe()`` / ``Expr.explain()`` methods just call in here.
 """
 
 from __future__ import annotations

@@ -40,7 +40,7 @@ OPERATORS = frozenset({"eq", "ne", "lt", "le", "gt", "ge", "and", "or", "not"})
 FUNCTIONS = frozenset({"is_empty", "is_ok"})
 
 #: op name -> its Python symbol (so ``describe`` is a parseable expression, and
-#: ``from_explain`` reads it back). ``not`` is the unary ``~`` prefix.
+#: ``from_describe`` reads it back). ``not`` is the unary ``~`` prefix.
 _OP_SYM = {
     "eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">=",
     "and": "&", "or": "|", "not": "~",
@@ -51,7 +51,7 @@ _CTX = "_"
 
 def _url_from_source(source: dict[str, Any]) -> str:
     """Reconstruct the seed URL from a ``reference(url)`` root's source spec, so
-    ``describe`` can render (and ``from_explain`` re-read) it as ``reference("url")``.
+    ``describe`` can render (and ``from_describe`` re-read) it as ``reference("url")``.
     Pure string work -- the plan stays core-agnostic."""
     from urllib.parse import urlencode, urlunsplit
 
@@ -122,7 +122,7 @@ class Plan(BaseModel):
 
     def describe(self) -> str:
         """A clean, canonical rendering of the chain as a Python-like expression --
-        readable for logs/the demo, and **round-trippable**: ``from_explain`` parses
+        readable for logs/the demo, and **round-trippable**: ``from_describe`` parses
         this back into the same plan. Roots render as ``reference("url")`` (sourced)
         or the type name (``Document``/``Reference``/…), operators as their symbols
         (``==`` / ``&`` / ``~`` …), so the whole thing reads as the ``wq`` chain that

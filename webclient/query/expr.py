@@ -162,18 +162,19 @@ class Expr:
         return self._plan.to_blob()
 
     def explain(self) -> str:
-        """A readable one-line rendering of the recorded chain (pretty-print);
-        round-trippable via :func:`from_explain`. For the SQL-EXPLAIN-style
-        indented step tree, use :meth:`explain_tree`."""
+        """A SQL-EXPLAIN-style indented step tree of the recorded plan -- one op per line
+        with its key args + data flow (the visualization; see :mod:`webclient.query.viz`).
+        For the one-line, round-trippable serialization form use :meth:`describe`; for a
+        picture, :meth:`wireframe`."""
+        from .viz import explain as _explain
+
+        return _explain(self._plan)
+
+    def describe(self) -> str:
+        """A readable ONE-LINE rendering of the recorded chain -- the serialization/round-trip
+        form (the inverse of :func:`from_describe`; distinct from the visual :meth:`explain`
+        and the portable :meth:`to_blob`)."""
         return self._plan.describe()
-
-    def explain_tree(self) -> str:
-        """A SQL-EXPLAIN-style indented step tree of the recorded plan (one op per
-        line with its key args + data flow) -- richer than the one-line
-        :meth:`explain`. Read-only (see :mod:`webclient.query.viz`)."""
-        from .viz import explain as _explain_tree
-
-        return _explain_tree(self._plan)
 
     def wireframe(self) -> str:
         """A self-contained HTML wireframe of the recorded plan (inline CSS/SVG,
@@ -228,12 +229,12 @@ def from_plan(plan: Plan | dict[str, Any] | str, client: Any = None) -> Expr:
 def from_blob(blob: str, client: Any = None) -> Expr:
     """Rebuild an ``Expr`` from a :meth:`Plan.to_blob` string, validated -- the
     LLM-authoring path: write a plan, encode it to a blob, rebuild + validate +
-    (via ``expr.explain()``) pretty-print it before running."""
+    (via ``expr.describe()``) pretty-print it before running."""
     return from_plan(blob, client)
 
 
 # --------------------------------------------------------------------------- #
-# from_explain: parse the readable ``describe()`` form back into a plan, so an
+# from_describe: parse the readable ``describe()`` form back into a plan, so an
 # expression round-trips through its human-readable rendering (not only the blob).
 # --------------------------------------------------------------------------- #
 
@@ -325,9 +326,9 @@ def _call_plan(node: "ast.Call") -> Plan:
     raise ValueError("unsupported call in plan expression")
 
 
-def from_explain(text: str, client: Any = None) -> Expr:
-    """Rebuild an ``Expr`` from the readable :meth:`Expr.explain` / :meth:`Plan.describe`
-    form -- the inverse of ``explain``, so an expression round-trips through its
+def from_describe(text: str, client: Any = None) -> Expr:
+    """Rebuild an ``Expr`` from the readable one-line :meth:`Expr.describe` / :meth:`Plan.describe`
+    form -- the inverse of ``describe``, so an expression round-trips through its
     human-readable rendering as well as through :meth:`to_blob`. Parses the text as a
     Python expression (``ast``) and translates it into a validated plan. (URL-only for
     a ``reference(url)`` root -- header/cookie specs need the lossless blob.)"""
@@ -348,6 +349,6 @@ __all__ = [
     "lazy_root",
     "from_plan",
     "from_blob",
-    "from_explain",
+    "from_describe",
     "to_arg",
 ]

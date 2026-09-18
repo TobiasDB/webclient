@@ -1852,7 +1852,7 @@ def _artifact_from(
     exe = _executable_query(expr, candidate_url, resolve)  # self-contained + runnable
     art = QueryArtifact(
         blob=exe.to_blob(),
-        describe=exe.explain(),
+        describe=exe.describe(),
         plan=exe._plan.model_dump(mode="json"),
         tested=tested,
         complete=bool(tested and good and not missing),  # every required leaf populated
@@ -1965,7 +1965,7 @@ def write_query(
         follow_up = (
             "That query did not extract the dataset. Produce a MATERIALLY DIFFERENT query --"
             " change the .select_all(...) RECORD selector to a more semantic anchor, don't just"
-            f" tweak the fields.\n\nYour previous query was:\n{expr.explain()}\n\n"
+            f" tweak the fields.\n\nYour previous query was:\n{expr.describe()}\n\n"
             f"{_content_hint(expr, rows, brief, doc)}"
         )
     if best is None:  # every attempt failed to author a usable query -- say so loudly

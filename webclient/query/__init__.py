@@ -19,7 +19,7 @@ from .executor import (
     fan_out_stream,
     truthy,
 )
-from .expr import Expr, from_explain, from_plan, lazy, lazy_root, to_arg
+from .expr import Expr, from_describe, from_plan, lazy, lazy_root, to_arg
 from .plan import Arg, Plan, Step
 
 __all__ = [
@@ -28,7 +28,7 @@ __all__ = [
     "lazy",
     "lazy_root",
     "from_plan",
-    "from_explain",
+    "from_describe",
     "to_arg",
     # plan IR
     "Plan",
