@@ -32,7 +32,7 @@ class FlagsBacking(Backing):
 
     provides = frozenset(
         {"flags", "spa", "anti_bot_present", "anti_bot_triggered", "login_present",
-         "login_required", "pagination", "forms", "buttons", "shadow_dom", "iframe",
+         "login_required", "pagination", "tabbed", "forms", "buttons", "shadow_dom", "iframe",
          "large_document", "framework", "xhr_endpoints"}
     )
     gate = "ok"
@@ -88,6 +88,12 @@ class FlagsBacking(Backing):
         """The dataset spans multiple pages. ``value`` notes the next-page pattern."""
         return self._flags(core)["pagination"]
 
+    def tabbed(self, core: "Document") -> Flag:
+        """The page splits content across TABS on the SAME page (Upcoming vs Past, year tabs,
+        categories) -- distinct from pagination (another page of the same list). A dataset can
+        live across several tabs, and one tab may be the default/visible one."""
+        return self._flags(core)["tabbed"]
+
     def forms(self, core: "Document") -> Flag:
         """Interactive forms on the page. ``value`` is the form list (method / action
         / field names)."""
@@ -122,7 +128,7 @@ class FlagsBacking(Backing):
         "what is notable about this page"."""
         order = (
             "anti_bot_triggered", "login_required", "spa", "shadow_dom", "iframe",
-            "anti_bot_present", "login_present", "pagination", "forms", "buttons",
+            "anti_bot_present", "login_present", "pagination", "tabbed", "forms", "buttons",
         )
         got = self._flags(core)
         return [got[name] for name in order if got[name].present]

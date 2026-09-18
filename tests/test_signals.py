@@ -48,6 +48,22 @@ def test_iframe_and_shadow_dom_flags_from_the_static_tree():
     assert got["shadow_dom"].signals[0].stage == "static"
 
 
+def test_tabbed_flag_fires_on_tabs_but_not_on_a_plain_table():
+    # same-page tab controls (Upcoming/Past, year tabs) -> the tabbed flag; distinct from
+    # pagination. A plain <table> must NOT trip it (avoid matching the substring "table").
+    tabs = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {},
+        b'<div role="tablist"><button role="tab">Upcoming</button>'
+        b'<button role="tab">Past</button></div><div role="tabpanel"></div>',
+    ))
+    assert tabs["tabbed"].present and tabs["tabbed"].confidence >= 0.6
+    plain = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {},
+        b'<table class="data-table"><tr><td>x</td></tr></table>',
+    ))
+    assert not plain["tabbed"].present
+
+
 def test_caas_content_service_marker_fires_spa_so_auto_renders():
     # a page whose records are fetched by a content-service widget (e.g. Adobe Milo /
     # a CaaS block) leaves only a shell in the served HTML; the static marker fires spa

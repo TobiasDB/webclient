@@ -229,6 +229,32 @@ def _numbered_sequence(ctx: Context) -> Hit | None:
     return Hit(0.6, "a numbered page sequence") if len(nums) >= 3 else None
 
 
+# -- tabbed (tree) -- same page, content split behind TAB controls ------------
+# distinct from pagination (more of the SAME list, another page): tabs show DIFFERENT
+# sections/slices on the one page (Upcoming vs Past events, year tabs, categories).
+
+flag("tabbed")
+
+
+@detector(flag="tabbed", name="aria_tabs", stage="static")
+def _aria_tabs(ctx: Context) -> Hit | None:
+    if ctx.tree is not None and ctx.tree.cssselect(
+        '[role="tablist"], [role="tab"], [role="tabpanel"]'
+    ):
+        return Hit(0.9, "ARIA tab roles (tablist / tab / tabpanel)")
+    return None
+
+
+@detector(flag="tabbed", name="tab_widget", stage="static")
+def _tab_widget(ctx: Context) -> Hit | None:
+    # conservative selectors -- avoid bare [class*="tab"] (it matches "table")
+    if ctx.tree is not None and ctx.tree.cssselect(
+        '[data-tab], [data-toggle="tab"], [class*="nav-tab"], .tab-pane, .tabbed, [class*="tab-list"]'
+    ):
+        return Hit(0.6, "a tab widget (nav-tabs / tab-pane / data-tab)")
+    return None
+
+
 # -- forms (tree) -------------------------------------------------------------
 
 

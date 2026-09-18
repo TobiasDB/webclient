@@ -390,6 +390,7 @@ class QueryArtifact(BaseModel):
 
     blob: str  # the portable lazy-query blob (rebuildable with from_blob)
     describe: str  # a readable one-line rendering of the chain
+    explain: str = ""  # the SQL-EXPLAIN-style step tree (computed at authoring, before testing)
     plan: dict[str, Any] = {}  # the plan dict (from_plan-loadable; the wire form)
     tested: bool = False  # did the EXTRACTION run against the fetched source without error?
     complete: bool = False  # tested + rows have content + every REQUIRED field populated
@@ -579,11 +580,15 @@ def _summarize(result: OnboardingResult) -> None:
     if result.query is not None:
         q = result.query
         lines.append(f"  query:     {q.describe}")
+        if q.explain:  # the visual step tree of the (valid) query
+            lines.append("  explain:")
+            lines += [f"    {ln}" for ln in q.explain.splitlines()]
         lines.append(f"  tested:    {'✓' if q.tested else '✗'}  {q.row_count} row(s)")
         if q.timeliness:  # the TIMELINESS flag: is the newest extracted row recent? (a flag, not a gate)
+            tabbed = ev is not None and "tabbed" in (ev.flags or {})
             hint = ("  ← the current period may be behind a tab/filter/page"
                     if q.stale and ev is not None
-                    and (ev.has_filters or ev.has_pagination or ev.interactive) else "")
+                    and (tabbed or ev.has_filters or ev.has_pagination or ev.interactive) else "")
             lines.append(f"  timeliness:{' ⚠️ STALE —' if q.stale else ' ✓'} {q.timeliness}{hint}")
         lines.append("  sample:")
         lines += _render_table(q.sample)
@@ -1703,7 +1708,8 @@ def _test_query(expr: Any, doc: Any, *, timeout: float = _QUERY_TEST_TIMEOUT) ->
             async def _bounded() -> Any:
                 return await asyncio.wait_for(expr.acollect(doc), timeout=timeout)
 
-            result = loop().run(_bounded())
+            engine: Any = loop()
+            result = engine.run(_bounded())
         else:  # no engine loop (an unbound doc) -- fall back to the plain sync collect
             result = expr.collect(doc)
     except (asyncio.TimeoutError, TimeoutError):
@@ -1928,9 +1934,14 @@ def _artifact_from(
     missing = _empty_required_fields(good, brief)  # required leaves empty on every row
     tnote, stale = _timeliness(good, brief)  # over ALL rows; a FLAG, never a ship blocker
     exe = _executable_query(expr, candidate_url, resolve)  # self-contained + runnable
+    try:  # the visual step tree, from the VALID parsed plan (before/independent of testing)
+        explain = exe.explain()
+    except Exception:  # noqa: BLE001 - never let rendering the explain break authoring
+        explain = ""
     art = QueryArtifact(
         blob=exe.to_blob(),
         describe=exe.describe(),
+        explain=explain,
         plan=exe._plan.model_dump(mode="json"),
         tested=tested,
         complete=bool(tested and good and not missing),  # every required leaf populated
