@@ -57,6 +57,10 @@ class NetworkEvent(Event):
     status_code: int | None = None
     body: bytes | None = None
     resource_type: str | None = None  # browser sub-request kind: xhr/fetch/document/...
+    method: str | None = None  # the HTTP method (GET/POST/...), for the correlation request list
+    index: int | None = None  # 1-based COMPLETION order among xhr/fetch (the phase counter the
+    # DOM stamps key to); None for a non-correlated request
+    t_s: float | None = None  # seconds since the FIRST request (relative float), for the timeline
 
 
 class NavigationEvent(NetworkEvent):

@@ -126,6 +126,11 @@ class PageResult:
     #: DOM-mutation records the page accumulated during the initial load+settle (the
     #: drained observer buffer) -- how the page rewrote its own DOM after navigation.
     mutations: list[dict[str, Any]] = field(default_factory=list)
+    #: the correlation substrate (see core/document/correlate.py): the append-only XHR
+    #: timeline ({index, method, url, t}) and the SEPARATE per-node phase stamp stream
+    #: ({node, xhr, t}). Emitted apart from ``mutations`` so nothing overwrites a phase.
+    xhr: list[dict[str, Any]] = field(default_factory=list)
+    stamps: list[dict[str, Any]] = field(default_factory=list)
     #: the settled page's totals (``text`` chars, ``nodes``) -- the denominators for
     #: "what fraction of the content was injected after load".
     dom_stats: dict[str, Any] = field(default_factory=dict)
@@ -293,8 +298,10 @@ class BrowserClient(Client):
         for s in scripts:  # drain the load-time observer buffer -> result.mutations
             if s.phase == "drain":
                 drained = await page.evaluate(s.source)
-                if isinstance(drained, dict):  # {muts, text, nodes, dclText}
+                if isinstance(drained, dict):  # {muts, stamps, xhr, text, nodes, dclText}
                     result.mutations.extend(drained.get("muts", []))
+                    result.stamps.extend(drained.get("stamps", []))
+                    result.xhr = list(drained.get("xhr", []))  # cumulative timeline (replace)
                     result.dom_stats = {
                         "text": drained.get("text", 0),
                         "nodes": drained.get("nodes", 0),

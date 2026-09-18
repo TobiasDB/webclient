@@ -16,6 +16,7 @@ from .models import Element
 
 if TYPE_CHECKING:
     from . import Document
+    from .correlate import Correlation
 
 _HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 _SKIP = {"script", "style"}
@@ -28,6 +29,15 @@ _ASCII_LOWER = "abcdefghijklmnopqrstuvwxyz"
 
 def _norm(text: str) -> str:
     return " ".join(text.split())
+
+
+#: our internal correlation stamps (data-wc-node / data-wc-*): never shown in the skeleton,
+#: never a selector, and stripped from any HTML we hand back as output.
+_WC_ATTR = re.compile(r'\s+data-wc-[\w-]+="[^"]*"')
+
+
+def _strip_wc_attrs(html_text: str) -> str:
+    return _WC_ATTR.sub("", html_text)
 
 
 def _clean_href(value: "str | None") -> str:
@@ -351,6 +361,27 @@ def _xhr_endpoints(core: "Document") -> "list[str]":
     return out
 
 
+def _correlation(core: "Document") -> "Correlation | None":
+    """Build the XHR->DOM :class:`Correlation` for this document from its captured events
+    + phase stamps (the cheap :class:`OrderingCorrelator`). ``None`` when there is nothing to
+    correlate (a static document, or a browser render that issued no XHR)."""
+    from ...models import DOMUpdateEvent, NetworkEvent
+    from .correlate import OrderingCorrelator
+
+    net = [e for e in core._events if isinstance(e, NetworkEvent) and e.index is not None]
+    stamps = getattr(core, "_stamps", []) or []
+    if not net and not stamps:
+        return None
+    dom = [
+        DOMUpdateEvent(
+            node_id=str(s.get("node") or ""),
+            detail={"xhr_index": s.get("xhr", 0), "t_s": s.get("t")},
+        )
+        for s in stamps
+    ]
+    return OrderingCorrelator().correlate(net, dom)
+
+
 def _static_sig_set(static_html: "bytes | None") -> "frozenset[str] | None":
     """The set of ``_selector_sig`` values present in the STATIC (pre-JS) HTML, used
     to mark rendered nodes as initial vs injected. ``None`` if there is no static
@@ -429,6 +460,7 @@ def _skeleton(
     drop_chrome: bool = False,
     static_html: "bytes | None" = None,
     xhr_endpoints: "list[str] | None" = None,
+    correlation: "Correlation | None" = None,
 ) -> str:
     """A token-lean DOM skeleton: an indented outline of HTML open-tag signatures
     with structural noise (script/style/svg/meta/comments/…) removed and a short
@@ -455,6 +487,15 @@ def _skeleton(
         if static_sigs is None:
             return ""
         return "" if _selector_sig(el) in static_sigs else inject_tag
+
+    def phase_note(el: Any) -> str:
+        # which XHR request(s) this node's content followed (the correlation stamp) --
+        # an ANNOTATION, never a selector; the data-wc-node attr itself is never shown.
+        if correlation is None:
+            return ""
+        node = el.get("data-wc-node") if hasattr(el, "get") else None
+        cands = correlation.candidates_for(node) if node else []
+        return f"  ← after [{', '.join(str(c) for c in cands)}]" if cands else ""
 
     def walk(el: Any, depth: int) -> None:
         if depth > max_depth:
@@ -487,7 +528,9 @@ def _skeleton(
                 f'  "{text}"' if text else ""
             )
             suffix = f" ×{count}" if count > 1 else ""
-            lines.append("  " * depth + _selector_sig(child) + origin(child) + suffix + hint)
+            lines.append(
+                "  " * depth + _selector_sig(child) + origin(child) + phase_note(child) + suffix + hint
+            )
             walk(child, depth + 1)  # the representative's structure (all N share it)
             i = j
             shown += 1
@@ -500,7 +543,15 @@ def _skeleton(
             leg += ' ×N=N identical siblings collapsed;'
         if static_sigs is not None:
             leg += "  [xhr]/[js]=client-injected (unmarked=server-initial)"
+        if correlation is not None and correlation.requests:
+            leg += '  "← after [n]"=this content followed request [n] below'
         header.append(leg)
+    if correlation is not None and correlation.requests:
+        header.append("# XHR/fetch requests (completion order, seconds since the first):")
+        for r in correlation.requests[:12]:
+            header.append(f"#  [{r.index}] {r.method} {r.url}  {r.t_s:.2f}s")
+        if len(correlation.requests) > 12:
+            header.append(f"#  … (+{len(correlation.requests) - 12} more)")
     if xhr_endpoints:
         shown_ep = xhr_endpoints[:8]
         more = f" (+{len(xhr_endpoints) - 8} more)" if len(xhr_endpoints) > 8 else ""
@@ -730,6 +781,7 @@ class HtmlBacking(Backing):
         APIs are listed -- so the LLM sees what is server-initial vs client-loaded."""
         static_html = core._static_html if annotate_origin else None
         xhr = _xhr_endpoints(core) if annotate_origin else None
+        correlation = _correlation(core) if annotate_origin else None
         return _skeleton(
             self._tree(core),
             max_lines=max_lines,
@@ -741,6 +793,7 @@ class HtmlBacking(Backing):
             drop_chrome=drop_chrome,
             static_html=static_html,
             xhr_endpoints=xhr,
+            correlation=correlation,
         )
 
     def applies(self, core: "Document") -> bool:
@@ -766,8 +819,9 @@ class HtmlBacking(Backing):
             if core._element is not None:  # a selected element: serialise it on demand
                 from lxml import html as _lh
 
-                return _lh.tostring(core._element, encoding="unicode")
-            return _html_text(core, core.content or b"")  # graceful on a bogus charset
+                return _strip_wc_attrs(_lh.tostring(core._element, encoding="unicode"))
+            # graceful on a bogus charset; strip our internal correlation stamps from output
+            return _strip_wc_attrs(_html_text(core, core.content or b""))
         root = self._tree(core)
         if format == "links":
             base = core.final_url or core.url

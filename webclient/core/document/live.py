@@ -34,6 +34,57 @@ INIT_JS = """(() => {
   if (window.__wc_installed) return;
   window.__wc_installed = true;
   window.__wc_mutations = [];
+  // --- correlation substrate: an append-only XHR timeline + a SEPARATE, append-only
+  // stamp stream (never overwritten, even between drains). Node identity is a set-once
+  // data-wc-node attribute (an internal stamp -- stripped from skeleton/output, never a
+  // selector). See webclient/core/document/correlate.py.
+  window.__wc_xhr = window.__wc_xhr || [];         // {index, method, url, t} (t = secs since first)
+  window.__wc_xhr_index = window.__wc_xhr_index || 0;  // COMPLETED xhr/fetch count (the phase)
+  window.__wc_node_seq = window.__wc_node_seq || 0;    // set-once node-identity counter
+  window.__wc_t0 = (typeof window.__wc_t0 === 'number') ? window.__wc_t0 : null;
+  window.__wc_stamps = window.__wc_stamps || [];   // {node, xhr, t} -- emitted SEPARATELY from muts
+  const relSecs = () => window.__wc_t0 == null ? 0 : (performance.now() - window.__wc_t0) / 1000;
+  const startReq = () => { if (window.__wc_t0 == null) window.__wc_t0 = performance.now(); };
+  const doneReq = (method, url) => {
+    window.__wc_xhr_index += 1;
+    if (window.__wc_xhr.length < 500)
+      window.__wc_xhr.push({index: window.__wc_xhr_index, method: (method || 'GET'),
+                            url: String(url || ''), t: relSecs()});
+  };
+  const stamp = (el) => {  // set-once identity; return the stamp id (null for non-elements)
+    if (!el || el.nodeType !== 1) return null;
+    if (!el.hasAttribute('data-wc-node'))
+      el.setAttribute('data-wc-node', 'n' + (++window.__wc_node_seq));
+    return el.getAttribute('data-wc-node');
+  };
+  const emitStamp = (el) => {  // append-only -> a re-render appends, never overwrites
+    const node = stamp(el);
+    if (node && window.__wc_stamps.length < 8000)
+      window.__wc_stamps.push({node: node, xhr: window.__wc_xhr_index, t: relSecs()});
+  };
+  // wrap fetch + XMLHttpRequest so completion bumps the phase counter + records the request.
+  const _fetch = window.fetch;
+  if (_fetch && !_fetch.__wc) {
+    const w = function(input, init) {
+      const url = (typeof input === 'string') ? input : (input && input.url) || '';
+      const method = (init && init.method) || (input && input.method) || 'GET';
+      startReq();
+      return _fetch.apply(this, arguments).then(
+        (r) => { doneReq(method, url); return r; },
+        (e) => { doneReq(method, url); throw e; });
+    };
+    w.__wc = true; window.fetch = w;
+  }
+  const _open = XMLHttpRequest.prototype.open, _send = XMLHttpRequest.prototype.send;
+  if (_open && !_open.__wc) {
+    XMLHttpRequest.prototype.open = function(m, u) { this.__wc_m = m; this.__wc_u = u; return _open.apply(this, arguments); };
+    XMLHttpRequest.prototype.open.__wc = true;
+    XMLHttpRequest.prototype.send = function() {
+      startReq();
+      try { this.addEventListener('loadend', () => doneReq(this.__wc_m, this.__wc_u)); } catch (e) {}
+      return _send.apply(this, arguments);
+    };
+  }
   const MAIN = 'MAIN,ARTICLE,SECTION';
   new MutationObserver((muts) => {
     for (const m of muts) {
@@ -46,6 +97,10 @@ INIT_JS = """(() => {
       }
       window.__wc_mutations.push({type: m.type, ids: ids, inMain: inMain,
         added: m.addedNodes.length, removed: m.removedNodes.length});
+      // emit phase stamps SEPARATELY: the mutated target + any added element nodes, so a
+      // record region is attributed to the request(s) that had completed by this mutation.
+      emitStamp(m.target);
+      for (const an of m.addedNodes) emitStamp(an);
     }
   }).observe(document,
              {childList: true, subtree: true, attributes: true, characterData: true});
@@ -57,6 +112,7 @@ INIT_JS = """(() => {
   // whose text is replaced rather than grown.)
   const mark = () => {
     window.__wc_mutations = [];
+    window.__wc_stamps = [];  // discard pre-DCL (parse/static) stamps, like the parse mutations
     window.__wc_dcl_text = document.body ? (document.body.innerText || '').length : 0;
   };
   if (document.readyState === 'loading') {
@@ -106,8 +162,10 @@ INIT_JS = """(() => {
 #: (see ``clients.browser.open``).
 DRAIN_JS = """() => {
   const m = window.__wc_mutations || []; window.__wc_mutations = [];
+  const s = window.__wc_stamps || []; window.__wc_stamps = [];  // the append-only phase stream
   const t = document.body ? (document.body.innerText || '').length : 0;
-  return {muts: m, text: t, nodes: document.getElementsByTagName('*').length,
+  return {muts: m, stamps: s, xhr: (window.__wc_xhr || []),
+          text: t, nodes: document.getElementsByTagName('*').length,
           dclText: window.__wc_dcl_text || 0};
 }"""
 
@@ -158,6 +216,11 @@ async def drain(doc: "Document") -> None:
     muts = result.get("muts", []) if isinstance(result, dict) else result
     for r in muts:
         doc._events.append(_mutation_event(r, doc))
+    if isinstance(result, dict):  # refresh the correlation substrate after the interaction
+        doc._stamps.extend(result.get("stamps", []))
+        # the xhr timeline is cumulative -- replace this doc's correlated NetworkEvents
+        doc._events = [e for e in doc._events if not (isinstance(e, NetworkEvent) and e.index is not None)]
+        doc._events.extend(xhr_events(result.get("xhr", []), doc))
     doc.content = (await doc._page.content()).encode()  # keep content current
     doc._tree = None  # invalidate the cached lxml parse of the old content
 
@@ -178,6 +241,29 @@ def network_event(method: str, url: str, resource_type: str, doc: "Document") ->
         resource_type=resource_type,
         document_id=doc.name,
     )
+
+
+def xhr_events(xhr: "list[dict[str, Any]]", doc: "Document") -> "list[NetworkEvent]":
+    """The correlated XHR timeline (from the fetch/XHR wrapper) -> NetworkEvents carrying a
+    completion ``index`` + relative ``t_s``, the raw material the :class:`Correlator` reads."""
+    from ..reference import from_url
+
+    out: list[NetworkEvent] = []
+    for r in xhr:
+        method = str(r.get("method") or "GET")
+        url = str(r.get("url") or "")
+        raw_index = r.get("index")
+        out.append(
+            NetworkEvent(
+                request=from_url(url, cast(Any, method.lower())),
+                resource_type="xhr",
+                method=method,
+                index=int(raw_index) if raw_index is not None else None,
+                t_s=float(r.get("t") or 0.0),
+                document_id=doc.name,
+            )
+        )
+    return out
 
 
 def _html() -> "HtmlBacking":
@@ -228,6 +314,10 @@ class LiveBacking(Backing):
         # page composed after navigation, and where.
         for r in getattr(result, "mutations", []):
             core._events.append(_mutation_event(r, core, phase="load"))
+        # correlation substrate: the XHR timeline (as indexed NetworkEvents) + the
+        # append-only phase stamps (kept raw on the doc; the Correlator builds from them).
+        core._events.extend(xhr_events(getattr(result, "xhr", []), core))
+        core._stamps.extend(getattr(result, "stamps", []))
         core._render_stats = getattr(result, "dom_stats", {}) or {}
 
     def _loop(self, core: "Document") -> "EngineLoop":
