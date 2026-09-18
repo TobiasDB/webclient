@@ -21,6 +21,12 @@ from .base import Client, ClientFactory
 
 Phase = Literal["init", "load", "inline", "drain"]
 
+#: bounds on response-body capture (content-matching correlation) -- keep memory + time capped.
+_BODY_MAX_BYTES = 256 * 1024  # per body
+_BODY_MAX_COUNT = 100  # total bodies kept
+#: only text-ish payloads are worth tokenising for value matching (skip images/fonts/binaries).
+_BODY_CONTENT_TYPES = ("json", "text", "javascript", "xml", "csv", "html")
+
 
 class WaitEvent(Enum):
     """The DOM/navigation milestone ``open`` waits for after navigating -- the
@@ -131,6 +137,10 @@ class PageResult:
     #: ({node, xhr, t}). Emitted apart from ``mutations`` so nothing overwrites a phase.
     xhr: list[dict[str, Any]] = field(default_factory=list)
     stamps: list[dict[str, Any]] = field(default_factory=list)
+    #: captured XHR/fetch RESPONSE BODIES, url -> decoded text (bounded per-body + count,
+    #: text/JSON only), for the content-matching :class:`ContentCorrelator`. Populated by the
+    #: ``response`` listener; the ordering correlator ignores it. Best-effort -- may be empty.
+    bodies: dict[str, str] = field(default_factory=dict)
     #: the settled page's totals (``text`` chars, ``nodes``) -- the denominators for
     #: "what fraction of the content was injected after load".
     dom_stats: dict[str, Any] = field(default_factory=dict)
@@ -243,6 +253,7 @@ class BrowserClient(Client):
         # console/network events (which feed SPA detection).
         console: list[tuple[str, str]] = []
         network: list[tuple[str, str, str]] = []
+        responses: list[Any] = []  # XHR/fetch Response objects -- bodies read after settle
 
         def _on_console(m: Any) -> None:
             console.append((m.type, m.text))
@@ -250,18 +261,50 @@ class BrowserClient(Client):
         def _on_request(r: Any) -> None:
             network.append((r.method, r.url, r.resource_type))
 
+        def _on_response(r: Any) -> None:
+            # collect the Response objects synchronously; bodies are read (awaited) after the
+            # wait, so the handler stays cheap and there is no async-listener scheduling race.
+            try:
+                if r.request.resource_type in ("xhr", "fetch") and len(responses) < _BODY_MAX_COUNT:
+                    responses.append(r)
+            except Exception:  # noqa: BLE001 - a torn-down response: just skip it
+                pass
+
         page.on("console", _on_console)
         page.on("request", _on_request)
+        page.on("response", _on_response)
         try:
-            return await self._open_body(page, url, wait, scripts, replay, console, network)
+            return await self._open_body(
+                page, url, wait, scripts, replay, console, network, responses
+            )
         finally:  # ALWAYS remove the listeners -- a mid-open failure must not leave them on a
             # reused page (they would survive and double-count console/network into SPA detection).
             page.remove_listener("console", _on_console)
             page.remove_listener("request", _on_request)
+            page.remove_listener("response", _on_response)
+
+    async def _read_bodies(self, responses: list[Any]) -> dict[str, str]:
+        """Read the captured XHR/fetch response bodies (url -> text), bounded and text/JSON
+        only, swallowing every error -- a body may be gone, binary, or unreadable, and that
+        just means no content match for that request (the ordering baseline still applies)."""
+        out: dict[str, str] = {}
+        for r in responses:
+            try:
+                ctype = (r.headers or {}).get("content-type", "").lower()
+                if not any(t in ctype for t in _BODY_CONTENT_TYPES):
+                    continue
+                text = await r.text()
+                if text:
+                    out[r.url] = text[:_BODY_MAX_BYTES]
+                if len(out) >= _BODY_MAX_COUNT:
+                    break
+            except Exception:  # noqa: BLE001 - unreadable body: skip, keep the rest
+                continue
+        return out
 
     async def _open_body(
         self, page: Any, url: str, wait: Any, scripts: Any, replay: Any,
-        console: list[Any], network: list[Any],
+        console: list[Any], network: list[Any], responses: list[Any],
     ) -> "PageResult":
         # the main-document Response -- the REAL status/headers of the navigation
         # (Playwright hands it back from ``goto``). ``None`` for a non-HTTP nav.
@@ -294,6 +337,7 @@ class BrowserClient(Client):
             headers=headers,
             console=list(console),
             network=list(network),
+            bodies=await self._read_bodies(responses),  # XHR bodies for content correlation
         )
         for s in scripts:  # drain the load-time observer buffer -> result.mutations
             if s.phase == "drain":
