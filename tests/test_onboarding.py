@@ -253,6 +253,40 @@ def test_write_query_keeps_the_page_in_context_across_retries(httpserver):
     assert "did not extract" in turns[1] and len(turns[1]) < len(turns[0]) // 2
 
 
+def test_write_query_rejects_resolve_on_a_value_and_records_the_attempt(httpserver):
+    # the model sometimes calls .resolve() on .attr("text") (a value, not a link). It's caught
+    # with a targeted message, and the rejection is recorded on the returned artifact's trail.
+    httpserver.expect_request("/p").respond_with_data(
+        '<main><div class="r"><a href="/d/1">Item</a></div></main>', content_type="text/html",
+    )
+    follow_ups: list[str] = []
+    replies = iter([
+        # 1st: resolves the TEXT (invalid) -> rejected with the resolve feedback
+        'wq.doc.select_all(".r").extract(name=wq.doc.select("a").attr("text").resolve()'
+        '.select(".x").attr("text")).project()',
+        # 2nd: a plain valid query
+        'wq.doc.select_all(".r").extract(name=wq.doc.select("a").attr("text")).project()',
+    ])
+
+    class _Chat:
+        def send(self, text: str) -> str:
+            follow_ups.append(text)
+            return next(replies)
+
+    class _ChatLLM:
+        def conversation(self) -> "_Chat":
+            return _Chat()
+
+    from webclient.pipelines.onboarding import write_query
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/p"), Brief(description="rows", fields=["name"]),
+                          wc=wc, llm=_ChatLLM(), browser="never", retries=2)
+    assert art is not None and art.complete
+    assert ".resolve() follows a LINK" in follow_ups[1]  # the targeted feedback was sent
+    assert art.attempts and "resolve() called on a value" in art.attempts[0]  # recorded in the trail
+
+
 def test_recency_guidance_feeds_the_evaluator_read_into_the_query_prompt():
     # evaluate_candidate identifies the sort order + where the most recent records are;
     # that hint is injected into the query-writing prompt to assist the first attempt.

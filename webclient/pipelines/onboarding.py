@@ -410,6 +410,9 @@ class QueryArtifact(BaseModel):
     #: blocks a working query from shipping.
     timeliness: str = ""
     stale: bool = False
+    #: why each EARLIER authoring attempt was rejected (one short line each, in order), so the
+    #: onboard output shows the path to this query -- empty when the first attempt succeeded.
+    attempts: list[str] = []
 
 
 class Review(BaseModel):
@@ -584,6 +587,10 @@ def _summarize(result: OnboardingResult) -> None:
             lines.append(f"  timeliness:{' ⚠️ STALE —' if q.stale else ' ✓'} {q.timeliness}{hint}")
         lines.append("  sample:")
         lines += _render_table(q.sample)
+        if q.attempts:  # the rejection trail: why each earlier authoring attempt was rejected
+            lines.append(f"  authoring: {len(q.attempts) + 1} attempt(s); earlier rejections:")
+            for a in q.attempts:
+                lines.append(f"    ✗ {a}")
         # the self-contained query blob on its own line -- executable as is, easy to copy
         lines.append("  query blob (copy; run with `from_blob(blob).collect()`):")
         lines.append(q.blob)
@@ -1938,6 +1945,45 @@ class _Author:
         return self._llm(self._opening if not follow_up else f"{self._opening}\n\n{follow_up}")
 
 
+def _resolve_on_non_link(expr: Any) -> "str | None":
+    """Detect the common model mistake of calling ``.resolve()`` on a VALUE rather than a link
+    (``.attr("text").resolve()`` instead of ``.attr("href").resolve()``). Returns a targeted
+    feedback message, or ``None`` if every resolve follows a link attr. Recurses into nested
+    sub-plans (``extract`` columns, ``when`` branches). ``resolve`` on a root reference /
+    ``reference(col)`` (no preceding attr) is fine."""
+
+    def _msg(name: str) -> str:
+        return (
+            f'You called .resolve() on .attr("{name}") -- but .resolve() follows a LINK, and a '
+            'value/text is not a URL. To READ a value, .attr("text") is the whole answer (do not '
+            'resolve it). To FOLLOW a link, resolve its href: .select("a").attr("href").resolve(). '
+            'Re-write the query.'
+        )
+
+    def scan(steps: "list[Any]") -> "str | None":
+        last_attr: "str | None" = None  # the arg of the most recent attr(...) call, per (sub)plan
+        for i, s in enumerate(steps):
+            if s.kind == "get" and s.name == "attr":
+                nxt = steps[i + 1] if i + 1 < len(steps) else None
+                if nxt is not None and nxt.kind == "call" and nxt.args:
+                    v = nxt.args[0].value
+                    last_attr = v if isinstance(v, str) else None
+            elif s.kind == "get" and s.name == "resolve":
+                if last_attr is not None and last_attr not in ("href", "src", "action"):
+                    return _msg(last_attr)
+                last_attr = None  # a valid resolve on a link (or a root/reference resolve)
+            elif s.kind == "get" and s.name in ("select", "select_all", "reference"):
+                last_attr = None  # a new selection -> the previous attr no longer applies
+            if s.kind == "call":  # recurse into sub-plan args/kwargs (extract cols / when branches)
+                for a in [*s.args, *s.kwargs.values()]:
+                    sub = getattr(a, "plan", None)
+                    if sub is not None and (r := scan(list(sub.steps))) is not None:
+                        return r
+        return None
+
+    return scan(list(getattr(expr._plan, "steps", [])))
+
+
 def _should_retry_for_recency(art: QueryArtifact, attempt: int, tries: int) -> bool:
     """A COMPLETE query whose newest data looks stale is probably scoped to an ARCHIVED
     period (a hidden year tab, an old paginated page). Worth one more try for the most
@@ -1991,9 +2037,14 @@ def write_query(
     bases = [candidate_url, *extra_urls]
     best: QueryArtifact | None = None
     best_complete: QueryArtifact | None = None  # a complete-but-STALE fallback (recency retries)
+    attempts: list[str] = []  # why each rejected attempt was rejected, for the onboard output
     author = _Author(llm, prompt)  # the page rides in the OPENING; retries send only feedback
     follow_up: "str | None" = None
     tries = retries + 1
+
+    def _with_attempts(art: QueryArtifact) -> QueryArtifact:
+        art.attempts = list(attempts)  # attach the rejection trail to the query we return
+        return art
     for attempt in range(tries):
         tag = f"    query {attempt + 1}/{tries}"
         try:
@@ -2006,6 +2057,7 @@ def write_query(
         except Exception as exc:  # noqa: BLE001 - unparsable query code -> retry with feedback
             log.info("%s: reply was not a valid query (%s) — retrying", tag, exc)
             log.debug("      unparseable reply: %.200r", reply.strip())  # the detail, at debug
+            attempts.append(f"attempt {attempt + 1}: not a valid query ({exc})")
             follow_up = ("Your previous reply was not a valid query. Reply with ONLY the query"
                          " code -- a single wq.doc... chain, nothing else.")
             continue
@@ -2014,17 +2066,26 @@ def write_query(
         ops = {s.name for s in expr._plan.steps if s.kind == "get"}
         if not ({"select", "select_all"} & ops):
             log.info("%s: no record selection — retrying", tag)
+            attempts.append(f"attempt {attempt + 1}: no record selection (.select_all missing)")
             follow_up = ("Your previous query had NO selection so it extracts nothing. You MUST"
                          " select the repeating record with .select_all(...), pull each field with"
                          " .extract(col=...), and END with .project(). Re-write it.")
+            continue
+        # a resolve() on a value (attr("text").resolve()) instead of a link -> a clear, targeted fix
+        bad_resolve = _resolve_on_non_link(expr)
+        if bad_resolve is not None:
+            log.info("%s: .resolve() on a non-link attr — retrying", tag)
+            attempts.append(f"attempt {attempt + 1}: .resolve() called on a value, not a link")
+            follow_up = bad_resolve
             continue
         art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases)
         if art.complete:
             if not _should_retry_for_recency(art, attempt, tries):
                 note = f" (STALE flag: {art.timeliness})" if art.stale else ""
                 log.info("%s: ✓ complete%s — %d row(s)", tag, note, art.row_count)
-                return art
+                return _with_attempts(art)
             best_complete = art  # complete but stale: keep it, but push for the most recent data
+            attempts.append(f"attempt {attempt + 1}: complete but stale — {art.timeliness}")
             log.info("%s: complete but STALE — retrying for the most recent data (%s)",
                      tag, art.timeliness)
             follow_up = _recency_follow_up(art)
@@ -2038,9 +2099,10 @@ def write_query(
                 note = f" (STALE flag: {rart.timeliness})" if rart.stale else ""
                 log.info("%s: ✓ complete after auto-repairing a selector%s — %d row(s)",
                          tag, note, rart.row_count)
-                return rart
+                return _with_attempts(rart)
             if rart.complete and rart.stale:  # repaired but stale -> keep as fallback, push recency
                 best_complete = rart
+                attempts.append(f"attempt {attempt + 1}: repaired + complete but stale — {rart.timeliness}")
                 log.info("%s: repaired + complete but STALE — retrying for recent (%s)",
                          tag, rart.timeliness)
                 follow_up = _recency_follow_up(rart)
@@ -2048,7 +2110,9 @@ def write_query(
             art = rart if rart.row_count > art.row_count else art  # keep the better fallback
         best = best or art  # keep the first rebuildable one as a fallback (NOT complete)
         # a concise reason on the console; the full, multi-line diagnostic hint goes to the model.
-        log.info("%s: %s — retrying", tag, _short_fail_reason(expr, rows, brief, doc))
+        reason = _short_fail_reason(expr, rows, brief, doc)
+        attempts.append(f"attempt {attempt + 1}: {reason}")
+        log.info("%s: %s — retrying", tag, reason)
         follow_up = (
             "That query did not extract the dataset. Produce a MATERIALLY DIFFERENT query --"
             " change the .select_all(...) RECORD selector to a more semantic anchor, don't just"
@@ -2059,10 +2123,11 @@ def write_query(
     # one: it's a working query, and staleness is a FLAG for the human review, not a blocker.
     if best_complete is not None:
         log.info("    keeping the complete query with a STALE flag (%s)", best_complete.timeliness)
-        return best_complete
+        return _with_attempts(best_complete)
     if best is None:  # every attempt failed to author a usable query -- say so loudly
         log.warning("    could not author a working query in %d attempt(s)", tries)
-    return best
+        return None
+    return _with_attempts(best)
 
 
 # --------------------------------------------------------------------------- #

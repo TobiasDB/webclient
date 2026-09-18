@@ -157,7 +157,7 @@ wq.doc.select_all(".upcoming .event, .past .event").extract(
 ).project()
 ```
 
-Rules for a split query:
+Rules for the grouped-selector form:
 
 - **Shared fields** use the SAME per-record selector for both sections — each `.select(...)`
   runs *inside* whichever record matched, regardless of which section it came from.
@@ -169,10 +169,40 @@ Rules for a split query:
 - **A section label** (which section a row is from) is not on the record itself; derive it from
   a distinguishing child with `when`:
   `status=wq.when(wq.doc.select(".register", optional=True).is_ok()).then("upcoming").otherwise("past")`.
-- **Differently-shaped sections:** if the records genuinely differ per section (different tags
-  per field), a single grouped selector can't map every field cleanly. Use a grouped field
-  selector where they differ (`.select(".title, h3")`), and keep the fields that only one section
-  has `optional=True`.
+
+**Differently-shaped sections → one `doc.extract`, a sub-list per section.** When the two
+sections have genuinely different markup (different tags/classes per field), a single grouped
+selector can't map every field. Extract each section as its OWN named sub-list from the whole
+document — the query is rooted at `wq.doc` (the page), and each column is a full
+`select_all(...).extract(...).project()`:
+
+```python
+wq.doc.extract(
+    upcoming=wq.doc.select_all(".upcoming .event")
+        .extract(title=wq.doc.select(".title").attr("text"),
+                 register=wq.doc.select("a.register").attr("href")).project(),
+    past=wq.doc.select_all(".past .row")
+        .extract(title=wq.doc.select("h3").attr("text"),
+                 replay=wq.doc.select("a.replay").attr("href")).project(),
+).project()
+```
+
+This yields `{"upcoming": [ …rows… ], "past": [ …rows… ]}` — the two sections kept separate,
+each with its own shape. (An empty section is just `[]`.)
+
+**A section behind a TAB you must click → a `.step` sequence.** If a section isn't in the DOM
+until you interact (a "Past" tab that loads on demand), drive it as a sequence: extract the visible
+section, `.step(...)` to reveal the next, extract that too — the `.extract(...)` calls
+accumulate onto the one held page:
+
+```python
+wq.ref.resolve(browser="always")
+    .extract(upcoming=wq.doc.select_all(".event").extract(title=wq.doc.select(".title").attr("text")).project())
+    .step(wq.doc.click("button[data-tab=past]"))
+    .step(wq.doc.wait_for(".event"))
+    .extract(past=wq.doc.select_all(".event").extract(title=wq.doc.select(".title").attr("text")).project())
+    .project()
+```
 
 ## Writing durable CSS selectors
 
@@ -335,6 +365,11 @@ wq.doc.select_all("li.product").extract(
 Chain another `.resolve()` for a field two pages deep (listing → detail → spec page), and
 end with `.regex(...)` if the value is buried in prose:
 `...attr("href").resolve().select("a.spec").attr("href").resolve().select(".body").regex(r"ID:\s*([A-Z0-9-]+)", group=1)`.
+
+**`.resolve()` follows a LINK — only ever on `.attr("href")` / `.attr("src")` (a Reference).**
+NEVER call `.resolve()` on `.attr("text")` or on a value: text is not a URL, and resolving it
+fails. To *read* a value, `.attr("text")` is the whole answer — stop there. To *follow* a link,
+select the anchor and resolve its `href`: `.select("a").attr("href").resolve()`.
 
 ### 5. Filtering — drop rows with a sold-out badge
 
