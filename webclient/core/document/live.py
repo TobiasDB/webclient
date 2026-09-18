@@ -60,9 +60,14 @@ INIT_JS = """(() => {
   };
   const emitStamp = (el) => {  // append-only -> a re-render appends, never overwrites
     const node = stamp(el);
-    if (node && window.__wc_stamps.length < 8000)
+    if (node && window.__wc_stamps.length < 8000) {
+      // a bounded text snippet of the node -- the content-matching Correlator scores it against
+      // the XHR response bodies. innerText (rendered text) with a textContent fallback; clipped.
+      let txt = '';
+      try { txt = (el.innerText || el.textContent || '').slice(0, 200); } catch (e) {}
       window.__wc_stamps.push({node: node, xhr: window.__wc_xhr_index,
-                               action: window.__wc_action_index, t: relSecs()});
+                               action: window.__wc_action_index, t: relSecs(), text: txt});
+    }
   };
   // wrap fetch + XMLHttpRequest so completion bumps the phase counter + records the request.
   const _fetch = window.fetch;
@@ -222,7 +227,7 @@ async def drain(doc: "Document") -> None:
         doc._stamps.extend(result.get("stamps", []))
         # the xhr timeline is cumulative -- replace this doc's correlated NetworkEvents
         doc._events = [e for e in doc._events if not (isinstance(e, NetworkEvent) and e.index is not None)]
-        doc._events.extend(xhr_events(result.get("xhr", []), doc))
+        doc._events.extend(xhr_events(result.get("xhr", []), doc, doc._xhr_bodies))
     doc.content = (await doc._page.content()).encode()  # keep content current
     doc._tree = None  # invalidate the cached lxml parse of the old content
 
@@ -245,16 +250,24 @@ def network_event(method: str, url: str, resource_type: str, doc: "Document") ->
     )
 
 
-def xhr_events(xhr: "list[dict[str, Any]]", doc: "Document") -> "list[NetworkEvent]":
+def xhr_events(
+    xhr: "list[dict[str, Any]]", doc: "Document", bodies: "dict[str, str] | None" = None
+) -> "list[NetworkEvent]":
     """The correlated XHR timeline (from the fetch/XHR wrapper) -> NetworkEvents carrying a
-    completion ``index`` + relative ``t_s``, the raw material the :class:`Correlator` reads."""
+    completion ``index`` + relative ``t_s``, the raw material the :class:`Correlator` reads.
+
+    ``bodies`` (url -> decoded response text, best-effort from the transport) populates
+    ``NetworkEvent.body`` by URL, so the content-matching :class:`ContentCorrelator` can value-match
+    it against node text. Absent/unmatched -> ``body`` stays ``None`` (the ordering baseline holds)."""
     from ..reference import from_url
 
+    bodies = bodies or {}
     out: list[NetworkEvent] = []
     for r in xhr:
         method = str(r.get("method") or "GET")
         url = str(r.get("url") or "")
         raw_index = r.get("index")
+        text = bodies.get(url)
         out.append(
             NetworkEvent(
                 request=from_url(url, cast(Any, method.lower())),
@@ -262,6 +275,7 @@ def xhr_events(xhr: "list[dict[str, Any]]", doc: "Document") -> "list[NetworkEve
                 method=method,
                 index=int(raw_index) if raw_index is not None else None,
                 t_s=float(r.get("t") or 0.0),
+                body=text.encode("utf-8", "replace") if text is not None else None,
                 document_id=doc.name,
             )
         )
@@ -316,9 +330,12 @@ class LiveBacking(Backing):
         # page composed after navigation, and where.
         for r in getattr(result, "mutations", []):
             core._events.append(_mutation_event(r, core, phase="load"))
-        # correlation substrate: the XHR timeline (as indexed NetworkEvents) + the
-        # append-only phase stamps (kept raw on the doc; the Correlator builds from them).
-        core._events.extend(xhr_events(getattr(result, "xhr", []), core))
+        # correlation substrate: the XHR timeline (as indexed NetworkEvents, bodies attached by
+        # URL for content matching) + the append-only phase stamps (kept raw on the doc; the
+        # Correlator builds from them). Bodies are stashed so a later ``drain`` can reattach them.
+        bodies = dict(getattr(result, "bodies", {}) or {})
+        core._xhr_bodies.update(bodies)
+        core._events.extend(xhr_events(getattr(result, "xhr", []), core, core._xhr_bodies))
         core._stamps.extend(getattr(result, "stamps", []))
         core._render_stats = getattr(result, "dom_stats", {}) or {}
 

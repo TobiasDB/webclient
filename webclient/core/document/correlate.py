@@ -14,6 +14,10 @@ that residue behind the same interface.
 
 from __future__ import annotations
 
+import json
+import math
+import re
+from collections import Counter
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
@@ -38,6 +42,9 @@ class DomPhase(BaseModel):
     action: int | None = None  # the ACTION index that first revealed the node (a .click/.write);
     # None = it appeared without an action (server-static / load-time JS / an XHR)
     t_s: float | None = None  # when the node last mutated (seconds since the first request)
+    confidence: float | None = None  # OPTIONAL: set by a content-matching Correlator when it
+    # NARROWS an ambiguous ordering result -- 0..1, the share of the winning candidate's evidence
+    # (None = never narrowed by content; the ordering baseline leaves it unset)
 
 
 class Correlation(BaseModel):
@@ -164,4 +171,166 @@ class OrderingCorrelator:
         return sorted(out)
 
 
-__all__ = ["XhrRequest", "DomPhase", "Correlation", "Correlator", "OrderingCorrelator"]
+# --------------------------------------------------------------------------- #
+# ContentCorrelator: refine the ordering baseline by response-body value matching
+# --------------------------------------------------------------------------- #
+
+#: closed-class / very common words that are worthless as discriminators (they appear in
+#: almost any body and any DOM text). Kept small -- specificity scoring already ~zeroes
+#: short common words; this just spares a handful of common longer stopwords.
+_STOP = frozenset(
+    "the and for are but not you all any can had her was one our out day get has him his how man "
+    "new now old see two way who boy did its let put say she too use with from this that they them "
+    "then have will your what when your about which their there where would these than been more "
+    "http https www com org net html json data true false null value items item list page name "
+    "type text title href link node".split()
+)
+
+#: alphanumeric word runs, and longer "value" runs that keep the structural punctuation of a
+#: GUID / ISO-date / price / slug / path (so ``550e8400-e29b-41d4`` stays ONE token, not three).
+_WORD = re.compile(r"[a-z0-9]+")
+_VALUE = re.compile(r"[a-z0-9][a-z0-9._:/@%-]{3,}")
+
+
+def _text_tokens(s: str) -> "set[str]":
+    """Tokenise a string the SAME way for a node's text and a body, so a value that appears
+    in both matches. Case-folded; both bare words and punctuation-carrying value runs."""
+    s = s.lower()
+    return set(_WORD.findall(s)) | set(_VALUE.findall(s))
+
+
+def _json_leaves(data: Any, out: "list[str]", budget: int = 20000) -> None:
+    """Every scalar leaf (string / number / bool) of a parsed JSON value, as strings -- the
+    values a rendered node's text is most likely to echo. Bounded so a huge blob can't blow up."""
+    if len(out) >= budget:
+        return
+    if isinstance(data, dict):
+        for v in data.values():
+            _json_leaves(v, out, budget)
+    elif isinstance(data, list):
+        for v in data:
+            _json_leaves(v, out, budget)
+    elif isinstance(data, bool):
+        out.append("true" if data else "false")
+    elif isinstance(data, (str, int, float)):
+        out.append(str(data))
+
+
+def _body_tokens(body: "bytes | None") -> "set[str]":
+    """The token set of a response body: JSON leaf strings/numbers when it parses as JSON,
+    plus generic text tokens over the whole payload (covers non-JSON bodies and the inner
+    words of JSON string values). Empty for a missing body."""
+    if not body:
+        return set()
+    text = body.decode("utf-8", "replace")
+    toks: set[str] = set()
+    try:
+        leaves: list[str] = []
+        _json_leaves(json.loads(text), leaves)
+        for leaf in leaves:
+            toks |= _text_tokens(leaf)
+    except ValueError:
+        pass  # not JSON -- the generic pass below still tokenises it
+    toks |= _text_tokens(text)
+    return toks
+
+
+def _specificity(tok: str) -> float:
+    """How DISCRIMINATING a token is -- rarity/length/entropy. A short common word ≈ 0; a long
+    high-entropy value (GUID / price / ISO-date / long unique slug) scores high. Character
+    Shannon entropy captures "unique-looking"; length and a digit/structure bonus lift real ids.
+    Deliberately monotone and cheap -- it only has to RANK, not calibrate."""
+    n = len(tok)
+    if n < 4 or tok in _STOP:
+        return 0.0
+    counts = Counter(tok)
+    entropy = -sum((c / n) * math.log2(c / n) for c in counts.values())  # bits per char
+    score = (n - 3) * (0.5 + entropy)
+    if any(ch.isdigit() for ch in tok):  # ids / prices / dates discriminate strongly
+        score *= 1.6
+    if any(ch in "-._:/@%" for ch in tok):  # structured value (guid/date/url/slug)
+        score *= 1.3
+    return score
+
+
+class ContentCorrelator:
+    """A drop-in refinement of :class:`OrderingCorrelator`: keep its hard temporal gate, then
+    NARROW the residual ambiguity by matching response-body values against the node's text.
+
+    For each node the ordering baseline left with several candidates, score each candidate by the
+    summed SPECIFICITY of the node-text tokens that appear in THAT candidate's response body -- a
+    common word shared by every body cancels out, so dominance emerges only from rare/high-entropy
+    values (a GUID, a price, an ISO date, a long unique string) that one body uniquely explains.
+    If one candidate clearly dominates (``dominance``x the runner-up and above ``min_score``),
+    narrow to it and record a ``confidence``; otherwise the ambiguity is genuine and PRESERVED.
+    A node the baseline never precedes is never given a new candidate -- the temporal gate holds."""
+
+    def __init__(
+        self, window_s: float = 0.15, *, min_score: float = 6.0, dominance: float = 2.0
+    ) -> None:
+        self._ordering = OrderingCorrelator(window_s)
+        self.min_score = min_score  # a winner must clear this (a lone short-word match ≈ 0)
+        self.dominance = dominance  # ...and beat the runner-up by this ratio, else keep ambiguity
+
+    def correlate(
+        self, network: "list[NetworkEvent]", dom: "list[DOMUpdateEvent]"
+    ) -> Correlation:
+        base = self._ordering.correlate(network, dom)  # the temporal gate -- never widened below
+        body_tokens: dict[int, set[str]] = {}
+        for ev in network:
+            if ev.index is None:
+                continue
+            toks = _body_tokens(ev.body)
+            if toks:
+                body_tokens[int(ev.index)] = toks
+        if not body_tokens:  # no bodies captured -> nothing to refine; the baseline stands
+            return base
+        node_tokens = self._node_tokens(dom)
+        for phase in base.phases:
+            if len(phase.candidates) <= 1:
+                continue  # already unambiguous (or pre-XHR) -- nothing to narrow
+            node_toks = node_tokens.get(phase.node_key)
+            if not node_toks:
+                continue  # no node text captured -> can't content-match; keep the ambiguity
+            self._narrow(phase, node_toks, body_tokens)
+        return base
+
+    def _node_tokens(self, dom: "list[DOMUpdateEvent]") -> "dict[str, set[str]]":
+        """The union of every text snapshot a node carried across its mutations -> its token set."""
+        out: dict[str, set[str]] = {}
+        for ev in dom:
+            node = ev.node_id or ""
+            if not node:
+                continue
+            text = str((ev.detail or {}).get("text") or "")
+            if text:
+                out.setdefault(node, set()).update(_text_tokens(text))
+        return out
+
+    def _narrow(
+        self, phase: DomPhase, node_toks: "set[str]", body_tokens: "dict[int, set[str]]"
+    ) -> None:
+        scores: list[tuple[float, int]] = []
+        for idx in phase.candidates:
+            body = body_tokens.get(idx)
+            if not body:
+                scores.append((0.0, idx))
+                continue
+            shared = node_toks & body
+            scores.append((sum(_specificity(t) for t in shared), idx))
+        scores.sort(key=lambda s: (-s[0], s[1]))  # best first, stable by index
+        top_score, top_idx = scores[0]
+        runner = scores[1][0] if len(scores) > 1 else 0.0
+        if top_score >= self.min_score and top_score >= self.dominance * max(runner, 1e-9):
+            phase.candidates = [top_idx]  # the value match dominates -> attribute to it
+            phase.confidence = min(1.0, top_score / (top_score + runner)) if top_score else None
+
+
+__all__ = [
+    "XhrRequest",
+    "DomPhase",
+    "Correlation",
+    "Correlator",
+    "OrderingCorrelator",
+    "ContentCorrelator",
+]

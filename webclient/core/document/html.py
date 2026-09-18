@@ -363,10 +363,17 @@ def _xhr_endpoints(core: "Document") -> "list[str]":
 
 def _correlation(core: "Document") -> "Correlation | None":
     """Build the XHR->DOM :class:`Correlation` for this document from its captured events
-    + phase stamps (the cheap :class:`OrderingCorrelator`). ``None`` when there is nothing to
-    correlate (a static document, or a browser render that issued no XHR)."""
+    + phase stamps. ``None`` when there is nothing to correlate (a static document, or a
+    browser render that issued no XHR).
+
+    The correlator defaults to the cheap :class:`OrderingCorrelator` (unchanged behaviour). When
+    response bodies were captured AND ``WEBCLIENT_CORRELATOR=content`` is set, the content-matching
+    :class:`ContentCorrelator` refines the ordering candidates by value matching -- a strict,
+    opt-in narrowing that never widens the temporal gate."""
+    import os
+
     from ...models import DOMUpdateEvent, NetworkEvent
-    from .correlate import OrderingCorrelator
+    from .correlate import ContentCorrelator, Correlator, OrderingCorrelator
 
     net = [e for e in core._events if isinstance(e, NetworkEvent) and e.index is not None]
     stamps = getattr(core, "_stamps", []) or []
@@ -375,11 +382,21 @@ def _correlation(core: "Document") -> "Correlation | None":
     dom = [
         DOMUpdateEvent(
             node_id=str(s.get("node") or ""),
-            detail={"xhr_index": s.get("xhr", 0), "action": s.get("action", 0), "t_s": s.get("t")},
+            detail={
+                "xhr_index": s.get("xhr", 0),
+                "action": s.get("action", 0),
+                "t_s": s.get("t"),
+                "text": s.get("text", ""),  # node text snippet -- for content matching
+            },
         )
         for s in stamps
     ]
-    return OrderingCorrelator().correlate(net, dom)
+    correlator: Correlator = OrderingCorrelator()
+    if os.environ.get("WEBCLIENT_CORRELATOR", "").lower() == "content" and any(
+        e.body for e in net
+    ):
+        correlator = ContentCorrelator()
+    return correlator.correlate(net, dom)
 
 
 def _static_sig_set(static_html: "bytes | None") -> "frozenset[str] | None":
