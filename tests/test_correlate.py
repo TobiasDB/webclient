@@ -235,8 +235,8 @@ def test_content_correlator_wires_through_the_skeleton_under_the_env_var(monkeyp
             {"index": 3, "method": "GET", "url": "http://x/other", "t": 0.353},
         ],
         bodies={
-            "http://x/order": json.dumps({"id": GUID_A, "label": "Order confirmed"}),
-            "http://x/other": json.dumps({"id": GUID_B}),
+            "http://x/order": [json.dumps({"id": GUID_A, "label": "Order confirmed"})],
+            "http://x/other": [json.dumps({"id": GUID_B})],
         },
         stamps=[{"node": "n1", "xhr": 3, "action": 0, "t": 0.36,
                  "text": f"Order {GUID_A} confirmed"}],

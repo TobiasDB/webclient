@@ -358,6 +358,14 @@ def test_attr_href_resolves_to_reference_against_document():
     assert external.hostname == "other.example"
 
 
+def test_attr_href_with_a_pattern_extracts_from_the_url_not_a_reference():
+    # a regex on a link attr pulls a substring out of the RESOLVED url (e.g. an id) -> a value,
+    # not a Reference. Without a pattern it stays a resolvable Reference (the case above).
+    doc = make_doc()
+    got = doc.select(".card", index=0).select("a").attr("href", r"/items/(\d+)", group=1)
+    assert got == "1" and not isinstance(got, Reference)
+
+
 # -- html sugar ------------------------------------------------------------- #
 
 

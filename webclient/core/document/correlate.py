@@ -229,8 +229,8 @@ def _body_tokens(body: "bytes | None") -> "set[str]":
         _json_leaves(json.loads(text), leaves)
         for leaf in leaves:
             toks |= _text_tokens(leaf)
-    except ValueError:
-        pass  # not JSON -- the generic pass below still tokenises it
+    except (ValueError, RecursionError):
+        pass  # not JSON, or pathologically nested -- the generic pass below still tokenises it
     toks |= _text_tokens(text)
     return toks
 

@@ -1068,17 +1068,20 @@ class HtmlBacking(Backing):
             # honour the declared type: a link attr is a Reference even on a miss
             # (an empty, not-ok one whose ``.url`` is "" -- never a Field, so
             # ``select(..., optional=True).attr("href").url`` can't AttributeError).
+            # A regex on a link attr, though, extracts a substring -> a (lenient) Field.
             if name in ("href", "src", "action"):
-                ref = from_url("")
-                ref._client = core._client
-                return ref
+                return _regex_field(None, pattern, group) if pattern is not None else \
+                    self._link_ref(core, "")
             return Field(None, ok=False)
         el = core._element
         value = el.get(name) if el is not None else None
         if name in ("href", "src", "action"):
-            ref = from_url(urljoin(core.final_url or core.url, _clean_href(value)))
-            ref._client = core._client  # inherit the client so it resolves
-            return ref
+            url = urljoin(core.final_url or core.url, _clean_href(value))
+            # a regex on a link attr extracts from the URL STRING (e.g. an id in the path) ->
+            # a Field, not a Reference; without a pattern it stays a resolvable Reference.
+            if pattern is not None:
+                return _regex_field(url, pattern, group)
+            return self._link_ref(core, url)
         if value is None:  # absent attribute -> raise (structured) by default
             from ...errors import RAISE, current_policy, select_error
 
@@ -1086,6 +1089,12 @@ class HtmlBacking(Backing):
                 raise select_error(f"no attribute {name!r}")
             return Field(None, ok=False)
         return _regex_field(value.strip() if isinstance(value, str) else value, pattern, group)
+
+    def _link_ref(self, core: "Document", url: str) -> "Reference":
+        """A resolvable Reference for a link attr's URL, inheriting the client so it resolves."""
+        ref = from_url(url)
+        ref._client = core._client
+        return ref
 
     def _text(self, core: "Document", *, own: bool = False) -> "str | None":
         """The element's visible text, whitespace-normalised (``None`` on a miss).

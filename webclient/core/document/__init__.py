@@ -67,8 +67,8 @@ class Document(WebCore, IDocument):
     _stamps: list[dict[str, Any]] = PrivateAttr(  # append-only phase stamps ({node, xhr, t, text})
         default_factory=list  # the XHR->DOM correlation substrate (see correlate.py)
     )
-    _xhr_bodies: dict[str, str] = PrivateAttr(  # url -> XHR/fetch response text, for the
-        default_factory=dict  # content-matching ContentCorrelator (populated by the browser client)
+    _xhr_bodies: dict[str, list[str]] = PrivateAttr(  # url -> XHR/fetch response texts (in order),
+        default_factory=dict  # for the content-matching ContentCorrelator (populated by the browser)
     )
     _row: Any = PrivateAttr(default=None)  # extracted columns (extract/field)
     _surface: Any = PrivateAttr(default=None)  # the core's single eager surface

@@ -12,6 +12,7 @@ domain -- clean layering.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
@@ -24,6 +25,13 @@ Phase = Literal["init", "load", "inline", "drain"]
 #: bounds on response-body capture (content-matching correlation) -- keep memory + time capped.
 _BODY_MAX_BYTES = 256 * 1024  # per body
 _BODY_MAX_COUNT = 100  # total bodies kept
+
+
+def _want_bodies() -> bool:
+    """Only the opt-in content-matching correlator (``WEBCLIENT_CORRELATOR=content``) uses XHR
+    response bodies. The default ordering correlator ignores them, so on the common path we
+    don't capture, read or decode them at all (they can be tens of MB)."""
+    return os.environ.get("WEBCLIENT_CORRELATOR") == "content"
 #: only text-ish payloads are worth tokenising for value matching (skip images/fonts/binaries).
 _BODY_CONTENT_TYPES = ("json", "text", "javascript", "xml", "csv", "html")
 
@@ -140,7 +148,7 @@ class PageResult:
     #: captured XHR/fetch RESPONSE BODIES, url -> decoded text (bounded per-body + count,
     #: text/JSON only), for the content-matching :class:`ContentCorrelator`. Populated by the
     #: ``response`` listener; the ordering correlator ignores it. Best-effort -- may be empty.
-    bodies: dict[str, str] = field(default_factory=dict)
+    bodies: dict[str, list[str]] = field(default_factory=dict)
     #: the settled page's totals (``text`` chars, ``nodes``) -- the denominators for
     #: "what fraction of the content was injected after load".
     dom_stats: dict[str, Any] = field(default_factory=dict)
@@ -264,6 +272,9 @@ class BrowserClient(Client):
         def _on_response(r: Any) -> None:
             # collect the Response objects synchronously; bodies are read (awaited) after the
             # wait, so the handler stays cheap and there is no async-listener scheduling race.
+            # Only when the content correlator is opted in -- otherwise bodies are never used.
+            if not _want_bodies():
+                return
             try:
                 if r.request.resource_type in ("xhr", "fetch") and len(responses) < _BODY_MAX_COUNT:
                     responses.append(r)
@@ -283,11 +294,14 @@ class BrowserClient(Client):
             page.remove_listener("request", _on_request)
             page.remove_listener("response", _on_response)
 
-    async def _read_bodies(self, responses: list[Any]) -> dict[str, str]:
-        """Read the captured XHR/fetch response bodies (url -> text), bounded and text/JSON
-        only, swallowing every error -- a body may be gone, binary, or unreadable, and that
-        just means no content match for that request (the ordering baseline still applies)."""
-        out: dict[str, str] = {}
+    async def _read_bodies(self, responses: list[Any]) -> dict[str, list[str]]:
+        """Read the captured XHR/fetch response bodies (url -> bodies in RESPONSE ORDER),
+        bounded and text/JSON only, swallowing every error. Keyed to a LIST so two requests to
+        the SAME url keep BOTH bodies (a later one must not clobber the earlier); ``xhr_events``
+        hands them to same-url requests in order. Absent/unreadable -> no content match for that
+        request (the ordering baseline still applies)."""
+        out: dict[str, list[str]] = {}
+        seen = 0
         for r in responses:
             try:
                 ctype = (r.headers or {}).get("content-type", "").lower()
@@ -295,8 +309,9 @@ class BrowserClient(Client):
                     continue
                 text = await r.text()
                 if text:
-                    out[r.url] = text[:_BODY_MAX_BYTES]
-                if len(out) >= _BODY_MAX_COUNT:
+                    out.setdefault(r.url, []).append(text[:_BODY_MAX_BYTES])
+                    seen += 1
+                if seen >= _BODY_MAX_COUNT:
                     break
             except Exception:  # noqa: BLE001 - unreadable body: skip, keep the rest
                 continue

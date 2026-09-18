@@ -63,9 +63,10 @@ INIT_JS = """(() => {
     const node = stamp(el);
     if (node && window.__wc_stamps.length < 8000) {
       // a bounded text snippet of the node -- the content-matching Correlator scores it against
-      // the XHR response bodies. innerText (rendered text) with a textContent fallback; clipped.
+      // the XHR response bodies. textContent (NOT innerText: innerText forces a synchronous
+      // reflow on every mutation, which is costly on a busy SPA); clipped.
       let txt = '';
-      try { txt = (el.innerText || el.textContent || '').slice(0, 200); } catch (e) {}
+      try { txt = (el.textContent || '').slice(0, 200); } catch (e) {}
       window.__wc_stamps.push({node: node, xhr: window.__wc_xhr_index,
                                action: window.__wc_action_index, t: relSecs(), text: txt});
     }
@@ -289,23 +290,28 @@ def network_event(method: str, url: str, resource_type: str, doc: "Document") ->
 
 
 def xhr_events(
-    xhr: "list[dict[str, Any]]", doc: "Document", bodies: "dict[str, str] | None" = None
+    xhr: "list[dict[str, Any]]", doc: "Document", bodies: "dict[str, list[str]] | None" = None
 ) -> "list[NetworkEvent]":
     """The correlated XHR timeline (from the fetch/XHR wrapper) -> NetworkEvents carrying a
     completion ``index`` + relative ``t_s``, the raw material the :class:`Correlator` reads.
 
-    ``bodies`` (url -> decoded response text, best-effort from the transport) populates
-    ``NetworkEvent.body`` by URL, so the content-matching :class:`ContentCorrelator` can value-match
-    it against node text. Absent/unmatched -> ``body`` stays ``None`` (the ordering baseline holds)."""
+    ``bodies`` (url -> response texts in order) populates ``NetworkEvent.body`` so the
+    content-matching :class:`ContentCorrelator` can value-match it against node text. Same-url
+    requests consume their bodies IN ORDER (a repeat call doesn't clobber the earlier body).
+    Absent/unmatched -> ``body`` stays ``None`` (the ordering baseline holds)."""
     from ..reference import from_url
 
-    bodies = bodies or {}
+    pools = {k: list(v) for k, v in (bodies or {}).items()}  # copy; consumed per-url, in order
+    cursors: dict[str, int] = {}
     out: list[NetworkEvent] = []
     for r in xhr:
         method = str(r.get("method") or "GET")
         url = str(r.get("url") or "")
         raw_index = r.get("index")
-        text = bodies.get(url)
+        lst = pools.get(url) or []
+        i = cursors.get(url, 0)
+        cursors[url] = i + 1
+        text = lst[i] if i < len(lst) else None
         out.append(
             NetworkEvent(
                 request=from_url(url, cast(Any, method.lower())),

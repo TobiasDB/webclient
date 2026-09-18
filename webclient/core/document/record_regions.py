@@ -70,11 +70,21 @@ def _is_chromey(el: Any) -> bool:
 
 def _richness(members: "list[Any]") -> float:
     """Average descendant-element count of the members, scaled to 0..1 (a menu of bare
-    links is thin; a card list is rich)."""
+    links is thin; a card list is rich). BOUNDED -- ``skeleton()`` is a hot path, so this
+    samples the first few members and counts each subtree only up to the point the 0..1
+    scale saturates (``min(avg, 10)/10``), never walking a whole large subtree."""
     if not members:
         return 0.0
-    avg = sum(sum(1 for _ in m.iter()) for m in members) / len(members)
-    return min(avg, 10.0) / 10.0
+    sample = members[:20]  # a representative average; don't scan thousands of rows
+    total = 0
+    for m in sample:
+        c = 0
+        for _ in m.iter():  # cap: past ~12 descendants the scaled score is already maxed
+            c += 1
+            if c >= 12:
+                break
+        total += c
+    return min(total / len(sample), 10.0) / 10.0
 
 
 def _item_selector(members: "list[Any]") -> str:
