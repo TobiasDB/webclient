@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,10 +8,10 @@ version = "0.1.0"
 description = "Declarative web client: references, documents, live browser pages, lazy extraction plans"
 requires-python = ">=3.12"
 dependencies = [
-    "pydantic>=2.7",
+    "pydantic>=2.5",
     "pydantic-settings>=2.0",  # env-loadable Settings
-    "pyyaml>=6.0",             # brief frontmatter parsing
-    "httpx>=0.27",
+    "pyyaml>=5",             # brief frontmatter parsing
+    "httpx>=0.24",
     "typing_extensions>=4.5",
     "typeguard>=4.0",
 ]
@@ -19,15 +19,15 @@ dependencies = [
 [project.optional-dependencies]
 # Local parsing/extraction (Document.select/render). Not needed by the
 # RemoteWebClient, which parses server-side.
-local = ["lxml>=5.0", "cssselect>=1.2", "charset-normalizer>=3.0"]
-browser = ["playwright>=1.40"]                 # M4 LiveDocument
-service = ["fastapi>=0.110", "uvicorn>=0.29"]  # M7 browser-as-a-service
+local = ["lxml>=4.9", "cssselect>=1.2", "charset-normalizer>=3.0"]
+browser = ["playwright>=1.30"]                 # M4 LiveDocument
+service = ["fastapi>=0.100", "uvicorn>=0.23"]  # M7 browser-as-a-service
 # `remote` needs nothing beyond the base deps (httpx + pydantic).
 remote = []
-dev = ["pytest>=8", "pytest-httpserver>=1.0", "mypy>=1.10", "pyright>=1.1.380",
+dev = ["pytest>=7.4", "pytest-httpserver>=1.0", "mypy>=1.10", "pyright>=1.1.380",
        "lxml-stubs", "types-PyYAML",
-       "lxml>=5.0", "cssselect>=1.2", "charset-normalizer>=3.0",
-       "playwright>=1.40", "fastapi>=0.110", "uvicorn>=0.29"]
+       "lxml>=4.9", "cssselect>=1.2", "charset-normalizer>=3.0",
+       "playwright>=1.30", "fastapi>=0.100", "uvicorn>=0.23"]
 
 [tool.setuptools.packages.find]
 include = ["webclient*"]
