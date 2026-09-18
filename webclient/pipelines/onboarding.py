@@ -219,6 +219,11 @@ class Brief(BaseModel):
     # "investor relations news"); a literal "{company}" in it is substituted instead of prepended
     look: list[str] = []  # natural-language guides: what kinds of pages to head for
     ignore: list[str] = []  # natural-language guides: what kinds of pages to skip
+    #: a brief-level EXIT CONDITION -- a natural-language check evaluated on the chosen source;
+    #: when it holds the pipeline stops CLEANLY (a distinct exit, not a failure) instead of
+    #: authoring a query. For a dataset we can't reliably capture in some page state, e.g.
+    #: ir-events: "the upcoming-events section is empty -- its structure is unknown".
+    exit_when: str = ""
     crawl: dict[str, Any] = {}  # pipeline crawl overrides (max_pages/depth/rounds/browser)
 
     @model_validator(mode="after")
@@ -261,6 +266,7 @@ class Brief(BaseModel):
             name=str(front.get("name") or ""),
             title=str(front.get("title") or ""),
             search=str(front.get("search") or ""),
+            exit_when=str(front.get("exit_when") or ""),
             look=as_list(front.get("look")),
             ignore=as_list(front.get("ignore")),
             crawl=crawl if isinstance(crawl, dict) else {},
@@ -363,6 +369,10 @@ class CandidateEval(BaseModel):
     #: the dataset is reached only through interaction (forms / buttons), so a static
     #: fetch or a single query will not surface it -- a browser session is needed.
     interactive: bool = False
+    #: the brief's EXIT CONDITION (``Brief.exit_when``) evaluated on this page: when True the
+    #: pipeline stops cleanly (a defined exit, not a failure) instead of authoring a query.
+    exit_when_met: bool = False
+    exit_reason: str = ""  # the one-line reason, when exit_when_met
 
     @property
     def usable(self) -> bool:
@@ -425,6 +435,7 @@ class OnboardingResult(BaseModel):
     company: str
     brief: Brief
     ok: bool = False
+    exited: bool = False  # stopped cleanly by the brief's exit_when condition (NOT a failure)
     reason: str = ""  # why, when not ok
     evaluation: CandidateEval | None = None
     reference: Any = None  # the lazy Reference (a core; not re-validated by pydantic)
@@ -528,7 +539,10 @@ def _summarize(result: OnboardingResult) -> None:
         result.evaluation.url if result.evaluation else ""
     )
     lines = ["", f"── {result.company} " + "─" * max(3, 46 - len(result.company))]
-    lines.append(f"  result:    {'ready' if result.ok else 'not onboarded — ' + result.reason}")
+    outcome = ("ready" if result.ok else
+               f"exited (brief condition) — {result.reason}" if result.exited else
+               "not onboarded — " + result.reason)
+    lines.append(f"  result:    {outcome}")
     ev = result.evaluation
     if ev is not None:
         lines.append(f"  source:    {ev.url}")
@@ -1166,6 +1180,10 @@ def evaluate_candidate(
             flag_map_json=json.dumps(flag_map),
             endpoints_json=json.dumps(endpoints),
             skeleton=skeleton,
+            exit_condition=(f"EXIT CONDITION (from the brief): {brief.exit_when} If this holds "
+                            "for THIS page, set exit_when_met=true with a one-line exit_reason; "
+                            "the pipeline will then stop cleanly WITHOUT authoring a query.\n"
+                            if brief.exit_when else ""),
         ),
     )
     data: dict[str, Any] = dict(parsed) if isinstance(parsed, dict) else {"verdict": "could not evaluate"}
@@ -1185,6 +1203,8 @@ def evaluate_candidate(
         api_endpoint = None
     data.update(url=candidate.url, flags=flag_map, flag_signals=flag_signals,
                 api_endpoint=api_endpoint, interactive=interactive)
+    if not brief.exit_when:  # no exit condition -> the model's exit fields never apply
+        data["exit_when_met"], data["exit_reason"] = False, ""
     ev = CandidateEval.model_validate(data)
     log.info(
         "    evaluated %s -> present=%s, queryable=%s, scrapability=%d%s — %s",
@@ -2429,6 +2449,15 @@ def _onboard_company(
         result.evaluation = evaluation
         return result
     result.evaluation = evaluation
+    # a brief-level EXIT CONDITION held on the chosen source -> stop CLEANLY (a defined exit,
+    # not a failure): e.g. ir-events with no upcoming events, whose structure we can't know.
+    if evaluation.exit_when_met:
+        result.exited = True
+        result.reason = f"exit condition met: {evaluation.exit_reason or brief.exit_when}"
+        note("brief exit condition met — %s", evaluation.exit_reason or brief.exit_when)
+        if review:
+            _note_review(result, review_select(result, artifacts, brief, llm=llm))
+        return result
     note(
         "chose %s (queryable=%s, scrapability=%d)",
         evaluation.url, evaluation.is_queryable, evaluation.scrapability,

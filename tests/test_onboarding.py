@@ -521,6 +521,38 @@ def test_evaluate_drops_a_login_walled_candidate(httpserver):
     assert "login_required" in ev.flags
 
 
+def test_evaluate_honours_a_brief_exit_condition(httpserver):
+    # a brief-level exit_when is passed to the evaluator; when the model says it holds, the
+    # eval carries exit_when_met so the pipeline can stop cleanly (never authoring a query).
+    httpserver.expect_request("/events").respond_with_data(
+        "<main><section class='past'><div class='item'>Old event</div></section>"
+        "<section class='upcoming'></section></main>",  # upcoming is EMPTY
+        content_type="text/html",
+    )
+    prompts: list[str] = []
+
+    def llm(prompt: str) -> str:
+        prompts.append(prompt)
+        return ('{"dataset_present": true, "scrapability": 6, '
+                '"exit_when_met": true, "exit_reason": "the upcoming section is empty", '
+                '"verdict": "events page; no upcoming"}')
+
+    brief = Brief(description="investor events", fields=["title", "date"],
+                  exit_when="the upcoming-events section is empty")
+    with WebClient() as wc:
+        ev = evaluate_candidate(Candidate(url=httpserver.url_for("/events")), brief,
+                                wc=wc, llm=llm, browser="never")
+    assert ev.exit_when_met and "empty" in ev.exit_reason
+    assert "EXIT CONDITION" in prompts[0]  # the condition reached the model
+
+    # a brief with NO exit condition never honours a stray exit_when_met from the model
+    with WebClient() as wc:
+        ev2 = evaluate_candidate(Candidate(url=httpserver.url_for("/events")),
+                                 Brief(description="events", fields=["title"]),
+                                 wc=wc, llm=llm, browser="never")
+    assert ev2.exit_when_met is False
+
+
 # --------------------------------------------------------------------------- #
 # Prompts-as-data: the templates load and render with the right variables.
 # --------------------------------------------------------------------------- #
@@ -538,8 +570,10 @@ def test_prompt_templates_load_and_render():
     ev = render_prompt(
         "evaluate_candidate", description="d", fields_line=" Target fields: a.",
         candidate_url="http://c", flag_map_json="{}", endpoints_json="[]", skeleton="SKEL",
+        exit_condition="",
     )
     assert "Assess this page" in ev and "http://c" in ev and "SKEL" in ev
+    assert "exit_when_met" in ev  # the exit-condition key is always in the JSON schema
     wq_prompt = render_prompt(
         "write_query", guide="GUIDE-TEXT", description="d", fields_line="",
         pager="", skeleton="SKEL", recency="",
