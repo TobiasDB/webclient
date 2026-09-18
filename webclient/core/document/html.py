@@ -599,6 +599,8 @@ def _skeleton(
             leg += '  "← after [n]"=this content followed request [n] below'
         if region_marks:
             leg += '  "← RECORD LIST"=the repeating dataset region (select_all target)'
+        if mark_interactive:
+            leg += '  "← clickable"=a non-obvious control (div/span made clickable)'
         header.append(leg)
     if correlation is not None and correlation.requests:
         header.append("# XHR/fetch requests (completion order, seconds since the first):")
@@ -838,7 +840,10 @@ class HtmlBacking(Backing):
         baseline + lists observed data APIs; ``correlate`` lists the XHR/action timeline and
         annotates ``← after req[n] act[m]``; ``mark_records`` flags the repeating dataset
         region (``← RECORD LIST · N · select_all(...)``); ``mark_interactive`` flags
-        NON-obvious controls (a div/span made clickable via role/onclick/tabindex) ``← clickable``."""
+        NON-obvious controls (a div/span made clickable via role/onclick/tabindex)
+        ``← clickable``. (A human-readable label for any element is available as the reusable
+        :func:`webclient.core.document.naming.name` primitive -- not repeated here, since the
+        tag signature already surfaces aria-label / alt / title / placeholder.)"""
         from .record_regions import region_marks as _region_marks
 
         static_html = core._static_html if annotate_origin else None

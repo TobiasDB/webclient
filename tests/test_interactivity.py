@@ -78,6 +78,7 @@ def test_skeleton_marks_only_non_obvious_controls_and_is_toggleable():
         b"</body></html>"
     )
     d = Document(content=html, kind="html", status_code=200)
-    sk = d.skeleton()
-    assert sk.count("← clickable") == 2  # only the div[role] and span[onclick]
-    assert "← clickable" not in d.skeleton(mark_interactive=False)  # toggle off
+    body = "\n".join(l for l in d.skeleton().splitlines() if not l.startswith("#"))  # drop legend
+    assert body.count("← clickable") == 2  # only the div[role] and span[onclick]
+    off = "\n".join(l for l in d.skeleton(mark_interactive=False).splitlines() if not l.startswith("#"))
+    assert "← clickable" not in off  # toggle off
