@@ -64,3 +64,20 @@ def test_merge_ors_static_and_dynamic_findings():
 def test_bool_reflects_any_interactivity():
     assert not DomInteractive()
     assert DomInteractive(click=True)
+
+
+def test_skeleton_marks_only_non_obvious_controls_and_is_toggleable():
+    from webclient.core.document import Document
+
+    html = (
+        b"<html><body>"
+        b'<div role="button">Expand</div>'  # non-obvious -> marked
+        b'<a href="/x">link</a>'  # obvious -> NOT marked
+        b"<button>Btn</button>"  # obvious -> NOT marked
+        b'<span onclick="go()">tap</span>'  # non-obvious -> marked
+        b"</body></html>"
+    )
+    d = Document(content=html, kind="html", status_code=200)
+    sk = d.skeleton()
+    assert sk.count("← clickable") == 2  # only the div[role] and span[onclick]
+    assert "← clickable" not in d.skeleton(mark_interactive=False)  # toggle off

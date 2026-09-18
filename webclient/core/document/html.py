@@ -225,6 +225,12 @@ _SKELETON_ATTRS = (
 )
 _MAX_CLASSES = 8  # cap utility-class soup (tailwind &c.) so a node stays token-lean
 
+#: tags whose interactivity is SELF-EVIDENT -- marking them "clickable" would be noise. The
+#: skeleton only flags NON-obvious controls (a div/span made clickable via role/onclick/…).
+_OBVIOUS_INTERACTIVE = frozenset({
+    "a", "button", "input", "select", "textarea", "summary", "label", "option", "details",
+})
+
 #: CSS-in-JS / CSS-module class prefixes -- always generated, never a stable selector hook.
 _NOISE_CLASS_PREFIX = ("css-", "sc-", "jsx-", "emotion-", "chakra-", "mui", "makestyles", "jss")
 _HEX_SEG = re.compile(r"[0-9a-f]*[0-9][0-9a-f]*")  # hex chars incl. at least one digit
@@ -479,6 +485,7 @@ def _skeleton(
     xhr_endpoints: "list[str] | None" = None,
     correlation: "Correlation | None" = None,
     region_marks: "dict[str, str] | None" = None,
+    mark_interactive: bool = False,
 ) -> str:
     """A token-lean DOM skeleton: an indented outline of HTML open-tag signatures
     with structural noise (script/style/svg/meta/comments/…) removed and a short
@@ -530,6 +537,17 @@ def _skeleton(
 
         return mark_for(region_marks, el) if region_marks else ""
 
+    def interact_note(el: Any) -> str:
+        # mark ONLY non-obvious controls: a <div>/<span>/… made clickable via role /
+        # onclick / tabindex -- the ones the tag alone doesn't reveal (a plain <a>/<button>
+        # is already self-evident, so marking it would be noise).
+        if not mark_interactive or _tag(el) in _OBVIOUS_INTERACTIVE:
+            return ""
+        from .interactivity import interactive
+
+        hit = interactive(el)
+        return "  ← clickable" if hit and hit.click else ""
+
     def walk(el: Any, depth: int) -> None:
         if depth > max_depth:
             lines.append("  " * depth + "…")
@@ -563,7 +581,7 @@ def _skeleton(
             suffix = f" ×{count}" if count > 1 else ""
             lines.append(
                 "  " * depth + _selector_sig(child) + origin(child) + phase_note(child)
-                + record_note(child) + suffix + hint
+                + record_note(child) + interact_note(child) + suffix + hint
             )
             walk(child, depth + 1)  # the representative's structure (all N share it)
             i = j
@@ -800,6 +818,9 @@ class HtmlBacking(Backing):
         collapse: bool = False,
         drop_chrome: bool = False,
         annotate_origin: bool = True,
+        correlate: bool = True,
+        mark_records: bool = True,
+        mark_interactive: bool = True,
     ) -> str:
         """A token-lean DOM skeleton -- an indented HTML open-tag outline with the
         bloat (scripts/styles/svg/…) removed and leaf text hinted, every sibling
@@ -811,15 +832,18 @@ class HtmlBacking(Backing):
         ``drop_chrome=True`` omits nav/footer/sidebar landmarks so a huge page's records
         aren't buried under menus.
 
-        On a browser-rendered document (``browser="auto"``/``"always"``) with a
-        static baseline, nodes that were NOT in the server's initial HTML are marked
-        ``[xhr]`` (if the page issued XHR/fetch calls) or ``[js]``, and observed data
-        APIs are listed -- so the LLM sees what is server-initial vs client-loaded."""
+        Each ENRICHMENT is individually controllable (all default on; each simply produces
+        nothing when its data is absent -- e.g. a static document has no XHR to correlate):
+        ``annotate_origin`` marks client-injected nodes ``[xhr]``/``[js]`` against the pre-JS
+        baseline + lists observed data APIs; ``correlate`` lists the XHR/action timeline and
+        annotates ``← after req[n] act[m]``; ``mark_records`` flags the repeating dataset
+        region (``← RECORD LIST · N · select_all(...)``); ``mark_interactive`` flags
+        NON-obvious controls (a div/span made clickable via role/onclick/tabindex) ``← clickable``."""
         from .record_regions import region_marks as _region_marks
 
         static_html = core._static_html if annotate_origin else None
         xhr = _xhr_endpoints(core) if annotate_origin else None
-        correlation = _correlation(core) if annotate_origin else None
+        correlation = _correlation(core) if correlate else None
         tree = self._tree(core)
         return _skeleton(
             tree,
@@ -833,7 +857,8 @@ class HtmlBacking(Backing):
             static_html=static_html,
             xhr_endpoints=xhr,
             correlation=correlation,
-            region_marks=_region_marks(tree),
+            region_marks=_region_marks(tree) if mark_records else None,
+            mark_interactive=mark_interactive,
         )
 
     def applies(self, core: "Document") -> bool:
