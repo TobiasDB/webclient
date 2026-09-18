@@ -53,13 +53,13 @@ def test_tabbed_flag_fires_on_tabs_but_not_on_a_plain_table():
     # pagination. A plain <table> must NOT trip it (avoid matching the substring "table").
     tabs = flags(Context.from_response(
         200, {"content-type": "text/html"}, {},
-        b'<div role="tablist"><button role="tab">Upcoming</button>'
-        b'<button role="tab">Past</button></div><div role="tabpanel"></div>',
+        b'<html><body><div role="tablist"><button role="tab">Upcoming</button>'
+        b'<button role="tab">Past</button></div><div role="tabpanel"></div></body></html>',
     ))
     assert tabs["tabbed"].present and tabs["tabbed"].confidence >= 0.6
     plain = flags(Context.from_response(
         200, {"content-type": "text/html"}, {},
-        b'<table class="data-table"><tr><td>x</td></tr></table>',
+        b'<html><body><table class="data-table"><tr><td>x</td></tr></table></body></html>',
     ))
     assert not plain["tabbed"].present
 

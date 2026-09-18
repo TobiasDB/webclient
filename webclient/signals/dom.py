@@ -235,12 +235,23 @@ def _numbered_sequence(ctx: Context) -> Hit | None:
 
 flag("tabbed")
 
+# treeless (remote / no-lxml / signals-only) fallbacks -- read the raw HTML. Kept
+# conservative so a plain <table class="data-table"> never trips it: role="tab" needs a
+# closing quote (not "table"), and data-tab\b / nav-tab / tab-pane etc. don't match "table".
+_ARIA_TAB_RE = re.compile(r'role=["\']tab(?:list|panel)?["\']', re.I)
+_TAB_WIDGET_RE = re.compile(
+    r'data-tab\b|data-toggle=["\']tab["\']|nav-tab|tab-pane|class=["\'][^"\']*\btabbed\b|tab-list',
+    re.I,
+)
+
 
 @detector(flag="tabbed", name="aria_tabs", stage="static")
 def _aria_tabs(ctx: Context) -> Hit | None:
-    if ctx.tree is not None and ctx.tree.cssselect(
-        '[role="tablist"], [role="tab"], [role="tabpanel"]'
-    ):
+    if ctx.tree is not None:
+        if ctx.tree.cssselect('[role="tablist"], [role="tab"], [role="tabpanel"]'):
+            return Hit(0.9, "ARIA tab roles (tablist / tab / tabpanel)")
+        return None
+    if _ARIA_TAB_RE.search(ctx.text or ""):  # treeless context -- read the raw HTML
         return Hit(0.9, "ARIA tab roles (tablist / tab / tabpanel)")
     return None
 
@@ -248,9 +259,13 @@ def _aria_tabs(ctx: Context) -> Hit | None:
 @detector(flag="tabbed", name="tab_widget", stage="static")
 def _tab_widget(ctx: Context) -> Hit | None:
     # conservative selectors -- avoid bare [class*="tab"] (it matches "table")
-    if ctx.tree is not None and ctx.tree.cssselect(
-        '[data-tab], [data-toggle="tab"], [class*="nav-tab"], .tab-pane, .tabbed, [class*="tab-list"]'
-    ):
+    if ctx.tree is not None:
+        if ctx.tree.cssselect(
+            '[data-tab], [data-toggle="tab"], [class*="nav-tab"], .tab-pane, .tabbed, [class*="tab-list"]'
+        ):
+            return Hit(0.6, "a tab widget (nav-tabs / tab-pane / data-tab)")
+        return None
+    if _TAB_WIDGET_RE.search(ctx.text or ""):  # treeless context -- read the raw HTML
         return Hit(0.6, "a tab widget (nav-tabs / tab-pane / data-tab)")
     return None
 
