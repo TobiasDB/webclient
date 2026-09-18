@@ -339,6 +339,24 @@ def main() -> None:
         )
         wc.release(deep)
 
+        # [sequence] A multi-step script against ONE held page as a SINGLE plan:
+        #      .step(action) chains actions (write/click/wait_for) in order, the
+        #      interleaved .extract(...) captures accumulate onto the doc's row, and
+        #      .project() renders them. The executor resolves once, HOLDS the page
+        #      across every step, and releases it (scope-owned) when it finishes.
+        seq = (
+            wq.ref.resolve(browser="always")
+            .step(wq.doc.write("#qty", "7"))
+            .step(wq.doc.click("#add"))
+            .step(wq.doc.wait_for("#cart li"))
+            .extract(first=wq.doc.select("#cart li").attr("text"))
+            .step(wq.doc.write("#qty", "9"))
+            .step(wq.doc.click("#add"))
+            .extract(second=wq.doc.select("#cart li", index=1).attr("text"))
+            .project()
+        )
+        print("sequence:   ", wc.execute(seq, wc.ref(f"{base}/app")))
+
         # [browser transport] a browser render now carries the REAL Playwright
         #      main-response status + headers (not a fabricated 200 / empty), so
         #      transport() and the access signals are accurate on a rendered page.
@@ -388,6 +406,14 @@ def main() -> None:
     )
     print("\nlazy plan:  ", plan._plan.describe()[:60], "...")
     print("wire form:  ", plan._plan.model_dump_json()[:70], "...")
+
+    # [viz] Read-only plan visualization: explain_tree() renders a SQL-EXPLAIN
+    #       indented step tree, wireframe() a self-contained HTML picture of the
+    #       pipeline (page frames / selector boxes / field chips / output card).
+    print("explain:")
+    for line in plan.explain_tree().splitlines():
+        print("   ", line)
+    print("wireframe:   ", f"{len(plan.wireframe())} bytes of self-contained HTML")
 
     # [P3] One evaluator: the plan runs through the same @op implementations
     #      the eager calls use; a Collection fans out per element (bounded by

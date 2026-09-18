@@ -476,6 +476,10 @@ def _lazy_class(core: type) -> str:
             'def project(self) -> "Lazy[dict[str, Any]]": ...',
             'def field(self, name: str) -> "LazyField[Any]": ...',
             'def reference(self, name: str) -> "LazyReference": ...',
+            # sequence authoring: .step(action) chains an ACTION (a wait_for/click/
+            # write/... expr) into an ordered sequence against ONE held live page;
+            # interleave with .extract(...) (the capture) and end with .project().
+            'def step(self, action: Any) -> "LazyDocument": ...',
         ]
     extras.append(f'def collect(self, context: Any = ...) -> "{SURFACE[core]}": ...')
     body = members(core, "lazy") + extras
