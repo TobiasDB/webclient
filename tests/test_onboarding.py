@@ -1663,3 +1663,34 @@ def test_zero_row_query_is_not_a_success(site):
                                  wc=wc, llm=llm, search=search, browser=False)
     assert result.query is not None and result.query.row_count == 0
     assert not result.ok and result.reason == "authored query extracted 0 rows"
+
+
+def test_test_query_cannot_hang_on_a_slow_per_record_resolve(httpserver):
+    # a pathological query (a per-record .resolve() to a hanging detail page) must NOT hang:
+    # the bounded test cancels it and returns a clean failure well within the client timeout.
+    import time as _time
+
+    from webclient import wq
+    from webclient.pipelines.onboarding import _test_query
+
+    httpserver.expect_request("/list").respond_with_data(
+        '<main><div class="r"><a href="/slow">x</a></div></main>', content_type="text/html",
+    )
+
+    def _hang(_req):
+        _time.sleep(4)  # outlasts the 1.5s test cap
+        from werkzeug.wrappers import Response
+        return Response("late", content_type="text/html")
+
+    httpserver.expect_request("/slow").respond_with_handler(_hang)
+
+    query = wq.doc.select_all(".r").extract(
+        detail=wq.doc.select("a").attr("href").resolve().select(".d").attr("text"),
+    ).project()
+    with WebClient() as wc:
+        doc = wc.fetch(httpserver.url_for("/list"))
+        t0 = _time.monotonic()
+        ok, rows = _test_query(doc.select_all(".r") and query, doc, timeout=1.5)
+        elapsed = _time.monotonic() - t0
+    assert ok is False and rows == []  # cancelled -> a clean failed attempt
+    assert elapsed < 3.5  # bounded near the 1.5s cap, not the 4s server sleep

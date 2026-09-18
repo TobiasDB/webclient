@@ -1680,15 +1680,37 @@ def _content_hint(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> str:
     )
 
 
-def _test_query(expr: Any, doc: Any) -> "tuple[bool, list[Any]]":
+#: hard wall-clock cap on running ONE authored query against the source. A pathological LLM
+#: query (a per-record .resolve() fanning out to hundreds of fetches, a resolve to a slow host)
+#: must never hang the pipeline: the test is cancelled at this bound and counts as a failure.
+_QUERY_TEST_TIMEOUT = 45.0
+
+
+def _test_query(expr: Any, doc: Any, *, timeout: float = _QUERY_TEST_TIMEOUT) -> "tuple[bool, list[Any]]":
     """Run the authored query against the fetched source ``doc`` to prove it loads and
     actually EXTRACTS the dataset. The query is the document-level extraction
     (``wq.doc...``), so it collects directly against the resolved document. Returns
-    ``(ran_without_error, rows)`` where ``rows`` is the extracted DATA (see
-    :func:`_data_rows`) -- a query that only selects elements (no ``.project()``)
-    extracts zero rows and so is not treated as a working query."""
+    ``(ran_without_error, rows)`` -- a query that only selects elements (no ``.project()``)
+    extracts zero rows and so is not treated as a working query.
+
+    HARD-BOUNDED: the run is cancelled after ``timeout`` seconds (``asyncio.wait_for`` cancels
+    the coroutine, so in-flight fetches stop), so no authored query can hang the pipeline."""
+    import asyncio
+
+    loop = getattr(getattr(doc, "_client", None), "loop", None)
     try:
-        result = expr.collect(doc)
+        if callable(loop):  # bound + cancel on the engine loop (the normal path)
+            async def _bounded() -> Any:
+                return await asyncio.wait_for(expr.acollect(doc), timeout=timeout)
+
+            result = loop().run(_bounded())
+        else:  # no engine loop (an unbound doc) -- fall back to the plain sync collect
+            result = expr.collect(doc)
+    except (asyncio.TimeoutError, TimeoutError):
+        log.warning("    query test exceeded %.0fs and was cancelled -- treated as a FAILED "
+                    "attempt (a query must not hang; avoid per-record .resolve() over many rows)",
+                    timeout)
+        return False, []
     except Exception:  # noqa: BLE001 - a query that can't run against the source
         return False, []
     return True, _data_rows(result)
