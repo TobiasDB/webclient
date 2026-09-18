@@ -217,13 +217,29 @@ _SKELETON_SKIP = frozenset({
 })
 #: selector-relevant attributes to surface (in this order): form/input targets,
 #: accessibility + SPA test hooks -- the ones an LLM actually writes selectors on.
-#: ``value`` is deliberately excluded (may be sensitive); ``href``/``src`` show as
+#: A form input's ``value`` stays hidden (may be sensitive); a DISPLAY ``value``
+#: (``<data>``/``<meter>``/…) is surfaced separately below. ``href``/``src`` show as
 #: presence flags below. Values are collapsed + clipped to stay token-lean.
 _SKELETON_ATTRS = (
     "role", "type", "name", "placeholder", "for", "aria-label", "alt", "title",
     "data-testid", "data-test", "data-cy", "data-id", "data-qa", "contenteditable",
 )
+_SKELETON_ATTRS_SET = frozenset(_SKELETON_ATTRS)  # for de-duping the value-bearing data-* scan
 _MAX_CLASSES = 8  # cap utility-class soup (tailwind &c.) so a node stays token-lean
+
+#: VALUE-BEARING attributes -- where a field's value lives in an attribute, not the text
+#: (``<time datetime>``, ``<meta content>``). Surfaced WITH their value so the LLM sees to
+#: read the attribute, not the (often empty / formatted) text. Pairs with ``attr(name)``.
+_VALUE_ATTRS = ("datetime", "content")
+#: tags whose ``value`` is a DISPLAY value (safe to show), unlike a form input's ``value``
+#: (excluded as possibly sensitive): ``<data>``/``<meter>``/``<progress>``/``<option>``/``<li>``.
+_VALUE_TAGS = frozenset({"data", "meter", "progress", "option", "li"})
+#: value-bearing ``data-*`` names (``data-price``/``data-rating``/…) -- worth showing with
+#: their value; generic/analytics ``data-*`` (``data-ga-id`` …) are left out as noise.
+_VALUE_DATA_RE = re.compile(
+    r"^data-(price|value|amount|cost|total|rating|score|rank|count|qty|quantity|"
+    r"stock|date|time|sku|code|number|num|id|key|index|state|status)$"
+)
 
 #: tags whose interactivity is SELF-EVIDENT -- marking them "clickable" would be noise. The
 #: skeleton only flags NON-obvious controls (a div/span made clickable via role/onclick/…).
@@ -319,6 +335,24 @@ def _selector_sig(el: Any) -> str:
         val = el.get(attr)
         if val is not None and val != "":
             parts.append(f'{attr}="{_norm(val)[:24]}"')
+    # value-bearing attributes: surface WITH their value, so the LLM sees the field lives in
+    # an attribute (a machine date in `datetime`, a price in `content`/`data-price`), not text.
+    for attr in _VALUE_ATTRS:
+        val = el.get(attr)
+        if val is not None and val != "":
+            parts.append(f'{attr}="{_norm(val)[:24]}"')
+    if tag in _VALUE_TAGS:  # a DISPLAY value (not a form input's -- those stay hidden)
+        v = el.get("value")
+        if v is not None and v != "":
+            parts.append(f'value="{_norm(v)[:24]}"')
+    shown_data = 0  # value-bearing data-* (price/rating/…), capped; skip the ones already shown
+    for name, v in (el.attrib.items() if hasattr(el, "attrib") else []):
+        if shown_data >= 3:
+            break
+        if (name not in _SKELETON_ATTRS_SET and not name.startswith("data-wc-")
+                and _VALUE_DATA_RE.match(name) and v):
+            parts.append(f'{name}="{_norm(str(v))[:24]}"')
+            shown_data += 1
     if el.get("href") is not None:  # a link/area target (presence, not the url)
         parts.append("href")
     if el.get("src") is not None:  # img/media/iframe source (presence)

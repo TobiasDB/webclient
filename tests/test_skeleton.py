@@ -306,3 +306,26 @@ def test_xml_skeleton_uses_the_dom_outline():
     )
     out = doc.skeleton()
     assert "<item>" in out and "<name>" in out and '"Aeropress"' in out
+
+
+def test_value_bearing_attributes_are_surfaced_with_their_value():
+    # where the field's value lives in an attribute (not the text), the skeleton shows it
+    # WITH its value, so the LLM knows to read the attribute -- pairs with attr(name).
+    from webclient.core.document import Document
+
+    doc = Document(
+        content=(
+            b'<html><body>'
+            b'<time datetime="2026-09-14">Sep 14</time>'  # machine date in datetime
+            b'<span class="price" data-price="19.99">nineteen</span>'  # price in data-*
+            b'<data value="42">forty-two</data>'  # display value
+            b'<input type="text" value="secret">'  # a FORM value stays hidden
+            b'</body></html>'
+        ),
+        kind="html", status_code=200,
+    )
+    out = doc.skeleton()
+    assert 'datetime="2026-09-14"' in out
+    assert 'data-price="19.99"' in out
+    assert 'value="42"' in out  # the <data> display value
+    assert "secret" not in out  # a form input's value is NOT surfaced
