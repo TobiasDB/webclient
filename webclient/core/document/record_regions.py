@@ -90,14 +90,10 @@ def _item_selector(members: "list[Any]") -> str:
     return tag
 
 
-def find_record_regions(
-    root: Any, *, min_items: int = 3, top_k: int = 3
-) -> "list[RecordRegion]":
-    """The most dataset-like repeating regions under ``root``, best first. A region is a
-    container plus a group of >= ``min_items`` structurally-identical children; scored by
-    ``count x (1 + richness) x chrome_penalty`` so a long, content-rich, non-chrome list
-    outranks a short nav menu. Returns up to ``top_k``."""
-    regions: list[RecordRegion] = []
+def _scan(root: Any, min_items: int) -> "list[tuple[Any, RecordRegion]]":
+    """Every qualifying region as (container element, RecordRegion), best first -- the
+    shared search behind :func:`find_record_regions` and :func:`region_marks`."""
+    found: list[tuple[Any, RecordRegion]] = []
     for container in root.iter():
         if not isinstance(getattr(container, "tag", None), str):
             continue
@@ -112,17 +108,62 @@ def find_record_regions(
             if len(members) < min_items:
                 continue
             score = len(members) * (1.0 + _richness(members)) * chrome_penalty
-            regions.append(
+            found.append((
+                container,
                 RecordRegion(
                     item_selector=_item_selector(members),
                     count=len(members),
                     container_tag=_tag(container),
                     container_id=container.get("id") or "",
                     score=round(score, 3),
-                )
+                ),
+            ))
+    found.sort(key=lambda pair: pair[1].score, reverse=True)
+    return found
+
+
+def find_record_regions(
+    root: Any, *, min_items: int = 3, top_k: int = 3
+) -> "list[RecordRegion]":
+    """The most dataset-like repeating regions under ``root``, best first. A region is a
+    container plus a group of >= ``min_items`` structurally-identical children; scored by
+    ``count x (1 + richness) x chrome_penalty`` so a long, content-rich, non-chrome list
+    outranks a short nav menu. Returns up to ``top_k``."""
+    return [region for _el, region in _scan(root, min_items)][:top_k]
+
+
+def _path(el: Any) -> str:
+    """A canonical XPath for an element -- a STABLE key across traversals (lxml element
+    proxies do NOT have a stable ``id()``, so identity/``id()`` can't be used to match nodes
+    between the scan and the skeleton walk)."""
+    try:
+        return str(el.getroottree().getpath(el))
+    except Exception:  # noqa: BLE001 - a detached element: no path, no mark
+        return ""
+
+
+def region_marks(root: Any, *, min_items: int = 3, top_k: int = 2) -> "dict[str, str]":
+    """A map ``canonical-xpath -> skeleton marker`` for the top NON-CHROME record regions, so
+    the skeleton can flag the dataset in place
+    (``← RECORD LIST · N items · select_all("li.item")``). Chrome regions (nav/menu) are
+    skipped -- they are not the dataset."""
+    marks: dict[str, str] = {}
+    for el, region in _scan(root, min_items):
+        if len(marks) >= top_k:
+            break
+        if _is_chromey(el):  # a nav/menu list is not a dataset
+            continue
+        path = _path(el)
+        if path:
+            marks[path] = (
+                f'  ← RECORD LIST · {region.count} items · select_all("{region.item_selector}")'
             )
-    regions.sort(key=lambda r: r.score, reverse=True)
-    return regions[:top_k]
+    return marks
 
 
-__all__ = ["RecordRegion", "find_record_regions"]
+def mark_for(marks: "dict[str, str]", el: Any) -> str:
+    """The marker for an element (``""`` if none) -- matches by canonical XPath, the stable key."""
+    return marks.get(_path(el), "") if marks else ""
+
+
+__all__ = ["RecordRegion", "find_record_regions", "region_marks", "mark_for"]

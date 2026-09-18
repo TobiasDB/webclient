@@ -478,6 +478,7 @@ def _skeleton(
     static_html: "bytes | None" = None,
     xhr_endpoints: "list[str] | None" = None,
     correlation: "Correlation | None" = None,
+    region_marks: "dict[str, str] | None" = None,
 ) -> str:
     """A token-lean DOM skeleton: an indented outline of HTML open-tag signatures
     with structural noise (script/style/svg/meta/comments/…) removed and a short
@@ -522,6 +523,13 @@ def _skeleton(
             parts.append(f"act[{action}]")
         return f"  ← after {' '.join(parts)}" if parts else ""
 
+    def record_note(el: Any) -> str:
+        # flag the dominant repeating region (the dataset) with a suggested select_all;
+        # matched by canonical XPath (lxml proxies have no stable id()).
+        from .record_regions import mark_for
+
+        return mark_for(region_marks, el) if region_marks else ""
+
     def walk(el: Any, depth: int) -> None:
         if depth > max_depth:
             lines.append("  " * depth + "…")
@@ -554,7 +562,8 @@ def _skeleton(
             )
             suffix = f" ×{count}" if count > 1 else ""
             lines.append(
-                "  " * depth + _selector_sig(child) + origin(child) + phase_note(child) + suffix + hint
+                "  " * depth + _selector_sig(child) + origin(child) + phase_note(child)
+                + record_note(child) + suffix + hint
             )
             walk(child, depth + 1)  # the representative's structure (all N share it)
             i = j
@@ -570,6 +579,8 @@ def _skeleton(
             leg += "  [xhr]/[js]=client-injected (unmarked=server-initial)"
         if correlation is not None and correlation.requests:
             leg += '  "← after [n]"=this content followed request [n] below'
+        if region_marks:
+            leg += '  "← RECORD LIST"=the repeating dataset region (select_all target)'
         header.append(leg)
     if correlation is not None and correlation.requests:
         header.append("# XHR/fetch requests (completion order, seconds since the first):")
@@ -804,11 +815,14 @@ class HtmlBacking(Backing):
         static baseline, nodes that were NOT in the server's initial HTML are marked
         ``[xhr]`` (if the page issued XHR/fetch calls) or ``[js]``, and observed data
         APIs are listed -- so the LLM sees what is server-initial vs client-loaded."""
+        from .record_regions import region_marks as _region_marks
+
         static_html = core._static_html if annotate_origin else None
         xhr = _xhr_endpoints(core) if annotate_origin else None
         correlation = _correlation(core) if annotate_origin else None
+        tree = self._tree(core)
         return _skeleton(
-            self._tree(core),
+            tree,
             max_lines=max_lines,
             text_chars=text_chars,
             max_depth=max_depth,
@@ -819,6 +833,7 @@ class HtmlBacking(Backing):
             static_html=static_html,
             xhr_endpoints=xhr,
             correlation=correlation,
+            region_marks=_region_marks(tree),
         )
 
     def applies(self, core: "Document") -> bool:

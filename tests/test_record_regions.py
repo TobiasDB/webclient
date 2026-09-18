@@ -65,3 +65,20 @@ def test_differently_shaped_siblings_are_not_one_group():
 def test_result_is_a_model():
     r = RecordRegion(item_selector="li.item", count=5, score=7.5)
     assert RecordRegion.model_validate(r.model_dump()) == r
+
+
+def test_skeleton_marks_the_record_region_with_a_select_all():
+    # the integration: the skeleton flags the dataset container in place.
+    from webclient.core.document import Document
+
+    html = (
+        b'<html><body><main><ul class="news">'
+        + b"".join(
+            f'<li class="item"><h3>T{i}</h3><time>d{i}</time><a href="/{i}">go</a></li>'.encode()
+            for i in range(6)
+        )
+        + b"</ul></main></body></html>"
+    )
+    sk = Document(content=html, kind="html", status_code=200).skeleton()
+    assert "← RECORD LIST · 6 items" in sk
+    assert 'select_all("li.item")' in sk
