@@ -538,15 +538,24 @@ def _skeleton(
         return mark_for(region_marks, el) if region_marks else ""
 
     def interact_note(el: Any) -> str:
-        # mark ONLY non-obvious controls: a <div>/<span>/… made clickable via role /
-        # onclick / tabindex -- the ones the tag alone doesn't reveal (a plain <a>/<button>
-        # is already self-evident, so marking it would be noise).
-        if not mark_interactive or _tag(el) in _OBVIOUS_INTERACTIVE:
+        # mark NON-obvious controls: a <div>/<span>/… made clickable via role/onclick/tabindex
+        # (static/semantic) OR a JS listener / cursor:pointer (the dynamic data-wc-int stamp,
+        # which catches event delegation) -- the ones the tag alone doesn't reveal. hover /
+        # scroll targets are marked wherever seen. A plain <a>/<button> is left alone (noise).
+        if not mark_interactive:
             return ""
-        from .interactivity import interactive
+        kinds = set((el.get("data-wc-int") or "").split()) if hasattr(el, "get") else set()
+        marks: list[str] = []
+        if _tag(el) not in _OBVIOUS_INTERACTIVE:
+            from .interactivity import interactive
 
-        hit = interactive(el)
-        return "  ← clickable" if hit and hit.click else ""
+            if "click" in kinds or (interactive(el) is not None):
+                marks.append("clickable")
+        if "hover" in kinds:
+            marks.append("hover")
+        if "scroll" in kinds:
+            marks.append("scroll")
+        return f"  ← {'/'.join(marks)}" if marks else ""
 
     def walk(el: Any, depth: int) -> None:
         if depth > max_depth:

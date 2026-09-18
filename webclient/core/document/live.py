@@ -92,6 +92,43 @@ INIT_JS = """(() => {
       return _send.apply(this, arguments);
     };
   }
+  // --- interactivity (System B, dynamic tier): stamp data-wc-int on elements that get an
+  // interactive listener, so a <div> made clickable in JS is visible. Rides the DOM snapshot
+  // (internal, stripped from output, never a selector). The static/semantic tier + a
+  // cursor:pointer scan (below) OR this together give a robust "clickable" signal.
+  const _INT = {click:'click', mousedown:'click', pointerdown:'click', keydown:'click',
+                mouseenter:'hover', mouseover:'hover', pointerenter:'hover',
+                scroll:'scroll', wheel:'scroll'};
+  const addInt = (el, k) => {  // accumulate a kind on data-wc-int (space-separated, deduped)
+    if (!el || el.nodeType !== 1) return;
+    const cur = el.getAttribute('data-wc-int') || '';
+    if (cur.split(' ').indexOf(k) < 0) el.setAttribute('data-wc-int', (cur ? cur + ' ' : '') + k);
+  };
+  const _addEL = EventTarget.prototype.addEventListener;
+  if (_addEL && !_addEL.__wc) {
+    const wrapped = function(type, listener, opts) {
+      try { const k = _INT[type]; if (k && this instanceof Element) addInt(this, k); } catch (e) {}
+      return _addEL.apply(this, arguments);
+    };
+    wrapped.__wc = true;
+    EventTarget.prototype.addEventListener = wrapped;
+  }
+  // A capture-time scan: cursor:pointer marks a click affordance EVEN under event delegation
+  // (React attaches one listener at the root, so the wrap above misses the real target); a
+  // scrollable-overflow container is a scroll target. Bounded so a huge page stays cheap.
+  window.__wc_scan_int = () => {
+    let n = 0;
+    for (const el of document.querySelectorAll('div,span,li,td,th,section,article,a,label,summary,p,i')) {
+      if (n++ > 3000) break;
+      try {
+        const cs = getComputedStyle(el);
+        if (cs.cursor === 'pointer') addInt(el, 'click');
+        const oy = cs.overflowY;
+        if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 4) addInt(el, 'scroll');
+      } catch (e) {}
+    }
+    return n;
+  };
   const MAIN = 'MAIN,ARTICLE,SECTION';
   new MutationObserver((muts) => {
     for (const m of muts) {
@@ -309,6 +346,8 @@ class LiveBacking(Backing):
         PageScript(INIT_JS, "init"),
         # fold shadow-DOM / same-origin iframe content into the light DOM before the snapshot
         PageScript("() => window.__wc_inline ? window.__wc_inline() : {shadow:0,frames:0}", "inline"),
+        # stamp data-wc-int for cursor:pointer / scrollable elements (dynamic interactivity)
+        PageScript("() => window.__wc_scan_int ? window.__wc_scan_int() : 0", "inline"),
         PageScript(DRAIN_JS, "drain"),
     )
     gate = "page"

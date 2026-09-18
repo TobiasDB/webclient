@@ -74,6 +74,33 @@ def test_click_mutates_dom_and_records_everything(app):
     assert any(isinstance(e, DOMUpdateEvent) for e in app.dom_mutations)
 
 
+def test_dynamic_interactivity_is_stamped_and_shown_in_the_skeleton(httpserver, wc):
+    # System B dynamic tier: a <div> made clickable via a JS listener or cursor:pointer is
+    # marked "← clickable" (catches event delegation the tag can't reveal); a scrollable
+    # overflow container is a scroll target. The internal data-wc-int never leaks.
+    page = (
+        "<html><body>"
+        "<div id='styled' style='cursor:pointer'>styled control</div>"
+        "<div id='listener'>js control</div>"
+        "<div id='scroller' style='overflow:auto;height:40px'>"
+        + "<p>line</p>" * 20
+        + "</div>"
+        "<script>document.getElementById('listener')"
+        ".addEventListener('click', function(){});</script>"
+        "</body></html>"
+    )
+    httpserver.expect_request("/int").respond_with_data(page, content_type="text/html")
+    live = wc.ref(httpserver.url_for("/int")).resolve(browser=True).collect()
+    try:
+        sk = live.skeleton()
+        assert sk.count("← clickable") >= 2  # the cursor:pointer div AND the JS-listener div
+        assert "scroll" in sk  # the overflow container is a scroll target
+        assert "data-wc-int" not in sk  # the internal stamp is never shown
+        assert "data-wc-int" not in live.render("html")  # nor leaked to output
+    finally:
+        wc.release(live)
+
+
 def test_click_phase_stamps_new_elements_with_the_action_index(app):
     # the correlation substrate, end-to-end in a real browser: DOM revealed by the 1st
     # .click() is phase-stamped with action index 1, and the skeleton surfaces "act[1]"
