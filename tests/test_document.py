@@ -419,3 +419,38 @@ def test_element_events_are_document_scoped():
 def test_network_event_forward_ref_resolved():
     event = NetworkEvent(request=Reference(hostname="e.com"), document_id="d1")
     assert event.topic == "network"
+
+
+def test_split_query_combines_two_sections_into_one_dataset():
+    # the "split query" the guide teaches: a grouped (comma) selector pulls records from BOTH
+    # sections; a grouped field selector + optional handles section-specific fields; `when`
+    # derives which section a row came from. (Codifies webclient/skills/lazy-queries.md.)
+    from webclient import wq
+
+    doc = Document(
+        content=(
+            b"<html><body>"
+            b'<section class="upcoming"><div class="event"><span class="title">Investor Day</span>'
+            b'<time datetime="2026-11-01">Nov 1</time><a class="register" href="/reg/1">register</a></div></section>'
+            b'<section class="past"><div class="event"><span class="title">Q3 Call</span>'
+            b'<time datetime="2026-08-01">Aug 1</time><a class="replay" href="/rep/2">replay</a></div>'
+            b'<div class="event"><span class="title">Q2 Call</span>'
+            b'<time datetime="2026-05-01">May 1</time><a class="replay" href="/rep/3">replay</a></div></section>'
+            b"</body></html>"
+        ),
+        kind="html", status_code=200, url="https://x/",
+    )
+    rows = (
+        doc.select_all(".upcoming .event, .past .event")
+        .extract(
+            title=wq.doc.select(".title").attr("text"),
+            date=wq.doc.select("time").attr("datetime"),
+            link=wq.doc.select(".register, .replay", optional=True).attr("href"),
+            status=wq.when(wq.doc.select(".register", optional=True).is_ok())
+            .then("upcoming").otherwise("past"),
+        )
+        .project()
+    )
+    assert [r["title"] for r in rows] == ["Investor Day", "Q3 Call", "Q2 Call"]  # both sections
+    assert [r["status"] for r in rows] == ["upcoming", "past", "past"]  # section derived via when
+    assert rows[0]["link"] == "https://x/reg/1" and rows[1]["link"] == "https://x/rep/2"

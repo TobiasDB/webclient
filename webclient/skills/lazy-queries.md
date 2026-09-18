@@ -140,6 +140,40 @@ wq.doc.select_all("//p[a[contains(@href, '/news/')]]").extract(
 ).project()
 ```
 
+### Combining two sections into one dataset (a split query)
+
+Sometimes the dataset is split across **two (or more) sections** on the same page — an events
+page with an **"Upcoming"** list and a **"Past"** list, a "Featured" block above a "More" grid,
+a "Latest" tab beside an "Archive" tab. You want ONE combined dataset, not a single section.
+
+Select the records from **both** with a **grouped (comma) selector** — a CSS selector list
+matches all of them, in document order:
+
+```python
+wq.doc.select_all(".upcoming .event, .past .event").extract(
+    title=wq.doc.select(".title").attr("text"),
+    date=wq.doc.select("time").attr("datetime"),
+    url=wq.doc.select("a").attr("href"),
+).project()
+```
+
+Rules for a split query:
+
+- **Shared fields** use the SAME per-record selector for both sections — each `.select(...)`
+  runs *inside* whichever record matched, regardless of which section it came from.
+- **Section-specific fields** (a "Register" link only on upcoming, a "Replay" only on past) →
+  mark them `optional=True` so a record that lacks the field is not dropped. If the field uses a
+  different selector per section, group that too: `.select(".register, .replay", optional=True)`.
+- **An empty section is fine.** If "Upcoming" has no records, `.upcoming .event` simply matches
+  nothing and you get the "Past" records — a valid, complete result.
+- **A section label** (which section a row is from) is not on the record itself; derive it from
+  a distinguishing child with `when`:
+  `status=wq.when(wq.doc.select(".register", optional=True).is_ok()).then("upcoming").otherwise("past")`.
+- **Differently-shaped sections:** if the records genuinely differ per section (different tags
+  per field), a single grouped selector can't map every field cleanly. Use a grouped field
+  selector where they differ (`.select(".title, h3")`), and keep the fields that only one section
+  has `optional=True`.
+
 ## Writing durable CSS selectors
 
 A selector is only as good as it is stable — pages get restyled and reordered. Prefer
