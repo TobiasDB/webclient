@@ -39,10 +39,11 @@ INIT_JS = """(() => {
   // data-wc-node attribute (an internal stamp -- stripped from skeleton/output, never a
   // selector). See webclient/core/document/correlate.py.
   window.__wc_xhr = window.__wc_xhr || [];         // {index, method, url, t} (t = secs since first)
-  window.__wc_xhr_index = window.__wc_xhr_index || 0;  // COMPLETED xhr/fetch count (the phase)
+  window.__wc_xhr_index = window.__wc_xhr_index || 0;  // COMPLETED xhr/fetch count (the xhr phase)
+  window.__wc_action_index = window.__wc_action_index || 0;  // interactions performed (the action phase)
   window.__wc_node_seq = window.__wc_node_seq || 0;    // set-once node-identity counter
   window.__wc_t0 = (typeof window.__wc_t0 === 'number') ? window.__wc_t0 : null;
-  window.__wc_stamps = window.__wc_stamps || [];   // {node, xhr, t} -- emitted SEPARATELY from muts
+  window.__wc_stamps = window.__wc_stamps || [];   // {node, xhr, action, t} -- emitted SEPARATELY
   const relSecs = () => window.__wc_t0 == null ? 0 : (performance.now() - window.__wc_t0) / 1000;
   const startReq = () => { if (window.__wc_t0 == null) window.__wc_t0 = performance.now(); };
   const doneReq = (method, url) => {
@@ -60,7 +61,8 @@ INIT_JS = """(() => {
   const emitStamp = (el) => {  // append-only -> a re-render appends, never overwrites
     const node = stamp(el);
     if (node && window.__wc_stamps.length < 8000)
-      window.__wc_stamps.push({node: node, xhr: window.__wc_xhr_index, t: relSecs()});
+      window.__wc_stamps.push({node: node, xhr: window.__wc_xhr_index,
+                               action: window.__wc_action_index, t: relSecs()});
   };
   // wrap fetch + XMLHttpRequest so completion bumps the phase counter + records the request.
   const _fetch = window.fetch;
@@ -466,6 +468,12 @@ class LiveBacking(Backing):
                     },
                 }
             )
+        # bump the client-side ACTION counter BEFORE acting, so any DOM this interaction
+        # reveals is phase-stamped with this action's index (the correlation substrate).
+        try:
+            await core._page.evaluate("window.__wc_action_index = (window.__wc_action_index||0)+1")
+        except Exception:  # noqa: BLE001 - a page without the init script: correlation just skips
+            pass
         loc = core._page.locator(selector or "*").first
         try:
             if action == "click":

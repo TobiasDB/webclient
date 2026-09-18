@@ -31,10 +31,12 @@ class XhrRequest(BaseModel):
 
 
 class DomPhase(BaseModel):
-    """The request(s) that could have produced a DOM node's content."""
+    """The request/action that could have produced a DOM node's content."""
 
     node_key: str  # the set-once ``data-wc-node`` id of the mutated node
     candidates: list[int] = []  # XhrRequest.index values; EMPTY = pre-XHR (server-static or pure JS)
+    action: int | None = None  # the ACTION index that first revealed the node (a .click/.write);
+    # None = it appeared without an action (server-static / load-time JS / an XHR)
     t_s: float | None = None  # when the node last mutated (seconds since the first request)
 
 
@@ -52,6 +54,13 @@ class Correlation(BaseModel):
             if p.node_key == node_key:
                 return p.candidates
         return []
+
+    def action_for(self, node_key: str) -> "int | None":
+        """The action index that first revealed a node (``None`` if none / not action-driven)."""
+        for p in self.phases:
+            if p.node_key == node_key:
+                return p.action
+        return None
 
     def request(self, index: int) -> "XhrRequest | None":
         for r in self.requests:
@@ -123,13 +132,19 @@ class OrderingCorrelator:
                 continue
             detail: dict[str, Any] = ev.detail or {}
             xhr_index = int(detail.get("xhr_index", 0) or 0)
+            action = int(detail.get("action", 0) or 0)
             t_s = detail.get("t_s")
             cands = self._candidates(xhr_index, requests, by_index)
             existing = phases.get(node)
             if existing is None:
-                phases[node] = DomPhase(node_key=node, candidates=cands, t_s=t_s)
-            else:  # a node mutated more than once -- merge every phase it passed through
+                # the FIRST stamp for a node is when it appeared -> its revealing action.
+                phases[node] = DomPhase(
+                    node_key=node, candidates=cands, action=action or None, t_s=t_s
+                )
+            else:  # a node mutated more than once -- merge every xhr phase it passed through
                 existing.candidates = sorted(set(existing.candidates) | set(cands))
+                if existing.action is None and action:  # keep the earliest (appearance) action
+                    existing.action = action
                 if t_s is not None:
                     existing.t_s = t_s if existing.t_s is None else max(existing.t_s, t_s)
         return Correlation(requests=requests, phases=list(phases.values()))

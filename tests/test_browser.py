@@ -74,6 +74,19 @@ def test_click_mutates_dom_and_records_everything(app):
     assert any(isinstance(e, DOMUpdateEvent) for e in app.dom_mutations)
 
 
+def test_click_phase_stamps_new_elements_with_the_action_index(app):
+    # the correlation substrate, end-to-end in a real browser: DOM revealed by the 1st
+    # .click() is phase-stamped with action index 1, and the skeleton surfaces "act[1]"
+    # -- without ever exposing the internal data-wc-node stamp (never a selector / output).
+    app.click("#c1 button")
+    app.wait_for(".added", timeout=5.0)
+    sk = app.skeleton()
+    assert "added-one" in sk  # the injected content is present in the outline
+    assert "act[1]" in sk  # attributed to the first interaction
+    assert "data-wc-node" not in sk  # the internal stamp is never shown
+    assert "data-wc-node" not in app.select(".added").attr("html")  # nor leaked to output
+
+
 def test_write_and_live_state(app):
     app.write("#name", "Ada")
     assert app.select("#out").attr("text") == "Ada"

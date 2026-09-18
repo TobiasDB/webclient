@@ -375,7 +375,7 @@ def _correlation(core: "Document") -> "Correlation | None":
     dom = [
         DOMUpdateEvent(
             node_id=str(s.get("node") or ""),
-            detail={"xhr_index": s.get("xhr", 0), "t_s": s.get("t")},
+            detail={"xhr_index": s.get("xhr", 0), "action": s.get("action", 0), "t_s": s.get("t")},
         )
         for s in stamps
     ]
@@ -489,13 +489,21 @@ def _skeleton(
         return "" if _selector_sig(el) in static_sigs else inject_tag
 
     def phase_note(el: Any) -> str:
-        # which XHR request(s) this node's content followed (the correlation stamp) --
-        # an ANNOTATION, never a selector; the data-wc-node attr itself is never shown.
+        # which XHR request(s) / action this node's content followed (the correlation
+        # stamp) -- an ANNOTATION, never a selector; data-wc-node itself is never shown.
         if correlation is None:
             return ""
         node = el.get("data-wc-node") if hasattr(el, "get") else None
-        cands = correlation.candidates_for(node) if node else []
-        return f"  ← after [{', '.join(str(c) for c in cands)}]" if cands else ""
+        if not node:
+            return ""
+        cands = correlation.candidates_for(node)
+        action = correlation.action_for(node)
+        parts = []
+        if cands:
+            parts.append(f"req[{', '.join(str(c) for c in cands)}]")
+        if action:
+            parts.append(f"act[{action}]")
+        return f"  ← after {' '.join(parts)}" if parts else ""
 
     def walk(el: Any, depth: int) -> None:
         if depth > max_depth:

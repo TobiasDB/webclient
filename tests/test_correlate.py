@@ -22,9 +22,10 @@ def _net(index, url, t_s, method="GET"):
     )
 
 
-def _mut(node, xhr_index, t_s, kind="added"):
+def _mut(node, xhr_index, t_s, kind="added", action=0):
     return DOMUpdateEvent(
-        kind=kind, node_id=node, detail={"xhr_index": xhr_index, "t_s": t_s},
+        kind=kind, node_id=node,
+        detail={"xhr_index": xhr_index, "action": action, "t_s": t_s},
     )
 
 
@@ -68,6 +69,21 @@ def test_a_node_that_re_renders_merges_every_phase_it_passed_through():
     assert corr.request(2) is not None  # the later mutation's request is present
 
 
+def test_a_node_is_attributed_to_the_action_that_first_revealed_it():
+    # a .click() bumps the action counter; DOM that then appears carries that action index.
+    net: list = []
+    dom = [_mut("n1", xhr_index=0, t_s=1.0, action=2)]  # appeared after the 2nd interaction
+    corr = OrderingCorrelator().correlate(net, dom)
+    assert corr.action_for("n1") == 2
+    assert corr.candidates_for("n1") == []  # no xhr involved -> action-driven only
+
+
+def test_action_keeps_the_earliest_appearance_not_a_later_re_render():
+    dom = [_mut("n1", 0, 1.0, action=1), _mut("n1", 0, 2.0, action=3)]  # appeared at action 1
+    corr = OrderingCorrelator().correlate([], dom)
+    assert corr.action_for("n1") == 1
+
+
 def test_mutations_without_a_node_id_are_ignored():
     corr = OrderingCorrelator().correlate([_net(1, "https://x/a", 0.0)], [_mut("", 1, 0.1)])
     assert corr.phases == []  # no stable node -> no phantom phase
@@ -76,7 +92,7 @@ def test_mutations_without_a_node_id_are_ignored():
 def test_skeleton_annotates_phase_and_never_shows_the_stamp():
     # the end-to-end wiring, no browser: a captured page (data-wc-node stamps in the HTML)
     # + a fake PageResult carrying the xhr timeline + phase stamps -> the skeleton lists the
-    # requests and annotates the record region "← after [1]", but never leaks data-wc-node.
+    # requests and annotates the record region "← after req[1]", but never leaks data-wc-node.
     from webclient.clients.browser import PageResult
     from webclient.core.document import Document
     from webclient.core.document.live import LiveBacking
@@ -97,7 +113,7 @@ def test_skeleton_annotates_phase_and_never_shows_the_stamp():
 
     sk = doc.skeleton()
     assert "http://x/api/news" in sk and "0.22s" in sk  # the request timeline (relative seconds)
-    assert "← after [1]" in sk  # the record region attributed to request 1
+    assert "← after req[1]" in sk  # the record region attributed to request 1
     assert "data-wc-node" not in sk  # the internal stamp is never shown (never a selector)
     assert "data-wc-node" not in doc.attr("html")  # nor leaked into rendered output
 
