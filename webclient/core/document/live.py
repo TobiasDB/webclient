@@ -47,10 +47,11 @@ INIT_JS = """(() => {
   const relSecs = () => window.__wc_t0 == null ? 0 : (performance.now() - window.__wc_t0) / 1000;
   const startReq = () => { if (window.__wc_t0 == null) window.__wc_t0 = performance.now(); };
   const doneReq = (method, url) => {
+    try { url = new URL(url || '', location.href).href; } catch (e) { url = String(url || ''); }
     window.__wc_xhr_index += 1;
     if (window.__wc_xhr.length < 500)
       window.__wc_xhr.push({index: window.__wc_xhr_index, method: (method || 'GET'),
-                            url: String(url || ''), t: relSecs()});
+                            url: url, t: relSecs()});
   };
   const stamp = (el) => {  // set-once identity; return the stamp id (null for non-elements)
     if (!el || el.nodeType !== 1) return null;
