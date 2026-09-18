@@ -224,6 +224,13 @@ class Brief(BaseModel):
     #: authoring a query. For a dataset we can't reliably capture in some page state, e.g.
     #: ir-events: "the upcoming-events section is empty -- its structure is unknown".
     exit_when: str = ""
+    #: brief-specific STRUCTURAL guidance for the query author -- how this dataset is laid out
+    #: on the page, threaded straight into the write_query prompt. This is where a brief passes
+    #: down what it knows about a hard-to-see shape, e.g. ir-events: "the dataset splits into
+    #: UPCOMING and ARCHIVED sections; ARCHIVED is often tabbed by year; the UPCOMING section
+    #: may be a SINGLE row in a DIFFERENT format from the archived rows (or empty) -- capture it
+    #: too, don't assume one selector fits every record."
+    hints: str = ""
     crawl: dict[str, Any] = {}  # pipeline crawl overrides (max_pages/depth/rounds/browser)
 
     @model_validator(mode="after")
@@ -249,7 +256,9 @@ class Brief(BaseModel):
         paths nest, the text is that field's description; a bare string is a field with
         no description); ``search`` (a deterministic web-search qualifier appended after the
         company name, e.g. ``investor relations news``); ``look`` / ``ignore`` (NL guide
-        lines); ``crawl`` (a mapping of pipeline crawl overrides -- ``max_pages`` / ``depth``
+        lines); ``hints`` (brief-specific STRUCTURAL guidance for the query author -- how the
+        dataset is laid out on the page); ``exit_when`` (a natural-language exit condition);
+        ``crawl`` (a mapping of pipeline crawl overrides -- ``max_pages`` / ``depth``
         / ``rounds`` / ``browser``); ``description`` (else the body)."""
         front, body = _parse_frontmatter(text)
 
@@ -267,6 +276,7 @@ class Brief(BaseModel):
             title=str(front.get("title") or ""),
             search=str(front.get("search") or ""),
             exit_when=str(front.get("exit_when") or ""),
+            hints=str(front.get("hints") or ""),
             look=as_list(front.get("look")),
             ignore=as_list(front.get("ignore")),
             crawl=crawl if isinstance(crawl, dict) else {},
@@ -1326,6 +1336,8 @@ def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False, recen
         fields_line=_fields_line(brief),
         pager=pager,
         skeleton=skeleton,
+        hints=(f"\n\nDATASET NOTES (from the brief -- how this dataset is laid out): {brief.hints}"
+               if brief.hints else ""),
         recency=(f"\n\nRECENCY (from the page evaluation): {recency}" if recency else ""),
     )
 
@@ -2401,6 +2413,43 @@ def review_query(result: OnboardingResult, artifacts: _RunArtifacts, brief: Brie
     return review
 
 
+def review_query_exit(result: OnboardingResult, artifacts: _RunArtifacts, brief: Brief, *, llm: LLM) -> "Review | None":
+    """Re-check the brief's EXIT CONDITION against the authored query's RESULT (the extracted
+    rows), not just the page as the evaluate stage did. When the condition holds on the RESULT
+    -- e.g. ir-events' "the upcoming section is empty" reading true because the output has no
+    upcoming events -- it is NOTED here, and a genuine clean exit is distinguished from a likely
+    MISS (an oddly-formatted single row the record selector skipped). Informational only: it
+    never abandons a working query (a query that ran and is complete still ships) -- it ensures
+    the brief's own exit semantics are checked against the DATA and surfaced for the human.
+    ``None`` when the brief has no exit condition or no query was authored."""
+    q = result.query
+    if not brief.exit_when or q is None:
+        return None
+    sample = json.dumps(list(q.sample)[:8], default=str, indent=2)
+    data = _ask_json(llm, render_prompt(
+        "review_query_exit",
+        description=brief.description,
+        exit_condition=brief.exit_when,
+        row_count=str(q.row_count),
+        sample=_clip(sample, _MAX_LISTING_CHARS, "sample rows"),
+    ))
+    if not isinstance(data, dict):
+        return None
+    reason = str(data.get("reason") or "")
+    if not _as_bool(data.get("met")):  # the condition does NOT hold on the result -> nothing to flag
+        return Review(stage="exit", verdict="not met", passed=True,
+                      summary=reason or "the brief's exit condition does not hold on the result")
+    missed = _as_bool(data.get("likely_missed"))  # holds only because records were probably skipped
+    return Review(
+        stage="exit",
+        verdict="likely miss" if missed else "met",
+        passed=not missed,  # a probable miss is FLAGGED; a genuine clean exit is informational
+        issues=([f"the query may have MISSED records the brief expects ({brief.exit_when})"]
+                if missed else []),
+        summary=reason or f"the brief's exit condition holds on the result: {brief.exit_when}",
+    )
+
+
 def review_failure(result: OnboardingResult, artifacts: _RunArtifacts, brief: Brief, *, llm: LLM) -> "Review | None":
     """Diagnose a failed run: from the trace + how far it got, name the most likely cause
     and what would fix it. Included in the summary so a human sees WHY it failed."""
@@ -2610,6 +2659,11 @@ def _onboard_company(
     # model graded it low or the data looks stale.
     if review and q is not None:
         _note_review(result, review_query(result, artifacts, brief, llm=llm))
+        # the brief's own EXIT CONDITION, re-checked against the query RESULT (not just the page):
+        # ensures e.g. ir-events' "upcoming is empty" is NOTED against the data, and a probable
+        # miss (an oddly-formatted row skipped) is flagged. A flag, never a gate.
+        if brief.exit_when:
+            _note_review(result, review_query_exit(result, artifacts, brief, llm=llm))
     return result
 
 

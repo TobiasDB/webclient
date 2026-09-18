@@ -3,6 +3,7 @@ name: ir-events
 title: Investor-Relations Events
 search: investor relations events presentations webcasts
 exit_when: the UPCOMING events section is empty (no upcoming events are scheduled). We can't author a reliable query for a section with no example rows, so stop here rather than guess its structure.
+hints: This is a SPLIT dataset with two sections that do NOT share one record format. ARCHIVED / PAST events are a repeating list, often TABBED BY YEAR (an older year may show by default). The UPCOMING section is separate and is frequently a SINGLE row (one scheduled event) laid out DIFFERENTLY from the archived rows — a callout/banner, not a table row — so a .select_all(...) tuned to the archived rows will silently MISS it. Write a split query that captures the upcoming section separately from the archived list (a sub-list per section, or a .step across the year tabs), and treat the single upcoming row as its own selector. Mark upcoming-only fields optional; if upcoming is truly empty the exit condition applies.
 schema:
   - title: the event name (e.g. "Q3 FY2026 Earnings Call", "Adobe Investor Meeting 2026", "Morgan Stanley Technology Conference")
   - date: the event date as shown (e.g. "September 11, 2026", "Dec 12, 2026", "2026-09-11")

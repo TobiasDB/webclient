@@ -302,6 +302,22 @@ def test_recency_guidance_feeds_the_evaluator_read_into_the_query_prompt():
     assert _recency_guidance(CandidateEval(url="http://x")) == ""
 
 
+def test_brief_hints_are_passed_down_into_the_query_prompt():
+    # brief-specific STRUCTURAL guidance (e.g. ir-events' upcoming/archived split, the single
+    # differently-formatted upcoming row) reaches the query author; a brief with no hints adds none.
+    from webclient.pipelines.onboarding import _query_prompt
+
+    brief = Brief(description="events", fields=["title"],
+                  hints="UPCOMING is a single differently-formatted row; ARCHIVED is tabbed by year.")
+    prompt = _query_prompt(brief, "SKEL")
+    assert "DATASET NOTES (from the brief" in prompt
+    assert "single differently-formatted row" in prompt
+    # no hints -> no injected notes (the static split-query paragraph still references DATASET
+    # NOTES conditionally, but the brief's own note block is absent)
+    assert "DATASET NOTES (from the brief" not in _query_prompt(
+        Brief(description="events", fields=["title"]), "SKEL")
+
+
 def test_write_query_retries_for_recent_data_when_the_first_query_is_stale(httpserver):
     # the hidden-tabs failure: the model first selects an ARCHIVED tab (complete but stale);
     # the writer nudges it for the MOST RECENT data, and it lands on the current tab.
@@ -587,6 +603,47 @@ def test_evaluate_honours_a_brief_exit_condition(httpserver):
     assert ev2.exit_when_met is False
 
 
+def test_exit_condition_reviews_the_query_result_and_flags_a_likely_miss():
+    # the brief's exit_when is re-checked against the query RESULT (not just the page): when it
+    # holds because records were probably SKIPPED, it is flagged; a genuine clean exit is noted
+    # but not flagged; with no exit_when the review is skipped entirely.
+    from webclient.pipelines.onboarding import (
+        OnboardingResult,
+        QueryArtifact,
+        _RunArtifacts,
+        review_query_exit,
+    )
+
+    brief = Brief(description="investor events", fields=["title", "date"],
+                  exit_when="the upcoming-events section is empty")
+    art = QueryArtifact(blob="b", describe="wq.doc...", row_count=3,
+                        sample=[{"title": "Q1 FY25 Earnings", "date": "2024-03-01"}])
+    result = OnboardingResult(company="Acme", brief=brief, query=art)
+
+    prompts: list[str] = []
+
+    def miss_llm(prompt: str) -> str:
+        prompts.append(prompt)
+        return ('{"met": true, "likely_missed": true, '
+                '"reason": "no upcoming rows in the result — the single upcoming callout was likely missed"}')
+
+    rev = review_query_exit(result, _RunArtifacts(), brief, llm=miss_llm)
+    assert rev is not None and rev.stage == "exit"
+    assert rev.verdict == "likely miss" and rev.passed is False  # flagged for the human
+    assert rev.issues and "MISSED" in rev.issues[0]
+    assert "EXIT CONDITION" in prompts[0] and "RESULT" in prompts[0]
+
+    # a genuine clean exit (condition holds, nothing missed) is NOTED but not flagged
+    clean = review_query_exit(result, _RunArtifacts(), brief,
+                              llm=lambda p: '{"met": true, "likely_missed": false, "reason": "no upcoming events scheduled"}')
+    assert clean is not None and clean.verdict == "met" and clean.passed is True
+
+    # no exit_when on the brief -> the review is skipped
+    plain = OnboardingResult(company="Acme", brief=Brief(description="events"), query=art)
+    assert review_query_exit(plain, _RunArtifacts(), Brief(description="events"),
+                             llm=lambda p: "{}") is None
+
+
 # --------------------------------------------------------------------------- #
 # Prompts-as-data: the templates load and render with the right variables.
 # --------------------------------------------------------------------------- #
@@ -610,11 +667,18 @@ def test_prompt_templates_load_and_render():
     assert "exit_when_met" in ev  # the exit-condition key is always in the JSON schema
     wq_prompt = render_prompt(
         "write_query", guide="GUIDE-TEXT", description="d", fields_line="",
-        pager="", skeleton="SKEL", recency="",
+        pager="", skeleton="SKEL", hints="", recency="",
     )
     assert "query syntax" in wq_prompt and "query code" in wq_prompt
     assert "MOST RECENT" in wq_prompt  # the recency / hidden-tabs guidance is in the prompt
+    assert "SPLIT query" in wq_prompt  # the split-section (differently-formatted row) guidance
     assert wq_prompt.startswith("GUIDE-TEXT")
+    # the exit-condition-against-the-RESULT review prompt renders with its placeholders
+    exit_prompt = render_prompt(
+        "review_query_exit", description="d", exit_condition="upcoming is empty",
+        row_count="3", sample="[]",
+    )
+    assert "EXIT CONDITION" in exit_prompt and "RESULT" in exit_prompt
 
 
 def test_render_prompt_requires_every_placeholder():
