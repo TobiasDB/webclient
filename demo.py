@@ -389,6 +389,14 @@ def main() -> None:
     print("\nlazy plan:  ", plan._plan.describe()[:60], "...")
     print("wire form:  ", plan._plan.model_dump_json()[:70], "...")
 
+    # [viz] Read-only plan visualization: explain_tree() renders a SQL-EXPLAIN
+    #       indented step tree, wireframe() a self-contained HTML picture of the
+    #       pipeline (page frames / selector boxes / field chips / output card).
+    print("explain:")
+    for line in plan.explain_tree().splitlines():
+        print("   ", line)
+    print("wireframe:   ", f"{len(plan.wireframe())} bytes of self-contained HTML")
+
     # [P3] One evaluator: the plan runs through the same @op implementations
     #      the eager calls use; a Collection fans out per element (bounded by
     #      the pool) and rows are delivered one at a time via stream=True.

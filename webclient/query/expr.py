@@ -162,8 +162,26 @@ class Expr:
         return self._plan.to_blob()
 
     def explain(self) -> str:
-        """A readable one-line rendering of the recorded chain (pretty-print)."""
+        """A readable one-line rendering of the recorded chain (pretty-print);
+        round-trippable via :func:`from_explain`. For the SQL-EXPLAIN-style
+        indented step tree, use :meth:`explain_tree`."""
         return self._plan.describe()
+
+    def explain_tree(self) -> str:
+        """A SQL-EXPLAIN-style indented step tree of the recorded plan (one op per
+        line with its key args + data flow) -- richer than the one-line
+        :meth:`explain`. Read-only (see :mod:`webclient.query.viz`)."""
+        from .viz import explain as _explain_tree
+
+        return _explain_tree(self._plan)
+
+    def wireframe(self) -> str:
+        """A self-contained HTML wireframe of the recorded plan (inline CSS/SVG,
+        no external deps): the plan pictured as page frames, selector boxes, field
+        chips and an output card (see :func:`webclient.query.viz.wireframe`)."""
+        from .viz import wireframe as _wireframe
+
+        return _wireframe(self._plan)
 
     def __repr__(self) -> str:
         return f"lazy {self._plan.describe()}"
