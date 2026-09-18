@@ -253,6 +253,69 @@ def test_write_query_keeps_the_page_in_context_across_retries(httpserver):
     assert "did not extract" in turns[1] and len(turns[1]) < len(turns[0]) // 2
 
 
+def test_recency_guidance_feeds_the_evaluator_read_into_the_query_prompt():
+    # evaluate_candidate identifies the sort order + where the most recent records are;
+    # that hint is injected into the query-writing prompt to assist the first attempt.
+    from webclient.pipelines.onboarding import CandidateEval, _query_prompt, _recency_guidance
+
+    ev = CandidateEval(url="http://x", sort_order="newest-first",
+                       recency_hint="the latest is in the '2026' tab")
+    guidance = _recency_guidance(ev)
+    assert "newest-first" in guidance and "2026" in guidance and "MOST RECENT" in guidance
+    prompt = _query_prompt(Brief(description="news", fields=["title"]), "SKEL", recency=guidance)
+    assert "RECENCY (from the page evaluation)" in prompt and "2026" in prompt
+    # a non-dated dataset -> no recency noise in the prompt
+    assert _recency_guidance(CandidateEval(url="http://x")) == ""
+
+
+def test_write_query_retries_for_recent_data_when_the_first_query_is_stale(httpserver):
+    # the hidden-tabs failure: the model first selects an ARCHIVED tab (complete but stale);
+    # the writer nudges it for the MOST RECENT data, and it lands on the current tab.
+    from datetime import date, timedelta
+
+    from webclient.pipelines.onboarding import write_query
+
+    today = date.today()
+    old = [(today - timedelta(days=760 + i * 30)).isoformat() for i in range(3)]  # ~2 yrs, monthly
+    new = [(today - timedelta(days=i * 7)).isoformat() for i in range(3)]         # recent, weekly
+    page = (
+        "<main>"
+        + '<section class="archive">'
+        + "".join(f'<div class="item"><span class="t">Old {i}</span><time>{old[i]}</time></div>'
+                  for i in range(3)) + "</section>"
+        + '<section class="current">'
+        + "".join(f'<div class="item"><span class="t">New {i}</span><time>{new[i]}</time></div>'
+                  for i in range(3)) + "</section></main>"
+    )
+    httpserver.expect_request("/p").respond_with_data(page, content_type="text/html")
+    replies = iter([
+        # 1st: the ARCHIVED tab -> complete but STALE
+        'wq.doc.select_all(".archive .item").extract('
+        'title=wq.doc.select(".t").attr("text"), date=wq.doc.select("time").attr("text")).project()',
+        # 2nd (after the recency nudge): the CURRENT tab -> fresh
+        'wq.doc.select_all(".current .item").extract('
+        'title=wq.doc.select(".t").attr("text"), date=wq.doc.select("time").attr("text")).project()',
+    ])
+    follow_ups: list[str] = []
+
+    class _Chat:
+        def send(self, text: str) -> str:
+            follow_ups.append(text)
+            return next(replies)
+
+    class _ChatLLM:
+        def conversation(self) -> "_Chat":
+            return _Chat()
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/p"), Brief(description="news", fields=["title", "date"]),
+                          wc=wc, llm=_ChatLLM(), browser="never", retries=2)
+    assert art is not None and art.complete and not art.stale  # retried onto the fresh data
+    assert "New" in str(art.sample) and "Old" not in str(art.sample)  # the current tab
+    assert len(follow_ups) == 2  # opening + one recency retry
+    assert "recent" in follow_ups[1].lower() and "archived" in follow_ups[1].lower()
+
+
 def test_select_candidates_forces_data_docs_and_fails_open():
     from webclient.core.document.models import PageCard
     from webclient.pipelines.onboarding import select_candidates
@@ -479,9 +542,10 @@ def test_prompt_templates_load_and_render():
     assert "Assess this page" in ev and "http://c" in ev and "SKEL" in ev
     wq_prompt = render_prompt(
         "write_query", guide="GUIDE-TEXT", description="d", fields_line="",
-        pager="", skeleton="SKEL",
+        pager="", skeleton="SKEL", recency="",
     )
     assert "query syntax" in wq_prompt and "query code" in wq_prompt
+    assert "MOST RECENT" in wq_prompt  # the recency / hidden-tabs guidance is in the prompt
     assert wq_prompt.startswith("GUIDE-TEXT")
 
 

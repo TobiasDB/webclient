@@ -340,7 +340,8 @@ class CandidateEval(BaseModel):
     url: str
     dataset_present: bool = False
     is_queryable: bool = False  # an API / endpoint that serves the WHOLE dataset
-    sort_order: str | None = None
+    sort_order: str | None = None  # "newest-first" | "oldest-first" | "unsorted" (from the dates)
+    recency_hint: str = ""  # where the MOST RECENT records are (a tab/filter/first page), for write_query
     completeness: str | None = None  # e.g. "full" | "partial" | "unknown"
     has_pagination: bool = False
     has_filters: bool = False
@@ -531,13 +532,18 @@ def _summarize(result: OnboardingResult) -> None:
     ev = result.evaluation
     if ev is not None:
         lines.append(f"  source:    {ev.url}")
+        if ev.api_endpoint:  # the JSON API behind the page (from XHR correlation) -- query it, not the DOM
+            lines.append(f"  data API:  {ev.api_endpoint}  ← the JSON behind the page (query this, not the DOM)")
         lines.append(
             "  scores:    "
             + f"scrapability {ev.scrapability}/10, queryable={ev.is_queryable}, "
             + f"present={ev.dataset_present}, complete={ev.completeness or '?'}, "
             + f"paginated={ev.has_pagination}, filters={ev.has_filters}, "
-            + f"subset={ev.dataset_is_subset}, interactive={ev.interactive}"
+            + f"subset={ev.dataset_is_subset}, interactive={ev.interactive}, "
+            + f"sort={ev.sort_order or '?'}"
         )
+        if ev.recency_hint:  # where the most recent records are (fed to the query writer)
+            lines.append(f"  recency:   {ev.recency_hint}")
         if ev.flags:  # each present flag with the SIGNALS (evidence) behind it
             lines.append("  flags:")
             for name, conf in sorted(ev.flags.items(), key=lambda x: -x[1]):
@@ -557,6 +563,11 @@ def _summarize(result: OnboardingResult) -> None:
         q = result.query
         lines.append(f"  query:     {q.describe}")
         lines.append(f"  tested:    {'✓' if q.tested else '✗'}  {q.row_count} row(s)")
+        if q.timeliness:  # the TIMELINESS flag: is the newest extracted row recent? (a flag, not a gate)
+            hint = ("  ← the current period may be behind a tab/filter/page"
+                    if q.stale and ev is not None
+                    and (ev.has_filters or ev.has_pagination or ev.interactive) else "")
+            lines.append(f"  timeliness:{' ⚠️ STALE —' if q.stale else ' ✓'} {q.timeliness}{hint}")
         lines.append("  sample:")
         lines += _render_table(q.sample)
         # the self-contained query blob on its own line -- executable as is, easy to copy
@@ -1036,8 +1047,10 @@ def _log_crawl_progress(crawl: Any, seen_pages: int, seen_fails: int) -> "tuple[
     names), plus each failed edge + why. So the crawl is observable page by page: you can
     see when a page forced a browser escalation and what it tripped."""
     for card in crawl.pages[seen_pages:]:
-        tier = getattr(card, "final_tier", "static") or "static"
-        transport = "http" if tier == "static" else tier  # static tier == a plain HTTP fetch
+        # the FULL resolve trail, so it's explicit whether http was enough or a browser (and
+        # any proxy) was needed: "http" (static only) / "http→browser" / "http→proxy→browser".
+        esc = getattr(card, "escalation", None) or [getattr(card, "final_tier", "static") or "static"]
+        transport = "→".join("http" if t == "static" else t for t in esc)
         flags = ", ".join(getattr(card, "flags", []) or []) or "none"
         log.info("    crawl [%s] %s  (via %s; signals: %s)",
                  card.status_code, card.final_url or card.url, transport, flags)
@@ -1266,7 +1279,7 @@ def write_resolve(flags: Sequence[Flag]) -> Resolve:
 # --------------------------------------------------------------------------- #
 
 
-def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False) -> str:
+def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False, recency: str = "") -> str:
     # Deliberately narrow: the packaged query spec + the skeleton + the ask. Nothing
     # about fetching, resolving, or running -- only CSS selectors and the query syntax.
     pager = (
@@ -1281,7 +1294,23 @@ def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False) -> st
         fields_line=_fields_line(brief),
         pager=pager,
         skeleton=skeleton,
+        recency=(f"\n\nRECENCY (from the page evaluation): {recency}" if recency else ""),
     )
+
+
+def _recency_guidance(ev: "CandidateEval | None") -> str:
+    """A short recency instruction for the query writer, from the evaluator's read of the
+    sort order + where the most recent records are. Empty for a non-dated dataset."""
+    if ev is None:
+        return ""
+    parts = []
+    if ev.sort_order:
+        parts.append(f"the records are {ev.sort_order}")
+    if ev.recency_hint:
+        parts.append(ev.recency_hint)
+    if not parts:
+        return ""
+    return "Prioritise the MOST RECENT records -- " + "; ".join(parts) + "."
 
 
 def _data_rows(result: Any) -> list[Any]:
@@ -1889,6 +1918,27 @@ class _Author:
         return self._llm(self._opening if not follow_up else f"{self._opening}\n\n{follow_up}")
 
 
+def _should_retry_for_recency(art: QueryArtifact, attempt: int, tries: int) -> bool:
+    """A COMPLETE query whose newest data looks stale is probably scoped to an ARCHIVED
+    period (a hidden year tab, an old paginated page). Worth one more try for the most
+    recent data -- but never a ship blocker, so only while attempts remain."""
+    return art.stale and attempt < tries - 1
+
+
+def _recency_follow_up(art: QueryArtifact) -> str:
+    """The feedback that pushes the model toward the MOST RECENT data + the hidden-tabs pattern."""
+    return (
+        f"That query is COMPLETE, but the most recent data looks MISSING: {art.timeliness}. "
+        "The records you selected are probably an ARCHIVED period. Sites keep the CURRENT period "
+        "behind a control: YEAR TABS (an older year shows by default), a 'Latest' vs 'Archive' "
+        "toggle, a category filter, or a paginated first page. In the skeleton look for clickable "
+        "tab/filter controls (marked '← clickable'), pagination, and records marked '[xhr]' "
+        "(loaded on demand). Re-write the query to capture the MOST RECENT records -- pick a "
+        "record selector that is NOT scoped to one archived tab (select across all of them, or "
+        "the current/latest tab). Is there more recent data than what you selected?"
+    )
+
+
 def write_query(
     candidate_url: str,
     brief: Brief,
@@ -1901,6 +1951,7 @@ def write_query(
     extra_urls: Sequence[str] = (),
     resolve: "Resolve | None" = None,
     doc: Any = None,
+    recency: str = "",
 ) -> QueryArtifact | None:
     """Have the model author the DOCUMENT-level extraction from the page skeleton, test
     it against the fetched source (``from_blob`` + run -> it must extract DATA rows), and
@@ -1916,9 +1967,10 @@ def write_query(
     if doc is None:
         doc = wc.fetch(candidate_url, browser=browser, optional=True)
     skeleton = _skeleton_for(doc) if doc.ok else ""
-    prompt = _query_prompt(brief, skeleton, paginated=paginated)
+    prompt = _query_prompt(brief, skeleton, paginated=paginated, recency=recency)
     bases = [candidate_url, *extra_urls]
     best: QueryArtifact | None = None
+    best_complete: QueryArtifact | None = None  # a complete-but-STALE fallback (recency retries)
     author = _Author(llm, prompt)  # the page rides in the OPENING; retries send only feedback
     follow_up: "str | None" = None
     tries = retries + 1
@@ -1948,16 +2000,31 @@ def write_query(
             continue
         art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases)
         if art.complete:
-            log.info("%s: ✓ complete — %d row(s)", tag, art.row_count)
-            return art
+            if not _should_retry_for_recency(art, attempt, tries):
+                note = f" (STALE flag: {art.timeliness})" if art.stale else ""
+                log.info("%s: ✓ complete%s — %d row(s)", tag, note, art.row_count)
+                return art
+            best_complete = art  # complete but stale: keep it, but push for the most recent data
+            log.info("%s: complete but STALE — retrying for the most recent data (%s)",
+                     tag, art.timeliness)
+            follow_up = _recency_follow_up(art)
+            continue
         # AUTO-REPAIR a near-miss field selector (a one-char class typo: widget vs widgets) by
         # swapping in the nearest real class present in the record, then re-validate.
         repaired = _repair_query(expr, doc)
         if repaired is not None:
             rart, _rrows = _artifact_from(repaired, doc, brief, candidate_url, resolve, bases)
-            if rart.complete:
-                log.info("%s: ✓ complete after auto-repairing a selector — %d row(s)", tag, rart.row_count)
+            if rart.complete and not _should_retry_for_recency(rart, attempt, tries):
+                note = f" (STALE flag: {rart.timeliness})" if rart.stale else ""
+                log.info("%s: ✓ complete after auto-repairing a selector%s — %d row(s)",
+                         tag, note, rart.row_count)
                 return rart
+            if rart.complete and rart.stale:  # repaired but stale -> keep as fallback, push recency
+                best_complete = rart
+                log.info("%s: repaired + complete but STALE — retrying for recent (%s)",
+                         tag, rart.timeliness)
+                follow_up = _recency_follow_up(rart)
+                continue
             art = rart if rart.row_count > art.row_count else art  # keep the better fallback
         best = best or art  # keep the first rebuildable one as a fallback (NOT complete)
         # a concise reason on the console; the full, multi-line diagnostic hint goes to the model.
@@ -1968,6 +2035,11 @@ def write_query(
             f" tweak the fields.\n\nYour previous query was:\n{expr.describe()}\n\n"
             f"{_content_hint(expr, rows, brief, doc)}"
         )
+    # a complete-but-stale query (recency retries didn't find fresher data) beats an incomplete
+    # one: it's a working query, and staleness is a FLAG for the human review, not a blocker.
+    if best_complete is not None:
+        log.info("    keeping the complete query with a STALE flag (%s)", best_complete.timeliness)
+        return best_complete
     if best is None:  # every attempt failed to author a usable query -- say so loudly
         log.warning("    could not author a working query in %d attempt(s)", tries)
     return best
@@ -2387,6 +2459,7 @@ def _onboard_company(
         query_url, brief, wc=wc, llm=llm, browser=_mode(browser),
         paginated=evaluation.has_pagination, resolve=result.resolve,
         doc=doc if doc.ok else None,
+        recency=_recency_guidance(evaluation),  # sort order + where the most recent records are
     )
     if isinstance(llm, LlmClient):
         result.cost_usd = llm.spent_usd
