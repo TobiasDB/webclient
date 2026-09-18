@@ -253,6 +253,19 @@ async def _aapply(
 
 
 async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -> Any:
+    # step(action): a SEQUENCE step against ONE held live page. Replay the action
+    # sub-plan (a wait_for/click/write/... chain) against the CURRENT doc -- the
+    # same held page the resolve opened -- as a side effect, then hand the doc back
+    # so later .step(...)/.extract(...) chain onto it (extract accumulates the row).
+    # Run WITHIN the current plan scope (not a fresh one) so every page the sequence
+    # opens -- the root AND any sub-resolve inside a step -- is owned by the sequence
+    # and released together when it finishes (see ``_plan_scope``; a nested
+    # ``aevaluate`` shares the outer live registry and releases nothing itself).
+    if name == "step":
+        if call.args and call.args[0].plan is not None:
+            action = Expr(call.args[0].plan, client)
+            await aevaluate(action, value, client=client)
+        return value
     # field(k) / reference(k) read an extracted column off the element's _row
     if name in ("field", "reference"):
         from ..collection import _row_of

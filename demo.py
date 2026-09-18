@@ -339,6 +339,24 @@ def main() -> None:
         )
         wc.release(deep)
 
+        # [sequence] A multi-step script against ONE held page as a SINGLE plan:
+        #      .step(action) chains actions (write/click/wait_for) in order, the
+        #      interleaved .extract(...) captures accumulate onto the doc's row, and
+        #      .project() renders them. The executor resolves once, HOLDS the page
+        #      across every step, and releases it (scope-owned) when it finishes.
+        seq = (
+            wq.ref.resolve(browser="always")
+            .step(wq.doc.write("#qty", "7"))
+            .step(wq.doc.click("#add"))
+            .step(wq.doc.wait_for("#cart li"))
+            .extract(first=wq.doc.select("#cart li").text_content)
+            .step(wq.doc.write("#qty", "9"))
+            .step(wq.doc.click("#add"))
+            .extract(second=wq.doc.select("#cart li", index=1).text_content)
+            .project()
+        )
+        print("sequence:   ", wc.execute(seq, wc.ref(f"{base}/app")))
+
         # [browser transport] a browser render now carries the REAL Playwright
         #      main-response status + headers (not a fabricated 200 / empty), so
         #      transport() and the access signals are accurate on a rendered page.

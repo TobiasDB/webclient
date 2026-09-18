@@ -31,6 +31,20 @@ def _url_of(source: dict[str, Any]) -> str:
     return cast(str, Reference(**source).dispatch("url"))
 
 
+def _reject_sequence(expr: Any) -> None:
+    """A ``.step(...)`` sequence plan holds ONE live page across ordered actions --
+    v1 keeps that scope-owned page lifecycle LOCAL. Rather than ship a plan whose
+    held-page semantics the remote path does not yet carry, fail clearly here (the
+    same stance remote ``crawl.step`` takes: some plan shapes stay engine-local)."""
+    plan = getattr(expr, "_plan", None)
+    steps = getattr(plan, "steps", None) or ()
+    if any(s.kind == "get" and s.name == "step" for s in steps):
+        raise NotImplementedError(
+            "a .step(...) sequence plan runs only on a local client (it holds one "
+            "live page across the sequence); remote sequences are not yet supported"
+        )
+
+
 _WIRE_MODELS_CACHE: "dict[str, type[Any]] | None" = None
 
 
@@ -100,6 +114,7 @@ class RemoteWebClientCore(WebClient):
 
     # -- execution: one Plan POSTed to /execute ------------------------------
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
+        _reject_sequence(expr)
         body: dict[str, Any] = {"plan": expr._plan.model_dump()}
         src = expr._plan.source
         if src and "document_id" in src:
