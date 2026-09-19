@@ -519,6 +519,33 @@ def _lazy_tier() -> str:
     return "# fmt: off\n" + "\n\n\n".join(blocks) + "\n# fmt: on"
 
 
+def _view_class(core: type, tier: str) -> str:
+    """A generated dispatch-view class for ``core`` in ``tier`` (``async``/``remote``):
+    the WHOLE class -- header, docstring, ``lazy`` accessor and members -- so a view is
+    generated from the backings, never hand-written. A pure typing stub: at runtime the
+    view IS the core (the dispatch mode, not a subtype)."""
+    name = {"async": SURFACE_ASYNC, "remote": SURFACE_REMOTE}[tier][core]
+    base = SURFACE[core]
+    lines = [
+        f'"""The {tier} view of a :class:`{base}` -- a generated typing stub over the',
+        f'same core (the {tier}-ness is the client\'s dispatch mode, not the type)."""',
+        "@property",
+        f'def lazy(self) -> "{LAZY[core]}": ...',
+        *members(core, tier, fields=False, class_props=False),
+    ]
+    return f"class {name}({base}):\n" + "\n".join("    " + ln for ln in lines)
+
+
+def _dispatch_views() -> list[str]:
+    """Every async/remote dispatch-view class, generated -- the async + remote surfaces
+    over the Reference/Document cores (the WebClient views live with the client verbs)."""
+    blocks = [
+        _view_class(Reference, "async"), _view_class(Document, "async"),
+        _view_class(Reference, "remote"), _view_class(Document, "remote"),
+    ]
+    return "\n\n".join(blocks).split("\n")
+
+
 # -- block assembly / rewrite -------------------------------------------------
 
 
@@ -554,31 +581,14 @@ def _body(region: str) -> str:
         return _indented(
             members(Crawl, "eager", fields=False, class_props=False), 8
         )
-    if region == "AsyncReference surface":
-        # the async view: IO ops (resolve) are ``async def``, Core returns map to
-        # the Async surfaces so ``await ac.ref(url).resolve()`` chains async.
-        return _indented(
-            members(Reference, "async", fields=False, class_props=False), 8
-        )
-    if region == "AsyncDocument surface":
-        return _indented(
-            members(Document, "async", fields=False, class_props=False), 8
-        )
+    if region == "dispatch views":
+        # every async/remote view class, whole-class generated (header + members).
+        return _indented(_dispatch_views(), 4)
     if region == "AsyncWebClient surface":
         # the async client's verbs: ``async def fetch/summary`` -> the async
         # surface, sync ``ref`` -> AsyncReference.
         return _indented(
             members(WebClient, "async", fields=False, class_props=False), 8
-        )
-    if region == "RemoteReference surface":
-        # the remote view: Core-ops return Remote* (server-held references), data
-        # crosses the wire materialised -- the same core, a remote dispatch mode.
-        return _indented(
-            members(Reference, "remote", fields=False, class_props=False), 8
-        )
-    if region == "RemoteDocument surface":
-        return _indented(
-            members(Document, "remote", fields=False, class_props=False), 8
         )
     raise KeyError(region)
 
@@ -588,11 +598,8 @@ REGIONS = [
     (DOCINIT, "Document interface"),
     (CLIENTMODELS, "WebClient interface"),
     (CRAWLMODELS, "Crawl interface"),
-    (SURFACES, "AsyncReference surface"),
-    (SURFACES, "AsyncDocument surface"),
+    (SURFACES, "dispatch views"),
     (SURFACES, "AsyncWebClient surface"),
-    (SURFACES, "RemoteReference surface"),
-    (SURFACES, "RemoteDocument surface"),
     (COLLECTION, "collection element-op lifting"),
     (MODELS, "lazy-tier"),
 ]
