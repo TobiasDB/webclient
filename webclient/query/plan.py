@@ -29,6 +29,12 @@ class Step(BaseModel):
     name: str = ""  # attribute / operator / function name
     args: list[Arg] = []
     kwargs: dict[str, Arg] = {}
+    #: an ADVISORY state fingerprint captured when a recorder recorded this step (a
+    #: ``.step(action)`` in a recorded sequence). On replay the live state's fingerprint
+    #: is compared to this; a mismatch surfaces sequence divergence through the event bus
+    #: -- never a gate. Empty on a hand-authored plan (nothing to compare). See
+    #: :mod:`webclient.core.document.fingerprint`.
+    fp: str = ""
 
 
 #: the surface types a plan may be rooted at ("" = the evaluation context;

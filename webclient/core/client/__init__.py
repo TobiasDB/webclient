@@ -749,6 +749,24 @@ class WebClient(SessionCore, IWebClient):
             else:
                 sub = getattr(call, op)(sel)
             self._record_chain = cast(Any, self._record_chain).step(sub)
+            self._stamp_fingerprint(receiver)
+
+    def _stamp_fingerprint(self, doc: Any) -> None:
+        """Attach an ADVISORY state fingerprint to the just-recorded ``.step`` (the call
+        step), captured off the live page. Best-effort: any failure leaves the step
+        without a fingerprint (replay then simply skips the drift check for it)."""
+        try:
+            loop = self._the_engine().loop()
+            page = getattr(doc, "_page", None)
+            if page is None or loop.on_loop_thread():  # can't safely read it from here
+                return
+            from ..document.fingerprint import page_fingerprint
+
+            fp = loop.run(page_fingerprint(page))
+            if fp:
+                cast(Any, self._record_chain)._plan.steps[-1].fp = fp
+        except Exception:  # noqa: BLE001 - a fingerprint is advisory, never fatal
+            pass
 
     # -- crawl ---------------------------------------------------------------
     def crawl(

@@ -265,6 +265,8 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
         if call.args and call.args[0].plan is not None:
             action = Expr(call.args[0].plan, client)
             await aevaluate(action, value, client=client)
+        if call.fp:  # a recorded step carries a state fingerprint -- compare, never gate
+            await _check_divergence(value, call.fp, client)
         return value
     # field(k) / reference(k) read an extracted column off the element's _row
     if name in ("field", "reference"):
@@ -298,6 +300,32 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
             reg.append(core)
         return wrap(core)
     return result
+
+
+async def _check_divergence(doc: Any, recorded: str, client: Any) -> None:
+    """Advisory sequence-divergence check on replay: compare the live state's fingerprint
+    to the one recorded for this step. A mismatch is surfaced through the event bus (a
+    ``PlanEvent(phase="divergence")``) and a logged warning -- it NEVER raises or blocks
+    the run (fingerprints are debug/drift signals, not a gate)."""
+    from ..core.document.fingerprint import fingerprint
+
+    live = await fingerprint(doc)
+    if not live or live == recorded:
+        return  # unreadable, or the reached state matches what was recorded
+    import logging
+
+    logging.getLogger("webclient").warning(
+        "sequence divergence on replay: recorded page state %s, live %s (advisory)",
+        recorded, live,
+    )
+    bus = getattr(client, "bus", None)
+    if bus is not None:
+        from ..models import PlanEvent
+
+        bus.publish(PlanEvent(
+            phase="divergence",
+            detail={"recorded": recorded, "live": live, "document_id": getattr(doc, "id", None)},
+        ))
 
 
 def _as_expr(arg: Arg, client: Any) -> Any:

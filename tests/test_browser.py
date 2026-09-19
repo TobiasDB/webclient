@@ -209,6 +209,70 @@ def test_recorder_scrubs_secrets_from_the_plan(httpserver, wc):
     assert rec.plan.describe().count(".step(") == 1  # the write step IS recorded (redacted)
 
 
+APP_CHANGED = """
+<html><head><title>App</title></head><body>
+  <div class="card" id="c1"><h2>Card One</h2>
+    <button onclick="this.parentElement.insertAdjacentHTML('beforeend',
+      '<div class=added>added-one</div>')">grow</button></div>
+  <div class="card" id="c2"><h2>Card Two</h2></div>
+  <section id="extra"><ul><li>a</li><li>b</li><li>c</li></ul><p>more</p></section>
+  <form><input id="name" type="text"><span id="out"></span></form>
+</body></html>
+"""
+
+
+def _record_grow_sequence(rec, url):
+    live = rec.ref(url).resolve(browser=True).collect()
+    live.write("#name", "Bob").click("#c1 button")
+    live.wait_for(".added", timeout=5.0)
+    return live
+
+
+def test_recorded_replay_is_clean_when_unchanged(httpserver, wc):
+    # replaying a recorded sequence against the SAME page raises no divergence, and still
+    # reproduces the interacted state (the fingerprint is stable across renders).
+    httpserver.expect_request("/drift1").respond_with_data(APP, content_type="text/html")
+    with wc.record() as rec:
+        live = _record_grow_sequence(rec, httpserver.url_for("/drift1"))
+        plan = rec.plan
+    wc.release(live)
+
+    events: list = []
+    sub = wc.bus.subscribe("plan", lambda e: events.append(e))
+    fresh = plan.collect()
+    wc.release(fresh)
+    sub.cancel()
+    assert not any(getattr(e, "phase", "") == "divergence" for e in events)
+
+
+def test_recorded_replay_flags_sequence_divergence(httpserver, wc):
+    # replay against a STRUCTURALLY-CHANGED page at the same URL: an advisory divergence
+    # event fires, but the replay still runs to completion (a fingerprint never gates).
+    from werkzeug.wrappers import Response
+
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return Response(APP if calls["n"] == 1 else APP_CHANGED, content_type="text/html")
+
+    httpserver.expect_request("/drift2").respond_with_handler(handler)
+    with wc.record() as rec:
+        live = _record_grow_sequence(rec, httpserver.url_for("/drift2"))
+        plan = rec.plan
+    wc.release(live)
+
+    events: list = []
+    sub = wc.bus.subscribe("plan", lambda e: events.append(e))
+    fresh = plan.collect()  # replays against the changed page -- must not raise
+    try:
+        assert fresh.select(".added", error=RETURN).ok  # replay still reached the state
+    finally:
+        wc.release(fresh)
+        sub.cancel()
+    assert any(getattr(e, "phase", "") == "divergence" for e in events)
+
+
 def test_reload_re_renders_the_base_page(httpserver, wc):
     # reload() re-renders the BASE page on a fresh browser tier (no interaction replay --
     # that lives in a recorded Plan now).
