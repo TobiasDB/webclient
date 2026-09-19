@@ -23,72 +23,13 @@ from ..client import WebClient, _materialize, _seed_urls
 from ..engine import Engine
 from ..document import Document
 from ..reference import Reference
+from .wire import deserialize, reject_sequence, url_of, wire_models  # noqa: F401 (re-exported)
 
 if TYPE_CHECKING:
     from ..crawl import Crawl
 
-
-def _url_of(source: dict[str, Any]) -> str:
-    return cast(str, Reference(**source).dispatch("url"))
-
-
-def _reject_sequence(expr: Any) -> None:
-    """A ``.step(...)`` sequence holds ONE live page across ordered actions. A COMPLETE
-    stepful plan -- one that ends in ``.project()`` -- produces DATA: its held page lives
-    entirely inside a single server-side ``/execute`` evaluation and never crosses the
-    wire, so it runs remotely like any other data-producing browser plan. An OPEN stepful
-    plan (one that would hand back a live page/element -- e.g. it ends in
-    ``select``/``select_all``) has no remote representation for that held page, so it
-    stays engine-local: fail clearly, and tell the caller to close it with ``.project()``."""
-    plan = getattr(expr, "_plan", None)
-    gets = [s for s in (getattr(plan, "steps", None) or ()) if s.kind == "get"]
-    if not any(s.name == "step" for s in gets):
-        return  # no sequence -- nothing to guard
-    if gets and gets[-1].name == "project":
-        return  # a complete, data-producing sequence -- safe to run server-side
-    raise NotImplementedError(
-        "an OPEN .step(...) sequence (one that returns a live page/element) runs only on "
-        "a local client; end it with .project() to produce data and run it remotely"
-    )
-
-
-_WIRE_MODELS_CACHE: "dict[str, type[Any]] | None" = None
-
-
-def _wire_models() -> "dict[str, type[Any]]":
-    """Name -> class for the value models an op can return over the wire (built
-    once), so ``_deserialize`` rebuilds a real ``Transport``/``Metadata``/… facet
-    model from a tagged ``{"__model__": ...}`` payload."""
-    global _WIRE_MODELS_CACHE
-    if _WIRE_MODELS_CACHE is None:
-        from ...models import (
-            ActionEvent,
-            ConsoleEvent,
-            DOMUpdateEvent,
-            Event,
-            NavigationEvent,
-            NetworkEvent,
-            PlanEvent,
-        )
-        from ..client.models import Robots
-        from ..crawl.models import Edge
-        from ..document.models import (
-            Element,
-            Metadata,
-            Flag,
-            PageCard,
-            Signal,
-            Structure,
-            Transport,
-        )
-
-        models: list[type[Any]] = [
-            Transport, Metadata, Structure, Signal, Flag, Element, PageCard,
-            Edge, Robots, Event, NavigationEvent, NetworkEvent, ConsoleEvent,
-            DOMUpdateEvent, ActionEvent, PlanEvent,
-        ]
-        _WIRE_MODELS_CACHE = {m.__name__: m for m in models}
-    return _WIRE_MODELS_CACHE
+#: back-compat alias -- the guard now lives in :mod:`.wire`.
+_reject_sequence = reject_sequence
 
 
 class RemoteWebClientCore(WebClient):
@@ -122,13 +63,13 @@ class RemoteWebClientCore(WebClient):
 
     # -- execution: one Plan POSTed to /execute ------------------------------
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
-        _reject_sequence(expr)
+        reject_sequence(expr)
         body: dict[str, Any] = {"plan": expr._plan.model_dump()}
         src = expr._plan.source
         if src and "document_id" in src:
             body["document_id"] = src["document_id"]
         elif src:  # a reference-rooted plan carries its spec
-            body["url"] = _url_of(src)
+            body["url"] = url_of(src)
         # a context roots a context-based plan (e.g. plan.collect(rc.ref(url)))
         # server-side: a server document handle by id, a reference by its spec, a
         # recorded Expr by its plan.
@@ -155,38 +96,7 @@ class RemoteWebClientCore(WebClient):
         # the service returns clean JSON; rebuild real cores (a Document handle, a
         # Reference) and wrap a scalar leaf into a Field, so remote and local
         # ``collect()`` agree on the result type.
-        return _materialize(self._deserialize(resp.json()["rows"]))
-
-    def _deserialize(self, rows: Any) -> Any:
-        if isinstance(rows, dict) and "__doc__" in rows:
-            return self._doc_handle(rows["__doc__"])
-        if isinstance(rows, dict) and "__ref__" in rows:
-            ref = Reference(**rows["__ref__"])
-            ref._client = self
-            return ref
-        if isinstance(rows, dict) and "__model__" in rows:
-            # rebuild the real value model (Summary/SearchResult/Element/…) so a
-            # remote result has the same type as a local one (s.title, not s["title"]).
-            model = _wire_models().get(rows["__model__"])
-            data = rows.get("data", {})
-            return model.model_validate(data) if model is not None else data
-        if isinstance(rows, list):
-            return [self._deserialize(r) for r in rows]
-        return rows
-
-    def _doc_handle(self, meta: dict[str, Any]) -> Document:
-        """A server-side document as a real ``Document``: id/kind/ok are inline
-        (``status_code`` set so the ``ok`` property agrees), content ops round-trip
-        (``_remote_handle``)."""
-        doc = Document(
-            url="",
-            kind=meta.get("kind", "html"),
-            status_code=200 if meta.get("ok", True) else 502,
-        )
-        doc.id = doc.name = meta["id"]
-        doc._client = self
-        doc._remote_handle = True
-        return doc
+        return _materialize(deserialize(self, resp.json()["rows"]))
 
     # -- crawl: a server-side crawl, driven by dispatch ----------------------
     # A crawl is stateful (it owns a frontier + drives many fetches), so it lives on
@@ -282,7 +192,7 @@ class RemoteWebClientCore(WebClient):
         crawl.scope = state.get("scope", "")
         crawl.status = state.get("status", "running")
         crawl.frontier = [Edge(**e) for e in state.get("frontier", [])]
-        crawl.pages = [self._deserialize(p) for p in state.get("pages", [])]
+        crawl.pages = [deserialize(self, p) for p in state.get("pages", [])]
         crawl.history = [Edge(**e) for e in state.get("history", [])]
         crawl.failures = [Failure(**f) for f in state.get("failures", [])]
         crawl._seen = set(state.get("seen", []))
