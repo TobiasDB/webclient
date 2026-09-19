@@ -64,15 +64,15 @@ CRAWLMODELS = ROOT / "webclient" / "core" / "crawl" / "models.py"
 
 #: the cores that map to a surface class (a Core-typed result -> its surface).
 CORES: tuple[type, ...] = (Reference, Document, Crawl)
-SURFACE = {Reference: "Reference", Document: "Document", Crawl: "Crawl"}
-LAZY = {Reference: "LazyReference", Document: "LazyDocument"}
+SURFACE = {Reference: "Reference", Document: "Document", Crawl: "Crawl", WebClient: "WebClient"}
+LAZY = {Reference: "LazyReference", Document: "LazyDocument", WebClient: "LazyWebClient"}
 #: the async eager tier: a Core maps to its Async surface, and its IO ops are
 #: ``async def`` (see ``members``), so ``await ac.ref(url).resolve()`` types.
-SURFACE_ASYNC = {Reference: "AsyncReference", Document: "AsyncDocument"}
+SURFACE_ASYNC = {Reference: "AsyncReference", Document: "AsyncDocument", WebClient: "AsyncWebClient"}
 #: the remote tier: a Core maps to its Remote surface -- a server-held reference the
 #: remote dispatcher returns EAGERLY (execution happens on the server); data crosses
 #: the wire materialised. Like the eager tier for values, but Core-ops return Remote*.
-SURFACE_REMOTE = {Reference: "RemoteReference", Document: "RemoteDocument"}
+SURFACE_REMOTE = {Reference: "RemoteReference", Document: "RemoteDocument", WebClient: "RemoteWebClient"}
 #: the cores whose ops the core itself implements via a generated interface (so the
 #: async surface's IO ops override the inherited eager ones -> need an ``override``
 #: ignore). Grows as each core gets its interface.
@@ -531,17 +531,27 @@ def _view_class(core: type, tier: str) -> str:
         f'same core (the {tier}-ness is the client\'s dispatch mode, not the type)."""',
         "@property",
         f'def lazy(self) -> "{LAZY[core]}": ...',
-        *members(core, tier, fields=False, class_props=False),
     ]
+    if core is WebClient:  # the client's non-backing accessors (not ops) + the remote entry
+        if tier == "remote":  # `RemoteWebClient(url)` is the typed remote-session entry
+            lines.append('def __init__(self, url: str, token: str | None = ...) -> None: ...  # type: ignore[override]')
+        lines += [
+            "@property", 'def bus(self) -> "EventBus": ...',
+            "@property", 'def pool(self) -> "ClientPool": ...',
+            'def session(self, *, ttl: float | None = ..., headers: dict[str, str] | None = ..., **kw: Any) -> "Session": ...',
+        ]
+    lines += members(core, tier, fields=False, class_props=False)
     return f"class {name}({base}):\n" + "\n".join("    " + ln for ln in lines)
 
 
 def _dispatch_views() -> list[str]:
-    """Every async/remote dispatch-view class, generated -- the async + remote surfaces
-    over the Reference/Document cores (the WebClient views live with the client verbs)."""
+    """Every async/remote dispatch-view class, generated from the backings -- the async +
+    remote surfaces over Reference / Document / WebClient (one core, many dispatch stubs)."""
     blocks = [
         _view_class(Reference, "async"), _view_class(Document, "async"),
+        _view_class(WebClient, "async"),
         _view_class(Reference, "remote"), _view_class(Document, "remote"),
+        _view_class(WebClient, "remote"),
     ]
     return "\n\n".join(blocks).split("\n")
 
@@ -584,12 +594,6 @@ def _body(region: str) -> str:
     if region == "dispatch views":
         # every async/remote view class, whole-class generated (header + members).
         return _indented(_dispatch_views(), 4)
-    if region == "AsyncWebClient surface":
-        # the async client's verbs: ``async def fetch/summary`` -> the async
-        # surface, sync ``ref`` -> AsyncReference.
-        return _indented(
-            members(WebClient, "async", fields=False, class_props=False), 8
-        )
     raise KeyError(region)
 
 
@@ -599,7 +603,6 @@ REGIONS = [
     (CLIENTMODELS, "WebClient interface"),
     (CRAWLMODELS, "Crawl interface"),
     (SURFACES, "dispatch views"),
-    (SURFACES, "AsyncWebClient surface"),
     (COLLECTION, "collection element-op lifting"),
     (MODELS, "lazy-tier"),
 ]

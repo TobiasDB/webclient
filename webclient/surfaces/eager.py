@@ -5,7 +5,7 @@ dispatch-view stubs. Blocks marked ``>>> generated <<<`` are produced there."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 
 from ..core.client import WebClient
 from ..core.client import async_client as _async_client
@@ -121,6 +121,21 @@ if TYPE_CHECKING:
         async def write(self, selector: str, text: str, *, timeout: float | None = ..., optional: bool = ..., error: Any = ...) -> "AsyncDocument": ...  # type: ignore[override]
         def xhr_endpoints(self) -> "list[XhrCall]": ...
     
+    class AsyncWebClient(WebClient):
+        """The async view of a :class:`WebClient` -- a generated typing stub over the
+        same core (the async-ness is the client's dispatch mode, not the type)."""
+        @property
+        def lazy(self) -> "LazyWebClient": ...
+        @property
+        def bus(self) -> "EventBus": ...
+        @property
+        def pool(self) -> "ClientPool": ...
+        def session(self, *, ttl: float | None = ..., headers: dict[str, str] | None = ..., **kw: Any) -> "Session": ...
+        async def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ..., wait: 'WaitConfig | None' = ..., **kw: Any) -> "AsyncDocument": ...  # type: ignore[override]
+        def ref(self, url: Any, method: str = ..., **kw: Any) -> "AsyncReference": ...
+        async def robots(self, url: Any) -> "Robots": ...  # type: ignore[override]
+        async def sitemap(self, url: Any, *, limit: int = ...) -> "Collection[AsyncReference]": ...  # type: ignore[override]
+    
     class RemoteReference(Reference):
         """The remote view of a :class:`Reference` -- a generated typing stub over the
         same core (the remote-ness is the client's dispatch mode, not the type)."""
@@ -205,6 +220,22 @@ if TYPE_CHECKING:
         def wait_for(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ..., error: Any = ...) -> "RemoteDocument": ...
         def write(self, selector: str, text: str, *, timeout: float | None = ..., optional: bool = ..., error: Any = ...) -> "RemoteDocument": ...
         def xhr_endpoints(self) -> "list[XhrCall]": ...
+    
+    class RemoteWebClient(WebClient):
+        """The remote view of a :class:`WebClient` -- a generated typing stub over the
+        same core (the remote-ness is the client's dispatch mode, not the type)."""
+        @property
+        def lazy(self) -> "LazyWebClient": ...
+        def __init__(self, url: str, token: str | None = ...) -> None: ...  # type: ignore[override]
+        @property
+        def bus(self) -> "EventBus": ...
+        @property
+        def pool(self) -> "ClientPool": ...
+        def session(self, *, ttl: float | None = ..., headers: dict[str, str] | None = ..., **kw: Any) -> "Session": ...
+        def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ..., wait: 'WaitConfig | None' = ..., **kw: Any) -> "RemoteDocument": ...
+        def ref(self, url: Any, method: str = ..., **kw: Any) -> "RemoteReference": ...
+        def robots(self, url: Any) -> "Robots": ...
+        def sitemap(self, url: Any, *, limit: int = ...) -> "Collection[RemoteReference]": ...
     # fmt: on
     # >>> end generated <<<
 
@@ -213,6 +244,15 @@ else:  # at runtime a dispatch view IS the core (a dispatch mode, not a subtype)
     AsyncDocument = Document
     RemoteReference = Reference
     RemoteDocument = Document
+    AsyncWebClient = _async_client  # the core in async-dispatcher mode
+
+    def RemoteWebClient(url, token=None):  # type: ignore[no-untyped-def]
+        """A ``WebClient`` over a remote core -- the same surface, executed server-side.
+        The remote-ness is entirely in the core (``RemoteWebClientCore``, a
+        different-dispatcher client whose verbs round-trip a one-step plan)."""
+        from ..core.remote import RemoteWebClientCore
+
+        return RemoteWebClientCore(url=url, token=token)
 
 #: A live (browser-backed) document is a Document with the ``page`` capability.
 LiveDocument = Document
@@ -235,49 +275,6 @@ def default_client() -> "WebClient":
     from ..core.client import default_client as _default
 
     return _default()
-
-
-if TYPE_CHECKING:
-
-    class AsyncWebClient(WebClient):
-        """The async eager client -- the very same core with async dispatch (an
-        instance flag, not a subclass): ``doc = await ac.fetch(url)`` and
-        ``await ac.ref(url).resolve()`` chain async through the ``Async*`` surface
-        types; in-memory ops on a resolved document are synchronous. At runtime a
-        factory (``core.client.async_client``) setting mode "async", so its IO
-        ops hand back an awaitable via ``bridge``."""
-
-        @property
-        def lazy(self) -> "LazyWebClient": ...
-        @property
-        def bus(self) -> "EventBus": ...
-        @property
-        def pool(self) -> "ClientPool": ...
-        def session(
-            self, *, ttl: float | None = ..., headers: dict[str, str] | None = ..., **kw: Any
-        ) -> "Session": ...
-
-        # >>> generated: AsyncWebClient surface <<<
-        # fmt: off
-        async def fetch(self, url: Any, *, browser: "bool | Literal['never', 'auto', 'always']" = ..., optional: bool = ..., error: Any = ..., keep_alive: 'bool | float' = ..., wait: 'WaitConfig | None' = ..., **kw: Any) -> "AsyncDocument": ...  # type: ignore[override]
-        def ref(self, url: Any, method: str = ..., **kw: Any) -> "AsyncReference": ...
-        async def robots(self, url: Any) -> "Robots": ...  # type: ignore[override]
-        async def sitemap(self, url: Any, *, limit: int = ...) -> "Collection[AsyncReference]": ...  # type: ignore[override]
-        # fmt: on
-        # >>> end generated <<<
-
-else:  # at runtime the async client is the core in async-dispatcher mode
-    AsyncWebClient = _async_client
-
-
-def RemoteWebClient(url: str, token: str | None = None) -> "WebClient":
-    """A ``WebClient`` over a remote core -- literally the same eager surface, run
-    server-side. A factory, not a subclass: the remote-ness is entirely in the
-    core (``RemoteWebClientCore``), a different-dispatcher ``WebClient`` whose
-    client verbs round-trip a one-step plan to the service."""
-    from ..core.remote import RemoteWebClientCore
-
-    return cast("WebClient", RemoteWebClientCore(url=url, token=token))
 
 
 __all__ = [
