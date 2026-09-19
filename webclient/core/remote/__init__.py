@@ -28,6 +28,19 @@ if TYPE_CHECKING:
     from ..crawl import Crawl
 
 
+class RemoteDocument(Document):
+    """A server-held document referenced from a remote session -- a dummy wire handle
+    with no local content. Its ops execute EAGERLY on the SERVER: a core result comes
+    back as another remote reference, data crosses the wire materialised. At runtime it
+    is a ``Document`` with ``_remote_handle=True`` so its content ops round-trip;
+    ``gen_stubs`` will give it its own typed ``Remote*`` surface (core-op ->
+    ``Remote<Core>``, data-op -> the value type)."""
+
+
+class RemoteReference(Reference):
+    """A reference returned from a remote session -- its ops dispatch to the server."""
+
+
 def _url_of(source: dict[str, Any]) -> str:
     return cast(str, Reference(**source).dispatch("url"))
 
@@ -161,7 +174,7 @@ class RemoteWebClientCore(WebClient):
         if isinstance(rows, dict) and "__doc__" in rows:
             return self._doc_handle(rows["__doc__"])
         if isinstance(rows, dict) and "__ref__" in rows:
-            ref = Reference(**rows["__ref__"])
+            ref = RemoteReference(**rows["__ref__"])
             ref._client = self
             return ref
         if isinstance(rows, dict) and "__model__" in rows:
@@ -178,7 +191,7 @@ class RemoteWebClientCore(WebClient):
         """A server-side document as a real ``Document``: id/kind/ok are inline
         (``status_code`` set so the ``ok`` property agrees), content ops round-trip
         (``_remote_handle``)."""
-        doc = Document(
+        doc = RemoteDocument(
             url="",
             kind=meta.get("kind", "html"),
             status_code=200 if meta.get("ok", True) else 502,
