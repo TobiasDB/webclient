@@ -47,6 +47,7 @@ from pydantic import BaseModel, model_validator
 #: also appended to ``OnboardingResult.steps`` for a programmatic trace.
 log = logging.getLogger("webclient.pipelines.onboarding")
 
+from ..core.crawl import from_picks
 from ..core.document.models import Flag
 from ..core.reference.models import (
     AntiBotPolicy,
@@ -1079,9 +1080,17 @@ def crawl_from_seeds(
     for s in seeds:
         if s.url:
             log.info("      seed %s%s", s.url, f"  — {s.title}" if s.title else "")
+    # The LLM edge-picker is a crawl DRIVER (see webclient.core.crawl.drivers): each round
+    # the crawl hands it the frontier, it filters to the company's domains + collapses
+    # dup/docs pages, then the model picks which edges reach the dataset. The driving loop
+    # (list frontier -> pick -> expand) lives in the crawl; only the policy lives here.
+    def _pick(edges: "Sequence[Any]") -> list[str]:
+        candidates = _filter_frontier(list(edges), brief, allow_domains=domains)
+        return _pick_edges(llm, brief, candidates, company=company) if candidates else []
+
     crawl = wc.crawl(
         seed_urls, auto=False, browser=browser, max_pages=max_pages, depth=depth,
-        obey_robots=False, allow_domains=sorted(domains),
+        obey_robots=False, allow_domains=sorted(domains), driver=from_picks(_pick),
     )
     seen_pages = seen_fails = 0
     # The seeds sit in the frontier UNFETCHED: round 0 lets the model evaluate the seeds
@@ -1092,17 +1101,16 @@ def crawl_from_seeds(
     for round_i in range(rounds + 1):
         if not crawl.frontier or len(crawl.pages) >= max_pages:
             break
-        # keep to the company's domains, collapse paginated/similar-API dups, ban docs pages
-        candidates = _filter_frontier(list(crawl.frontier), brief, allow_domains=domains)
-        if not candidates:
-            break
-        picks = _pick_edges(llm, brief, candidates, company=company)
-        if not picks and round_i == 0:
+        before = len(crawl.pages)
+        crawl.step()  # the driver: filter -> model pick -> expand this round's edges
+        if len(crawl.pages) == before and round_i == 0:
+            candidates = _filter_frontier(list(crawl.frontier), brief, allow_domains=domains)
+            if not candidates:
+                break
             log.info("    model chose no frontier links this round — fetching the seed(s) directly")
-            picks = [e.url for e in candidates]
-        if not picks:
-            break
-        crawl.step(picks)
+            crawl.step([e.url for e in candidates])
+        if len(crawl.pages) == before:
+            break  # no progress this round -- stop
         seen_pages, seen_fails = _log_crawl_progress(crawl, seen_pages, seen_fails)
     return crawl
 

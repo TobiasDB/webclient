@@ -71,6 +71,10 @@ class Crawl(SessionCore, ICrawl):
     #: page budget stays correct while a round fetches its claimed edges CONCURRENTLY (outside
     #: the lock), and concurrent rounds don't both claim the same remaining budget.
     _inflight: int = PrivateAttr(default=0)
+    #: the auto edge-selection driver layered on the manual base (see :mod:`.drivers`): a
+    #: ``Callable[[Crawl], list[Edge]]`` that ``run``/``stream``/a bare ``step()`` consult.
+    #: ``None`` = the built-in best-first heuristic (or nothing, when ``order="manual"``).
+    _driver: Any = PrivateAttr(default=None)
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (CrawlBacking(),)
 
@@ -184,4 +188,9 @@ class Crawl(SessionCore, ICrawl):
         return _CrawlLazy(self)
 
 
-__all__ = ["Crawl", "Edge", "Failure", "PageCard", "CrawlConfig", "CrawlState", "ICrawl"]
+from .drivers import Driver, from_picks  # noqa: E402  (re-export; avoids an import cycle)
+
+__all__ = [
+    "Crawl", "Edge", "Failure", "PageCard", "CrawlConfig", "CrawlState", "ICrawl",
+    "Driver", "from_picks",
+]

@@ -201,14 +201,17 @@ class CrawlBacking(Backing):
                     self._add_edge(core, u, "", 0, 0.0, force=True)
             want = set(wanted)
             return [e for e in core.frontier if e.url in want]
-        if core.config.order == "manual":
-            return []  # manual: a bare step() fetches nothing -- the caller selects
+        if core._driver is None and core.config.order == "manual":
+            return []  # pure manual: a bare step() fetches nothing -- the caller selects
         return self._drive_select(core)
 
     def _drive_select(self, core: "Crawl") -> "list[Edge]":
-        """The auto drive's selection: the top-``width`` frontier edges by score. Used by
-        ``run``/``stream`` regardless of ``config.order`` -- the drives are always
-        best-first; ``order`` only governs what a bare ``step()`` does."""
+        """The auto drive's selection, layered on the manual base: a custom :mod:`.drivers`
+        driver if one is set (e.g. an LLM picking the edges most likely to reach a dataset),
+        otherwise the built-in best-first heuristic (the top-``width`` frontier edges by
+        score). Used by ``run``/``stream`` and a bare ``step()``."""
+        if core._driver is not None:
+            return cast("list[Edge]", core._driver(core))
         ranked = sorted(core.frontier, key=lambda e: self._score(core, e), reverse=True)
         return ranked[: core.config.width]
 

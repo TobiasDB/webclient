@@ -98,6 +98,28 @@ def test_turn_based_frontier_is_caller_driven(wc, site):
     assert len(crawl.pages) == 2
 
 
+def test_custom_driver_steers_the_auto_drive(wc, site):
+    # a driver layered on the manual base decides which edges run()/step() expand -- here
+    # only the seed and the /a -> /b chain, never /docs -- overriding best-first.
+    from webclient.core.crawl import from_picks
+
+    from urllib.parse import urlparse
+
+    consulted = []
+
+    def pick(edges):
+        consulted.append(len(edges))
+        return [e.url for e in edges if urlparse(e.url).path.rstrip("/") in ("", "/a", "/b")]
+
+    with wc.crawl(site.url_for("/"), max_pages=5, browser=False,
+                  obey_robots=False, driver=from_picks(pick)) as crawl:
+        crawl.run()
+    urls = _urls(crawl)
+    assert any(u.endswith("/a") for u in urls) and any(u.endswith("/b") for u in urls)
+    assert not any("/docs" in u for u in urls)  # the driver never picked docs
+    assert consulted  # the driver was consulted each round
+
+
 def test_keywords_drive_best_first(wc, site):
     # width=1 forces a choice each round; "pricing" should steer toward /docs.
     with wc.crawl(

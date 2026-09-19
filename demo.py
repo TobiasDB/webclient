@@ -206,6 +206,16 @@ def main() -> None:
             crawl.run()   # then let it self-drive the rest
             print("crawled:    ", [(p.final_url or p.url).replace(base, "")
                                     for p in crawl.pages])
+        # [driver] manual is the base; best-first is the default AUTO driver. A custom
+        #      driver (any list[Edge] -> list[url] via from_picks -- e.g. an LLM edge
+        #      picker) layers on top to steer run()/step(). Here: follow only /feed* pages.
+        from webclient.core.crawl import from_picks
+
+        picker = from_picks(lambda edges: [e.url for e in edges if "/feed" in e.url])
+        with wc.crawl(f"{base}/feed", max_pages=4, browser=False, driver=picker) as steered:
+            steered.run()
+            print("driven:     ", [(p.final_url or p.url).replace(base, "")
+                                    for p in steered.pages])
         # sitemap: a cheap hunt for the site's sitemap.xml page URLs (not a crawl)
         print("sitemap:    ", [r.url.replace(base, "") for r in wc.sitemap(f"{base}/")])
 

@@ -795,10 +795,17 @@ class WebClient(SessionCore, IWebClient):
         browser: "bool | Literal['never', 'auto', 'always']" = "auto",
         resolve: Any = None,
         project: Any = None,
+        driver: Any = None,
     ) -> "Crawl":
         """A scoped site traversal sharing this engine (a :class:`Crawl` core). Drive it
         with ``crawl.run()`` (batch → read ``.pages``) or ``crawl.step(select)`` (one
         round; ``select`` may be frontier edges/URLs or brand-new URLs to fetch next).
+
+        The manual base -- the frontier + ``step(picks)`` -- is common; ``driver`` is the
+        auto edge-selection policy layered on it (see :mod:`.drivers`). ``None`` (default)
+        is the built-in best-first heuristic (or nothing, with ``auto=False``); pass a
+        ``Callable[[Crawl], list[Edge]]`` (e.g. :func:`~webclient.core.crawl.from_picks`
+        wrapping an LLM pick) to steer ``run``/``stream``/a bare ``step()``.
 
         ``.pages`` is the ``project`` expression evaluated per page. It defaults to
         ``doc.card()`` -- a lean :class:`PageCard` (url / kind / title / description /
@@ -827,6 +834,7 @@ class WebClient(SessionCore, IWebClient):
                 frontier=list(resume.frontier), history=list(resume.history),
             ).bind(self)
             crawl._seen |= set(resume.seen)
+            crawl._driver = driver
             return crawl
 
         overrides: dict[str, Any] = {} if project is None else {"project": project}
@@ -841,11 +849,13 @@ class WebClient(SessionCore, IWebClient):
             order="best-first" if auto else "manual", **overrides,
         )
         urls = _seed_urls(seeds)
-        return Crawl(
+        crawl = Crawl(
             config=cfg,
             scope=scope or (from_url(urls[0]).hostname if urls else ""),
             frontier=[Edge(url=u, depth=0) for u in urls],
         ).bind(self)
+        crawl._driver = driver
+        return crawl
 
     # ``sitemap`` (hunt the sitemap.xml) and ``robots`` (hunt the robots.txt) are
     # dispatched IO ops on ``SiteBacking`` -- reached via ``__getattr__``, so remote is
