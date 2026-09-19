@@ -21,117 +21,94 @@ from pydantic import PrivateAttr
 from ...query.expr import Expr
 from ..client import WebClient, _materialize, _seed_urls
 from ..engine import Engine
-from ..document import Document
 from ..reference import Reference
 from .wire import deserialize, reject_sequence, url_of, wire_models  # noqa: F401 (re-exported)
 
 if TYPE_CHECKING:
     from ..crawl import Crawl
+    from ..document import Document
 
 #: back-compat alias -- the guard now lives in :mod:`.wire`.
 _reject_sequence = reject_sequence
 
 
-class RemoteWebClientCore(WebClient):
-    """A ``WebClient`` in ``"remote"`` mode: its ``execute`` POSTs one Plan to
-    ``/execute`` instead of running locally, and ``WebCore``'s remote dispatcher
-    turns every server-needing op into such a POST. The surface is unchanged; only
-    the dispatch mode differs."""
+def _raise_for_body(resp: Any) -> None:
+    """Turn a non-2xx service response into a structured ``RemoteError``."""
+    if 200 <= resp.status_code < 300:
+        return
+    from ...errors import RemoteError, WebError
 
-    url: str
-    token: str | None = None
+    err: WebError | None = None
+    try:  # the service sends {"error": {type, message, status_code, ...}}
+        payload = resp.json()
+        if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+            err = WebError(**payload["error"])
+    except Exception:
+        pass
+    raise RemoteError(resp.status_code, resp.text[:200], error=err)
 
-    _http: Any = PrivateAttr(default=None)
-    _remote_hops: int = PrivateAttr(default=0)  # per-op round-trips (chattiness)
-    _nagged: bool = PrivateAttr(default=False)  # warned about .lazy once
 
-    def model_post_init(self, ctx: Any) -> None:
-        super().model_post_init(ctx)
-        self._engine._mode = "remote"  # the mode is an engine property
-        self.url = self.url.rstrip("/")
-        # bound every round-trip by the client's timeout so a hung service can't
-        # block the caller forever.
-        self._http = httpx.Client(timeout=self.timeout)
+class RemoteConnection:
+    """The remote TRANSPORT a client uses in ``"remote"`` dispatch mode: the HTTP
+    connection to a :mod:`webclient.service` app plus the plan-POST + server-side
+    crawl/session drivers. Held on the client as ``_conn``; the client delegates its
+    ``execute`` / ``crawl`` / ``session`` to it. This is the substance a remote client
+    is -- a dispatch mode + this connection + the :mod:`.wire` (de)serialisation -- not
+    a bespoke ``WebClient`` subtype. A server-session connection carries a ``sid`` (its
+    plans resolve through that session) and SHARES the parent's http."""
 
-    def _init_transport(self) -> None:
-        """No local transport pool -- execution is a remote round-trip. Still bind a
-        pool-less :class:`Engine` so the bus/loop are available like any client."""
-        self._engine = Engine(self.browser_config, transport=False)
+    def __init__(
+        self, url: str, token: str | None, timeout: float, *,
+        http: Any = None, sid: str = "",
+    ) -> None:
+        self.url = url.rstrip("/")
+        self.token = token
+        self.sid = sid  # a server session id ("" = the connection itself)
+        self.owns_http = http is None  # only the root connection closes the http
+        self.http = http if http is not None else httpx.Client(timeout=timeout)
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
     # -- execution: one Plan POSTed to /execute ------------------------------
-    def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
+    def execute(self, client: Any, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
         reject_sequence(expr)
+        if self.sid:  # a session-scoped plan resolves through the server session
+            expr = Expr(expr._plan.model_copy(update={"session_id": self.sid}), expr._client)
         body: dict[str, Any] = {"plan": expr._plan.model_dump()}
         src = expr._plan.source
         if src and "document_id" in src:
             body["document_id"] = src["document_id"]
         elif src:  # a reference-rooted plan carries its spec
             body["url"] = url_of(src)
-        # a context roots a context-based plan (e.g. plan.collect(rc.ref(url)))
-        # server-side: a server document handle by id, a reference by its spec, a
-        # recorded Expr by its plan.
+        # a context roots a context-based plan (e.g. plan.collect(rc.ref(url))) server-side:
+        # a server document handle by id, a reference by its spec, a recorded Expr by its plan.
         if getattr(context, "_remote_handle", False):
             body["document_id"] = context.id
         elif isinstance(context, Reference):
             body["url"] = context.dispatch("url")
         elif isinstance(context, Expr):
             body["context_plan"] = context._plan.model_dump()
-        resp = self._http.post(
-            f"{self.url}/execute", json=body, headers=self._headers()
-        )
-        if not (200 <= resp.status_code < 300):
-            from ...errors import RemoteError, WebError
-
-            err: WebError | None = None
-            try:  # the service sends {"error": {type, message, status_code, ...}}
-                payload = resp.json()
-                if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
-                    err = WebError(**payload["error"])
-            except Exception:
-                pass
-            raise RemoteError(resp.status_code, resp.text[:200], error=err)
-        # the service returns clean JSON; rebuild real cores (a Document handle, a
-        # Reference) and wrap a scalar leaf into a Field, so remote and local
-        # ``collect()`` agree on the result type.
-        return _materialize(deserialize(self, resp.json()["rows"]))
+        resp = self.http.post(f"{self.url}/execute", json=body, headers=self._headers())
+        _raise_for_body(resp)
+        # rebuild real cores (a Document handle, a Reference) + wrap a scalar leaf into a
+        # Field, so remote and local ``collect()`` agree on the result type.
+        return _materialize(deserialize(client, resp.json()["rows"]))
 
     # -- crawl: a server-side crawl, driven by dispatch ----------------------
-    # A crawl is stateful (it owns a frontier + drives many fetches), so it lives on
-    # the server (like a session) addressed by id. ``crawl()`` creates it; the Crawl
-    # core's ``step``/``run`` dispatch here (``_advance_crawl``) to advance it and
-    # refresh the handle's mirror -- so turn-based stepping AND streaming work
-    # remotely, not just run-to-completion. ``sitemap``/``robots`` are ordinary
-    # dispatched IO ops (they ride ``/execute`` like ``fetch``), no override needed.
-    def _crawl_post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    def crawl_post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         """POST to a crawl endpoint and return the server crawl's state (or raise)."""
-        resp = self._http.post(
+        resp = self.http.post(
             f"{self.url}{path}",
             json={k: v for k, v in body.items() if v is not None},
             headers=self._headers(),
         )
-        if not (200 <= resp.status_code < 300):
-            from ...errors import RemoteError, WebError
-
-            err: WebError | None = None
-            try:
-                data = resp.json()
-                if isinstance(data, dict) and isinstance(data.get("error"), dict):
-                    err = WebError(**data["error"])
-            except Exception:
-                pass
-            raise RemoteError(resp.status_code, resp.text[:200], error=err)
+        _raise_for_body(resp)
         return cast("dict[str, Any]", resp.json())
 
-    def crawl(self, seeds: Any, **kwargs: Any) -> "Crawl":
-        """Create a server-side crawl and return a :class:`Crawl` handle over it. Unlike
-        before, it does NOT run to completion -- drive it with ``crawl.run()`` (batch),
-        ``crawl.step(select)`` (turn-based) or ``for card in crawl.stream()``, exactly as
-        a local crawl: each dispatches to the server. Accepts the local ``crawl`` wire
-        knobs (budget / scope / browser / resolve / keywords); a custom ``project`` is
-        local-only, so remote pages are always :class:`PageCard`\\ s."""
+    def crawl(self, client: Any, seeds: Any, **kwargs: Any) -> "Crawl":
+        """Create a server-side crawl and return a :class:`Crawl` handle over it (driven
+        with ``run``/``step``/``stream``, each dispatching to the server)."""
         from ..crawl import Crawl
 
         resolve = kwargs.get("resolve")
@@ -158,77 +135,114 @@ class RemoteWebClientCore(WebClient):
             "browser": kwargs.get("browser", "auto"),
             "resolve": resolve.model_dump() if resolve is not None else None,
         }
-        sid = getattr(self, "_sid", "")
-        if sid:  # a session-scoped crawl runs with the server session's identity
-            body["session"] = sid
-        state = self._crawl_post("/crawls", body)
+        if self.sid:  # a session-scoped crawl runs with the server session's identity
+            body["session"] = self.sid
+        state = self.crawl_post("/crawls", body)
         crawl = Crawl()
-        crawl._client = self
+        crawl._client = client
         crawl._crawl_id = state["id"]
-        self._adopt_crawl_state(crawl, state)
+        self.adopt_crawl_state(client, crawl, state)
         return crawl
 
-    def _advance_crawl(self, crawl: "Crawl", op: str, *args: Any) -> "Crawl":
-        """Dispatch a remote ``step``/``run``: POST to the server-side crawl, then adopt
-        the returned state into ``crawl``'s mirror. ``step``'s selection is sent as a
-        list of URLs (the server matches its own frontier by URL, or adds new ones)."""
+    def advance_crawl(self, client: Any, crawl: "Crawl", op: str, *args: Any) -> "Crawl":
+        """Dispatch a remote ``step``/``run`` and adopt the returned state into ``crawl``."""
         body: dict[str, Any] = {}
         if op == "step" and args and args[0] is not None:
             from ..crawl import Edge
 
             body["select"] = [e.url if isinstance(e, Edge) else str(e) for e in args[0]]
-        state = self._crawl_post(f"/crawls/{crawl._crawl_id}/{op}", body)
-        self._adopt_crawl_state(crawl, state)
+        state = self.crawl_post(f"/crawls/{crawl._crawl_id}/{op}", body)
+        self.adopt_crawl_state(client, crawl, state)
         return crawl
 
-    def _adopt_crawl_state(self, crawl: "Crawl", state: dict[str, Any]) -> None:
-        """Refresh a crawl handle's mirrored state from the server (config / scope /
-        status / frontier / pages / history / seen), so its local reads are current.
-        ``pages`` is deserialised the usual way -- a PageCard/model, a Document handle,
-        or a scalar/dict -- so a custom projection survives the round-trip."""
+    def adopt_crawl_state(self, client: Any, crawl: "Crawl", state: dict[str, Any]) -> None:
+        """Refresh a crawl handle's mirrored state from the server so its local reads are current."""
         from ..crawl import CrawlConfig, Edge, Failure
 
         crawl.config = CrawlConfig.model_validate(state.get("config", {}))
         crawl.scope = state.get("scope", "")
         crawl.status = state.get("status", "running")
         crawl.frontier = [Edge(**e) for e in state.get("frontier", [])]
-        crawl.pages = [deserialize(self, p) for p in state.get("pages", [])]
+        crawl.pages = [deserialize(client, p) for p in state.get("pages", [])]
         crawl.history = [Edge(**e) for e in state.get("history", [])]
         crawl.failures = [Failure(**f) for f in state.get("failures", [])]
         crawl._seen = set(state.get("seen", []))
 
-    def release(self, doc: Document) -> None:
-        """No-op on remote: the server owns its transport pool and reclaims pages
-        (the doc store is LRU-bounded); there is no local page to return."""
+    # -- server-side sessions ------------------------------------------------
+    def open_session(self, ttl: float | None) -> str:
+        """Create a server-side session and return its id."""
+        resp = self.http.post(f"{self.url}/sessions", json={"ttl": ttl}, headers=self._headers())
+        resp.raise_for_status()
+        return cast(str, resp.json()["id"])
+
+    def close_session(self, sid: str) -> None:
+        self.http.delete(f"{self.url}/sessions/{sid}", headers=self._headers())
 
     def close(self) -> None:
-        if self._http is not None:
-            self._http.close()
+        if self.owns_http:  # a session shares the root's http -- only the root closes it
+            self.http.close()
+
+
+class RemoteWebClientCore(WebClient):
+    """A ``WebClient`` in ``"remote"`` dispatch mode: it holds a :class:`RemoteConnection`
+    (``_conn``) and delegates ``execute`` / ``crawl`` / ``session`` to it, so every
+    server-needing op POSTs one Plan to the service. A thin shell over the connection --
+    the transport logic lives in :class:`RemoteConnection`, not here; only the dispatch
+    mode differs from a local client."""
+
+    url: str
+    token: str | None = None
+
+    _conn: Any = PrivateAttr(default=None)  # the RemoteConnection (transport)
+    _remote_hops: int = PrivateAttr(default=0)  # per-op round-trips (chattiness)
+    _nagged: bool = PrivateAttr(default=False)  # warned about .lazy once
+
+    def model_post_init(self, ctx: Any) -> None:
+        super().model_post_init(ctx)
+        self._engine._mode = "remote"  # the mode is an engine property
+        self.url = self.url.rstrip("/")
+        # bound every round-trip by the client's timeout so a hung service can't block forever.
+        self._conn = RemoteConnection(self.url, self.token, self.timeout)
+
+    def _init_transport(self) -> None:
+        """No local transport pool -- execution is a remote round-trip. Still bind a
+        pool-less :class:`Engine` so the bus/loop are available like any client."""
+        self._engine = Engine(self.browser_config, transport=False)
+
+    def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
+        return self._conn.execute(self, expr, context, stream=stream)
+
+    def crawl(self, seeds: Any, **kwargs: Any) -> "Crawl":
+        return cast("Crawl", self._conn.crawl(self, seeds, **kwargs))
+
+    def _advance_crawl(self, crawl: "Crawl", op: str, *args: Any) -> "Crawl":
+        """Reached from ``Crawl._remote_call`` for a remote ``step``/``run``."""
+        return cast("Crawl", self._conn.advance_crawl(self, crawl, op, *args))
+
+    def release(self, doc: "Document") -> None:
+        """No-op on remote: the server owns its transport pool and reclaims pages."""
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
         super().close()
 
-    # -- server-side sessions ------------------------------------------------
     def session(  # type: ignore[override]  # remote sessions are a distinct core
         self, *, ttl: float | None = None, **kw: Any
     ) -> "RemoteWebSessionCore":
-        resp = self._http.post(
-            f"{self.url}/sessions", json={"ttl": ttl}, headers=self._headers()
-        )
-        resp.raise_for_status()
-        return RemoteWebSessionCore(url=self.url, token=self.token)._bind(
-            self, resp.json()["id"]
-        )
+        sid = self._conn.open_session(ttl)
+        return RemoteWebSessionCore(url=self.url, token=self.token)._bind(self, sid)
 
-    def close_session(self, sid: str) -> None:
-        self._http.delete(f"{self.url}/sessions/{sid}", headers=self._headers())
+    def close_session(self, sid: str) -> None:  # kept for symmetry / callers
+        self._conn.close_session(sid)
 
 
 class RemoteWebSessionCore(RemoteWebClientCore):
-    """A server-side session as a real core -- no bespoke handle: it is a remote
-    client that threads its server session id into every plan (so the service
-    resolves through that session) and shares the parent client's http. So
-    ``session.ref(url)`` / ``session.fetch(url)`` dispatch exactly like the
-    client's, only scoped. A context manager: ``with rc.session() as s: ...``
-    deletes the server session on exit."""
+    """A server-side session as a real core: a remote client whose ``_conn`` carries the
+    server session id (so every plan resolves through that session) and SHARES the
+    parent's http. ``session.ref(url)`` / ``session.fetch(url)`` dispatch like the
+    client's, only scoped. A context manager -- ``with rc.session() as s: ...`` deletes
+    the server session on exit."""
 
     status: Literal["running", "closed"] = "running"
 
@@ -236,17 +250,18 @@ class RemoteWebSessionCore(RemoteWebClientCore):
     _sid: str = PrivateAttr(default="")  # the server session id
 
     def model_post_init(self, ctx: Any) -> None:
-        # share the parent's http (set in ``_bind``) -- don't open our own; skip
-        # RemoteWebClientCore.model_post_init (which would) and just mark the mode.
+        # skip RemoteWebClientCore.model_post_init (which would open its own connection);
+        # the sid-carrying, http-sharing connection is built in ``_bind``.
         WebClient.model_post_init(self, ctx)
-        self._engine._mode = "remote"  # the mode is an engine property (parent's shares it post-bind)
+        self._engine._mode = "remote"
 
-    def _bind(
-        self, parent: "RemoteWebClientCore", sid: str
-    ) -> "RemoteWebSessionCore":
+    def _bind(self, parent: "RemoteWebClientCore", sid: str) -> "RemoteWebSessionCore":
         self._parent = parent
         self._sid = sid
-        self._http = parent._http  # share the connection
+        # share the parent's http; carry the sid so the connection threads it into plans.
+        self._conn = RemoteConnection(
+            parent.url, parent.token, self.timeout, http=parent._conn.http, sid=sid
+        )
         self.url, self.token = parent.url, parent.token
         return self
 
@@ -254,18 +269,10 @@ class RemoteWebSessionCore(RemoteWebClientCore):
     def id(self) -> str:
         return self._sid
 
-    def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
-        # thread the server session id into the plan so the service resolves
-        # through this session; then POST via the remote client machinery.
-        scoped = Expr(
-            expr._plan.model_copy(update={"session_id": self._sid}), expr._client
-        )
-        return super().execute(scoped, context, stream=stream)
-
     def close(self) -> None:
         if self.status == "closed":
             return
-        self._parent.close_session(self._sid)
+        self._parent._conn.close_session(self._sid)
         self.status = "closed"
 
     def __enter__(self) -> "RemoteWebSessionCore":
@@ -275,4 +282,4 @@ class RemoteWebSessionCore(RemoteWebClientCore):
         self.close()
 
 
-__all__ = ["RemoteWebClientCore", "RemoteWebSessionCore"]
+__all__ = ["RemoteConnection", "RemoteWebClientCore", "RemoteWebSessionCore"]
