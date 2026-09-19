@@ -69,6 +69,10 @@ LAZY = {Reference: "LazyReference", Document: "LazyDocument"}
 #: the async eager tier: a Core maps to its Async surface, and its IO ops are
 #: ``async def`` (see ``members``), so ``await ac.ref(url).resolve()`` types.
 SURFACE_ASYNC = {Reference: "AsyncReference", Document: "AsyncDocument"}
+#: the remote tier: a Core maps to its Remote surface -- a server-held reference the
+#: remote dispatcher returns EAGERLY (execution happens on the server); data crosses
+#: the wire materialised. Like the eager tier for values, but Core-ops return Remote*.
+SURFACE_REMOTE = {Reference: "RemoteReference", Document: "RemoteDocument"}
 #: the cores whose ops the core itself implements via a generated interface (so the
 #: async surface's IO ops override the inherited eager ones -> need an ``override``
 #: ignore). Grows as each core gets its interface.
@@ -76,7 +80,8 @@ HAS_INTERFACE: set[type] = {Document, Reference, WebClient}
 #: bare core-surface names -- an overload returning one overlaps a later ``str``
 #: overload and needs the ``overload-overlap`` ignore.
 _CORE_SURFACES = (
-    set(SURFACE.values()) | set(LAZY.values()) | set(SURFACE_ASYNC.values())
+    set(SURFACE.values()) | set(LAZY.values())
+    | set(SURFACE_ASYNC.values()) | set(SURFACE_REMOTE.values())
 )
 
 #: names the resolved annotations may reference (TYPE_CHECKING-only in their own
@@ -217,8 +222,8 @@ def _render(tp: Any, tier: str) -> str:
     not a chainable field/list."""
     inner = _unwrap_union(tp)
     cat = _classify(inner)
-    smap = {"eager": SURFACE, "async": SURFACE_ASYNC}.get(tier, LAZY)
-    sync = tier in ("eager", "async")  # a materialised value tier
+    smap = {"eager": SURFACE, "async": SURFACE_ASYNC, "remote": SURFACE_REMOTE}.get(tier, LAZY)
+    sync = tier in ("eager", "async", "remote")  # a materialised value tier
     if cat == "core":
         return smap[inner]
     if cat == "iterable":
@@ -565,6 +570,16 @@ def _body(region: str) -> str:
         return _indented(
             members(WebClient, "async", fields=False, class_props=False), 8
         )
+    if region == "RemoteReference surface":
+        # the remote view: Core-ops return Remote* (server-held references), data
+        # crosses the wire materialised -- the same core, a remote dispatch mode.
+        return _indented(
+            members(Reference, "remote", fields=False, class_props=False), 8
+        )
+    if region == "RemoteDocument surface":
+        return _indented(
+            members(Document, "remote", fields=False, class_props=False), 8
+        )
     raise KeyError(region)
 
 
@@ -576,6 +591,8 @@ REGIONS = [
     (SURFACES, "AsyncReference surface"),
     (SURFACES, "AsyncDocument surface"),
     (SURFACES, "AsyncWebClient surface"),
+    (SURFACES, "RemoteReference surface"),
+    (SURFACES, "RemoteDocument surface"),
     (COLLECTION, "collection element-op lifting"),
     (MODELS, "lazy-tier"),
 ]
