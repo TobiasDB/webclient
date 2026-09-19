@@ -289,23 +289,31 @@ def main() -> None:
         print("session:    ", session.status, "cookies:", session.cookies)
 
         # [M4] browser=True -> a LiveDocument backed by a real page. Actions
-        #      auto-wait and are recorded; the DOM/console/network are
-        #      captured onto the document as events.
-        live = wc.ref(f"{base}/app").resolve(browser=True)
-        live.write("#qty", "3").click("#add")
-        live.wait_for("#cart li", timeout=5.0)
-        print("live dom:   ", live.select("#cart li").attr("text"))
-        print("console:    ", [e.text for e in live.console])
-        print("dom events: ", len(live.dom_mutations), "mutations captured")
+        #      auto-wait; the DOM/console/network are captured onto the document
+        #      as events. A recording session (wc.record()) mirrors the eager
+        #      navigations + interactions into ONE replayable Plan -- rec.plan --
+        #      with secrets scrubbed (a Plan is portable, so credentials/auth never
+        #      land in it). Replaying the Plan reproduces the interacted state.
+        with wc.record() as rec:
+            live = rec.ref(f"{base}/app").resolve(browser=True)
+            live.write("#qty", "3").click("#add")
+            live.wait_for("#cart li", timeout=5.0)
+            print("live dom:   ", live.select("#cart li").attr("text"))
+            print("console:    ", [e.text for e in live.console])
+            print("dom events: ", len(live.dom_mutations), "mutations captured")
 
-        # [M4] LiveNode event narrowing: an element sees only its own subtree.
-        cart = live.select("#cart")
-        print("narrowed:   ", len(cart.events_of(DOMUpdateEvent)), "under #cart")
-
-        # [P7] The reference carries the action chain, so re-resolving it
-        #      (reload) reproduces the mutated state on a fresh page.
-        print("chain:      ", [a["op"] for a in live.ref().actions])
+            # [M4] LiveNode event narrowing: an element sees only its own subtree.
+            cart = live.select("#cart")
+            print("narrowed:   ", len(cart.events_of(DOMUpdateEvent)), "under #cart")
+            recorded = rec.plan  # the resolve + ordered interaction steps, as a Plan
         wc.release(live)  # page back to the pool
+
+        # [recorder] Replay the recorded Plan on a fresh page -> the same reached state
+        #      (replay = running the Expr/Plan; the recorder never touched reload/actions).
+        print("recorded:   ", recorded.describe())
+        replayed = recorded.collect()
+        print("replayed:   ", replayed.select("#cart li").attr("text"))
+        wc.release(replayed)
 
         # [flags] browser="auto" escalates a JS-gated page to a browser render on the
         #      response's flags. The /spa page injects its content via JS, so the spa

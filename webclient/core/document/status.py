@@ -52,9 +52,9 @@ class StatusBacking(Backing):
         return core._ref
 
     async def reload(self, core: "Document") -> "Document":
-        """Re-resolve on a fresh page, replaying the recorded action chain --
-        available even after the page was released. An IO op: the interface
-        bridges it (``dispatch``)."""
+        """Re-resolve the BASE page on a fresh render (same tier) -- available even after
+        the page was released. To reproduce an INTERACTED state, record the interactions
+        (``with wc.record()``) and replay the Plan. An IO op (bridged by ``dispatch``)."""
         return await core._client.areload(core)
 
     def is_ok(self, core: "Document") -> "Field[bool]":

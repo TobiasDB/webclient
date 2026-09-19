@@ -171,14 +171,19 @@ def test_screenshot(app):
     assert element_shot.content[:4] == b"\x89PNG"
 
 
-def test_reload_reproduces_state(httpserver, wc):
+def test_recorded_plan_reproduces_interacted_state(httpserver, wc):
+    # interactions performed under a recording session are captured into a replayable
+    # Plan (rec.plan); replaying it reproduces the interacted state on a fresh page.
     httpserver.expect_request("/app2").respond_with_data(APP, content_type="text/html")
-    live = wc.ref(httpserver.url_for("/app2")).resolve(browser=True).collect()
-    live.click("#c1 button").write("#name", "Bob")
-    assert [a["op"] for a in live.ref().actions] == ["click", "write"]  # chain recorded
+    with wc.record() as rec:
+        live = rec.ref(httpserver.url_for("/app2")).resolve(browser=True).collect()
+        live.click("#c1 button").write("#name", "Bob")
+        plan = rec.plan
     wc.release(live)
+    # the plan is the resolve + the ordered interaction steps
+    assert plan.describe().count(".step(") == 2
 
-    fresh = live.reload()  # re-resolves + replays the action chain
+    fresh = plan.collect()  # replay reproduces the interacted state on a fresh page
     try:
         assert fresh.select(".added", error=RETURN).ok
         assert fresh.select("#out").attr("text") == "Bob"
@@ -187,6 +192,33 @@ def test_reload_reproduces_state(httpserver, wc):
         # taken AFTER replay, not the pre-replay shell.
         assert "added-one" in fresh.attr("text")
         assert "added-one" in fresh.html()
+    finally:
+        wc.release(fresh)
+
+
+def test_recorder_scrubs_secrets_from_the_plan(httpserver, wc):
+    # a Plan is portable, so a secret typed during recording is never written into it: the
+    # write step is recorded but its text (a declared secret) is redacted.
+    httpserver.expect_request("/app5").respond_with_data(APP, content_type="text/html")
+    with wc.record(secrets=["hunter2"]) as rec:
+        live = rec.ref(httpserver.url_for("/app5")).resolve(browser=True).collect()
+        live.write("#name", "hunter2")  # a credential typed into a field
+        blob = rec.plan.to_blob()
+    wc.release(live)
+    assert "hunter2" not in blob  # never written into the portable Plan
+    assert rec.plan.describe().count(".step(") == 1  # the write step IS recorded (redacted)
+
+
+def test_reload_re_renders_the_base_page(httpserver, wc):
+    # reload() re-renders the BASE page on a fresh browser tier (no interaction replay --
+    # that lives in a recorded Plan now).
+    httpserver.expect_request("/app3").respond_with_data(APP, content_type="text/html")
+    live = wc.ref(httpserver.url_for("/app3")).resolve(browser=True).collect()
+    live.click("#c1 button")  # mutate the live page
+    wc.release(live)
+    fresh = live.reload()  # re-renders the base -- the click is NOT replayed
+    try:
+        assert not fresh.select(".added", error=RETURN).ok  # base state, no interaction
     finally:
         wc.release(fresh)
 

@@ -539,6 +539,8 @@ def _view_class(core: type, tier: str) -> str:
             "@property", 'def bus(self) -> "EventBus": ...',
             "@property", 'def pool(self) -> "ClientPool": ...',
             'def session(self, *, ttl: float | None = ..., headers: dict[str, str] | None = ..., **kw: Any) -> "Session": ...',
+            'def record(self, *, secrets: list[str] | None = ...) -> "Session": ...',
+            "@property", 'def plan(self) -> "Expr | None": ...',
         ]
     lines += members(core, tier, fields=False, class_props=False)
     return f"class {name}({base}):\n" + "\n".join("    " + ln for ln in lines)

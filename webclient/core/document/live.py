@@ -520,17 +520,9 @@ class LiveBacking(Backing):
         )
         core._client.bus.publish(event)
         core._events.append(event)  # routed onto the document
-        if core._ref is not None:
-            core._ref.actions.append(
-                {
-                    "op": action,
-                    "args": {
-                        k: v
-                        for k, v in (("selector", selector), ("text", text))
-                        if v is not None
-                    },
-                }
-            )
+        # (an interaction is captured for replay only under a recording session -- the
+        # ``WebCore.dispatch`` hook mirrors it into ``rec.plan``; see ``WebClient.record``.
+        # The reference no longer accumulates an action chain.)
         # bump the client-side ACTION counter BEFORE acting, so any DOM this interaction
         # reveals is phase-stamped with this action's index (the correlation substrate).
         try:

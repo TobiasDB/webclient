@@ -27,6 +27,11 @@ from ..query.plan import Plan
 #: per-op remote round-trips (on server-side handles) before nudging toward .lazy.
 _CHATTY_ROUND_TRIPS = 4
 
+#: the eager ops a recording session mirrors into its Plan (see ``WebClient.record``):
+#: the navigations that root a page journey and the live interactions that advance it.
+#: Reads (``select``/``attr``/``title``/...) are never recorded -- they don't change state.
+_RECORDABLE_OPS = frozenset({"resolve", "fetch", "click", "write", "wait_for", "goto"})
+
 
 class UnsupportedOp(WebException, TypeError):
     """An op no chosen backing provides (the receiver lacks the capability, e.g.
@@ -194,8 +199,28 @@ class WebCore:
             return remote if is_prop else remote(*args, **kwargs)
         result = getattr(self.backing(op), op)(self, *args, **kwargs)
         if op in type(self).io_ops():
-            return self._bridge_io(result)
+            result = self._bridge_io(result)
+            if op in _RECORDABLE_OPS:
+                self._maybe_record(op, args, kwargs)
+            return result
+        if op in _RECORDABLE_OPS:
+            self._maybe_record(op, args, kwargs)
         return result
+
+    def _maybe_record(self, op: str, args: Any, kwargs: Any) -> None:
+        """Mirror an eager action into the bound recording session's Plan, if any (see
+        :meth:`WebClient.record`). Zero cost off the recording path -- a session is
+        recording only inside a ``with wc.record()`` block. Ops that happen INSIDE a plan
+        run (a ``collect``/replay, marked by the executor's live-page scope) are skipped,
+        so recording a chain, or replaying one, never records the derived sub-ops."""
+        client = getattr(self, "_session", None) or getattr(self, "_client", None) or self
+        if not getattr(client, "_recording", False):
+            return
+        from ..query.executor import _PLAN_LIVE
+
+        if _PLAN_LIVE.get() is not None:  # inside a plan evaluation -- not an authored action
+            return
+        cast(Any, client)._record_op(self, op, args, kwargs)
 
     def _bridge_io(self, coro: Any) -> Any:
         """Bridge an IO op's coroutine on the right dispatcher: a session's, else

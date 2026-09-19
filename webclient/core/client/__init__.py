@@ -216,6 +216,13 @@ class WebClient(SessionCore, IWebClient):
     #: per-op remote round-trips + the one-time .lazy nag (only used in remote mode).
     _remote_hops: int = PrivateAttr(default=0)
     _nagged: bool = PrivateAttr(default=False)
+    #: recording state, set by ``record()`` on a session (a recorder IS a session). When
+    #: ``_recording``, ``WebCore.dispatch`` mirrors each eager navigation/interaction into
+    #: ``_record_chain`` (a replayable ``Expr``); ``_record_secrets`` are values scrubbed
+    #: from the Plan so a portable recording never carries credentials. See ``record()``.
+    _recording: bool = PrivateAttr(default=False)
+    _record_chain: Any = PrivateAttr(default=None)
+    _record_secrets: set[str] = PrivateAttr(default_factory=set)
     _scope: Any = PrivateAttr(default=None)  # the client's NameScope (000)
     _scope_counter: int = PrivateAttr(default=0)  # next session scope index
     _scope_lock: Any = PrivateAttr(default_factory=threading.Lock)  # guards ^
@@ -664,6 +671,85 @@ class WebClient(SessionCore, IWebClient):
 
         return connect(WebClient(timeout=self.timeout), url, token)
 
+    # -- recorder ------------------------------------------------------------
+    def record(self, *, secrets: "list[str] | None" = None) -> "Session":
+        """Open a RECORDING SESSION: ``with wc.record() as rec: ...`` captures the eager
+        navigations + interactions performed through ``rec`` (its resolved refs / fetched
+        documents) into a single replayable Plan -- ``rec.plan`` -- ``ref.resolve(browser=)
+        .step(doc.click(...)).step(doc.write(...))...``. A recorder is just a session (a
+        scope on this engine) with recording on; ``WebCore.dispatch`` mirrors each action
+        (see :data:`~webclient.core.web_core._RECORDABLE_OPS`), so there is no separate
+        recorder object and zero cost off the recording path. Replay the reached state with
+        ``rec.plan.collect()``; persist it with ``rec.plan.to_blob()``.
+
+        Because a Plan is portable/serialisable, SECRETS are never written into it: the
+        recorded ``resolve`` carries only the request's URL/params (never its headers /
+        cookies / body), and any interaction text equal to one of this session's auth
+        values -- or to a value passed in ``secrets`` -- is redacted."""
+        from ..session import Session
+
+        core = Session()
+        core.bind(self)
+        core._recording = True
+        core._record_secrets = set(secrets or [])
+        return core
+
+    @property
+    def plan(self) -> "Any":
+        """The Plan a recording session has captured so far (an ``Expr``), or ``None`` if
+        nothing has been recorded yet -- see :meth:`record`. Replay it with
+        ``.collect()``, serialise it with ``.to_blob()``, read it with ``.describe()``."""
+        return self._record_chain
+
+    def _record_secret_values(self) -> "set[str]":
+        """The values scrubbed from a recorded Plan: the caller's ``secrets`` plus this
+        session's own auth (cookie + header values), so a credential typed or carried
+        during recording never lands in the portable Plan."""
+        auth: dict[str, Any] = {
+            **getattr(self, "cookies", {}), **getattr(self, "session_headers", {})
+        }
+        return set(self._record_secrets) | {v for v in auth.values() if isinstance(v, str)}
+
+    def _redact(self, value: Any) -> Any:
+        """Redact a value that matches a known secret (else pass it through)."""
+        return "" if isinstance(value, str) and value in self._record_secret_values() else value
+
+    def _record_op(self, receiver: Any, op: str, args: Any, kwargs: Any) -> None:
+        """Mirror one eager action onto this recording session's Plan (called from
+        ``WebCore._maybe_record``). A navigation (``resolve``/``fetch``) starts a fresh
+        page chain rooted at its scrubbed reference; an interaction (``click``/``write``/
+        ``wait_for``/``goto``) appends a ``.step(doc.<op>(...))`` with its text scrubbed."""
+        from ...query.expr import Expr
+        from ...query.plan import Plan
+
+        # bind the Plan to the OWNING client (a recorder is an ephemeral session scope), so
+        # ``rec.plan.collect()`` replays after the ``with`` block has closed the recorder.
+        client = getattr(self, "_parent", None) or self
+        if op in ("resolve", "fetch"):
+            browser = kwargs.get("browser", False)
+            if op == "fetch":  # receiver is the client; the url is the first arg
+                from ...surfaces import reference
+
+                src_plan = cast(Any, reference(str(args[0])))._plan
+            else:  # receiver is the reference -- carry its spec MINUS any auth/secret
+                spec = {
+                    k: v for k, v in receiver.model_dump().items()
+                    if k not in ("headers", "cookies", "body", "json_body", "form")
+                }
+                src_plan = Plan(root="Reference", source=spec)
+            self._record_chain = Expr(src_plan, client).resolve(browser=browser)
+        elif self._record_chain is not None:  # an interaction advances the held page
+            from ...surfaces import wq
+
+            sel = args[0] if args else kwargs.get("selector")
+            call = cast(Any, wq).doc
+            if op == "write":
+                text = self._redact(args[1] if len(args) > 1 else kwargs.get("text"))
+                sub = call.write(sel, text)
+            else:
+                sub = getattr(call, op)(sel)
+            self._record_chain = cast(Any, self._record_chain).step(sub)
+
     # -- crawl ---------------------------------------------------------------
     def crawl(
         self,
@@ -834,9 +920,11 @@ class WebClient(SessionCore, IWebClient):
         ref = core._ref
         if ref is None:
             raise ValueError("cannot reload a document with no source reference")
-        if core._page is not None or ref.actions:  # live page / recorded actions
-            return await self._alive(ref, replay=list(ref.actions))
+        if core._page is not None or "browser" in (core._tiers or []):
+            return await self._alive(ref)  # re-render the page fresh (same browser tier)
         return await self.afetch(ref)  # plain HTTP refetch
+        # NB: reload reproduces the BASE page; to reproduce an INTERACTED state, record the
+        # interactions (``with wc.record()``) and replay the Plan (``rec.plan.collect()``).
 
     def release(self, doc: Document) -> None:
         """Return a live document's page lease to the pool (sync front door for

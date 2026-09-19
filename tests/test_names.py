@@ -34,12 +34,22 @@ def test_resolve_names_ref_and_doc_in_the_client_scope(site, wc):
     assert doc.created and doc.accessed >= doc.created
 
 
-def test_ref_roundtrips_request_and_action_chain(site, wc):
+def test_record_captures_a_replayable_plan(site, wc):
+    # a recording session mirrors the eager fetch into rec.plan (a replayable Expr); off
+    # the recording path nothing is captured (zero cost).
+    assert wc.plan is None
+    with wc.record() as rec:
+        d = rec.fetch(site.url_for("/p2"))
+        assert d.select("h1").attr("text") == "2"  # reads are NOT recorded
+    assert rec.plan is not None
+    assert rec.plan.collect().select("h1").attr("text") == "2"  # replays to the same page
+
+
+def test_ref_roundtrips_request(site, wc):
     doc = wc.ref(site.url_for("/p2")).resolve().collect()
     wc._scope.clear()  # resolver forgot it
     rebuilt = doc.ref()
     assert rebuilt.name == doc.root and rebuilt.url == doc.url
-    rebuilt.actions.append({"op": "click", "args": ["#go"]})
     again = Reference.model_validate_json(rebuilt.model_dump_json())
     assert again.model_dump() == rebuilt.model_dump()  # binding is private state
     assert wc.fetch(again).collect().select("h1").attr("text") == "2"
