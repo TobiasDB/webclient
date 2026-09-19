@@ -1,6 +1,6 @@
-"""Remote-backend tests: the same WebClient over a RemoteWebClientCore,
-driving a real (in-process) uvicorn server on an ephemeral port -- no local
-browser/lxml, exercising the true HTTP path. Remote documents are lazy
+"""Remote-backend tests: the same WebClient in ``"remote"`` dispatch mode (over a
+``RemoteConnection``), driving a real (in-process) uvicorn server on an ephemeral port
+-- no local browser/lxml, exercising the true HTTP path. Remote documents are lazy
 handles; value ops run through ``rc.execute`` (deferred/batched)."""
 
 import threading
@@ -15,7 +15,6 @@ from webclient import (
     Reference,
     RemoteError,
     RemoteWebClient,
-    RemoteWebClientCore,
     WebClient,
     doc,
     ref,
@@ -81,7 +80,7 @@ def test_wc_remote_opens_a_context_managed_remote_session(remote):
 
     rc, server = remote
     with WebClient() as wc:
-        with wc.remote(rc.url, token="secret") as rr:
+        with wc.remote(rc._conn.url, token="secret") as rr:
             assert rr._dispatch_mode() == "remote"  # its engine's mode is remote
             d = rr.fetch(server.url_for("/cards"))
             assert d.ok and d.title == "Shop"
@@ -253,10 +252,12 @@ def test_plan_matches_local_client(remote, httpserver):
 
 
 def test_same_facade_over_a_remote_core(remote):
-    """The remote client is literally a WebClient over a remote core."""
+    """The remote client is literally a WebClient in "remote" dispatch mode -- no
+    subtype: just the core with a RemoteConnection (``_conn``) it delegates to."""
     rc, server = remote
     assert isinstance(rc, WebClient)
-    assert isinstance(rc.core, RemoteWebClientCore)
+    assert rc.core is rc  # the eager surface IS the core
+    assert rc._dispatch_mode() == "remote" and rc._conn is not None
 
 
 def test_sessions(remote, httpserver):
@@ -319,7 +320,7 @@ def test_remote_client_times_out_on_a_hung_service(httpserver):
         return Response("{}", content_type="application/json")
 
     httpserver.expect_request("/execute").respond_with_handler(slow)
-    rc = RemoteWebClientCore(url=httpserver.url_for(""), timeout=0.1)  # IS the client
+    rc = RemoteWebClient(httpserver.url_for(""), timeout=0.1)  # IS the client
     with pytest.raises(httpx.TimeoutException):
         rc.fetch("https://example.com")
     rc.close()

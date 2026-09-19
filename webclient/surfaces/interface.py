@@ -234,7 +234,7 @@ if TYPE_CHECKING:
         same core (the remote-ness is the client's dispatch mode, not the type)."""
         @property
         def lazy(self) -> "LazyWebClient": ...
-        def __init__(self, url: str, token: str | None = ...) -> None: ...  # type: ignore[override]
+        def __init__(self, url: str, token: str | None = ..., **policy: Any) -> None: ...  # type: ignore[override]
         @property
         def bus(self) -> "EventBus": ...
         @property
@@ -254,13 +254,14 @@ else:  # at runtime a dispatch view IS the core (a dispatch mode, not a subtype)
     RemoteDocument = Document
     AsyncWebClient = _async_client  # the core in async-dispatcher mode
 
-    def RemoteWebClient(url, token=None):  # type: ignore[no-untyped-def]
-        """A ``WebClient`` over a remote core -- the same surface, executed server-side.
-        The remote-ness is entirely in the core (``RemoteWebClientCore``, a
-        different-dispatcher client whose verbs round-trip a one-step plan)."""
-        from ..core.remote import RemoteWebClientCore
+    def RemoteWebClient(url, token=None, **policy):  # type: ignore[no-untyped-def]
+        """A ``WebClient`` in ``"remote"`` dispatch mode -- the same surface, executed
+        server-side. Remote is not a subtype: this builds a plain ``WebClient`` (with any
+        ``**policy`` kwargs) and puts it into remote mode over a ``RemoteConnection`` via
+        ``connect`` -- its verbs round-trip a one-step plan to the service."""
+        from ..core.remote import connect
 
-        return RemoteWebClientCore(url=url, token=token)
+        return connect(WebClient(**policy), url, token)
 
 #: A live (browser-backed) document is a Document with the ``page`` capability.
 LiveDocument = Document

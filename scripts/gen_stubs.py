@@ -534,7 +534,7 @@ def _view_class(core: type, tier: str) -> str:
     ]
     if core is WebClient:  # the client's non-backing accessors (not ops) + the remote entry
         if tier == "remote":  # `RemoteWebClient(url)` is the typed remote-session entry
-            lines.append('def __init__(self, url: str, token: str | None = ...) -> None: ...  # type: ignore[override]')
+            lines.append('def __init__(self, url: str, token: str | None = ..., **policy: Any) -> None: ...  # type: ignore[override]')
         lines += [
             "@property", 'def bus(self) -> "EventBus": ...',
             "@property", 'def pool(self) -> "ClientPool": ...',

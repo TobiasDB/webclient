@@ -79,6 +79,8 @@ class Session(WebClient):
 
     def close(self) -> None:  # not the parent engine
         self.status = "closed"
+        if self._conn is not None:  # a server-side session -- dispose it (shares parent http)
+            self._conn.close()
         if self._scope is not None:
             self._scope.clear()
 

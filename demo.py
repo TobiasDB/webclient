@@ -629,8 +629,8 @@ def main() -> None:
         ).json()
         print("service plan:  ", rows["rows"])
 
-    # [remote] Remote is just a different backend: the same WebClient over a
-    #      RemoteWebClientCore, so execute runs server-side over HTTP with no
+    # [remote] Remote is just a dispatch mode: the same WebClient put into "remote"
+    #      mode over a RemoteConnection, so execute runs server-side over HTTP with no
     #      local browser or lxml (httpx + pydantic only). A fetched document is
     #      a lazy handle; value ops run via rc.execute (one round trip each).
     import threading

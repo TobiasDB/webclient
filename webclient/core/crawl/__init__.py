@@ -80,8 +80,8 @@ class Crawl(SessionCore, ICrawl):
         only the IO ops round-trip). Every other op runs on the local mirror, so
         ``done``/``pages``/``frontier`` need no round-trip."""
         if op in ("step", "run"):
-            client = cast(Any, self._client)  # a RemoteWebClientCore in remote mode
-            return lambda *a, **k: client._advance_crawl(self, op, *a, **k)
+            client = cast(Any, self._client)  # a WebClient in remote mode (holds ``_conn``)
+            return lambda *a, **k: client._conn.advance_crawl(client, self, op, *a, **k)
         return super()._remote_call(op, is_prop)
 
     def bind(self, client: "WebClient") -> "Crawl":

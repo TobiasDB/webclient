@@ -41,7 +41,6 @@ from .events import (
 )
 from .guides import lazy_query_guide
 from .query.expr import from_blob, from_describe, from_plan
-from .core.remote import RemoteWebClientCore
 from .surfaces import (
     AsyncDocument,
     AsyncReference,
@@ -72,7 +71,6 @@ __all__ = [
     "AsyncReference",
     "AsyncDocument",
     "RemoteWebClient",
-    "RemoteWebClientCore",
     "Session",
     "Document",
     "LiveDocument",

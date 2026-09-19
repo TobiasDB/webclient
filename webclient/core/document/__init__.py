@@ -82,7 +82,7 @@ class Document(WebCore, IDocument):
     #: ``["static", "proxy", "browser"]`` -- read by the ``transport`` facet.
     _tiers: list[str] = PrivateAttr(default_factory=list)
     #: a server-side handle (remote dispatcher): it holds no local content, so its
-    #: content ops round-trip. Set by ``RemoteWebClientCore`` on deserialize.
+    #: content ops round-trip. Set by ``core.remote.wire.deserialize`` on the wire.
     _remote_handle: bool = PrivateAttr(default=False)
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (

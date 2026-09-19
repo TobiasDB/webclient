@@ -208,6 +208,14 @@ class WebClient(SessionCore, IWebClient):
     #: this session's own state (a ``SessionCore.store``); empty on the root client.
     _store: dict[str, Any] = PrivateAttr(default_factory=dict)
     _closed: bool = PrivateAttr(default=False)
+    #: the remote transport when this client is in ``"remote"`` dispatch mode (a
+    #: ``core.remote.RemoteConnection``), else ``None`` -- set by ``remote()`` /
+    #: ``core.remote.connect``. When set, ``execute``/``crawl``/``session``/``close``
+    #: route through it: remote is a dispatch mode + this connection, not a subtype.
+    _conn: Any = PrivateAttr(default=None)
+    #: per-op remote round-trips + the one-time .lazy nag (only used in remote mode).
+    _remote_hops: int = PrivateAttr(default=0)
+    _nagged: bool = PrivateAttr(default=False)
     _scope: Any = PrivateAttr(default=None)  # the client's NameScope (000)
     _scope_counter: int = PrivateAttr(default=0)  # next session scope index
     _scope_lock: Any = PrivateAttr(default_factory=threading.Lock)  # guards ^
@@ -287,6 +295,8 @@ class WebClient(SessionCore, IWebClient):
     def close(self) -> None:
         if self._closed:
             return
+        if self._conn is not None:  # remote: dispose the connection (or server session)
+            self._conn.close()
         if self._engine is not None:  # a session borrows its parent's engine (its own is None)
             self._engine.close()  # tear down the transport pool + engine loop
         for session in self._sessions:  # cascade to sessions
@@ -568,8 +578,11 @@ class WebClient(SessionCore, IWebClient):
 
     # -- plan execution (machinery): the surface's sync/async entry ----------
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
-        """Run a recorded plan on this engine (sync bridge). A remote subclass
-        swaps this for an HTTP round-trip; ``stream=True`` yields rows."""
+        """Run a recorded plan on this engine (sync bridge). In ``"remote"`` mode the
+        plan is POSTed to the service over ``self._conn`` instead of run locally;
+        ``stream=True`` yields rows."""
+        if self._conn is not None:  # remote dispatch: one round-trip to the service
+            return self._conn.execute(self, expr, context, stream=stream)
         if stream:
             return self._stream(expr, context)
         return _materialize(evaluate(expr, context, client=self))
@@ -623,11 +636,18 @@ class WebClient(SessionCore, IWebClient):
         headers: dict[str, str] | None = None,
         **kw: Any,
     ) -> "Session":
-        """A new session sharing this engine (a scoped ``Session``)."""
+        """A new session sharing this engine (a scoped ``Session``). In ``"remote"``
+        mode it opens a SERVER-SIDE session and returns a ``Session`` whose ``_conn``
+        carries that session id, so its plans resolve through the server session and
+        closing it disposes the server session."""
         from ..session import Session
 
         core = Session(ttl=ttl, session_headers=headers or {}, **kw)
         core.bind(self)
+        if self._conn is not None:  # a server-side session over a child connection
+            from ..remote import open_remote_session
+
+            core._conn = open_remote_session(self, ttl)
         return core
 
     def remote(self, url: str, *, token: str | None = None) -> "WebClient":
@@ -636,10 +656,13 @@ class WebClient(SessionCore, IWebClient):
         page or large result they produce, bounded by THIS session's lifecycle -- ``with
         wc.remote(url) as rc: ...`` disposes the server-side state on exit. A session-like
         core, uniform with ``session`` / ``crawl`` (its engine is the server's, not this
-        client's -- a session lives where its execution is)."""
-        from ..remote import RemoteWebClientCore
+        client's -- a session lives where its execution is). Remote is not a subtype: this
+        is a fresh ``WebClient`` put into ``"remote"`` dispatch mode over a
+        ``RemoteConnection`` (see :func:`core.remote.connect`); ``execute`` / ``crawl`` /
+        ``session`` / ``close`` route through that connection while it is set."""
+        from ..remote import connect
 
-        return cast("WebClient", RemoteWebClientCore(url=url, token=token))
+        return connect(WebClient(timeout=self.timeout), url, token)
 
     # -- crawl ---------------------------------------------------------------
     def crawl(
@@ -687,6 +710,17 @@ class WebClient(SessionCore, IWebClient):
         stopped. See :class:`CrawlConfig` for scope/country/domain filters, scoring
         weights, and the frontier cap."""
         from ..crawl import Crawl, CrawlConfig, Edge
+
+        if self._conn is not None:  # remote dispatch: create + drive a server-side crawl
+            return cast("Crawl", self._conn.crawl(
+                self, seeds, resolve=resolve, project=project, auto=auto, width=width,
+                depth=depth, max_pages=max_pages, max_frontier=max_frontier,
+                same_origin=same_origin, allow_subdomains=allow_subdomains,
+                allow_domains=allow_domains, deny_domains=deny_domains,
+                allow_countries=allow_countries, deny_countries=deny_countries,
+                include=include, exclude=exclude, include_xhr=include_xhr,
+                keywords=keywords, obey_robots=obey_robots, browser=browser,
+            ))
 
         if resume is not None:  # continue a prior crawl from its saved state
             crawl = Crawl(

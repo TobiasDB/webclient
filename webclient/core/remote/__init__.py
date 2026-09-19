@@ -13,10 +13,9 @@ handle type, no interface exceptions. Batch a chain/fan-out with ``.lazy``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
-from pydantic import PrivateAttr
 
 from ...query.expr import Expr
 from ..client import WebClient, _materialize, _seed_urls
@@ -179,107 +178,34 @@ class RemoteConnection:
         self.http.delete(f"{self.url}/sessions/{sid}", headers=self._headers())
 
     def close(self) -> None:
-        if self.owns_http:  # a session shares the root's http -- only the root closes it
+        if self.sid:  # a server session -- dispose it server-side (its http is shared)
+            try:
+                self.close_session(self.sid)
+            except Exception:  # noqa: BLE001 - best-effort dispose on close
+                pass
+        elif self.owns_http:  # the root connection owns the http
             self.http.close()
 
 
-class RemoteWebClientCore(WebClient):
-    """A ``WebClient`` in ``"remote"`` dispatch mode: it holds a :class:`RemoteConnection`
-    (``_conn``) and delegates ``execute`` / ``crawl`` / ``session`` to it, so every
-    server-needing op POSTs one Plan to the service. A thin shell over the connection --
-    the transport logic lives in :class:`RemoteConnection`, not here; only the dispatch
-    mode differs from a local client."""
-
-    url: str
-    token: str | None = None
-
-    _conn: Any = PrivateAttr(default=None)  # the RemoteConnection (transport)
-    _remote_hops: int = PrivateAttr(default=0)  # per-op round-trips (chattiness)
-    _nagged: bool = PrivateAttr(default=False)  # warned about .lazy once
-
-    def model_post_init(self, ctx: Any) -> None:
-        super().model_post_init(ctx)
-        self._engine._mode = "remote"  # the mode is an engine property
-        self.url = self.url.rstrip("/")
-        # bound every round-trip by the client's timeout so a hung service can't block forever.
-        self._conn = RemoteConnection(self.url, self.token, self.timeout)
-
-    def _init_transport(self) -> None:
-        """No local transport pool -- execution is a remote round-trip. Still bind a
-        pool-less :class:`Engine` so the bus/loop are available like any client."""
-        self._engine = Engine(self.browser_config, transport=False)
-
-    def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
-        return self._conn.execute(self, expr, context, stream=stream)
-
-    def crawl(self, seeds: Any, **kwargs: Any) -> "Crawl":
-        return cast("Crawl", self._conn.crawl(self, seeds, **kwargs))
-
-    def _advance_crawl(self, crawl: "Crawl", op: str, *args: Any) -> "Crawl":
-        """Reached from ``Crawl._remote_call`` for a remote ``step``/``run``."""
-        return cast("Crawl", self._conn.advance_crawl(self, crawl, op, *args))
-
-    def release(self, doc: "Document") -> None:
-        """No-op on remote: the server owns its transport pool and reclaims pages."""
-
-    def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-        super().close()
-
-    def session(  # type: ignore[override]  # remote sessions are a distinct core
-        self, *, ttl: float | None = None, **kw: Any
-    ) -> "RemoteWebSessionCore":
-        sid = self._conn.open_session(ttl)
-        return RemoteWebSessionCore(url=self.url, token=self.token)._bind(self, sid)
-
-    def close_session(self, sid: str) -> None:  # kept for symmetry / callers
-        self._conn.close_session(sid)
+def connect(client: "WebClient", url: str, token: str | None = None) -> "WebClient":
+    """Put ``client`` into ``"remote"`` dispatch mode over the service at ``url``: swap in
+    a pool-less :class:`Engine` (no local transport) and a :class:`RemoteConnection` it
+    delegates to. So a remote client is just a ``WebClient`` in remote mode + this
+    connection -- no bespoke subtype. The base client's ``execute``/``crawl``/``session``/
+    ``close`` route through ``self._conn`` when it is set (see :class:`WebClient`)."""
+    client._engine = Engine(client.browser_config, transport=False)
+    client._engine._mode = "remote"
+    client._conn = RemoteConnection(url, token, client.timeout)
+    return client
 
 
-class RemoteWebSessionCore(RemoteWebClientCore):
-    """A server-side session as a real core: a remote client whose ``_conn`` carries the
-    server session id (so every plan resolves through that session) and SHARES the
-    parent's http. ``session.ref(url)`` / ``session.fetch(url)`` dispatch like the
-    client's, only scoped. A context manager -- ``with rc.session() as s: ...`` deletes
-    the server session on exit."""
-
-    status: Literal["running", "closed"] = "running"
-
-    _parent: Any = PrivateAttr(default=None)  # the RemoteWebClientCore
-    _sid: str = PrivateAttr(default="")  # the server session id
-
-    def model_post_init(self, ctx: Any) -> None:
-        # skip RemoteWebClientCore.model_post_init (which would open its own connection);
-        # the sid-carrying, http-sharing connection is built in ``_bind``.
-        WebClient.model_post_init(self, ctx)
-        self._engine._mode = "remote"
-
-    def _bind(self, parent: "RemoteWebClientCore", sid: str) -> "RemoteWebSessionCore":
-        self._parent = parent
-        self._sid = sid
-        # share the parent's http; carry the sid so the connection threads it into plans.
-        self._conn = RemoteConnection(
-            parent.url, parent.token, self.timeout, http=parent._conn.http, sid=sid
-        )
-        self.url, self.token = parent.url, parent.token
-        return self
-
-    @property
-    def id(self) -> str:
-        return self._sid
-
-    def close(self) -> None:
-        if self.status == "closed":
-            return
-        self._parent._conn.close_session(self._sid)
-        self.status = "closed"
-
-    def __enter__(self) -> "RemoteWebSessionCore":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.close()
+def open_remote_session(parent: "WebClient", ttl: float | None) -> RemoteConnection:
+    """Open a server-side session on ``parent``'s connection and return a child
+    :class:`RemoteConnection` that carries its id + shares the parent's http -- so the
+    session's plans thread the server session id, and closing it disposes the session."""
+    conn = cast(RemoteConnection, parent._conn)
+    sid = conn.open_session(ttl)
+    return RemoteConnection(conn.url, conn.token, parent.timeout, http=conn.http, sid=sid)
 
 
-__all__ = ["RemoteConnection", "RemoteWebClientCore", "RemoteWebSessionCore"]
+__all__ = ["RemoteConnection", "connect", "open_remote_session"]
