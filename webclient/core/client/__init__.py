@@ -204,9 +204,6 @@ class WebClient(WebCore, IWebClient):
     #: scripts). The ROOT client owns one; a session borrows its parent's (its own
     #: stays ``None`` -- ``Session`` no-ops ``_init_transport``). See :class:`Engine`.
     _engine: Any = PrivateAttr(default=None)
-    #: backings registered via ``use(...)``, chosen before the built-ins (newest
-    #: first) by every core bound to this client -- the extensibility hook.
-    _backings: list[Backing] = PrivateAttr(default_factory=list)
     _closed: bool = PrivateAttr(default=False)
     _scope: Any = PrivateAttr(default=None)  # the client's NameScope (000)
     _scope_counter: int = PrivateAttr(default=0)  # next session scope index
@@ -732,8 +729,9 @@ class WebClient(WebCore, IWebClient):
         """The page scripts to install on a live page: this client's own
         (``inject_script``) plus the ones its document backings + registered
         backings declare. The backing owns the script; the client installs it."""
-        scripts = list(self._the_engine()._page_scripts)
-        for backing in (*Document.BACKINGS, *self._backings):
+        engine = self._the_engine()
+        scripts = list(engine._page_scripts)
+        for backing in (*Document.BACKINGS, *engine._backings):
             scripts.extend(backing.page_scripts)
         return scripts
 

@@ -108,6 +108,20 @@ class WebCore:
     _io_ops_memo: ClassVar["frozenset[str] | None"] = None
     _collection_ops_memo: ClassVar["frozenset[str] | None"] = None
 
+    # -- engine binding ------------------------------------------------------
+    def _bound_engine(self) -> Any:
+        """The :class:`~.engine.Engine` this core is bound to -- its shared loop /
+        pool / bus / registered backings -- or ``None`` if the core is unbound. A
+        client/session resolves its own engine (parent-or-self); a document/reference
+        resolves it through the client/session it is bound to. The one place a
+        content core reaches the shared engine, replacing the old ``_client``-hop for
+        backings."""
+        owner = getattr(self, "_session", None) or getattr(self, "_client", None) or self
+        resolver = getattr(owner, "_the_engine", None)
+        if resolver is not None:  # a client/session knows how to resolve its engine
+            return resolver()
+        return getattr(owner, "_engine", None)  # an unbound doc/ref -> None
+
     # -- choose / capabilities ----------------------------------------------
     def use(self, backing: "Backing") -> Self:
         """Register a ``Backing`` on this core's client: every core the client
@@ -122,25 +136,26 @@ class WebCore:
         e.g. a ``HtmlBacking`` subclass with ``provides = frozenset({"render"})``
         overrides ``render`` (``super()`` handles the formats you don't) while
         ``select`` / ``attr`` / live interaction still reach their built-ins."""
-        client = getattr(self, "_client", None) or self
-        backings = getattr(client, "_backings", None)
-        if backings is None:
+        engine = self._bound_engine()
+        if engine is None:
             raise TypeError(
-                f"{type(self).__name__} has no client to register a backing on; "
+                f"{type(self).__name__} has no engine to register a backing on; "
                 "call use() on a client/session or a client-bound surface"
             )
-        backings.insert(0, backing)  # newest first -> wins the choice
+        engine._backings.insert(0, backing)  # newest first -> wins the choice
         return self
 
     def _extra_backings(self) -> tuple[Backing, ...]:
-        """Backings registered on this core's client via ``use(backing)`` -- chosen
-        BEFORE the built-in ``BACKINGS`` (so a registered backing overrides /
-        extends any op) for the client's CONTENT cores (documents / references).
-        The engine cores themselves (client / session -- they have no ``_client``)
-        get none, so a document-render backing is never probed against a client
-        that has no ``kind``."""
-        client = getattr(self, "_client", None)
-        return tuple(getattr(client, "_backings", ())) if client is not None else ()
+        """Backings registered on this core's engine via ``use(backing)`` -- chosen
+        BEFORE the built-in ``BACKINGS`` (so a registered backing overrides / extends
+        any op) for the engine's CONTENT cores (documents / references). Only a content
+        core bound to a client/session picks them up; the engine cores themselves
+        (client / session) get none, so a document-render backing is never probed
+        against a client that has no ``kind``."""
+        if getattr(self, "_session", None) is None and getattr(self, "_client", None) is None:
+            return ()  # the engine core itself (or an unbound core) -- no extra backings
+        engine = self._bound_engine()
+        return tuple(engine._backings) if engine is not None else ()
 
     def choose(self) -> list[Backing]:
         """The backings that apply to this core's current state, in order --

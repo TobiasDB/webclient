@@ -29,6 +29,11 @@ class Engine:
         self._bus: Any = None  # EventBus (lazy)
         self._host_next: dict[str, float] = {}  # host -> earliest next request time
         self._page_scripts: list[Any] = []  # scripts injected via inject_script
+        #: backings registered via ``use(...)`` -- chosen (newest first) before the
+        #: built-in BACKINGS by every core bound to this engine. Shared across the
+        #: sessions scoped on it, so a ``use()`` on the client or any session is seen
+        #: by all of them (the extensibility hook).
+        self._backings: list[Any] = []
         if transport:  # a remote client executes over the wire -- no local pool, but keep bus/loop
             self._init_transport(browser_config)
 

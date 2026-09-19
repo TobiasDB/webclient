@@ -52,7 +52,7 @@ class Session(WebClient):
         """Share ``parent``'s engine (loop / http / browser / bus / plugins) and
         take a fresh name scope from it."""
         self._parent = parent
-        self._backings = parent._backings  # registered backings are shared
+        # registered backings live on the shared engine now (no per-session copy)
         self._scope = parent.new_scope()
         parent._sessions.append(self)
         return self
