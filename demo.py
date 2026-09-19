@@ -672,6 +672,17 @@ def main() -> None:
             .project()
         )
         print("remote plan:   ", same_plan.collect(rc.ref(f"{base}/")))
+        # A remote crawl is data-producing, not a stateful server object: run() executes
+        # the WHOLE crawl as one WebClient.crawl(...).run().pages plan server-side and the
+        # pages ride back (no /crawls wire). Interactive step() is local-only.
+        remote_crawl = rc.crawl(
+            f"{base}/feed", auto=True, max_pages=3, browser=False, obey_robots=False
+        )
+        remote_crawl.run()
+        print(
+            "remote crawl:  ",
+            [(p.final_url or p.url).replace(base, "") for p in remote_crawl.pages],
+        )
     server.should_exit = True
     app.state.wc.close()
 

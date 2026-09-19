@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar, Iterator, cast
 from pydantic import PrivateAttr
 
 from ...collection import Collection
+from ...query.expr import Expr
+from ...query.plan import Plan
 from ..session_core import SessionCore
 from ..web_core import Backing
 from .models import CrawlConfig, CrawlState, Edge, Failure, ICrawl, PageCard  # noqa: F401  (re-exported)
@@ -50,10 +52,11 @@ class Crawl(SessionCore, ICrawl):
     """A scoped site traversal. State (frontier / pages / config) is the ``ICrawl``
     model it inherits; this core adds the client binding, the dedup/robots machinery,
     and ``state()`` (a resumable snapshot). A context manager; its ops (``step`` /
-    ``run`` / ``done``) are the ``CrawlBacking``. Under a remote client it is a thin
-    handle over a server-side crawl: ``step``/``run`` dispatch to the server (which
-    owns the frontier/fetch) and refresh this handle's mirrored state, so turn-based
-    stepping works remotely too."""
+    ``run`` / ``done``) are the ``CrawlBacking``. Under a remote client a crawl is
+    data-producing, not a server-side object: ``run``/``stream`` execute the whole crawl
+    as ONE plan (``WebClient.crawl(seeds, ...).run().pages``) server-side over
+    ``/execute`` -- its config is fully serializable -- and the pages ride back. Interactive
+    ``step`` (a live, mutating frontier) has no stateless plan form, so it stays local."""
 
     _client: "WebClient" = PrivateAttr(default=None)  # type: ignore[assignment]
     _store: dict[str, Any] = PrivateAttr(default_factory=dict)  # SessionCore.store (unused for now)
@@ -68,21 +71,51 @@ class Crawl(SessionCore, ICrawl):
     #: page budget stays correct while a round fetches its claimed edges CONCURRENTLY (outside
     #: the lock), and concurrent rounds don't both claim the same remaining budget.
     _inflight: int = PrivateAttr(default=0)
-    #: set on a remote handle -- the id of the server-side crawl this mirrors, so
-    #: ``step``/``run`` round-trip to it (empty on a local crawl).
-    _crawl_id: str = PrivateAttr(default="")
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (CrawlBacking(),)
 
     def _remote_call(self, op: str, is_prop: bool) -> Any:
-        """A remote crawl's ``step``/``run`` advance the server-side crawl and refresh
-        this handle's mirror (the frontier/pages are then read locally off the mirror --
-        only the IO ops round-trip). Every other op runs on the local mirror, so
-        ``done``/``pages``/``frontier`` need no round-trip."""
-        if op in ("step", "run"):
-            client = cast(Any, self._client)  # a WebClient in remote mode (holds ``_conn``)
-            return lambda *a, **k: client._conn.advance_crawl(client, self, op, *a, **k)
+        """Under a remote client a crawl is DATA-PRODUCING, not a stateful server object:
+        ``run`` executes ``WebClient.crawl(seeds, ...).run().pages`` as one plan over
+        ``/execute`` (the config is fully serializable) and the returned pages populate
+        this handle. Interactive ``step`` hands back a live, mutating frontier -- it has no
+        stateless plan form, the exact analogue of an OPEN ``.step(...)`` sequence -- so it
+        stays engine-local; run/stream remotely instead."""
+        if op == "run":
+            def _run(*a: Any, **k: Any) -> "Crawl":
+                self.pages = list(self._remote_expr().run().pages.collect())
+                self.status = "closed"  # a remote run is one-shot and complete
+                return self
+            return _run
+        if op == "step":
+            def _step(*a: Any, **k: Any) -> "Crawl":
+                raise NotImplementedError(
+                    "a remote crawl runs as one plan (its frontier lives server-side); "
+                    "interactive step() runs only on a local client -- use run() or "
+                    "stream() to crawl remotely"
+                )
+            return _step
         return super()._remote_call(op, is_prop)
+
+    def _remote_expr(self) -> Any:
+        """The ``WebClient.crawl(...)`` plan that rebuilds THIS crawl server-side: its seed
+        URLs plus its config as keyword args (``project`` as a serialized document plan the
+        server rebuilds, ``resolve`` as its dict). Rooted at the remote client, so
+        ``.run().pages`` collects the crawl's pages over ``/execute``."""
+        c = self.config
+        root = Expr(Plan(root="WebClient"), self._client)
+        return root.crawl(
+            [e.url for e in self.frontier],
+            auto=c.order == "best-first",
+            width=c.width, depth=c.max_depth, max_pages=c.max_pages,
+            max_frontier=c.max_frontier, same_origin=c.same_origin,
+            allow_subdomains=c.allow_subdomains, allow_domains=c.allow_domains,
+            deny_domains=c.deny_domains, allow_countries=c.allow_countries,
+            deny_countries=c.deny_countries, include=c.include, exclude=c.exclude,
+            include_xhr=c.include_xhr, keywords=c.keywords, obey_robots=c.obey_robots,
+            browser=c.browser, resolve=c.resolve.model_dump() if c.resolve else None,
+            project=c.project._plan.model_dump(),
+        )
 
     def bind(self, client: "WebClient") -> "Crawl":
         """Share ``client``'s engine (its ``afetch``/pool drive the crawl) and seed
@@ -125,21 +158,23 @@ class Crawl(SessionCore, ICrawl):
         return self._client.loop().stream(backing._astream(self))
 
     def _remote_stream(self) -> "Iterator[Any]":
-        """Remote streaming: drive the server-side crawl one ``step`` round-trip at a
-        time, yielding each round's new pages off the refreshed mirror. Break pauses
-        exactly as locally (the server keeps the frontier)."""
-        seen = len(self.pages)  # only yield pages fetched during THIS stream
-        while not self.done:
-            self.dispatch("step")
-            fresh = self.pages[seen:]
-            seen = len(self.pages)
-            if not fresh:  # a round that fetched nothing (all blocked) -- stop
-                break
-            yield from fresh
+        """Remote streaming: a remote crawl is data-producing (its frontier lives inside
+        one server-side ``/execute``), so there is no per-round handshake to pause on --
+        run the crawl as one plan and yield its pages. (True incremental streaming needs a
+        local crawl.)"""
+        self.dispatch("run")  # one-shot server-side crawl; populates self.pages
+        yield from self.pages
 
     def astream(self) -> "AsyncIterator[Any]":
         """The async twin of :meth:`stream`: ``async for card in crawl.astream()``. Same
-        best-first engine and pause/resume semantics, delivered on the caller's loop."""
+        best-first engine and pause/resume semantics, delivered on the caller's loop. A
+        remote crawl is data-producing -- run it as one plan and hand back its pages."""
+        if self._dispatch_mode() == "remote":
+            async def _aiter() -> "AsyncIterator[Any]":
+                self.dispatch("run")
+                for page in self.pages:
+                    yield page
+            return _aiter()
         backing = cast(CrawlBacking, self.BACKINGS[0])
         return self._client.loop().astream(backing._astream(self))
 

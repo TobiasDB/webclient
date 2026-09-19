@@ -711,16 +711,11 @@ class WebClient(SessionCore, IWebClient):
         weights, and the frontier cap."""
         from ..crawl import Crawl, CrawlConfig, Edge
 
-        if self._conn is not None:  # remote dispatch: create + drive a server-side crawl
-            return cast("Crawl", self._conn.crawl(
-                self, seeds, resolve=resolve, project=project, auto=auto, width=width,
-                depth=depth, max_pages=max_pages, max_frontier=max_frontier,
-                same_origin=same_origin, allow_subdomains=allow_subdomains,
-                allow_domains=allow_domains, deny_domains=deny_domains,
-                allow_countries=allow_countries, deny_countries=deny_countries,
-                include=include, exclude=exclude, include_xhr=include_xhr,
-                keywords=keywords, obey_robots=obey_robots, browser=browser,
-            ))
+        if isinstance(project, dict):  # a serialized document plan (a remote crawl's
+            # server-side replay) -- rebuild + validate it into the projection Expr.
+            from ...query.expr import from_plan
+
+            project = from_plan(project)
 
         if resume is not None:  # continue a prior crawl from its saved state
             crawl = Crawl(

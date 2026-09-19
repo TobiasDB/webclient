@@ -88,29 +88,40 @@ def test_wc_remote_opens_a_context_managed_remote_session(remote):
 
 
 def test_remote_crawl_runs_server_side(remote):
-    # crawl is a server-side object addressed by id; run() drives it to completion in
-    # one dispatch and mirrors the pages back as real PageCards (no local pool/crash).
+    # a remote crawl is data-producing, not a stateful server object: run() executes the
+    # whole crawl as ONE WebClient.crawl(...).run().pages plan over /execute and the pages
+    # ride back as real PageCards (no local pool, no /crawls wire).
     from webclient import Crawl
     from webclient.core.crawl import PageCard
 
     rc, server = remote
     crawl = rc.crawl(server.url_for("/cards"), auto=True, max_pages=3, obey_robots=False, browser=False)
-    assert isinstance(crawl, Crawl) and not crawl.done  # created, not yet run
+    assert isinstance(crawl, Crawl) and not crawl.done  # built locally, not yet run
     crawl.run()
     assert crawl.done and all(isinstance(p, PageCard) for p in crawl.pages)
     assert any((p.final_url or p.url).endswith("/cards") for p in crawl.pages)
 
 
-def test_remote_crawl_supports_stepping_and_streaming(remote):
-    # remote stepping now works: step/run dispatch to the server-side crawl and refresh
-    # the handle's mirror, so turn-based driving AND streaming behave like a local crawl.
+def test_remote_crawl_streams_its_pages(remote):
+    # stream() over a remote crawl runs it as one plan and hands back its pages (a remote
+    # crawl's frontier lives inside one server-side /execute, so there is no per-round
+    # handshake to pause on -- true incremental streaming needs a local crawl).
     rc, server = remote
     crawl = rc.crawl(server.url_for("/cards"), auto=True, max_pages=3, obey_robots=False, browser=False)
-    crawl.step()  # one round -> the seed
-    assert len(crawl.pages) == 1 and not crawl.done  # mirror refreshed, more to do
-    streamed = list(crawl.stream())  # drive the rest by streaming
-    assert crawl.done
-    assert len(crawl.pages) == 1 + len(streamed)  # streamed the remaining pages
+    streamed = list(crawl.stream())
+    assert crawl.done and streamed and len(streamed) == len(crawl.pages)
+
+
+def test_remote_crawl_step_is_local_only(remote):
+    # interactive step() hands back a live, mutating frontier -- it has no stateless plan
+    # form, so a remote crawl refuses it and points at run()/stream() (the OPEN-sequence
+    # analogue). run() remotely instead.
+    import pytest
+
+    rc, server = remote
+    crawl = rc.crawl(server.url_for("/cards"), auto=False, max_pages=5, obey_robots=False, browser=False)
+    with pytest.raises(NotImplementedError, match="run\\(\\) or"):
+        crawl.step([server.url_for("/cards")])
 
 
 def test_remote_sitemap_and_robots(remote):
@@ -145,15 +156,6 @@ def test_remote_crawl_custom_projection_crosses_the_wire(remote):
     crawl.run()
     assert crawl.pages and all(isinstance(p, str) for p in crawl.pages)
     assert "Featured" in crawl.pages[0]
-
-
-def test_remote_crawl_manual_step_selects_urls(remote):
-    # a manual (auto=False) remote crawl: the caller selects which URLs to fetch each
-    # round, dispatched to the server which matches its own frontier by URL.
-    rc, server = remote
-    crawl = rc.crawl(server.url_for("/cards"), auto=False, max_pages=5, obey_robots=False, browser=False)
-    crawl.step([server.url_for("/cards")])  # fetch a specific URL
-    assert any((p.final_url or p.url).endswith("/cards") for p in crawl.pages)
 
 
 def test_remote_release_is_a_noop(remote):
