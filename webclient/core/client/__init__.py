@@ -630,6 +630,17 @@ class WebClient(SessionCore, IWebClient):
         core.bind(self)
         return core
 
+    def remote(self, url: str, *, token: str | None = None) -> "WebClient":
+        """Open a REMOTE SESSION: a client whose engine lives SERVER-SIDE. Its ops execute
+        on the service at ``url`` (``remote`` is just a dispatch mode); the server holds any
+        page or large result they produce, bounded by THIS session's lifecycle -- ``with
+        wc.remote(url) as rc: ...`` disposes the server-side state on exit. A session-like
+        core, uniform with ``session`` / ``crawl`` (its engine is the server's, not this
+        client's -- a session lives where its execution is)."""
+        from ..remote import RemoteWebClientCore
+
+        return cast("WebClient", RemoteWebClientCore(url=url, token=token))
+
     # -- crawl ---------------------------------------------------------------
     def crawl(
         self,

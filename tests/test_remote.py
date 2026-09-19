@@ -74,6 +74,20 @@ def test_fetch_returns_handle(remote):
     assert d.id
 
 
+def test_wc_remote_opens_a_context_managed_remote_session(remote):
+    # wc.remote(url) opens a REMOTE SESSION -- a client whose engine lives server-side,
+    # uniform with wc.session()/wc.crawl(); `with` disposes it on exit.
+    from webclient import WebClient
+
+    rc, server = remote
+    with WebClient() as wc:
+        with wc.remote(rc.url, token="secret") as rr:
+            assert rr._dispatch_mode() == "remote"  # its engine's mode is remote
+            d = rr.fetch(server.url_for("/cards"))
+            assert d.ok and d.title == "Shop"
+        assert rr._closed  # the remote session was disposed on exit
+
+
 def test_remote_crawl_runs_server_side(remote):
     # crawl is a server-side object addressed by id; run() drives it to completion in
     # one dispatch and mirrors the pages back as real PageCards (no local pool/crash).
