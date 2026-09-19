@@ -33,7 +33,8 @@ from ...signals import flags_from_response
 from ..reference import Reference, from_url
 from ..reference.models import ProxyPolicy, Resolve
 from ..engine import Engine
-from ..web_core import Backing, WebCore
+from ..session_core import SessionCore
+from ..web_core import Backing
 from .fetch import FetchBacking
 from .loop import EngineLoop
 from .models import IWebClient
@@ -188,7 +189,7 @@ class NameScope:
             return len(self._items)
 
 
-class WebClient(WebCore, IWebClient):
+class WebClient(SessionCore, IWebClient):
     """The engine: its Core Fields (policy) + eager verbs come from the
     ``IWebClient`` model/interface it inherits (:mod:`.models`); this core adds the
     machinery (loop, ClientPool, bus, name scopes, transport + plan execution). Its
@@ -204,6 +205,8 @@ class WebClient(WebCore, IWebClient):
     #: scripts). The ROOT client owns one; a session borrows its parent's (its own
     #: stays ``None`` -- ``Session`` no-ops ``_init_transport``). See :class:`Engine`.
     _engine: Any = PrivateAttr(default=None)
+    #: this session's own state (a ``SessionCore.store``); empty on the root client.
+    _store: dict[str, Any] = PrivateAttr(default_factory=dict)
     _closed: bool = PrivateAttr(default=False)
     _scope: Any = PrivateAttr(default=None)  # the client's NameScope (000)
     _scope_counter: int = PrivateAttr(default=0)  # next session scope index
@@ -222,11 +225,6 @@ class WebClient(WebCore, IWebClient):
         """The engine core. The eager surface IS the core, so ``wc.core is wc`` --
         kept for call sites (and remote parity) that reach for ``.core``."""
         return self
-
-    def _the_engine(self) -> Engine:
-        """The :class:`Engine` this core is bound to -- a session borrows its parent's,
-        the root client owns its own. The one place engine access resolves parent-vs-self."""
-        return cast(Engine, (getattr(self, "_parent", None) or self)._engine)
 
     @property
     def bus(self) -> EventBus:

@@ -21,7 +21,8 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar, Iterator, cast
 from pydantic import PrivateAttr
 
 from ...collection import Collection
-from ..web_core import Backing, WebCore
+from ..session_core import SessionCore
+from ..web_core import Backing
 from .models import CrawlConfig, CrawlState, Edge, Failure, ICrawl, PageCard  # noqa: F401  (re-exported)
 
 from .backing import CrawlBacking
@@ -45,7 +46,7 @@ class _CrawlLazy:
         return Collection(list(self._crawl.frontier), client=self._crawl._client)
 
 
-class Crawl(WebCore, ICrawl):
+class Crawl(SessionCore, ICrawl):
     """A scoped site traversal. State (frontier / pages / config) is the ``ICrawl``
     model it inherits; this core adds the client binding, the dedup/robots machinery,
     and ``state()`` (a resumable snapshot). A context manager; its ops (``step`` /
@@ -55,6 +56,7 @@ class Crawl(WebCore, ICrawl):
     stepping works remotely too."""
 
     _client: "WebClient" = PrivateAttr(default=None)  # type: ignore[assignment]
+    _store: dict[str, Any] = PrivateAttr(default_factory=dict)  # SessionCore.store (unused for now)
     _seen: set[str] = PrivateAttr(default_factory=set)  # dedup ledger (canonical urls)
     _robots: dict[str, Any] = PrivateAttr(default_factory=dict)  # per-host RobotFileParser
     #: serialises ``step`` rounds so a step's frontier-claim + page-budget + expansion
