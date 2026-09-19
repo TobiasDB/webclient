@@ -366,6 +366,100 @@ def test_write_query_retries_for_recent_data_when_the_first_query_is_stale(https
     assert "recent" in follow_ups[1].lower() and "archived" in follow_ups[1].lower()
 
 
+def test_parse_queries_splits_sections_on_the_dashes_delimiter():
+    # a split reply is one wq.doc chain PER section, separated by a line of only dashes; a
+    # single reply (and a raw blob) still yields exactly one query -- the unchanged path.
+    from webclient.pipelines.onboarding import _parse_queries, _split_queries
+
+    two = ('wq.doc.select_all(".up .c").extract(title=wq.doc.select(".t").attr("text")).project()\n'
+           '---\n'
+           'wq.doc.select_all(".past .row").extract(title=wq.doc.select("h3").attr("text")).project()')
+    assert len(_split_queries(two)) == 2 and len(_parse_queries(two)) == 2
+    one = 'wq.doc.select_all(".r").extract(title=wq.doc.select(".t").attr("text")).project()'
+    assert len(_parse_queries(one)) == 1
+    # a stray delimiter / fences don't create empty queries
+    fenced = f"```python\n{one}\n```"
+    assert len(_parse_queries(fenced)) == 1
+
+
+# a page whose dataset is SPLIT across two differently-shaped sections: a single "upcoming"
+# callout (its own markup) above a "past" list of rows -- the ir-events shape.
+_SPLIT_PAGE = (
+    '<main>'
+    '<section class="upcoming"><div class="callout"><h2 class="hl">Q4 Earnings Call</h2></div></section>'
+    '<section class="past">'
+    '<div class="row"><h3>Q3 Earnings</h3></div>'
+    '<div class="row"><h3>Q2 Earnings</h3></div>'
+    '<div class="row"><h3>Q1 Earnings</h3></div>'
+    '</section></main>'
+)
+_SPLIT_REPLY = (
+    'wq.doc.select_all(".upcoming .callout").extract(title=wq.doc.select(".hl").attr("text")).project()\n'
+    '---\n'
+    'wq.doc.select_all(".past .row").extract(title=wq.doc.select("h3").attr("text")).project()'
+)
+
+
+def test_write_query_combines_two_sections_into_one_dataset(httpserver):
+    # the model writes ONE simple query per section (separated by ---); the pipeline tests each,
+    # concatenates the rows into one flat dataset, and run_query reproduces the union.
+    from webclient.pipelines.onboarding import run_query, write_query
+
+    httpserver.expect_request("/events").respond_with_data(_SPLIT_PAGE, content_type="text/html")
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/events"),
+                          Brief(description="events", fields=["title"]),
+                          wc=wc, llm=lambda p: _SPLIT_REPLY, browser="never", retries=0)
+        assert art is not None and art.complete
+        assert len(art.parts) == 2 and art.row_count == 4  # 1 upcoming + 3 past, concatenated
+        titles = {r["title"] for r in art.sample}
+        assert "Q4 Earnings Call" in titles and "Q3 Earnings" in titles  # both shapes present
+        rows = run_query(art, wc=wc)  # the shipped artifact re-runs each section and concatenates
+    assert {r["title"] for r in rows} == {
+        "Q4 Earnings Call", "Q3 Earnings", "Q2 Earnings", "Q1 Earnings"
+    }
+
+
+def test_write_query_tolerates_an_empty_split_section(httpserver):
+    # the UPCOMING section is empty (no callout) -- its section query matches 0 rows. The split
+    # query is still COMPLETE on the union (the past rows), the empty section contributes nothing,
+    # and it is nudged exactly once before being accepted.
+    from webclient.pipelines.onboarding import write_query
+
+    empty_upcoming = _SPLIT_PAGE.replace('<div class="callout"><h2 class="hl">Q4 Earnings Call</h2></div>', "")
+    httpserver.expect_request("/events").respond_with_data(empty_upcoming, content_type="text/html")
+
+    sent: list[str] = []
+
+    def llm(prompt: str) -> str:
+        sent.append(prompt)
+        return _SPLIT_REPLY  # same reply each turn (a genuinely-empty upcoming section)
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/events"),
+                          Brief(description="events", fields=["title"]),
+                          wc=wc, llm=llm, browser="never", retries=2)
+    assert art is not None and art.complete
+    assert len(art.parts) == 2 and art.row_count == 3  # only the past rows; upcoming is empty
+    assert art.parts[0].row_count == 0  # the empty section, kept
+    assert len(sent) == 2  # opening + exactly one empty-section nudge, then accepted
+    assert any("0 records" in a for a in art.attempts)  # the nudge is recorded in the trail
+
+
+def test_write_query_single_section_has_no_parts(httpserver):
+    # a plain (non-split) reply behaves exactly as before: one query, no parts recorded.
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/events").respond_with_data(_SPLIT_PAGE, content_type="text/html")
+    single = 'wq.doc.select_all(".past .row").extract(title=wq.doc.select("h3").attr("text")).project()'
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/events"),
+                          Brief(description="events", fields=["title"]),
+                          wc=wc, llm=lambda p: single, browser="never", retries=0)
+    assert art is not None and art.complete and art.parts == [] and art.row_count == 3
+
+
 def test_select_candidates_forces_data_docs_and_fails_open():
     from webclient.core.document.models import PageCard
     from webclient.pipelines.onboarding import select_candidates
@@ -671,7 +765,7 @@ def test_prompt_templates_load_and_render():
     )
     assert "query syntax" in wq_prompt and "query code" in wq_prompt
     assert "MOST RECENT" in wq_prompt  # the recency / hidden-tabs guidance is in the prompt
-    assert "SPLIT query" in wq_prompt  # the split-section (differently-formatted row) guidance
+    assert "SPLIT DATASETS" in wq_prompt and "---" in wq_prompt  # one query per section, joined by the pipeline
     assert wq_prompt.startswith("GUIDE-TEXT")
     # the exit-condition-against-the-RESULT review prompt renders with its placeholders
     exit_prompt = render_prompt(

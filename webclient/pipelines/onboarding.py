@@ -389,6 +389,19 @@ class CandidateEval(BaseModel):
         return self.dataset_present and self.scrapability >= 5
 
 
+class QueryPart(BaseModel):
+    """One SECTION sub-query of a split dataset. When a dataset is spread across
+    differently-shaped sections on a page (an UPCOMING callout + an ARCHIVED list), the model
+    writes one simple ``wq.doc...project()`` per section and the pipeline runs each and
+    CONCATENATES the rows (see :func:`run_query`). Each part is a self-contained, runnable
+    blob in its own right; a plain single-section query has no parts."""
+
+    blob: str  # the portable, self-contained blob for this section (from_blob-rebuildable)
+    describe: str  # a readable one-line rendering of this section's chain
+    explain: str = ""  # this section's SQL-EXPLAIN step tree
+    row_count: int = 0  # how many rows this section produced when tested
+
+
 class QueryArtifact(BaseModel):
     """The authored lazy query, ready to reload and run. ``blob`` rebuilds it with
     ``from_blob`` and is SELF-CONTAINED: it bakes in the reference + the FULL fetch policy
@@ -424,6 +437,12 @@ class QueryArtifact(BaseModel):
     #: why each EARLIER authoring attempt was rejected (one short line each, in order), so the
     #: onboard output shows the path to this query -- empty when the first attempt succeeded.
     attempts: list[str] = []
+    #: the SECTION sub-queries of a split dataset, run and CONCATENATED by :func:`run_query`
+    #: into one flat result. ``[]`` for a plain single-section query (the common case, run via
+    #: ``blob``); length >= 2 for a concat-join, where ``blob``/``describe``/``explain`` above
+    #: describe the FIRST section and ``row_count``/``sample``/``complete``/``timeliness`` are
+    #: the COMBINED verdict over every section's rows.
+    parts: list[QueryPart] = []
 
 
 class Review(BaseModel):
@@ -589,11 +608,14 @@ def _summarize(result: OnboardingResult) -> None:
     lines.append(f"  resolve:   {_resolve_summary(result.resolve)}")
     if result.query is not None:
         q = result.query
-        lines.append(f"  query:     {q.describe}")
-        if q.explain:  # the visual step tree of the (valid) query
-            lines.append("  explain:")
+        split = len(q.parts) > 1  # a concat-join of per-section sub-queries
+        lines.append(f"  query:     {q.describe}"
+                     + (f"   (split: {len(q.parts)} sections, rows concatenated)" if split else ""))
+        if q.explain:  # the visual step tree of the (valid) query (the first section, when split)
+            lines.append("  explain:" + ("   (section 1)" if split else ""))
             lines += [f"    {ln}" for ln in q.explain.splitlines()]
-        lines.append(f"  tested:    {'✓' if q.tested else '✗'}  {q.row_count} row(s)")
+        lines.append(f"  tested:    {'✓' if q.tested else '✗'}  {q.row_count} row(s)"
+                     + (" combined" if split else ""))
         if q.timeliness:  # the TIMELINESS flag: is the newest extracted row recent? (a flag, not a gate)
             tabbed = ev is not None and "tabbed" in (ev.flags or {})
             hint = ("  ← the current period may be behind a tab/filter/page"
@@ -606,9 +628,17 @@ def _summarize(result: OnboardingResult) -> None:
             lines.append(f"  authoring: {len(q.attempts) + 1} attempt(s); earlier rejections:")
             for a in q.attempts:
                 lines.append(f"    ✗ {a}")
-        # the self-contained query blob on its own line -- executable as is, easy to copy
-        lines.append("  query blob (copy; run with `from_blob(blob).collect()`):")
-        lines.append(q.blob)
+        # the self-contained query blob(s) -- executable as is, easy to copy. A split query is
+        # several section blobs the pipeline runs and CONCATENATES (via run_query); a plain
+        # query is one blob runnable with `from_blob(blob).collect()`.
+        if split:
+            lines.append(f"  section blobs ({len(q.parts)}; run_query runs each + concatenates the rows):")
+            for i, part in enumerate(q.parts):
+                lines.append(f"    section {i + 1}: {part.describe}   ({part.row_count} row[s])")
+                lines.append(f"    {part.blob}")
+        else:
+            lines.append("  query blob (copy; run with `from_blob(blob).collect()`):")
+            lines.append(q.blob)
     if result.reviews:  # the integral stage reviews (gates) + a failure diagnosis
         lines.append("  review:")
         for r in result.reviews:
@@ -1515,6 +1545,31 @@ def _parse_query(reply: str) -> Any:
     return _normalize_selectors(from_blob(_json_blob(reply)))  # fallback: a raw blob
 
 
+#: a delimiter line separating the per-section queries of a SPLIT dataset -- a line that is
+#: only dashes (``---`` or longer), which cannot occur inside a single ``wq.`` chain.
+_QUERY_SPLIT = __import__("re").compile(r"^\s*-{3,}\s*$", __import__("re").M)
+
+
+def _split_queries(reply: str) -> "list[str]":
+    """Split a model reply into its SECTION queries. A split dataset is written as one simple
+    ``wq.doc...project()`` per section separated by a line of only dashes (``---``); the common
+    single-section reply has no delimiter and yields one segment. Fences are stripped first
+    (reuse :func:`_strip_fences`) and only segments that actually contain a ``wq.`` chain are
+    kept, so a stray delimiter or blank tail doesn't create an empty query."""
+    text = _strip_fences(reply)
+    segments = [s.strip() for s in _QUERY_SPLIT.split(text)]
+    kept = [s for s in segments if "wq." in s]
+    return kept or [text]  # no wq. anywhere -> hand the whole reply on (raw-blob fallback)
+
+
+def _parse_queries(reply: str) -> "list[Any]":
+    """Parse a reply into 1..N section queries (:func:`_parse_query` per segment). One segment
+    -> one query (today's path, incl. the raw-blob fallback); a ``---``-separated reply ->
+    several. Each segment goes through the SAME safe AST allowlist, so multi-section parsing
+    adds no new execution surface. Raises if a segment is not a valid query."""
+    return [_parse_query(seg) for seg in _split_queries(reply)]
+
+
 def _row_selector(expr: Any) -> "str | None":
     """The CSS/selector string the query selects its repeating record with -- the argument
     of the first ``select``/``select_all``. Used to diagnose a 0-row query: if this
@@ -1735,18 +1790,22 @@ def _test_query(expr: Any, doc: Any, *, timeout: float = _QUERY_TEST_TIMEOUT) ->
 
 
 def run_query(artifact: QueryArtifact, *, wc: WebClient) -> list[Any]:
-    """Run the authored query against ALL its ``base_urls`` and concatenate the rows --
-    so a dataset split across distinct URLs (``/products/cloud`` + ``/products/onprem``)
-    comes back as one list. The blob is SELF-CONTAINED (reference + resolve + extraction),
-    so it resolves + extracts on its own; each base just re-points the reference."""
-    base_expr = from_blob(artifact.blob, wc)
+    """Run the authored query and concatenate all the rows. Two independent join axes both
+    concatenate: every SECTION sub-query (``artifact.parts`` -- an UPCOMING callout + an
+    ARCHIVED list on one page) and every base URL (``base_urls`` -- ``/products/cloud`` +
+    ``/products/onprem``). A plain single-section query has no ``parts`` and runs via ``blob``.
+    Each blob is SELF-CONTAINED (reference + resolve + extraction), so it resolves + extracts
+    on its own; each base just re-points the reference."""
+    blobs = [p.blob for p in artifact.parts] or [artifact.blob]
     out: list[Any] = []
-    for url in artifact.base_urls or []:
-        try:
-            result = _reroot(base_expr, url).collect()  # self-contained: no context
-        except Exception:  # noqa: BLE001 - a base whose query fails contributes nothing
-            continue
-        out.extend(_data_rows(result))  # extracted data rows, not selected elements
+    for blob in blobs:  # each section sub-query
+        base_expr = from_blob(blob, wc)
+        for url in artifact.base_urls or []:
+            try:
+                result = _reroot(base_expr, url).collect()  # self-contained: no context
+            except Exception:  # noqa: BLE001 - a base whose query fails contributes nothing
+                continue
+            out.extend(_data_rows(result))  # extracted data rows, not selected elements
     return out
 
 
@@ -1967,6 +2026,70 @@ def _artifact_from(
     return art, rows
 
 
+def _representative_sample(part_rows: "list[list[Any]]", limit: int = 5) -> "list[Any]":
+    """A sample that shows EACH non-empty section: one row from every part in turn, then more
+    in order, capped at ``limit`` -- so a combined query's sample surfaces both shapes (the
+    single upcoming row AND an archived row), not just the first section's rows."""
+    out: list[Any] = []
+    for row in part_rows:  # first pass: one row from each part, in order
+        if row and len(out) < limit:
+            out.append(row[0])
+    for rows in part_rows:  # second pass: fill from the remainder, in order
+        for r in rows[1:]:
+            if len(out) >= limit:
+                return out
+            out.append(r)
+    return out
+
+
+def _combined_artifact(
+    exprs: "list[Any]", doc: Any, brief: Brief, candidate_url: str,
+    resolve: "Resolve | None", bases: "list[str]",
+) -> "tuple[QueryArtifact, list[Any], list[int]]":
+    """Test each SECTION query against the ONE fetched source and build a single combined
+    :class:`QueryArtifact` whose rows are the CONCATENATION of every section's rows. Each
+    section becomes a self-contained runnable :class:`QueryPart`; the combined verdict
+    (``complete`` / ``row_count`` / ``sample`` / ``timeliness``) is judged over the union, and
+    the top-level ``blob``/``describe``/``explain`` describe the FIRST section. Returns
+    ``(artifact, combined_good_rows, per_section_good_counts)`` -- the counts let the caller
+    give per-section feedback on a section that matched nothing."""
+    parts: list[QueryPart] = []
+    part_goods: list[list[Any]] = []
+    all_tested = True
+    for expr in exprs:
+        tested, rows = _test_query(expr, doc) if doc.ok else (False, [])
+        good = _populated_rows(rows)
+        all_tested = all_tested and tested
+        exe = _executable_query(expr, candidate_url, resolve)  # self-contained + runnable
+        try:  # the visual step tree, independent of testing
+            explain = exe.explain()
+        except Exception:  # noqa: BLE001 - never let rendering the explain break authoring
+            explain = ""
+        parts.append(QueryPart(blob=exe.to_blob(), describe=exe.describe(),
+                               explain=explain, row_count=len(good)))
+        part_goods.append(good)
+    combined_good = [r for good in part_goods for r in good]
+    missing = _empty_required_fields(combined_good, brief)  # required leaves empty across the union
+    tnote, stale = _timeliness(combined_good, brief)  # over the union; a FLAG, never a blocker
+    first = parts[0]
+    art = QueryArtifact(
+        blob=first.blob,
+        describe=first.describe,
+        explain=first.explain,
+        plan={},  # a combined query has no single plan; each section's plan lives in its blob
+        tested=all_tested,
+        complete=bool(all_tested and combined_good and not missing),  # every required leaf populated
+        row_count=len(combined_good),
+        sample=_representative_sample(part_goods),
+        resolve=(resolve.model_dump(mode="json") if resolve is not None else {}),
+        base_urls=bases,
+        timeliness=tnote,
+        stale=stale,
+        parts=parts,
+    )
+    return art, combined_good, [len(g) for g in part_goods]
+
+
 class _Author:
     """Drives the query-authoring turns. The PAGE (guide + skeleton + brief) is the OPENING
     message; each retry sends only the short feedback. If the model keeps a conversation (an
@@ -2036,6 +2159,49 @@ def _should_retry_for_recency(art: QueryArtifact, attempt: int, tries: int) -> b
     return art.stale and attempt < tries - 1
 
 
+def _precheck_sections(exprs: "list[Any]") -> "tuple[str, str] | None":
+    """The pre-test guards applied to EVERY section query before it's run: each must select
+    its records (a query with no ``select``/``select_all`` extracts nothing) and none may call
+    ``.resolve()`` on a value instead of a link. Returns ``(reason, follow_up)`` for the FIRST
+    offending section (the reason names the section when there is more than one), or ``None``
+    when every section passes."""
+    multi = len(exprs) > 1
+    for i, expr in enumerate(exprs):
+        where = f"section {i + 1} " if multi else ""
+        ops = {s.name for s in expr._plan.steps if s.kind == "get"}
+        if not ({"select", "select_all"} & ops):
+            return (
+                f"{where}has no record selection (.select_all missing)".strip(),
+                f"{'Section ' + str(i + 1) + ' of your reply' if multi else 'Your query'} had NO"
+                " selection so it extracts nothing. Every section MUST select the repeating record"
+                " with .select_all(...), pull each field with .extract(col=...), and END with"
+                " .project(). Re-write it.",
+            )
+        bad = _resolve_on_non_link(expr)
+        if bad is not None:
+            return (f"{where}.resolve() called on a value, not a link".strip(), bad)
+    return None
+
+
+def _split_section_follow_up(empties: "list[int]", exprs: "list[Any]") -> str:
+    """Feedback for a SPLIT query that ran but didn't fully land. Names the section(s) that
+    matched 0 records (fix the selector, or keep it if that section is genuinely empty) or, when
+    all sections have rows but the result is still incomplete, asks for more semantic record
+    selectors. Always restates the ``---``-separated one-query-per-section contract."""
+    contract = (" Reply with one wq.doc... chain per section, separated by a line containing"
+                " only ---.")
+    if empties:
+        which = ", ".join(str(i) for i in empties)
+        return (
+            f"Your split query ran, but section(s) {which} matched 0 records. Fix that section's"
+            " .select_all(...) record selector to match its rows. If that section is GENUINELY"
+            " empty on the page (e.g. no upcoming events), keep it as is and leave the working"
+            " sections unchanged." + contract
+        )
+    return ("Your split query did not extract the dataset. Re-write each section's .select_all(...)"
+            " to a more semantic record selector -- don't just tweak the fields." + contract)
+
+
 def _recency_follow_up(art: QueryArtifact) -> str:
     """The feedback that pushes the model toward the MOST RECENT data + the hidden-tabs pattern."""
     return (
@@ -2083,6 +2249,7 @@ def write_query(
     best: QueryArtifact | None = None
     best_complete: QueryArtifact | None = None  # a complete-but-STALE fallback (recency retries)
     attempts: list[str] = []  # why each rejected attempt was rejected, for the onboard output
+    nudged_empty = False  # a split query with an empty section is nudged ONCE, then accepted
     author = _Author(llm, prompt)  # the page rides in the OPENING; retries send only feedback
     follow_up: "str | None" = None
     tries = retries + 1
@@ -2098,31 +2265,52 @@ def write_query(
             log.warning("%s: LLM call failed (%s)", tag, exc)
             break
         try:
-            expr = _parse_query(reply)  # load the written wq.doc chain (or a raw blob)
+            exprs = _parse_queries(reply)  # 1 wq.doc chain, or one per section (split on ---)
         except Exception as exc:  # noqa: BLE001 - unparsable query code -> retry with feedback
             log.info("%s: reply was not a valid query (%s) — retrying", tag, exc)
             log.debug("      unparseable reply: %.200r", reply.strip())  # the detail, at debug
             attempts.append(f"attempt {attempt + 1}: not a valid query ({exc})")
-            follow_up = ("Your previous reply was not a valid query. Reply with ONLY the query"
-                         " code -- a single wq.doc... chain, nothing else.")
+            follow_up = ("Your previous reply was not a valid query. Reply with ONLY query code --"
+                         " one wq.doc... chain, or, for a split dataset, one chain PER section"
+                         " separated by a line containing only ---. Nothing else.")
             continue
-        # a real extraction MUST select the records -- a query with no select_all/select
-        # can't extract anything, so reject it before it looks like a 0-row "success".
-        ops = {s.name for s in expr._plan.steps if s.kind == "get"}
-        if not ({"select", "select_all"} & ops):
-            log.info("%s: no record selection — retrying", tag)
-            attempts.append(f"attempt {attempt + 1}: no record selection (.select_all missing)")
-            follow_up = ("Your previous query had NO selection so it extracts nothing. You MUST"
-                         " select the repeating record with .select_all(...), pull each field with"
-                         " .extract(col=...), and END with .project(). Re-write it.")
+        # every SECTION must select its records, and none may resolve() a value -- reject before
+        # it looks like a 0-row "success" (a targeted, per-section reason on a multi-part reply).
+        pre = _precheck_sections(exprs)
+        if pre is not None:
+            reason, follow_up = pre
+            log.info("%s: %s — retrying", tag, reason)
+            attempts.append(f"attempt {attempt + 1}: {reason}")
             continue
-        # a resolve() on a value (attr("text").resolve()) instead of a link -> a clear, targeted fix
-        bad_resolve = _resolve_on_non_link(expr)
-        if bad_resolve is not None:
-            log.info("%s: .resolve() on a non-link attr — retrying", tag)
-            attempts.append(f"attempt {attempt + 1}: .resolve() called on a value, not a link")
-            follow_up = bad_resolve
+        if len(exprs) > 1:  # a SPLIT dataset: test each section, concatenate, judge the UNION
+            art, rows, counts = _combined_artifact(exprs, doc, brief, candidate_url, resolve, bases)
+            empties = [i + 1 for i, c in enumerate(counts) if c == 0]
+            if art.complete:
+                if _should_retry_for_recency(art, attempt, tries):  # stale union -> push for recent
+                    best_complete = art
+                    attempts.append(f"attempt {attempt + 1}: split query complete but stale — {art.timeliness}")
+                    log.info("%s: split query complete but STALE — retrying (%s)", tag, art.timeliness)
+                    follow_up = _recency_follow_up(art)
+                    continue
+                if empties and not nudged_empty:  # working query in hand; nudge ONCE to fill the empty section
+                    nudged_empty, best_complete = True, art
+                    which = ", ".join(map(str, empties))
+                    attempts.append(f"attempt {attempt + 1}: split query section(s) {which} matched 0 records")
+                    log.info("%s: split query section(s) %s empty — nudging once", tag, which)
+                    follow_up = _split_section_follow_up(empties, exprs)
+                    continue
+                note = f" (STALE: {art.timeliness})" if art.stale else ""
+                log.info("%s: ✓ complete split query%s — %d row(s) across %d section(s)",
+                         tag, note, art.row_count, len(exprs))
+                return _with_attempts(art)
+            best = best or art  # keep the first rebuildable split as a fallback (NOT complete)
+            reason = (f"split query section(s) {', '.join(map(str, empties))} matched 0 records"
+                      if empties else f"split query {_short_fail_reason(exprs[0], rows, brief, doc)}")
+            attempts.append(f"attempt {attempt + 1}: {reason}")
+            log.info("%s: %s — retrying", tag, reason)
+            follow_up = _split_section_follow_up(empties, exprs)
             continue
+        expr = exprs[0]
         art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases)
         if art.complete:
             if not _should_retry_for_recency(art, attempt, tries):

@@ -170,39 +170,37 @@ Rules for the grouped-selector form:
   a distinguishing child with `when`:
   `status=wq.when(wq.doc.select(".register", optional=True).is_ok()).then("upcoming").otherwise("past")`.
 
-**Differently-shaped sections → one `doc.extract`, a sub-list per section.** When the two
-sections have genuinely different markup (different tags/classes per field), a single grouped
-selector can't map every field. Extract each section as its OWN named sub-list from the whole
-document — the query is rooted at `wq.doc` (the page), and each column is a full
-`select_all(...).extract(...).project()`:
+**Differently-shaped sections → one simple query PER section.** When the sections have
+genuinely different markup (different tags/classes per field), a single grouped selector can't
+map every field — and you should NOT try to fold them into one chain. Write each section as its
+OWN complete query, a plain `wq.doc.select_all("<that section's records>").extract(...)
+.project()`, giving every section the SAME field columns (the target schema) so the combined
+rows are uniform. Hand them back as separate queries — separate the sections with a line
+containing only three dashes (`---`) — and each is run on its own and the rows are
+**concatenated** into one flat dataset. You never write the join yourself; a section that turns
+out empty simply contributes no rows.
 
 ```python
-wq.doc.extract(
-    upcoming=wq.doc.select_all(".upcoming .event")
-        .extract(title=wq.doc.select(".title").attr("text"),
-                 register=wq.doc.select("a.register").attr("href")).project(),
-    past=wq.doc.select_all(".past .row")
-        .extract(title=wq.doc.select("h3").attr("text"),
-                 replay=wq.doc.select("a.replay").attr("href")).project(),
+# section 1 — the upcoming callout (its own shape)
+wq.doc.select_all(".upcoming .event").extract(
+    title=wq.doc.select(".title").attr("text"),
+    date=wq.doc.select("time").attr("datetime"),
 ).project()
 ```
 
-This yields `{"upcoming": [ …rows… ], "past": [ …rows… ]}` — the two sections kept separate,
-each with its own shape. (An empty section is just `[]`.)
-
-**A section behind a TAB you must click → a `.step` sequence.** If a section isn't in the DOM
-until you interact (a "Past" tab that loads on demand), drive it as a sequence: extract the visible
-section, `.step(...)` to reveal the next, extract that too — the `.extract(...)` calls
-accumulate onto the one held page:
+Then a line containing only `---`, then the next section:
 
 ```python
-wq.ref.resolve(browser="always")
-    .extract(upcoming=wq.doc.select_all(".event").extract(title=wq.doc.select(".title").attr("text")).project())
-    .step(wq.doc.click("button[data-tab=past]"))
-    .step(wq.doc.wait_for(".event"))
-    .extract(past=wq.doc.select_all(".event").extract(title=wq.doc.select(".title").attr("text")).project())
-    .project()
+# section 2 — the archived list (a different shape)
+wq.doc.select_all(".past .row").extract(
+    title=wq.doc.select("h3").attr("text"),
+    date=wq.doc.select(".when").attr("text"),
+).project()
 ```
+
+Keep each section's query simple and independently correct; the join is deterministic and
+happens afterwards. (Prefer the single grouped-comma selector above when the sections DO share a
+record selector — only split when their shapes genuinely differ.)
 
 ## Writing durable CSS selectors
 
