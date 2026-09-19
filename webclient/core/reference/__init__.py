@@ -20,7 +20,7 @@ from .resolve import ResolveBacking
 if TYPE_CHECKING:
     from ..client import WebClient
     from ..session import Session
-    from ...surfaces.lazy import LazyReference
+    from ...surfaces.interface import LazyReference
 
 
 class Reference(WebCore, IReference):

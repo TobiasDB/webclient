@@ -31,7 +31,7 @@ from .flags import FlagsBacking
 from .regex import RegexBacking
 
 if TYPE_CHECKING:
-    from ...surfaces.lazy import LazyDocument
+    from ...surfaces.interface import LazyDocument
     from ..client import WebClient  # noqa: F401
     from ..reference import Reference
 

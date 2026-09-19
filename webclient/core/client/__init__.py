@@ -43,7 +43,7 @@ from .sitemap import SiteBacking
 if TYPE_CHECKING:
     from ..crawl import Crawl, CrawlConfig, CrawlState
     from ..session import Session
-    from ...surfaces.lazy import LazyWebClient
+    from ...surfaces.interface import LazyWebClient
 
 
 _MODES = ("never", "auto", "always")

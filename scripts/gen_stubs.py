@@ -52,9 +52,9 @@ from webclient.models import (  # noqa: E402
 from webclient.models import E as _EventTypeVar  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-SURFACES = ROOT / "webclient" / "surfaces" / "eager.py"
+SURFACES = ROOT / "webclient" / "surfaces" / "interface.py"  # every dispatch-view stub
 COLLECTION = ROOT / "webclient" / "collection.py"
-MODELS = ROOT / "webclient" / "surfaces" / "lazy.py"
+MODELS = SURFACES  # the lazy tier lives in the one merged interface file too
 #: cores that implement their own eager ops -- the generated ``I<Core>`` interface
 #: is emitted into the core's own module (which the core inherits).
 DOCINIT = ROOT / "webclient" / "core" / "document" / "models.py"

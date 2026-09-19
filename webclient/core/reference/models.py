@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from ...clients import WaitConfig  # noqa: F401  (resolve wait strategy)
     from . import Reference  # noqa: F401  (the ops return the core itself)
     from ..document import Document  # noqa: F401  (Reference.resolve -> Document)
-    from ...surfaces.lazy import LazyReference  # noqa: F401
+    from ...surfaces.interface import LazyReference  # noqa: F401
 
 
 class IReference(BaseModel):
