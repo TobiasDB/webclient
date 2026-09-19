@@ -33,17 +33,23 @@ def _url_of(source: dict[str, Any]) -> str:
 
 
 def _reject_sequence(expr: Any) -> None:
-    """A ``.step(...)`` sequence plan holds ONE live page across ordered actions --
-    v1 keeps that scope-owned page lifecycle LOCAL. Rather than ship a plan whose
-    held-page semantics the remote path does not yet carry, fail clearly here (the
-    same stance remote ``crawl.step`` takes: some plan shapes stay engine-local)."""
+    """A ``.step(...)`` sequence holds ONE live page across ordered actions. A COMPLETE
+    stepful plan -- one that ends in ``.project()`` -- produces DATA: its held page lives
+    entirely inside a single server-side ``/execute`` evaluation and never crosses the
+    wire, so it runs remotely like any other data-producing browser plan. An OPEN stepful
+    plan (one that would hand back a live page/element -- e.g. it ends in
+    ``select``/``select_all``) has no remote representation for that held page, so it
+    stays engine-local: fail clearly, and tell the caller to close it with ``.project()``."""
     plan = getattr(expr, "_plan", None)
-    steps = getattr(plan, "steps", None) or ()
-    if any(s.kind == "get" and s.name == "step" for s in steps):
-        raise NotImplementedError(
-            "a .step(...) sequence plan runs only on a local client (it holds one "
-            "live page across the sequence); remote sequences are not yet supported"
-        )
+    gets = [s for s in (getattr(plan, "steps", None) or ()) if s.kind == "get"]
+    if not any(s.name == "step" for s in gets):
+        return  # no sequence -- nothing to guard
+    if gets and gets[-1].name == "project":
+        return  # a complete, data-producing sequence -- safe to run server-side
+    raise NotImplementedError(
+        "an OPEN .step(...) sequence (one that returns a live page/element) runs only on "
+        "a local client; end it with .project() to produce data and run it remotely"
+    )
 
 
 _WIRE_MODELS_CACHE: "dict[str, type[Any]] | None" = None
