@@ -20,6 +20,7 @@ from pydantic import PrivateAttr
 
 from ...query.expr import Expr
 from ..client import WebClient, _materialize, _seed_urls
+from ..engine import Engine
 from ..document import Document
 from ..reference import Reference
 
@@ -107,7 +108,9 @@ class RemoteWebClientCore(WebClient):
         self._http = httpx.Client(timeout=self.timeout)
 
     def _init_transport(self) -> None:
-        """No local transport pool -- execution is a remote round-trip."""
+        """No local transport pool -- execution is a remote round-trip. Still bind a
+        pool-less :class:`Engine` so the bus/loop are available like any client."""
+        self._engine = Engine(self.browser_config, transport=False)
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}

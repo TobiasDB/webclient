@@ -18,10 +18,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
 from pydantic import PrivateAttr
 
 from ...clients import (
-    BrowserFactory,
     ClientPool,
-    HTTPXFactory,
-    PageScript,
     WaitConfig,
     WaitEvent,
 )
@@ -35,6 +32,7 @@ from ...resiliency import policy_headers
 from ...signals import flags_from_response
 from ..reference import Reference, from_url
 from ..reference.models import ProxyPolicy, Resolve
+from ..engine import Engine
 from ..web_core import Backing, WebCore
 from .fetch import FetchBacking
 from .loop import EngineLoop
@@ -202,23 +200,18 @@ class WebClient(WebCore, IWebClient):
         @property
         def lazy(self) -> "LazyWebClient": ...
 
-    _loop: Any = PrivateAttr(default=None)
-    _pool: Any = PrivateAttr(default=None)  # ClientPool (lazy)
+    #: the shared transport/execution resources (loop / pool / bus / pacing / page
+    #: scripts). The ROOT client owns one; a session borrows its parent's (its own
+    #: stays ``None`` -- ``Session`` no-ops ``_init_transport``). See :class:`Engine`.
+    _engine: Any = PrivateAttr(default=None)
     #: backings registered via ``use(...)``, chosen before the built-ins (newest
     #: first) by every core bound to this client -- the extensibility hook.
     _backings: list[Backing] = PrivateAttr(default_factory=list)
-    #: browser page scripts injected directly on this client (``inject_script``),
-    #: on top of the ones its backings declare (see ``_browser_scripts``).
-    _page_scripts: list[Any] = PrivateAttr(default_factory=list)
     _closed: bool = PrivateAttr(default=False)
     _scope: Any = PrivateAttr(default=None)  # the client's NameScope (000)
     _scope_counter: int = PrivateAttr(default=0)  # next session scope index
     _scope_lock: Any = PrivateAttr(default_factory=threading.Lock)  # guards ^
-    _bus: Any = PrivateAttr(default=None)  # EventBus (lazy)
     _sessions: list[Any] = PrivateAttr(default_factory=list)  # sessions to close
-    _host_next: dict[str, float] = PrivateAttr(  # host -> earliest next request time
-        default_factory=dict
-    )
     #: the dispatch mode -- an instance switch, not a subclass. ``"sync"`` blocks
     #: IO on a background engine loop; ``"async"`` is loop-native (IO runs on the
     #: caller's loop, awaited); ``"remote"`` turns every op into an API call. Every
@@ -233,31 +226,24 @@ class WebClient(WebCore, IWebClient):
         kept for call sites (and remote parity) that reach for ``.core``."""
         return self
 
+    def _the_engine(self) -> Engine:
+        """The :class:`Engine` this core is bound to -- a session borrows its parent's,
+        the root client owns its own. The one place engine access resolves parent-vs-self."""
+        return cast(Engine, (getattr(self, "_parent", None) or self)._engine)
+
     @property
     def bus(self) -> EventBus:
-        if self._bus is None:
-            self._bus = EventBus()
-        return cast(EventBus, self._bus)
+        return self._the_engine().bus
 
     def model_post_init(self, _ctx: Any) -> None:
         self._scope = NameScope(0, cap=self.names_cap)
         self._init_transport()
 
     def _init_transport(self) -> None:
-        """Build the transport pool eagerly (cheap -- no browser launch until a
-        page is leased) so it is never lazily created from two threads at once.
-        Sessions override this to share the parent's pool."""
-        bc = self.browser_config
-        self._pool = ClientPool(
-            {
-                "http": HTTPXFactory(proxy=bc.proxy),  # same client-wide proxy for httpx...
-                "page": BrowserFactory(
-                    headless=bc.headless, stealth=bc.stealth, fingerprint=bc.fingerprint,
-                    channel=bc.channel, proxy=bc.proxy,  # ...and the browser
-                ),
-            },
-            limits={"http": bc.pool_http, "page": bc.pool_pages},
-        )
+        """Create this client's shared :class:`Engine` (transport pool + loop + bus +
+        pacing). A ``Session`` overrides this to a no-op so it borrows the parent's
+        engine instead of building its own."""
+        self._engine = Engine(self.browser_config)
 
     def new_scope(self) -> NameScope:
         """A fresh scope for a session (index 1, 2, ...). Locked so two sessions
@@ -281,9 +267,7 @@ class WebClient(WebCore, IWebClient):
 
     # -- loop / lifecycle ----------------------------------------------------
     def loop(self) -> EngineLoop:
-        if self._loop is None:
-            self._loop = EngineLoop()
-        return cast(EngineLoop, self._loop)
+        return cast(EngineLoop, self._the_engine().loop())
 
     def bridge(self, coro: Any) -> Any:
         """Run an IO coroutine under this client's dispatch mode -- the one place
@@ -310,18 +294,16 @@ class WebClient(WebCore, IWebClient):
     @property
     def pool(self) -> ClientPool:
         """The transport-lease pool (http clients + browser pages)."""
-        return cast(ClientPool, self._pool)
+        return self._the_engine().pool
 
     def close(self) -> None:
         if self._closed:
             return
-        if self._loop is not None and not self._loop.closed and self._pool is not None:
-            self._loop.run(self._pool.aclose())
+        if self._engine is not None:  # a session borrows its parent's engine (its own is None)
+            self._engine.close()  # tear down the transport pool + engine loop
         for session in self._sessions:  # cascade to sessions
             session.status = "closed"
         self._closed = True
-        if self._loop is not None:
-            self._loop.stop()
 
     # -- context manager: a core IS the eager client (``with WebClient() ...``) --
     def __enter__(self) -> Self:
@@ -337,8 +319,8 @@ class WebClient(WebCore, IWebClient):
         if self._closed:
             return
         if self._mode == "async":
-            if self._pool is not None:
-                await self._pool.aclose()
+            if self._engine is not None:  # a session borrows its parent's engine
+                await self._engine.aclose_async()  # close the pool loop-natively
             for session in self._sessions:  # cascade to sessions
                 session.status = "closed"
             self._closed = True
@@ -391,25 +373,11 @@ class WebClient(WebCore, IWebClient):
     # -- transport (machinery): resolve a Reference -> Document ------
     async def _pace(self, host: str) -> None:
         """Politeness: keep at least ``min_interval`` seconds between requests to
-        ``host``. The schedule lives on the shared ENGINE (a session paces against
-        its parent), so N sessions on one engine honour ONE per-host rate limit
-        rather than each keeping an independent schedule. Best-effort; concurrent
-        same-host fetches may still bunch."""
-        import asyncio
-        import time
-
-        engine: WebClient = getattr(self, "_parent", None) or self
-        interval = engine.min_interval
-        if interval <= 0.0:
-            return
-        schedule = engine._host_next
-        wait = schedule.get(host, 0.0) - time.monotonic()
-        if wait > 0:
-            await asyncio.sleep(wait)
-        now = time.monotonic()
-        schedule[host] = now + interval
-        if len(schedule) > 4096:  # bound the map: drop hosts whose window has passed
-            engine._host_next = {h: t for h, t in schedule.items() if t > now}
+        ``host``. The schedule lives on the shared ENGINE (a session paces against its
+        parent's), so N sessions on one engine honour ONE per-host rate limit rather
+        than each keeping an independent schedule."""
+        owner = getattr(self, "_parent", None) or self
+        await owner._the_engine().pace(host, owner.min_interval)
 
     async def _afetch_once(
         self, ref: Reference, headers: dict[str, str]
@@ -757,14 +725,14 @@ class WebClient(WebCore, IWebClient):
         before every navigation (e.g. instrumentation), ``"load"`` once after. On
         top of the scripts the client's backings declare (``Backing.page_scripts``).
         Returns ``self`` for chaining."""
-        self._page_scripts.append(PageScript(source, cast(Any, phase)))
+        self._the_engine().inject_script(source, phase)
         return self
 
     def _browser_scripts(self) -> list[Any]:
         """The page scripts to install on a live page: this client's own
         (``inject_script``) plus the ones its document backings + registered
         backings declare. The backing owns the script; the client installs it."""
-        scripts = list(self._page_scripts)
+        scripts = list(self._the_engine()._page_scripts)
         for backing in (*Document.BACKINGS, *self._backings):
             scripts.extend(backing.page_scripts)
         return scripts
