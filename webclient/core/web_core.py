@@ -14,6 +14,7 @@ fields + its backings' ops (see ``scripts.gen_stubs``), never hand-written.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 from pydantic import BaseModel
@@ -304,20 +305,41 @@ class WebCore:
     def _remote_call(self, op: str, is_prop: bool) -> Any:
         """Run ``op`` on the server: record it onto this core's remote root and
         ``collect`` (one round-trip), returning the materialised value/core --
-        the SAME interface as the local dispatcher."""
-        root = self._remote_root()
+        the SAME interface as the local dispatcher. A content op on a server-side
+        handle that was evicted is replayed once (see :meth:`_remote_eval`)."""
         if is_prop:
-            value = _unwrap_remote(getattr(root, op).collect())
+            value = self._remote_eval(lambda: _unwrap_remote(getattr(self._remote_root(), op).collect()))
             self._note_remote_hop()
             return value
 
         def _call(*args: Any, **kwargs: Any) -> Any:
             kwargs.pop("_collect", None)
-            value = _unwrap_remote(getattr(root, op)(*args, **kwargs).collect())
+            value = self._remote_eval(
+                lambda: _unwrap_remote(getattr(self._remote_root(), op)(*args, **kwargs).collect())
+            )
             self._note_remote_hop()
             return value
 
         return _call
+
+    def _remote_eval(self, thunk: "Callable[[], Any]") -> Any:
+        """Run a remote op, replaying ONCE if the server-side handle was evicted. The
+        app is stateless by choice, so a handle is reproducible: on a retriable
+        ``NoSuchDocument`` we re-run the plan that produced this handle
+        (``_remote_source``) to get a fresh id, then retry the op against it. Any other
+        failure -- or a handle with no recorded producer -- propagates unchanged."""
+        from ..errors import RemoteError
+
+        try:
+            return thunk()
+        except RemoteError as exc:
+            source = getattr(self, "_remote_source", None)
+            err = exc.error
+            if source is None or err is None or err.type != "NoSuchDocument" or not err.retriable:
+                raise
+            fresh = source.collect()  # re-run the producer -> a fresh server-side handle
+            self.id = self.name = cast(Any, fresh).id  # adopt its id; the op re-roots on it
+            return thunk()
 
     def _note_remote_hop(self) -> None:
         """Count a per-op remote round-trip made on a server-side handle (the

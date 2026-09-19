@@ -164,6 +164,39 @@ def test_remote_release_is_a_noop(remote):
     rc.release(d)  # must not raise (no local page to free on a remote client)
 
 
+def test_remote_evicted_handle_replays_the_plan(httpserver):
+    # 2d: a size-1 server store evicts an earlier handle; a content op on it gets a
+    # retriable NoSuchDocument, and the client transparently RE-RUNS the plan that
+    # produced the handle (stateless replay) and retries -- so the op still returns
+    # the right value with no error surfaced to the caller.
+    from werkzeug.wrappers import Response
+
+    calls = {"a": 0}
+
+    def page_a(request):
+        calls["a"] += 1
+        return Response(
+            "<html><title>Alpha</title><body><p>alpha body</p></body></html>",
+            content_type="text/html",
+        )
+
+    httpserver.expect_request("/a").respond_with_handler(page_a)
+    httpserver.expect_request("/b").respond_with_data(
+        "<html><title>Beta</title></html>", content_type="text/html"
+    )
+    app = create_app(token="secret", max_docs=1)  # holds ONE handle -> forces eviction
+    with _Server(app) as base:
+        rc = RemoteWebClient(base, token="secret")
+        a = rc.fetch(httpserver.url_for("/a"))  # stored (handle A)
+        rc.fetch(httpserver.url_for("/b"))  # evicts A from the size-1 store
+        assert calls["a"] == 1
+        text = a.render("text")  # A is gone -> retriable 404 -> replay A's plan -> retry
+        assert "alpha body" in text
+        assert calls["a"] == 2  # the producer was re-run exactly once (the replay)
+        rc.close()
+    app.state.wc.close()
+
+
 def test_auth_enforced(httpserver):
     httpserver.expect_request("/x").respond_with_data("ok")
     app = create_app(token="secret")

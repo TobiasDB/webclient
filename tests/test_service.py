@@ -143,6 +143,38 @@ def test_session_lifecycle(client_and_server):
     assert api.delete(f"/sessions/{sid}", headers=AUTH).json()["status"] == "closed"
 
 
+def test_session_docs_use_a_separate_store(client_and_server):
+    # 2b: a session's handles live in its OWN bounded store (keyed by session id) and are
+    # disposed with the session -- not mixed into, or bounded by, the shared client store.
+    api, server = client_and_server
+    sid = api.post("/sessions", json={"ttl": 60}, headers=AUTH).json()["id"]
+    plan = ref.resolve()._plan.model_copy(update={"session_id": sid})
+    rows = api.post(
+        "/execute", headers=AUTH,
+        json={"plan": plan.model_dump(), "url": server.url_for("/cards")},
+    ).json()["rows"]
+    doc_id = rows["__doc__"]["id"]
+    state = api.app.state
+    assert doc_id in state.session_docs[sid]  # the session's own store
+    assert doc_id not in state.docs  # NOT the shared client store
+    api.delete(f"/sessions/{sid}", headers=AUTH)  # closing disposes its store
+    assert sid not in state.session_docs
+
+
+def test_evicted_handle_is_a_retriable_error(client_and_server):
+    # 2d: a follow-up plan on an evicted (or unknown) handle is a RETRIABLE NoSuchDocument
+    # -- the app is stateless, so the caller re-runs the plan that produced the handle.
+    api, _ = client_and_server
+    resp = api.post(
+        "/execute", headers=AUTH,
+        json={"plan": doc.select(".title").attr("text")._plan.model_dump(),
+              "document_id": "gone"},
+    )
+    assert resp.status_code == 404
+    err = resp.json()["error"]
+    assert err["type"] == "NoSuchDocument" and err["retriable"] is True
+
+
 def test_plan_submission(client_and_server):
     api, server = client_and_server
     plan = (

@@ -105,32 +105,50 @@ def create_app(
     token: str | None = None,
     max_docs: int = 1024,
     max_sessions: int = 256,
+    max_session_docs: int = 256,
     block_private_hosts: bool = False,
 ) -> FastAPI:
     """A FastAPI app exposing a WebClient over ``/execute`` (Bearer-token
     authorised when ``token`` is set). An existing client may be supplied;
-    ``max_docs`` caps the LRU document store, ``max_sessions`` bounds the
-    live-session store (expired/closed sessions are reclaimed first), and
-    ``block_private_hosts`` turns on the SSRF guard for a hosted server (refuses
-    plans that resolve to loopback/private hosts)."""
+    ``max_docs`` caps the shared LRU document store, ``max_sessions`` bounds the
+    live-session store (expired/closed sessions are reclaimed first),
+    ``max_session_docs`` caps EACH session's own document store (its per-session
+    resource policy -- the handles a session may hold), and ``block_private_hosts``
+    turns on the SSRF guard for a hosted server (refuses plans that resolve to
+    loopback/private hosts)."""
     app = FastAPI()
     app.state.wc = (
         wc if wc is not None else WebClient(block_private_hosts=block_private_hosts)
     )
-    app.state.docs = _DocStore(max_docs)
+    app.state.docs = _DocStore(max_docs)  # the shared client's handles
     app.state.sessions = {}
+    #: each server-side session's OWN document store (2b: a session's held handles are
+    #: bounded and disposed with it, not leaked into the shared LRU). Keyed by session id.
+    app.state.session_docs = {}
 
     def _auth(authorization: str | None) -> None:
         if token is not None and authorization != f"Bearer {token}":
             raise HTTPException(status_code=401, detail="bad token")
 
+    def _store_for(sid: str | None) -> _DocStore:
+        """The document store a plan's handles live in: the session's own bounded store
+        when it is session-scoped (so ``document_id`` handles resolve within -- and are
+        reclaimed with -- that session), else the shared client store."""
+        store = app.state.session_docs.get(sid) if sid else None
+        return cast(_DocStore, store) if store is not None else app.state.docs
+
+    def _drop_session(sid: str) -> None:
+        """Reclaim a session and its per-session document store."""
+        app.state.sessions.pop(sid, None)
+        app.state.session_docs.pop(sid, None)
+
     def _sweep_sessions() -> None:
-        """Drop closed or past-ttl sessions so the store does not leak them."""
+        """Drop closed or past-ttl sessions (and their stores) so nothing leaks them."""
         now = time.time()
         for sid, s in list(app.state.sessions.items()):
             expired = s.expires_at is not None and now > s.expires_at
             if s.status != "running" or expired:
-                app.state.sessions.pop(sid, None)
+                _drop_session(sid)
 
     @app.post("/execute", response_model=None)
     def execute(
@@ -151,18 +169,22 @@ def create_app(
             )
         sid = expr._plan.session_id
         # a session-scoped plan runs on the server-side session (its identity /
-        # cookies), else on the shared client.
+        # cookies) and its handles live in that session's own store, else on the
+        # shared client + shared store.
         engine = app.state.sessions[sid] if sid in app.state.sessions else wc_
+        store = _store_for(sid)
         if "document_id" in body:
-            if body["document_id"] not in app.state.docs:
+            if body["document_id"] not in store:
                 return _error(
                     404,
                     "NoSuchDocument",
                     f"no server-side document {body['document_id']!r}",
-                    hint="the document id expired from the store or was never "
-                    "created; re-run the fetch plan to get a fresh handle",
+                    retriable=True,  # 2d: the handle was evicted -- re-run its plan
+                    hint="the document handle expired from the store (or its session "
+                    "closed); it is stateless to reproduce -- re-run the plan that "
+                    "produced it to get a fresh handle, then retry",
                 )
-            context: Any = app.state.docs[body["document_id"]]
+            context: Any = store[body["document_id"]]
         elif "context_plan" in body:  # a client ref/fetch context plan
             try:
                 context = from_plan(body["context_plan"], wc_)
@@ -187,7 +209,7 @@ def create_app(
                 hint="retry if retriable; otherwise the target is unavailable, "
                 "blocking, or refused by policy",
             )
-        return {"rows": _serialize(result, app.state.docs)}
+        return {"rows": _serialize(result, store)}
 
     @app.get("/document/{doc_id}", response_model=None)
     def document(
@@ -199,8 +221,9 @@ def create_app(
                 404,
                 "NoSuchDocument",
                 f"no server-side document {doc_id!r}",
-                hint="the document id expired from the store or was never "
-                "created; re-run the fetch plan to get a fresh handle",
+                retriable=True,  # 2d: evicted -- re-run the plan that produced it
+                hint="the document handle expired from the store; re-run the plan "
+                "that produced it to get a fresh handle",
             )
         d = app.state.docs[doc_id]
         return {"id": d.name, "kind": d.kind, "ok": d.ok}
@@ -223,6 +246,7 @@ def create_app(
             )
         session = app.state.wc.session(ttl=body.get("ttl"))
         app.state.sessions[session.id] = session
+        app.state.session_docs[session.id] = _DocStore(max_session_docs)  # its own bounded store
         return {"id": session.id, "status": session.status}
 
     @app.get("/sessions/{sid}", response_model=None)
@@ -246,6 +270,7 @@ def create_app(
                 404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT
             )
         app.state.sessions[sid].close()
+        _drop_session(sid)  # dispose the session AND its per-session document store
         return {"id": sid, "status": "closed"}
 
     # -- crawl / sitemap -----------------------------------------------------

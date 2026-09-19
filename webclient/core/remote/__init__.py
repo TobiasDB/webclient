@@ -88,7 +88,16 @@ class RemoteConnection:
         _raise_for_body(resp)
         # rebuild real cores (a Document handle, a Reference) + wrap a scalar leaf into a
         # Field, so remote and local ``collect()`` agree on the result type.
-        return _materialize(deserialize(client, resp.json()["rows"]))
+        result = _materialize(deserialize(client, resp.json()["rows"]))
+        # 2d: stamp the producing plan on each fresh server-side handle so a later content
+        # op can replay it if the server evicts the handle. Only a PRODUCER plan (a
+        # fetch/resolve, rooted at the client or a reference) reproduces a handle; a
+        # content-op plan (Document root) does not, so it is left without a source.
+        if expr._plan.root in ("WebClient", "Reference"):
+            for doc in result if isinstance(result, list) else [result]:
+                if getattr(doc, "_remote_handle", False):
+                    doc._remote_source = expr
+        return result
 
     # a remote crawl is no longer a server-side object driven over a bespoke wire: it
     # runs as one ``WebClient.crawl(...).run().pages`` plan through ``execute`` (see

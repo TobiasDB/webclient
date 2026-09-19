@@ -84,6 +84,11 @@ class Document(WebCore, IDocument):
     #: a server-side handle (remote dispatcher): it holds no local content, so its
     #: content ops round-trip. Set by ``core.remote.wire.deserialize`` on the wire.
     _remote_handle: bool = PrivateAttr(default=False)
+    #: the plan (an ``Expr``) that produced THIS remote handle, stamped by
+    #: ``RemoteConnection.execute``. If the server evicts the handle (a retriable
+    #: ``NoSuchDocument``), a content op re-runs this to reproduce a fresh handle and
+    #: retries once -- stateless-by-choice makes the replay safe (see ``_remote_call``).
+    _remote_source: Any = PrivateAttr(default=None)
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (
         StatusBacking(),
