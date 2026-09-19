@@ -212,13 +212,6 @@ class WebClient(SessionCore, IWebClient):
     _scope_counter: int = PrivateAttr(default=0)  # next session scope index
     _scope_lock: Any = PrivateAttr(default_factory=threading.Lock)  # guards ^
     _sessions: list[Any] = PrivateAttr(default_factory=list)  # sessions to close
-    #: the dispatch mode -- an instance switch, not a subclass. ``"sync"`` blocks
-    #: IO on a background engine loop; ``"async"`` is loop-native (IO runs on the
-    #: caller's loop, awaited); ``"remote"`` turns every op into an API call. Every
-    #: core reads its client's mode via ``WebCore._dispatch_mode``; the surface is
-    #: the same core typed through the eager / ``Async*`` stubs. ``async_client()``
-    #: sets ``"async"``; ``RemoteWebClientCore`` sets ``"remote"``.
-    _mode: str = PrivateAttr(default="sync")
 
     @property
     def core(self) -> Self:
@@ -279,7 +272,7 @@ class WebClient(SessionCore, IWebClient):
         Only the *sync* client uses the engine loop (a submit-and-wait pool) to
         drive async IO from blocking code; the async client owns its IO on the
         caller's loop."""
-        if self._mode == "async":
+        if self._the_engine()._mode == "async":
             return coro
         loop = self.loop()
         if loop.on_loop_thread():
@@ -313,7 +306,7 @@ class WebClient(SessionCore, IWebClient):
     async def aclose(self) -> None:
         if self._closed:
             return
-        if self._mode == "async":
+        if self._the_engine()._mode == "async":
             if self._engine is not None:  # a session borrows its parent's engine
                 await self._engine.aclose_async()  # close the pool loop-natively
             for session in self._sessions:  # cascade to sessions
@@ -587,7 +580,7 @@ class WebClient(SessionCore, IWebClient):
         caller of a sync client still doesn't block its own loop)."""
         import asyncio
 
-        if self._mode == "async":
+        if self._the_engine()._mode == "async":
             return _materialize(await aevaluate(expr, context, client=self))
         result = await asyncio.wrap_future(
             self.loop().submit(aevaluate(expr, context, client=self))
@@ -613,7 +606,7 @@ class WebClient(SessionCore, IWebClient):
         count = 0
         rows = (
             astream(expr, context, client=self)
-            if self._mode == "async"
+            if self._the_engine()._mode == "async"
             else self.loop().astream(astream(expr, context, client=self))
         )
         async for row in rows:
@@ -923,7 +916,7 @@ def async_client(**policy: Any) -> WebClient:
     mode is an instance flag read by ``bridge``; the async surface is the same
     core typed through the ``Async*`` stubs. Backs ``surfaces.AsyncWebClient``."""
     core = WebClient(**policy)
-    core._mode = "async"
+    core._engine._mode = "async"  # the mode is an engine property (shared by its sessions)
     return core
 
 

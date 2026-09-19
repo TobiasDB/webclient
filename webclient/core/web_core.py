@@ -267,11 +267,11 @@ class WebCore:
 
     # -- dispatch mode (sync / async / remote), read by every core -----------
     def _dispatch_mode(self) -> str:
-        """This core's dispatch mode -- its own if it is a client, else its bound
-        client's (``sync`` / ``async`` / ``remote``). The one place a core learns
-        how its ops execute."""
-        client = getattr(self, "_client", None) or self
-        return cast(str, getattr(client, "_mode", "sync"))
+        """This core's dispatch mode (``sync`` / ``async`` / ``remote``) -- read from the
+        ENGINE it is bound to, so every session scoped on one engine shares its mode. The
+        one place a core learns how its ops execute."""
+        engine = self._bound_engine()
+        return cast(str, getattr(engine, "_mode", "sync"))
 
     def _goes_remote(self, op: str) -> bool:
         """Whether ``op`` must run on the server under the remote dispatcher: a

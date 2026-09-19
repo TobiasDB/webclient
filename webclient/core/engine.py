@@ -24,6 +24,11 @@ class Engine:
     loop, the transport pool, the event bus, per-host pacing state, and page scripts."""
 
     def __init__(self, browser_config: Any, *, transport: bool = True) -> None:
+        #: the dispatch mode -- how/where ops on THIS engine execute: ``"sync"`` blocks
+        #: IO on the background loop, ``"async"`` is loop-native, ``"remote"`` turns every
+        #: op into an API call. A property of the engine, so every session scoped on it
+        #: shares one mode (``remote`` is just a dispatch of the engine, not a per-core flag).
+        self._mode: str = "sync"
         self._loop: Any = None  # EngineLoop (lazy)
         self._pool: Any = None  # ClientPool (None when transport=False, e.g. a remote client)
         self._bus: Any = None  # EventBus (lazy)

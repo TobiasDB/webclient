@@ -95,13 +95,12 @@ class RemoteWebClientCore(WebClient):
     token: str | None = None
 
     _http: Any = PrivateAttr(default=None)
-    _mode: str = PrivateAttr(default="remote")
     _remote_hops: int = PrivateAttr(default=0)  # per-op round-trips (chattiness)
     _nagged: bool = PrivateAttr(default=False)  # warned about .lazy once
 
     def model_post_init(self, ctx: Any) -> None:
         super().model_post_init(ctx)
-        self._mode = "remote"
+        self._engine._mode = "remote"  # the mode is an engine property
         self.url = self.url.rstrip("/")
         # bound every round-trip by the client's timeout so a hung service can't
         # block the caller forever.
@@ -324,7 +323,7 @@ class RemoteWebSessionCore(RemoteWebClientCore):
         # share the parent's http (set in ``_bind``) -- don't open our own; skip
         # RemoteWebClientCore.model_post_init (which would) and just mark the mode.
         WebClient.model_post_init(self, ctx)
-        self._mode = "remote"
+        self._engine._mode = "remote"  # the mode is an engine property (parent's shares it post-bind)
 
     def _bind(
         self, parent: "RemoteWebClientCore", sid: str
