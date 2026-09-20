@@ -78,6 +78,14 @@ class IWebClient(BaseModel):
     #: is on by default; pass ``BrowserConfig(headless=False)`` to drive a visible
     #: browser or ``BrowserConfig.auto()`` for a randomised fingerprint per page.
     browser_config: BrowserConfig = BrowserConfig()
+    #: identity DATA a client carries and injects into its requests (a WebClient IS a
+    #: session -- ``wc.session()`` opens a child scope with its own identity). ``keep_cookies``
+    #: makes it STATEFUL: it sends ``cookies`` on every request and absorbs each response's
+    #: Set-Cookie back into them (the default root client is stateless -- keep_cookies off).
+    #: ``session_headers`` are always sent (empty on the root).
+    keep_cookies: bool = False
+    session_headers: dict[str, str] = {}
+    cookies: dict[str, str] = {}
 
     if TYPE_CHECKING:
         # >>> generated: WebClient interface <<<

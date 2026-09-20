@@ -42,7 +42,6 @@ from .sitemap import SiteBacking
 
 if TYPE_CHECKING:
     from ..crawl import Crawl, CrawlConfig, CrawlState, PageCard
-    from ..session import Session
     from ...interface import Lazy, LazyField, LazyWebClient
 
 
@@ -208,6 +207,10 @@ class WebClient(SessionCore, IWebClient):
     #: scripts). The ROOT client owns one; a session borrows its parent's (its own
     #: stays ``None`` -- ``Session`` no-ops ``_init_transport``). See :class:`Engine`.
     _engine: Any = PrivateAttr(default=None)
+    #: the owning client a CHILD session borrows its engine + name scope from (``None`` on
+    #: the root). A WebClient IS a session; ``wc.session()`` binds a child here. Read by
+    #: ``SessionCore._the_engine`` to resolve the shared engine.
+    _parent: Any = PrivateAttr(default=None)
     #: this session's own state (a ``SessionCore.store``); empty on the root client.
     _store: dict[str, Any] = PrivateAttr(default_factory=dict)
     _closed: bool = PrivateAttr(default=False)
@@ -244,12 +247,27 @@ class WebClient(SessionCore, IWebClient):
     def model_post_init(self, _ctx: Any) -> None:
         self._scope = NameScope(0, cap=self.names_cap)
         self._init_transport()
+        self._arm_ttl()  # a ttl'd client (a session) starts its expiry clock
 
     def _init_transport(self) -> None:
         """Create this client's shared :class:`Engine` (transport pool + loop + bus +
-        pacing). A ``Session`` overrides this to a no-op so it borrows the parent's
-        engine instead of building its own."""
+        pacing). A CHILD session's engine is nulled in :meth:`bind` (it borrows the
+        parent's), so its own engine here is discarded."""
         self._engine = Engine(self.browser_config)
+
+    def bind(self, parent: "WebClient") -> "WebClient":
+        """Make this a CHILD session of ``parent``: borrow its engine (loop / pool / bus /
+        registered backings) and take a fresh name scope from it. A WebClient IS a session,
+        so a bound child is a scope on the parent's engine (see ``SessionCore``)."""
+        from uuid import uuid4
+
+        self._parent = parent
+        self._engine = None  # borrow the parent's engine (resolved via ``_the_engine``)
+        self._scope = parent.new_scope()
+        parent._sessions.append(self)
+        if not self.id:  # a child session names itself; the root client keeps id=""
+            self.id = f"sess-{uuid4().hex[:8]}"
+        return self
 
     def new_scope(self) -> NameScope:
         """A fresh scope for a session (index 1, 2, ...). Locked so two sessions
@@ -403,6 +421,50 @@ class WebClient(SessionCore, IWebClient):
         return doc, resp
 
     async def afetch(
+        self,
+        ref: Reference,
+        *,
+        optional: bool = False,
+        browser: Any = False,
+        resolve: Any = None,
+        keep_alive: "bool | float" = False,
+        wait: "WaitConfig | None" = None,
+    ) -> Document:
+        """Resolve ``ref`` into a document, applying this client's IDENTITY when it is a
+        session (``session_headers`` / ``cookies`` when ``keep_cookies``): inject them into
+        the request, then absorb the response's Set-Cookie back into ``cookies``. A plain
+        root client (no identity) is a pure passthrough to the fetch pipeline
+        (:meth:`_afetch_core`). This is what makes a WebClient a session -- no subclass."""
+        if not (self.keep_cookies or self.session_headers):  # root/stateless: no identity
+            return await self._afetch_core(
+                ref, optional=optional, browser=browser, resolve=resolve,
+                keep_alive=keep_alive, wait=wait,
+            )
+        self._guard()  # a session refuses to act once closed / expired
+        cookies = {**self.cookies, **ref.cookies} if self.keep_cookies else dict(ref.cookies)
+        scoped = ref.model_copy(
+            update={"headers": {**self.session_headers, **ref.headers}, "cookies": cookies}
+        )
+        scoped._client = self
+        scoped._session = self
+        doc = await self._afetch_core(
+            scoped, optional=optional, browser=browser, resolve=resolve,
+            keep_alive=keep_alive, wait=wait,
+        )
+        doc.session_id = self.id
+        for event in doc._events:
+            event.session_id = self.id
+        if self.keep_cookies:
+            self._absorb(doc)
+        return doc
+
+    def _absorb(self, doc: Document) -> None:
+        """Merge the response's Set-Cookie into this session's ``cookies`` (the
+        transport-parsed cookiejar, not a hand-split of the collapsed header -- which
+        corrupted values whose ``Expires`` attribute contains a comma)."""
+        self.cookies.update(doc._set_cookies)
+
+    async def _afetch_core(
         self,
         ref: Reference,
         *,
@@ -645,14 +707,20 @@ class WebClient(SessionCore, IWebClient):
         *,
         ttl: float | None = None,
         headers: dict[str, str] | None = None,
+        keep_cookies: bool = True,
         **kw: Any,
-    ) -> "Session":
-        """A new session sharing this engine (a scoped ``Session``). In ``"remote"`` mode it
-        opens a SERVER-SIDE session and stamps its id on the child (``_server_sid``), so the
-        child's plans resolve through that server session and closing it disposes it."""
-        from ..session import Session
-
-        core = Session(ttl=ttl, session_headers=headers or {}, **kw)
+    ) -> "WebClient":
+        """Open a child SESSION on this client -- a new ``WebClient`` scope sharing this
+        engine, with its own identity (``headers`` + a cookie jar) and a ttl'd lifecycle. A
+        WebClient IS a session, so this returns a child ``WebClient`` bound to this one
+        (``.session()`` nests). ``keep_cookies`` (default on for a session) makes it absorb +
+        resend Set-Cookie. In ``"remote"`` mode it also opens a SERVER-SIDE session and
+        stamps its id on the child (``_server_sid``), so its plans resolve through -- and
+        closing it disposes -- that server session."""
+        core = WebClient(
+            ttl=ttl, session_headers=headers or {}, keep_cookies=keep_cookies,
+            timeout=self.timeout, **kw,
+        )
         core.bind(self)
         if self._the_engine().is_remote:  # a server-side session over the shared transport
             core._server_sid = self._the_engine().open_server_session(ttl)
@@ -671,7 +739,7 @@ class WebClient(SessionCore, IWebClient):
         return rc
 
     # -- recorder ------------------------------------------------------------
-    def record(self, *, secrets: "list[str] | None" = None) -> "Session":
+    def record(self, *, secrets: "list[str] | None" = None) -> "WebClient":
         """Open a RECORDING SESSION: ``with wc.record() as rec: ...`` captures the eager
         navigations + interactions performed through ``rec`` (its resolved refs / fetched
         documents) into a single replayable Plan -- ``rec.plan`` -- ``ref.resolve(browser=)
@@ -685,9 +753,7 @@ class WebClient(SessionCore, IWebClient):
         recorded ``resolve`` carries only the request's URL/params (never its headers /
         cookies / body), and any interaction text equal to one of this session's auth
         values -- or to a value passed in ``secrets`` -- is redacted."""
-        from ..session import Session
-
-        core = Session()
+        core = WebClient(timeout=self.timeout)
         core.bind(self)
         core._recording = True
         core._record_secrets = set(secrets or [])

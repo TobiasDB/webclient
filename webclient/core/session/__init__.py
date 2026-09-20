@@ -1,122 +1,17 @@
-"""Session: a scoped ``WebClient``.
+"""Session: an alias for ``WebClient``.
 
-A session is the same engine core as the client, sharing its loop / http client
-/ browser pool / event bus / plugins with a parent ``WebClient``, but with
-its own identity (headers + cookies + name scope) and a ttl'd lifecycle. It
-reuses the parent's whole fetch pipeline (``afetch``) -- it only injects its
-identity into the request, absorbs Set-Cookie, and guards the lifecycle. It has
-no backing class of its own (it is a subclassed core, not a new medium).
+A WebClient IS a session -- it holds state/config for interacting with the web, its
+lifecycle + name-scope + engine-sharing come from :class:`~..session_core.SessionCore`,
+and its identity (headers + a cookie jar, when ``keep_cookies``) lives on the client
+itself. ``wc.session()`` opens a CHILD ``WebClient`` (a nested scope on the same engine)
+with its own identity + ttl. So there is no separate ``Session`` class -- this name is
+kept as an alias for the cores/tests/surfaces that still refer to it.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
-from uuid import uuid4
-
-from pydantic import PrivateAttr
-
 from ..client import WebClient
-from ..reference import Reference
 
-if TYPE_CHECKING:
-    from ...clients import ClientPool, WaitConfig
-    from ...events import EventBus
-    from ..client.loop import EngineLoop
-    from ..document import Document
-
-
-class Session(WebClient):
-    """A ``WebClient`` scoped to one logical identity. The session LIFECYCLE (id / status /
-    ttl / expires / close / guard) is the shared :class:`~..session_core.SessionCore`; a
-    Session adds only its own DATA -- the identity it injects into requests (headers +
-    cookies) -- and the fetch pipeline that applies it."""
-
-    #: this session's identity DATA (its typed store): sent on every request, and the
-    #: response's Set-Cookie is absorbed back into ``cookies``.
-    session_headers: dict[str, str] = {}
-    cookies: dict[str, str] = {}
-
-    _parent: Any = PrivateAttr(default=None)  # the owning client (shares its engine + name scope)
-
-    def model_post_init(self, ctx: Any) -> None:
-        super().model_post_init(ctx)
-        if not self.id:  # an identity session names itself; the root client keeps id=""
-            self.id = f"sess-{uuid4().hex[:8]}"
-        self._arm_ttl()
-
-    def _init_transport(self) -> None:
-        """A session shares the parent's pool (set in ``bind``)."""
-
-    def bind(self, parent: WebClient) -> "Session":
-        """Share ``parent``'s engine (loop / http / browser / bus / plugins) and
-        take a fresh name scope from it."""
-        self._parent = parent
-        # registered backings live on the shared engine now (no per-session copy)
-        self._scope = parent.new_scope()
-        parent._sessions.append(self)
-        return self
-
-    # -- engine shared with the parent (loop / pool / bus / plugins) ---------
-    def loop(self) -> "EngineLoop":
-        return cast("EngineLoop", self._parent.loop())
-
-    @property
-    def pool(self) -> "ClientPool":
-        return cast("ClientPool", self._parent.pool)
-
-    @property
-    def bus(self) -> "EventBus":
-        return cast("EventBus", self._parent.bus)
-
-    # lifecycle (id/status/ttl/expires/close/_guard) is inherited from SessionCore.
-
-    # -- fetch: the parent's pipeline + this session's identity --------------
-    async def afetch(
-        self,
-        ref: Reference,
-        *,
-        optional: bool = False,
-        browser: Any = False,
-        resolve: Any = None,
-        keep_alive: "bool | float" = False,
-        wait: "WaitConfig | None" = None,
-    ) -> "Document":
-        self._guard()
-        scoped = ref.model_copy(
-            update={
-                "headers": {**self.session_headers, **ref.headers},
-                "cookies": {**self.cookies, **ref.cookies},
-            }
-        )
-        scoped._client = self
-        scoped._session = self
-        doc = await super().afetch(
-            scoped,
-            optional=optional,
-            browser=browser,
-            resolve=resolve,
-            keep_alive=keep_alive,
-            wait=wait,
-        )
-        doc.session_id = self.id
-        for event in doc._events:
-            event.session_id = self.id
-        self._absorb(doc)
-        return doc
-
-    def _absorb(self, doc: "Document") -> None:
-        """Merge the response's Set-Cookie into the session identity. Uses the
-        transport-parsed cookies (httpx's cookiejar), not a hand-split of the
-        collapsed header -- which corrupted values whose ``Expires`` attribute
-        contains a comma (``Expires=Wed, 21 Oct ...``)."""
-        self.cookies.update(doc._set_cookies)
-
-    def document(self, name: str) -> "Document | None":
-        """Recover a document from THIS session's scope only."""
-        from ..document import Document
-
-        obj = self._scope.get(name) if self._scope is not None else None
-        return obj if isinstance(obj, Document) else None
-
+Session = WebClient
 
 __all__ = ["Session"]
