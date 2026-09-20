@@ -116,9 +116,12 @@ class HTTPXClient(Client):
         return doc, resp
 
     async def reset(self) -> None:
+        """Clear the client's cookie jar before it is recycled, so a reused http client
+        never carries one lease's cookies into the next."""
         self._httpx.cookies.clear()
 
     async def aclose(self) -> None:
+        """Close the underlying httpx client."""
         await self._httpx.aclose()
 
 
@@ -130,6 +133,7 @@ class HTTPXFactory(ClientFactory):
         self.proxy = proxy
 
     async def create(self) -> HTTPXClient:
+        """Build a fresh httpx-backed client (its verify/proxy fixed by this factory)."""
         return HTTPXClient(verify=self.verify, proxy=self.proxy)
 
 
@@ -169,6 +173,7 @@ def sniff_kind(
 
 
 def charset_of(content_type: str | None) -> str | None:
+    """The ``charset=`` declared in a Content-Type header (lowercased), or ``None``."""
     for part in (content_type or "").split(";")[1:]:
         name, _, value = part.partition("=")
         if name.strip().lower() == "charset":

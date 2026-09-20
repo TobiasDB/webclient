@@ -321,6 +321,9 @@ class BrowserClient(Client):
         self, page: Any, url: str, wait: Any, scripts: Any, replay: Any,
         console: list[Any], network: list[Any], responses: list[Any],
     ) -> "PageResult":
+        """Navigate to ``url``, settle (the ``wait`` strategy), inline shadow-DOM/iframe
+        content, replay any recorded actions, and snapshot the page into a ``PageResult``
+        (content + the REAL navigation status/headers + captured console/network/DOM facts)."""
         # the main-document Response -- the REAL status/headers of the navigation
         # (Playwright hands it back from ``goto``). ``None`` for a non-HTTP nav.
         response = await page.goto(url, wait_until="domcontentloaded")
@@ -393,6 +396,7 @@ class BrowserClient(Client):
         return result
 
     async def aclose(self) -> None:
+        """Close this browser page (the leased unit)."""
         await self.page.close()
 
 
@@ -467,6 +471,8 @@ def _identity_js(fp: "dict[str, Any]") -> str:
 
 
 def _random_fingerprint() -> "dict[str, Any]":
+    """Pick one coherent desktop identity (UA + platform + GPU + viewport…) at random,
+    so a fingerprinting client gives each page a fresh but internally consistent identity."""
     import random
 
     return random.choice(_FINGERPRINTS)
@@ -496,6 +502,9 @@ class BrowserFactory(ClientFactory):
         self._contexts: list[Any] = []
 
     async def _browser_(self) -> Any:
+        """Lazily launch (and memoise) the one shared browser process for this factory,
+        applying stealth args / channel / proxy and reading back its real engine major
+        version so spoofed user-agents match the engine actually running."""
         if self._browser is None:
             from playwright.async_api import async_playwright
 
@@ -516,6 +525,9 @@ class BrowserFactory(ClientFactory):
         return self._browser
 
     async def create(self) -> BrowserClient:
+        """Open a fresh page in its own context, wrapped as a ``BrowserClient``: each page
+        gets one coherent identity (default, or a random fingerprint) and, under stealth,
+        the identity-independent masks plus that identity's platform/GPU/cores init scripts."""
         browser = await self._browser_()
         opts: dict[str, Any] = {}
         # one COHERENT identity: a random one per page when fingerprinting, else the default
@@ -537,6 +549,8 @@ class BrowserFactory(ClientFactory):
         return BrowserClient(await context.new_page())
 
     async def aclose(self) -> None:
+        """Shut down the shared browser process and the Playwright driver, dropping all
+        contexts (the factory-level teardown for the ``page`` kind)."""
         if self._browser is not None:
             await self._browser.close()
             await self._pw.stop()

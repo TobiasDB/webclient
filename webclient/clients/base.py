@@ -20,7 +20,8 @@ class Client(abc.ABC):
         """Clean per-lease state before the client is reused (default: none)."""
 
     @abc.abstractmethod
-    async def aclose(self) -> None: ...
+    async def aclose(self) -> None:
+        """Release this client's transport resources -- the teardown every medium implements."""
 
 
 class ClientFactory(abc.ABC):
@@ -29,7 +30,8 @@ class ClientFactory(abc.ABC):
     kind: str
 
     @abc.abstractmethod
-    async def create(self) -> Client: ...
+    async def create(self) -> Client:
+        """Build one fresh ``Client`` of this factory's kind (the pool calls it per lease)."""
 
     async def aclose(self) -> None:
         """Tear down factory-level resources (default: none)."""

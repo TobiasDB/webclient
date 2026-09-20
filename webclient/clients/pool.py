@@ -35,9 +35,11 @@ class Lease:
         self.released = False  # guard against a double-release inflating the permit
 
     async def __aenter__(self) -> "Lease":
+        """Use a lease as an ``async with`` -- hands back itself (its ``.client``)."""
         return self
 
     async def __aexit__(self, *exc: object) -> None:
+        """Return the leased client to the pool on block exit."""
         await self._pool.release(self)
 
 
@@ -64,11 +66,15 @@ class ClientPool:
         self._waiting: dict[str, int] = {k: 0 for k in factories}
 
     def _semaphore(self, kind: str) -> asyncio.Semaphore:
+        """The per-kind concurrency gate, created lazily at that kind's limit (default 10)."""
         if kind not in self._sem:
             self._sem[kind] = asyncio.Semaphore(self._limits.get(kind, 10))
         return self._sem[kind]
 
     async def lease(self, kind: str) -> Lease:
+        """Acquire a client of ``kind``: wait for a concurrency permit (bounded by
+        ``acquire_timeout``, else ``TimeoutError``), then hand back an idle recycled client
+        or build a fresh one. Return it by closing the :class:`Lease` (``async with`` / release)."""
         sem = self._semaphore(kind)
         self._waiting[kind] += 1
         try:
@@ -92,6 +98,9 @@ class ClientPool:
         return Lease(self, client)
 
     async def release(self, lease: Lease) -> None:
+        """Return a lease's client to the pool: recycle it (http) or close it (pages), and
+        ALWAYS give the concurrency permit back -- even if reset/close throws -- so a flaky
+        release can't bleed permits and deadlock the pool. Idempotent (a double-release no-ops)."""
         if lease.released:  # idempotent: a second release must not inflate the permit
             return
         lease.released = True
@@ -110,6 +119,7 @@ class ClientPool:
             self._semaphore(kind).release()
 
     async def aclose(self) -> None:
+        """Tear down the whole pool: close every idle client and every factory."""
         for kind, factory in self._factories.items():
             for client in self._idle[kind]:
                 await client.aclose()
@@ -137,6 +147,7 @@ class ClientPool:
         return self._limits.get(kind, 0) - self._held.get(kind, 0)
 
     def stats(self) -> PoolStats:
+        """A snapshot of pool occupancy (http/page total + free) for observability."""
         return PoolStats(
             http_total=self._total("http"),
             http_free=self._free("http"),

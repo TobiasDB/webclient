@@ -291,6 +291,8 @@ class LlmClient(Client):
         return self.pricing.get(self.model, _FALLBACK_PRICE)
 
     def __post_init__(self) -> None:
+        """Resolve the endpoint / API key from the constructor args or the standard
+        ``ANTHROPIC_*`` env vars, and open the shared httpx client if one wasn't supplied."""
         base = self.base_url or os.environ.get("ANTHROPIC_BASE_URL") or DEFAULT_BASE_URL
         self.base_url = base.rstrip("/")
         if self.auth is None:
@@ -328,9 +330,13 @@ class LlmClient(Client):
         return _Conversation(self)
 
     def _complete(self, prompt: str) -> tuple[str, Usage]:
+        """One-shot completion of a single user prompt -- wraps it as a one-message conversation."""
         return self._complete_messages([{"role": "user", "content": prompt}])
 
     def _complete_messages(self, messages: "list[dict[str, Any]]") -> tuple[str, Usage]:
+        """The single Messages-API call underlying every completion: build the payload, pace to the
+        rate limit, POST, and retry transport errors / 429 / 5xx with backoff (honouring
+        ``Retry-After``); a non-retriable status or exhausted retries raises :class:`LlmError`."""
         payload: dict[str, Any] = {
             "model": self.model,
             "max_tokens": self.max_tokens,
@@ -370,10 +376,13 @@ class LlmClient(Client):
         raise LlmError(0, f"exhausted retries: {last}")  # pragma: no cover
 
     def _backoff(self, attempt: int) -> float:
+        """The exponential backoff delay (seconds) for a given retry attempt."""
         return self.retry_backoff * (2.0**attempt)
 
     @staticmethod
     def _retry_after(resp: "httpx.Response") -> float | None:
+        """The server's ``Retry-After`` delay in seconds (capped at 60), or ``None`` when
+        the header is absent or unparseable -- so the caller falls back to plain backoff."""
         value = resp.headers.get("retry-after")
         try:
             return min(float(value), 60.0) if value else None
@@ -381,6 +390,8 @@ class LlmClient(Client):
             return None
 
     def _parse(self, resp: "httpx.Response") -> tuple[str, Usage]:
+        """Pull the concatenated text of a successful response's text blocks and its token
+        ``Usage`` out of the Messages-API JSON."""
         data: dict[str, Any] = resp.json()
         text = "".join(
             str(block.get("text", ""))
@@ -406,9 +417,11 @@ class LlmClient(Client):
         self.close()
 
     def __enter__(self) -> "LlmClient":
+        """Enter a ``with`` block, closing the HTTP client on exit."""
         return self
 
     def __exit__(self, *exc: object) -> None:
+        """Close the underlying HTTP client on block exit."""
         self.close()
 
 
@@ -423,6 +436,7 @@ class LlmFactory(ClientFactory):
     template: "dict[str, Any]" = field(default_factory=dict)
 
     async def create(self) -> LlmClient:
+        """Build one LLM client from this factory's template (the pool calls it per lease)."""
         return LlmClient(**self.template)
 
 
