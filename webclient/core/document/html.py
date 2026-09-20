@@ -28,6 +28,7 @@ _ASCII_LOWER = "abcdefghijklmnopqrstuvwxyz"
 
 
 def _norm(text: str) -> str:
+    """Collapse all runs of whitespace to single spaces and strip the ends."""
     return " ".join(text.split())
 
 
@@ -37,6 +38,8 @@ _WC_ATTR = re.compile(r'\s+data-wc-[\w-]+="[^"]*"')
 
 
 def _strip_wc_attrs(html_text: str) -> str:
+    """Remove our internal ``data-wc-*`` correlation-stamp attributes from HTML before it is
+    handed back as output (they are never part of the real document)."""
     return _WC_ATTR.sub("", html_text)
 
 
@@ -118,10 +121,13 @@ def _html_text(core: "Document", raw: bytes) -> str:
 
 
 def _tag(el: Any) -> str:
+    """The element's lowercased tag name, or ``""`` for a non-element node."""
     return el.tag.lower() if isinstance(el.tag, str) else ""
 
 
 def _inline(el: Any) -> str:
+    """The element's inline text -- its own and descendants' text with nested block/list/table
+    children skipped -- collapsed to a single line (used building the markdown/skeleton view)."""
     parts = [el.text or ""]
     for child in el:
         tag = _tag(child)
@@ -184,6 +190,8 @@ def _table_md(table: Any) -> str:
 
 
 def _md_blocks(el: Any, out: list[str]) -> None:
+    """Walk an element's children and append their Markdown block forms (headings, lists,
+    tables, paragraphs) to ``out`` -- the recursive core of the HTML-to-Markdown rendering."""
     for child in el:
         tag = _tag(child)
         if tag in _SKIP:
@@ -499,6 +507,8 @@ _CHROME_ROLES = frozenset({"navigation", "contentinfo", "complementary", "search
 
 
 def _is_chrome(el: Any) -> bool:
+    """Whether the element is page chrome (nav/footer/aside, or an ARIA landmark role) --
+    the parts dropped from the skeleton under ``drop_chrome`` so records aren't buried."""
     if _tag(el).rsplit("}", 1)[-1] in _CHROME_TAGS:
         return True
     role = (el.get("role") or "").strip().lower() if hasattr(el, "get") else ""
@@ -661,11 +671,15 @@ def _skeleton(
 
 
 def _main_container(root: Any) -> Any:
+    """The page's main-content element (``<main>``/``role=main``/article), or the whole
+    root when there is no distinct main region."""
     found = root.cssselect(_MAIN)
     return found[0] if found else root
 
 
 def _html_elements(root: Any) -> list[Element]:
+    """Flatten the tree into an ordered list of typed content ``Element``s (headings, text,
+    links, …) with stable ids and their section context -- the structured element surface."""
     out: list[Element] = []
     counter = 0
     section: str | None = None
@@ -910,24 +924,35 @@ class HtmlBacking(Backing):
         )
 
     def applies(self, core: "Document") -> bool:
+        """In play for markup documents (html/xml)."""
         return core.kind in ("html", "xml")
 
     def title(self, core: "Document") -> str | None:
+        """The page's ``<title>`` text (whitespace-normalised), or ``None`` when absent."""
         node = self._find(core, "title")
         return _norm("".join(node[0].itertext())) if node else None
 
     @overload
     def render(
         self, core: "Document", format: Literal["elements"]
-    ) -> "list[Element]": ...  # noqa: E501
+    ) -> "list[Element]":  # noqa: E501
+        """Render to the flat typed element list."""
+        ...
     @overload
     def render(
         self, core: "Document", format: Literal["links"]
-    ) -> "list[Reference]": ...  # noqa: E501
+    ) -> "list[Reference]":  # noqa: E501
+        """Render to the resolved link references."""
+        ...
     @overload
-    def render(self, core: "Document", format: str, **options: Any) -> str: ...
+    def render(self, core: "Document", format: str, **options: Any) -> str:
+        """Render to a string format (html/markdown/text/skeleton)."""
+        ...
 
     def render(self, core: "Document", format: str, **options: Any) -> Any:
+        """Render the document (or a selected element) into a requested format -- ``html``
+        (cleaned serialisation), ``links`` (resolved ``Reference``s), ``markdown``/``text``
+        (optionally main-content-only), or ``elements`` (the flat typed element list)."""
         if format == "html":
             if core._element is not None:  # a selected element: serialise it on demand
                 from lxml import html as _lh
@@ -970,9 +995,13 @@ class HtmlBacking(Backing):
         raise render_error(f"no html render format {format!r}")
 
     def _tree(self, core: "Document") -> Any:
+        """The document's parsed lxml tree (cached), rooted at the selected element if any."""
         return tree(core)
 
     def _find(self, core: "Document", selector: str) -> list[Any]:
+        """Resolve a CSS or XPath ``selector`` to the matching elements, scoped to this node.
+        Rejects attribute/text selectors (use ``attr``), scopes a leading ``//`` to the current
+        node, and falls back to a case-insensitive local-name match for a bare XML tag."""
         if selector.rstrip().endswith(("text()",)) or "/@" in selector:
             raise ValueError(
                 "select yields elements; use .attr() for an attribute or text"
@@ -1035,12 +1064,16 @@ class HtmlBacking(Backing):
     @overload  # link attrs narrow to a Reference (overlaps the str overload)
     def attr(
         self, core: "Document", name: Literal["href", "src", "action"]
-    ) -> "Reference": ...  # type: ignore[overload-overlap]  # noqa: E501
+    ) -> "Reference":  # type: ignore[overload-overlap]
+        """A link attribute (href/src/action) as a resolvable ``Reference``."""
+        ...
     @overload
     def attr(
         self, core: "Document", name: str, pattern: str | None = None, *,
         group: int | str | None = None, optional: bool = False, error: Any = None,
-    ) -> "Field[str]": ...  # noqa: E501
+    ) -> "Field[str]":
+        """Any other attribute (or a text/html pseudo-attr) as a ``Field``."""
+        ...
 
     def attr(
         self, core: "Document", name: str, pattern: str | None = None, *,

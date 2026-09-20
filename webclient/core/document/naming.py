@@ -38,14 +38,17 @@ class DomName(BaseModel):
     source: str = ""  # "aria" | "alt" | "title" | "placeholder" | "value" | "text" | "id"
 
     def __bool__(self) -> bool:
+        """Truthy when a non-empty label was found."""
         return bool(self.label)
 
 
 def _tag(el: Any) -> str:
+    """The element's lowercased tag name, or ``""`` for a non-element node."""
     return el.tag.lower() if isinstance(getattr(el, "tag", None), str) else ""
 
 
 def _norm(s: str) -> str:
+    """Collapse runs of whitespace to single spaces and strip the ends."""
     return _WS.sub(" ", s).strip()
 
 

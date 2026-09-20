@@ -22,16 +22,24 @@ class EventBacking(Backing):
     gate = "ok"
 
     def applies(self, core: "Document") -> bool:
+        """Always in play -- every document carries an (possibly empty) event store."""
         return True
 
     def events(self, core: "Document") -> "list[Event]":
+        """The document's whole captured-event store (the live, appendable list)."""
         return core._events  # the live store (appendable)
 
     @overload
-    def events_of(self, core: "Document", event_type: type[E]) -> "list[E]": ...
+    def events_of(self, core: "Document", event_type: type[E]) -> "list[E]":
+        """Events of a given ``Event`` subclass."""
+        ...
     @overload
-    def events_of(self, core: "Document", event_type: str) -> "list[Event]": ...
+    def events_of(self, core: "Document", event_type: str) -> "list[Event]":
+        """Events whose topic matches a prefix string."""
+        ...
     def events_of(self, core: "Document", event_type: Any) -> "list[Any]":
+        """Events narrowed to a kind: by an ``Event`` subclass (isinstance) or by a topic
+        prefix given as a string."""
         if isinstance(event_type, str):  # a topic prefix
             from ...models import topic_matches
 
@@ -39,6 +47,7 @@ class EventBacking(Backing):
         return [e for e in core._events if isinstance(e, event_type)]
 
     def action_events(self, core: "Document") -> "list[ActionEvent]":
+        """The interaction subset of the events (clicks/writes/…); empty until a live document."""
         from ...models import ActionEvent
 
         return [e for e in core._events if isinstance(e, ActionEvent)]

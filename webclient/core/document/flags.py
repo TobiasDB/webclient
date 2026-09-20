@@ -38,6 +38,7 @@ class FlagsBacking(Backing):
     gate = "ok"
 
     def applies(self, core: "Document") -> bool:
+        """Always in play -- the flags facet is available on every document."""
         return True
 
     # -- the detection context + the flag set ---------------------------------
@@ -58,6 +59,8 @@ class FlagsBacking(Backing):
         )
 
     def _flags(self, core: "Document") -> "dict[str, Flag]":
+        """The full flag set from the signal registry, keyed by flag name (the shared
+        source every per-flag accessor reads)."""
         return detect_flags(self._context(core))
 
     # -- per-flag typed accessors ---------------------------------------------

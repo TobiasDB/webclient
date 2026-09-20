@@ -34,14 +34,19 @@ class RecordRegion(BaseModel):
 
 
 def _tag(el: Any) -> str:
+    """The element's lowercased tag name, or ``""`` for a non-element node."""
     return el.tag.lower() if isinstance(getattr(el, "tag", None), str) else ""
 
 
 def _semantic_classes(el: Any) -> "list[str]":
+    """The element's class tokens with framework/utility noise classes dropped -- the ones
+    that might carry meaning for grouping records."""
     return [c for c in str(el.get("class") or "").split() if not _is_noise_class(c)]
 
 
 def _child_tags(el: Any) -> "tuple[str, ...]":
+    """The tag names of the element's meaningful child elements (skipping chrome tags) --
+    a cheap shape signature used to spot sibling records of the same shape."""
     return tuple(_tag(c) for c in el if isinstance(c.tag, str) and _tag(c) not in _SKIP)
 
 

@@ -70,6 +70,7 @@ class Correlation(BaseModel):
         return None
 
     def request(self, index: int) -> "XhrRequest | None":
+        """The correlated request carrying a given completion index, if any."""
         for r in self.requests:
             if r.index == index:
                 return r
@@ -84,10 +85,14 @@ class Correlator(Protocol):
 
     def correlate(
         self, network: "list[NetworkEvent]", dom: "list[DOMUpdateEvent]"
-    ) -> Correlation: ...
+    ) -> Correlation:
+        """Attribute the DOM mutations to the network requests that likely produced them,
+        returning the per-node candidate requests as a :class:`Correlation`."""
+        ...
 
 
 def _request_url(ev: NetworkEvent) -> str:
+    """The URL of a network event's request, or ``""`` when it has none / can't be read."""
     req = ev.request
     if req is None:
         return ""
@@ -130,6 +135,8 @@ class OrderingCorrelator:
     def correlate(
         self, network: "list[NetworkEvent]", dom: "list[DOMUpdateEvent]"
     ) -> Correlation:
+        """Tie each mutated node to the request(s) that completed just before it (purely by
+        timing), merging a node's phases across repeated mutations into one candidate set."""
         requests = _requests(network)
         by_index = {r.index: r for r in requests}
         phases: dict[str, DomPhase] = {}
@@ -159,6 +166,9 @@ class OrderingCorrelator:
     def _candidates(
         self, xhr_index: int, requests: "list[XhrRequest]", by_index: "dict[int, XhrRequest]"
     ) -> "list[int]":
+        """The request indices that could explain a mutation stamped at ``xhr_index``: the
+        latest-completed request plus any earlier one that finished within ``window_s`` of it
+        (near-simultaneous, so genuinely ambiguous). Empty when it preceded every request."""
         if xhr_index <= 0:  # mutated before any request completed -> server-static or pure JS
             return []
         latest = by_index.get(xhr_index)
@@ -275,6 +285,8 @@ class ContentCorrelator:
     def correlate(
         self, network: "list[NetworkEvent]", dom: "list[DOMUpdateEvent]"
     ) -> Correlation:
+        """Run the ordering baseline, then narrow any node it left ambiguous by matching the
+        node's text against each candidate's response body -- keeping the temporal gate intact."""
         base = self._ordering.correlate(network, dom)  # the temporal gate -- never widened below
         body_tokens: dict[int, set[str]] = {}
         for ev in network:
@@ -310,6 +322,9 @@ class ContentCorrelator:
     def _narrow(
         self, phase: DomPhase, node_toks: "set[str]", body_tokens: "dict[int, set[str]]"
     ) -> None:
+        """Score a phase's candidate requests by the summed specificity of node-text tokens
+        their body explains, and collapse to the single winner (with a confidence) when it
+        clears ``min_score`` and beats the runner-up by ``dominance``; else leave it ambiguous."""
         scores: list[tuple[float, int]] = []
         for idx in phase.candidates:
             body = body_tokens.get(idx)

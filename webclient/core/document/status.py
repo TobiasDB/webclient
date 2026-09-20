@@ -24,6 +24,7 @@ class StatusBacking(Backing):
     gate = "ok"
 
     def applies(self, core: "Document") -> bool:
+        """Always in play -- status/identity ops are available on every document."""
         return True
 
     def card(self, core: "Document") -> "PageCard":
@@ -58,13 +59,16 @@ class StatusBacking(Backing):
         return await core._client.areload(core)
 
     def is_ok(self, core: "Document") -> "Field[bool]":
+        """Whether the document resolved successfully (a 2xx, no error), as a ``Field``."""
         return Field(core.ok)
 
     def is_empty(self, core: "Document") -> "Field[bool]":
+        """Whether the document has no usable content -- missing, not ok, or no body/element."""
         empty = core._missing or not core.ok or not (core.content or core._element)
         return Field(bool(empty))
 
     def message(self, core: "Document") -> str:
+        """The error message if the document carries one, else the empty string."""
         return core.error.message if core.error is not None else ""
 
 

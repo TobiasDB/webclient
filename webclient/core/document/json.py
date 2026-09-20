@@ -81,6 +81,8 @@ def _json_skeleton(
 
 
 def _json_elements(value: Any) -> list[Element]:
+    """Flatten a parsed JSON value into a list of text ``Element``s, one per scalar leaf,
+    each keyed by its dotted/indexed path (so JSON exposes the same element surface as HTML)."""
     out: list[Element] = []
 
     def walk(v: Any, path: str, parent: str | None) -> None:
@@ -134,6 +136,7 @@ class JsonBacking(Backing):
         )
 
     def applies(self, core: "Document") -> bool:
+        """In play only for json documents."""
         return core.kind == "json"
 
     def select_all(
@@ -144,6 +147,8 @@ class JsonBacking(Backing):
         limit: int | None = None,
         offset: int = 0,
     ) -> "list[Document]":
+        """Each item of the array at ``path`` as its own sub-document (``offset``/``limit``
+        slice the list). A missing path or non-array node is an empty collection, not an error."""
         # optional: a missing path (or a non-array node) is an EMPTY collection, not an error --
         # matching HtmlBacking.select_all's "an empty match is still a collection" contract, so a
         # fan_out over the result doesn't raise and cancel its siblings.
@@ -156,6 +161,8 @@ class JsonBacking(Backing):
         return [core._sub(item) for item in items]
 
     def render(self, core: "Document", format: str, **options: Any) -> "list[Element]":
+        """Render the json to the ``"elements"`` format (its flat leaf list); any other
+        format is unsupported and raises."""
         if format != "elements":
             from ...errors import render_error
 
@@ -163,6 +170,8 @@ class JsonBacking(Backing):
         return _json_elements(self._data(core))
 
     def _data(self, core: "Document") -> Any:
+        """The document's parsed JSON value -- a selected sub-value if this is a selected node,
+        else the body parsed once and cached (``None`` on a body that won't parse)."""
         if core._element is not None:
             return core._element  # a selected sub-value
         if core._data is None:
@@ -181,6 +190,9 @@ class JsonBacking(Backing):
         optional: bool = False,
         error: Any = None,
     ) -> "Document":
+        """Navigate a dotted/indexed ``path`` (``a.b[0].c``) to a sub-value, returned as a
+        sub-document. A missing path is a miss -- an empty document when ``optional``, else the
+        configured error."""
         from ...errors import RETURN
 
         from .html import _miss

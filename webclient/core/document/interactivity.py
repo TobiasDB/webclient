@@ -43,6 +43,7 @@ class DomInteractive(BaseModel):
     source: str = ""  # how we know: "semantic" | "listener" | "cursor" | "scrollable"
 
     def __bool__(self) -> bool:
+        """Truthy when the node is interactive in some way (clickable/hoverable/scrollable)."""
         return self.click or self.hover or self.scroll
 
     def merged(self, other: "DomInteractive") -> "DomInteractive":
@@ -58,6 +59,7 @@ class DomInteractive(BaseModel):
 
 
 def _tag(el: Any) -> str:
+    """The element's lowercased tag name, or ``""`` for a non-element node."""
     return el.tag.lower() if isinstance(getattr(el, "tag", None), str) else ""
 
 

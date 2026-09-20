@@ -156,6 +156,7 @@ class Signal(BaseModel):
     value: Any = None  # the salient metric / endpoint / label
 
     def __bool__(self) -> bool:
+        """Truthy when this signal carries any confidence (i.e. it actually fired)."""
         return self.confidence > 0.0
 
 
@@ -179,6 +180,7 @@ class Flag(BaseModel):
     value: Any = None  # the actionable payload (endpoints / pattern / elements)
 
     def __bool__(self) -> bool:
+        """Truthy when the flag is present (its evidence crossed the threshold)."""
         return self.present
 
 

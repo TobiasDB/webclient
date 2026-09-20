@@ -24,9 +24,12 @@ class StructureBacking(Backing):
     gate = "ok"
 
     def applies(self, core: "Document") -> bool:
+        """In play for markup documents (html/xml) -- the only kinds with a body shape."""
         return core.kind in ("html", "xml")
 
     def structure(self, core: "Document") -> Structure:
+        """The page's body shape -- heading table of contents, element/word counts, and
+        the form/link/pagination summary -- a compact overview of how it is laid out."""
         root = tree(core)
         base = core.final_url or core.url
         host = urlparse(base).hostname or ""

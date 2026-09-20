@@ -39,9 +39,12 @@ class MetadataBacking(Backing):
     gate = "ok"
 
     def applies(self, core: "Document") -> bool:
+        """In play for markup documents (html/xml) -- the only kinds carrying meta tags."""
         return core.kind in ("html", "xml")
 
     def metadata(self, core: "Document") -> Metadata:
+        """The page's descriptive metadata -- title/description, Open Graph and canonical
+        link, and any schema.org types -- gathered from its meta/link tags and JSON-LD."""
         root = tree(core)
         base = core.final_url or core.url
 

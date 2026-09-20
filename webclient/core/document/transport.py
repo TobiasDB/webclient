@@ -37,9 +37,12 @@ class TransportBacking(Backing):
     gate = "ok"
 
     def applies(self, core: "Document") -> bool:
+        """Always in play -- every document records how it was fetched."""
         return True
 
     def transport(self, core: "Document") -> Transport:
+        """The how-it-was-fetched facet: final URL, status, redirect chain, timing, the
+        content-type/encoding/size, and the escalation tier the fetch settled on."""
         h = {k.lower(): v for k, v in core.response_headers.items()}
         return Transport(
             final_url=core.final_url or core.url,

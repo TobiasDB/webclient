@@ -47,7 +47,9 @@ class Document(WebCore, IDocument):
     if TYPE_CHECKING:  # narrow WebCore.lazy (Any) to this core's lazy surface
 
         @property
-        def lazy(self) -> "LazyDocument": ...
+        def lazy(self) -> "LazyDocument":
+            """This document's lazy surface -- ops build an ``Expr`` to run later, not now."""
+            ...
 
     # non-optional: a document is client-bound before any op (see Reference).
     _client: "WebClient" = PrivateAttr(default=None)  # type: ignore[assignment]
@@ -105,6 +107,8 @@ class Document(WebCore, IDocument):
 
     @property
     def ok(self) -> bool:
+        """Whether the document resolved cleanly -- no error, not a miss, and a 2xx (or the
+        in-memory ``0`` status of a locally built document)."""
         if self.error is not None or self._missing:
             return False
         return 200 <= self.status_code < 300 or self.status_code == 0
@@ -157,9 +161,13 @@ class Document(WebCore, IDocument):
         return self._client.loop().run(self.aextract(**exprs))
 
     @overload
-    def project(self) -> dict[str, Any]: ...
+    def project(self) -> dict[str, Any]:
+        """Project the extracted row to a plain ``dict``."""
+        ...
     @overload
-    def project(self, model: type[M]) -> M: ...
+    def project(self, model: type[M]) -> M:
+        """Project the extracted row validated into ``model``."""
+        ...
     def project(self, model: "type[M] | None" = None) -> "dict[str, Any] | M":
         """This document's extracted row as plain data: a ``Reference`` column
         (e.g. from ``attr('href')``) becomes its URL string and a ``Field`` its

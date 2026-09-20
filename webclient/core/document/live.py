@@ -225,6 +225,8 @@ _LEVELS = {
 
 
 def _kind(record: dict[str, Any]) -> str:
+    """Classify a raw MutationObserver record into a DOM-update kind
+    (attribute / text / added / removed)."""
     if record["type"] == "attributes":
         return "attribute"
     if record["type"] == "characterData":
@@ -272,6 +274,8 @@ async def drain(doc: "Document") -> None:
 
 
 def console_event(level: str, text: str, doc: "Document") -> ConsoleEvent:
+    """Wrap a browser console message (its level mapped to our taxonomy) as a ``ConsoleEvent``
+    tied to the document."""
     return ConsoleEvent(
         level=cast(Any, _LEVELS.get(level, "log")), text=text, document_id=doc.name
     )
@@ -361,6 +365,7 @@ class LiveBacking(Backing):
     gate = "page"
 
     def applies(self, core: "Document") -> bool:
+        """In play only while a live browser page is still held on the document."""
         return core._page is not None
 
     def on_load(self, core: "Document", result: "PageResult") -> None:
@@ -387,13 +392,16 @@ class LiveBacking(Backing):
         core._render_stats = getattr(result, "dom_stats", {}) or {}
 
     def _loop(self, core: "Document") -> "EngineLoop":
+        """The engine loop the live page runs on (where interaction ops are bridged)."""
         return core._client.loop()
 
     # -- captured event views ------------------------------------------------
     def dom_mutations(self, core: "Document") -> "list[DOMUpdateEvent]":
+        """The DOM-mutation events captured on this document (load + post-interaction)."""
         return [e for e in core._events if isinstance(e, DOMUpdateEvent)]
 
     def console(self, core: "Document") -> "list[ConsoleEvent]":
+        """The browser console messages captured on this document."""
         return [e for e in core._events if isinstance(e, ConsoleEvent)]
 
     # -- interactions (IO: async def; the interface bridges via dispatch) -----
@@ -406,6 +414,9 @@ class LiveBacking(Backing):
         optional: bool = False,
         error: Any = None,
     ) -> "Document":
+        """Click an element on the live page (the settled page's primary action when
+        ``selector`` is omitted), then settle the resulting DOM. Loud on a miss unless
+        ``optional``/``error`` soften it. Returns the document so interactions chain."""
         from ...errors import lenient
 
         await self._aact(
@@ -424,6 +435,8 @@ class LiveBacking(Backing):
         optional: bool = False,
         error: Any = None,
     ) -> "Document":
+        """Type ``text`` into the element matched by ``selector`` on the live page, then
+        settle. Loud on a miss unless ``optional``/``error`` soften it. Returns the document."""
         from ...errors import lenient
 
         await self._aact(
@@ -441,6 +454,9 @@ class LiveBacking(Backing):
         optional: bool = False,
         error: Any = None,
     ) -> "Document":
+        """Wait until ``selector`` appears on the live page (or the page settles when it is
+        omitted), bounded by ``timeout``. A timeout is a structured miss -- raised unless
+        ``optional``/``error`` soften it. Returns the document so ops chain."""
         from ...errors import lenient, select_error
 
         optional = lenient(optional, error)
@@ -471,6 +487,9 @@ class LiveBacking(Backing):
         optional: bool = False,
         error: Any = None,
     ) -> "Document":
+        """The first element matching ``selector`` on the live page. Queries the live DOM off
+        the engine loop, but falls back to an in-memory select on the captured content when
+        already running on the loop (a plan the evaluator drives) -- see the note above."""
         from ...errors import RETURN
 
         if self._loop(core).on_loop_thread():
@@ -484,6 +503,8 @@ class LiveBacking(Backing):
     def select_all(
         self, core: "Document", selector: str, *, limit: int | None = None, offset: int = 0
     ) -> "list[Document]":
+        """Every element matching ``selector`` on the live page (same live-vs-in-memory
+        dispatch as :meth:`select`), ``limit``/``offset``-bounded."""
         if self._loop(core).on_loop_thread():
             return _html().select_all(core, selector, limit=limit, offset=offset)
         return self._loop(core).run(self._aselect_all(core, selector, limit=limit, offset=offset))
@@ -499,6 +520,8 @@ class LiveBacking(Backing):
         return result
 
     async def screenshot(self, core: "Document", selector: str | None = None) -> "Document":
+        """Capture a screenshot of the live page (or the element matched by ``selector``);
+        the image is attached to the returned document."""
         return await self._ashot(core, selector)
 
     async def goto(
@@ -553,6 +576,9 @@ class LiveBacking(Backing):
         timeout: float | None = None,
         optional: bool = False,
     ) -> None:
+        """The shared async body behind ``click``/``write``: publish + route the action event,
+        bump the correlation action-index, perform the Playwright action (loud on a timeout
+        unless ``optional``), then drain the resulting DOM."""
         ms = (timeout or 30.0) * 1000
         event = ActionEvent(
             action=action,
@@ -590,6 +616,8 @@ class LiveBacking(Backing):
     async def _await_for(
         self, core: "Document", selector: str | None, timeout: float | None
     ) -> None:
+        """Await a selector (or a bare timeout when none is given) on the live page, then drain.
+        A Playwright timeout propagates for the caller to turn into a miss."""
         if selector is not None:
             await core._page.wait_for_selector(
                 selector, timeout=(timeout or 30.0) * 1000
@@ -599,6 +627,8 @@ class LiveBacking(Backing):
         await drain(core)
 
     async def _ashot(self, core: "Document", selector: str | None) -> "Document":
+        """Take the PNG screenshot (whole page or a located element) and wrap it as a new
+        binary document bound to this client."""
         from . import Document
 
         target = core._page if selector is None else core._page.locator(selector).first
@@ -610,6 +640,9 @@ class LiveBacking(Backing):
         return shot
 
     async def _aselect(self, core: "Document", selector: str, index: int, error: Any) -> "Document":
+        """Select the n-th live-DOM match of ``selector`` as a sub-document (its ``outerHTML``),
+        carrying over the element's own interaction mutations. Loud on a miss unless ``error`` is
+        ``RETURN``."""
         from ...errors import RETURN
         from . import Document
 
@@ -648,6 +681,8 @@ class LiveBacking(Backing):
     async def _aselect_all(
         self, core: "Document", selector: str, *, limit: int | None = None, offset: int = 0
     ) -> "list[Document]":
+        """Select every live-DOM match of ``selector`` (``offset``/``limit``-bounded) as
+        sub-documents built from each element's ``outerHTML``."""
         from . import Document
 
         loc = core._page.locator(selector)

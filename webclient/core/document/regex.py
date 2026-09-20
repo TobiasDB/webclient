@@ -27,6 +27,7 @@ _FLAGS = {"i": re.IGNORECASE, "m": re.MULTILINE, "s": re.DOTALL, "x": re.VERBOSE
 
 
 def _compile(pattern: str, flags: str) -> "re.Pattern[str]":
+    """Compile ``pattern`` with a flag string (any of ``"imsx"``) mapped to ``re`` flags."""
     bits = 0
     for ch in flags:
         bits |= _FLAGS.get(ch.lower(), 0)
@@ -34,6 +35,8 @@ def _compile(pattern: str, flags: str) -> "re.Pattern[str]":
 
 
 def _group(match: "re.Match[str]", group: int | str) -> str | None:
+    """The requested capture group of a match (``0`` = whole match), or ``None`` for a
+    bad group index/name."""
     try:
         return match.group(group)
     except IndexError:  # a bad group name / index -> no value
@@ -47,6 +50,7 @@ class RegexBacking(Backing):
     gate = "ok"
 
     def applies(self, core: "Document") -> bool:
+        """Always in play -- text is available on any resolved document."""
         return True  # text_content is available on any resolved document
 
     def regex(
