@@ -237,6 +237,40 @@ def test_write_query_uses_a_swappable_author_seam(httpserver, monkeypatch):
     assert art.sample[0] == {"name": "P0", "price": "09"}
 
 
+def test_write_query_index_engine_picks_indexes_not_css(httpserver):
+    # Phase 6: with author_engine="index" the model NEVER writes a selector -- it picks record +
+    # field NUMBERS and build_query assembles the durable query. Here the "model" returns a JSON
+    # index pick; write_query builds, tests, and ships a working artifact.
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/p").respond_with_data(
+        "<main>" + "".join(
+            f'<article class="product"><span class="name">P{i}</span>'
+            f'<span class="price">{i}9</span></article>' for i in range(3)
+        ) + "</main>",
+        content_type="text/html",
+    )
+
+    calls = {"n": 0}
+
+    def llm(prompt: str) -> str:  # the index policy asks for a JSON pick BY NUMBER (never a selector)
+        calls["n"] += 1
+        assert "PICKING NUMBERS" in prompt or "record" in prompt  # it's the index prompt, not code
+        # R1 = the article.product region; F1 = name leaf, F2 = price leaf
+        return '{"record": 1, "fields": {"name": 1, "price": 2}, "done": true}'
+
+    with WebClient() as wc:
+        art = write_query(
+            httpserver.url_for("/p"),
+            Brief(description="products", fields=["name", "price"]),
+            wc=wc, llm=llm, browser="never", retries=1, author_engine="index",
+        )
+    assert calls["n"] >= 1                       # the index policy was consulted
+    assert art is not None and art.complete and art.row_count == 3
+    assert art.sample[0] == {"name": "P0", "price": "09"}
+    assert "select_all" in art.describe          # a normal, durable query came out the other side
+
+
 def test_sample_table_collapses_newlines_so_columns_dont_shift():
     # an output-summary bug: a value with a newline (an RSS description) broke the aligned
     # sample table so LATER columns rendered shifted/empty. Cells now collapse whitespace.

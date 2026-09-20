@@ -2144,12 +2144,81 @@ class _TextAuthor(Author):
             raise AuthoringError(str(exc)) from exc
 
 
-def _make_author(llm: LLM, prompt: str, doc: Any, brief: Brief) -> Author:
-    """Build the query author for a ``write_query`` run -- THE single seam Phase 6 swaps. Today it
-    returns the :class:`_TextAuthor` (prompt the model for query code); Phase 6 returns an
-    index-loop author that drives ``llm.query_agent.build_query`` over ``doc`` (the model picks
-    record/field indexes, we build the selectors) at this one boundary, leaving ``write_query``'s
-    test / repair / retry / artifact orchestration unchanged."""
+def _query_loop_prompt(brief: Brief, obs: Any, follow_up: "str | None") -> str:
+    """The per-round prompt for the index-based query policy: the numbered RECORD options (the
+    repeated structures) and FIELD options (the chosen record's leaves) with the brief's required
+    fields, the query + sample so far, and any feedback -- asking for a JSON pick BY NUMBER (never
+    a selector)."""
+    records = "\n".join(f"  R{e.index}: {e.name} (repeats {e.repeats})" for e in obs.records) or "  (none)"
+    fields = "\n".join(f'  F{e.index}: {e.role} "{e.name}"' for e in obs.fields) or "  (none)"
+    want = ", ".join(brief.fields) or "the dataset's fields"
+    sofar = f"\n\nQuery so far:\n  {obs.query}\nSample rows so far:\n  {obs.sample[:3]}" if obs.query else ""
+    fb = f"\n\nFeedback to address: {obs.error or follow_up}" if (obs.error or follow_up) else ""
+    return (
+        "You are building a data-extraction query by PICKING NUMBERS -- never write a CSS "
+        "selector. Choose the REPEATED RECORD that holds the dataset, then map each required "
+        f"field to one of that record's FIELDS.\n\nRequired fields: {want}\n\n"
+        f"RECORDS (repeated structures -- pick the dataset):\n{records}\n\n"
+        f"FIELDS (leaves of the first record -- one per required field):\n{fields}{sofar}{fb}\n\n"
+        'Reply with ONLY JSON: {"record": <R-number or null>, "fields": {"<field name>": '
+        '<F-number>, ...}, "done": <true|false>}. Set record on the first turn; add fields; set '
+        "done=true once the sample has every required field."
+    )
+
+
+def _llm_query_policy(llm: LLM, brief: Brief, follow_up: "str | None") -> Any:
+    """An index-query policy backed by ``llm``: each round it prompts with the record/field
+    options + sample and parses a JSON ``{record, fields, done}`` into a
+    :class:`~webclient.llm.query_agent.QueryDecision` -- the model reasons in NUMBERS, the loop
+    builds the selectors."""
+    from ..llm.query_agent import QueryDecision
+
+    def policy(obs: Any) -> Any:
+        data = _ask_json(llm, _query_loop_prompt(brief, obs, follow_up)) or {}
+        rec = data.get("record")
+        cols = {
+            str(k): int(v) for k, v in (data.get("fields") or {}).items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool)
+        }
+        return QueryDecision(
+            record=int(rec) if isinstance(rec, (int, float)) and not isinstance(rec, bool) else None,
+            fields=cols, done=bool(data.get("done")),
+        )
+
+    return policy
+
+
+class _LoopAuthor(Author):
+    """Authors by DRIVING THE INDEX QUERY LOOP (Phase 6): the model picks record/field NUMBERS
+    from ``doc``'s element index and ``llm.query_agent.build_query`` assembles the durable
+    ``select_all(record).extract(fields).project()`` query -- the model never writes a selector.
+    Returns the rebuilt query expr for ``write_query`` to test/validate like any other."""
+
+    def __init__(self, llm: LLM, doc: Any, brief: Brief) -> None:
+        self._llm = llm
+        self._doc = doc
+        self._brief = brief
+
+    def author(self, follow_up: "str | None" = None) -> "list[Any]":
+        from ..llm.query_agent import build_query
+        from ..query.expr import from_blob
+
+        run = build_query(self._doc, _llm_query_policy(self._llm, self._brief, follow_up))
+        if not run.blob:
+            raise AuthoringError(run.error or "the index query loop produced no query")
+        return [from_blob(run.blob)]
+
+
+def _make_author(
+    llm: LLM, prompt: str, doc: Any, brief: Brief, *, engine: str = "text"
+) -> Author:
+    """Build the query author for a ``write_query`` run -- THE single Phase-6 seam. ``engine``
+    selects it: ``"text"`` (the default) returns the :class:`_TextAuthor` (prompt the model for
+    query code); ``"index"`` returns the :class:`_LoopAuthor` (the model picks record/field
+    indexes and ``build_query`` builds the selectors). ``write_query``'s test / repair / retry /
+    artifact orchestration is the same either way."""
+    if engine == "index":
+        return _LoopAuthor(llm, doc, brief)
     return _TextAuthor(llm, prompt)
 
 
@@ -2269,6 +2338,7 @@ def write_query(
     resolve: "Resolve | None" = None,
     doc: Any = None,
     recency: str = "",
+    author_engine: str = "text",
 ) -> QueryArtifact | None:
     """Have the model author the DOCUMENT-level extraction from the page skeleton, test
     it against the fetched source (``from_blob`` + run -> it must extract DATA rows), and
@@ -2280,7 +2350,9 @@ def write_query(
     author to capture the next-page link; ``extra_urls`` are further base URLs the same query
     also runs against; ``resolve`` bakes the fetch policy (browser tier) into the executable
     query. ``doc`` is the already-fetched source (from the flag-read step) -- reused so we
-    don't re-fetch it."""
+    don't re-fetch it. ``author_engine`` picks HOW the model authors: ``"text"`` (the default --
+    it writes query code) or ``"index"`` (it picks record/field indexes and ``build_query``
+    builds the selectors, so it never authors CSS); the test/validation is the same either way."""
     if doc is None:
         doc = wc.fetch(candidate_url, browser=browser, optional=True)
     skeleton = _skeleton_for(doc) if doc.ok else ""
@@ -2290,7 +2362,7 @@ def write_query(
     best_complete: QueryArtifact | None = None  # a complete-but-STALE fallback (recency retries)
     attempts: list[str] = []  # why each rejected attempt was rejected, for the onboard output
     nudged_empty = False  # a split query with an empty section is nudged ONCE, then accepted
-    author: Author = _make_author(llm, prompt, doc, brief)  # the seam Phase 6 swaps (build_query)
+    author: Author = _make_author(llm, prompt, doc, brief, engine=author_engine)  # text | index (build_query)
     follow_up: "str | None" = None
     tries = retries + 1
 
@@ -2735,6 +2807,7 @@ def onboard_company(
     browser: bool = True,
     budget: Budget | None = None,
     review: bool = False,
+    author_engine: str = "text",
 ) -> OnboardingResult:
     """Run the whole pipeline for one company: search -> crawl -> select -> evaluate
     -> write the reference, resolve, and query for the best source found.
@@ -2760,6 +2833,7 @@ def onboard_company(
             company, brief, result, artifacts,
             wc=wc, llm=llm, search=search, max_pages=max_pages, browser=browser,
             review=review,  # stage reviews are integral + gating, run inline (see _onboard_company)
+            author_engine=author_engine,
         )
         if review and not result.ok:  # diagnose WHY it failed (a gate, or a stage error)
             diagnose_failure(result, artifacts, brief=brief, llm=llm)
@@ -2784,6 +2858,7 @@ def _onboard_company(
     max_pages: int,
     browser: bool,
     review: bool = False,
+    author_engine: str = "text",
 ) -> OnboardingResult:
     def note(msg: str, *a: Any) -> None:  # trace with the running spend kept current
         if isinstance(llm, LlmClient):
@@ -2861,6 +2936,7 @@ def _onboard_company(
         paginated=evaluation.has_pagination, resolve=result.resolve,
         doc=doc if doc.ok else None,
         recency=_recency_guidance(evaluation),  # sort order + where the most recent records are
+        author_engine=author_engine,  # "text" (write query code) | "index" (pick indexes -> build_query)
     )
     if isinstance(llm, LlmClient):
         result.cost_usd = llm.spent_usd
