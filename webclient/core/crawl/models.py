@@ -10,7 +10,7 @@ under ``TYPE_CHECKING``, the ops it implements (``step`` / ``run`` / ``done``).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,11 @@ from ..reference.models import Resolve
 
 if TYPE_CHECKING:
     from . import Crawl  # noqa: F401  (step/run return the crawl itself)
+
+#: the per-page projection type -- what ``config.project`` yields and ``.pages`` holds.
+#: Defaults to :class:`PageCard` (the ``doc.card()`` projection); a custom ``project``
+#: expression parameterises it (``wq.doc.markdown()`` -> ``str``, ``wq.doc`` -> ``Document``).
+T = TypeVar("T")
 
 
 def _default_project() -> Any:
@@ -135,11 +140,15 @@ class CrawlState(BaseModel):
     failures: list[Failure] = []  # edges that failed to load, with the reason
 
 
-class ICrawl(BaseModel):
+class ICrawl(BaseModel, Generic[T]):
     """A site traversal's state: its :class:`CrawlConfig` + the live frontier / pages
     / trace, plus (for the checker) the ops ``Crawl`` implements. The ops are
     ``TYPE_CHECKING``-only, so at runtime this is just the state model. Read the tuning
-    knobs on ``.config``; ``scope`` (the seed's host) is derived, not configured."""
+    knobs on ``.config``; ``scope`` (the seed's host) is derived, not configured.
+
+    Generic in ``T`` -- the per-page projection type -- so ``.pages`` is typed to what the
+    ``project`` expression yields (``PageCard`` by default). At runtime ``T`` is unbound, so
+    ``pages`` behaves like ``list[Any]`` (pydantic never copies a live Document into it)."""
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -147,10 +156,10 @@ class ICrawl(BaseModel):
     scope: str = ""  # the registrable domain the crawl is bound to (derived from seeds)
     status: Literal["running", "closed"] = "running"
     # -- live state ----------------------------------------------------------
-    #: the retained pages -- a lean :class:`PageCard` each by default, or the whole
-    #: :class:`Document` when ``config.retain == "document"`` (untyped so pydantic
-    #: never copies a live Document).
-    pages: list[Any] = []
+    #: the retained pages -- a lean :class:`PageCard` each by default (``T``), or the whole
+    #: :class:`Document` under a ``project=wq.doc`` projection. ``T`` is unbound at runtime,
+    #: so pydantic never validates/copies a live Document into the list.
+    pages: list[T] = []
     #: unresolved edges (deduped, in scope), kept sorted best-first in auto mode.
     frontier: list[Edge] = []
     #: the edges taken, in order -- the audit trail + the resume history.
@@ -196,8 +205,8 @@ class ICrawl(BaseModel):
         # fmt: off
         @property
         def done(self) -> bool: ...
-        def run(self) -> "Crawl": ...
-        def step(self, select: 'list[Edge] | list[str] | None' = ...) -> "Crawl": ...
+        def run(self) -> "Crawl[T]": ...
+        def step(self, select: 'list[Edge] | list[str] | None' = ...) -> "Crawl[T]": ...
         # fmt: on
         # >>> end generated <<<
         pass

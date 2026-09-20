@@ -16,7 +16,7 @@ default (``config.retain="document"`` keeps the whole Document).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar, Iterator, cast
+from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar, Generic, Iterator, cast
 
 from pydantic import PrivateAttr
 
@@ -25,7 +25,7 @@ from ...query.expr import Expr
 from ...query.plan import Plan
 from ..session_core import SessionCore
 from ..web_core import Backing
-from .models import CrawlConfig, CrawlState, Edge, Failure, ICrawl, PageCard  # noqa: F401  (re-exported)
+from .models import CrawlConfig, CrawlState, Edge, Failure, ICrawl, PageCard, T  # noqa: F401  (re-exported)
 
 from .backing import CrawlBacking
 
@@ -40,7 +40,7 @@ class _CrawlLazy:
 
     __slots__ = ("_crawl",)
 
-    def __init__(self, crawl: "Crawl") -> None:
+    def __init__(self, crawl: "Crawl[Any]") -> None:
         self._crawl = crawl
 
     @property
@@ -48,7 +48,7 @@ class _CrawlLazy:
         return Collection(list(self._crawl.frontier), client=self._crawl._client)
 
 
-class Crawl(SessionCore, ICrawl):
+class Crawl(SessionCore, ICrawl[T], Generic[T]):
     """A scoped site traversal. State (frontier / pages / config) is the ``ICrawl``
     model it inherits; this core adds the client binding, the dedup/robots machinery,
     and ``state()`` (a resumable snapshot). A context manager; its ops (``step`` /
@@ -86,13 +86,13 @@ class Crawl(SessionCore, ICrawl):
         stateless plan form, the exact analogue of an OPEN ``.step(...)`` sequence -- so it
         stays engine-local; run/stream remotely instead."""
         if op == "run":
-            def _run(*a: Any, **k: Any) -> "Crawl":
+            def _run(*a: Any, **k: Any) -> "Crawl[Any]":
                 self.pages = list(self._remote_expr().run().pages.collect())
                 self.status = "closed"  # a remote run is one-shot and complete
                 return self
             return _run
         if op == "step":
-            def _step(*a: Any, **k: Any) -> "Crawl":
+            def _step(*a: Any, **k: Any) -> "Crawl[Any]":
                 raise NotImplementedError(
                     "a remote crawl runs as one plan (its frontier lives server-side); "
                     "interactive step() runs only on a local client -- use run() or "
@@ -121,7 +121,7 @@ class Crawl(SessionCore, ICrawl):
             project=c.project._plan.model_dump(),
         )
 
-    def bind(self, client: "WebClient") -> "Crawl":
+    def bind(self, client: "WebClient") -> "Crawl[Any]":
         """Share ``client``'s engine (its ``afetch``/pool drive the crawl) and seed
         the dedup ledger (canonicalised) from the initial frontier."""
         from .canon import _canon

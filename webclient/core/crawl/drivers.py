@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from .models import Edge
 
 #: an auto edge-selection policy: given the crawl, the frontier edges to fetch this round.
-Driver = Callable[["Crawl"], "list[Edge]"]
+Driver = Callable[["Crawl[Any]"], "list[Edge]"]
 
 
 def from_picks(pick: "Callable[[list[Edge]], Sequence[str]]") -> Driver:
@@ -36,7 +36,7 @@ def from_picks(pick: "Callable[[list[Edge]], Sequence[str]]") -> Driver:
     maps them back to the frontier edges to fetch. So an LLM (or any) selector supplies only
     the policy -- ``list[Edge] -> list[url]`` -- while the crawl owns the driving loop."""
 
-    def _driver(crawl: "Crawl") -> "list[Edge]":
+    def _driver(crawl: "Crawl[Any]") -> "list[Edge]":
         chosen = set(pick(list(crawl.frontier)))
         return [e for e in crawl.frontier if e.url in chosen]
 

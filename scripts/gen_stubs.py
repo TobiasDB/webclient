@@ -225,7 +225,15 @@ def _render(tp: Any, tier: str) -> str:
     smap = {"eager": SURFACE, "async": SURFACE_ASYNC, "remote": SURFACE_REMOTE}.get(tier, LAZY)
     sync = tier in ("eager", "async", "remote")  # a materialised value tier
     if cat == "core":
-        return smap[inner]
+        # a parameterised pydantic generic (e.g. ``Crawl[Any]``) is a real subclass, so map
+        # it back to its base surface via the MRO.
+        key = inner if inner in smap else next(
+            (b for b in getattr(inner, "__mro__", ()) if b in smap), inner
+        )
+        name = smap[key]
+        # Crawl is generic in its per-page projection type; a self-returning op
+        # (run/step) preserves it (T is in scope in the ICrawl interface).
+        return "Crawl[T]" if name == "Crawl" else name
     if cat == "iterable":
         el = _unwrap_union(_element_type(inner))
         if _classify(el) == "core":

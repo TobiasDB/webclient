@@ -13,7 +13,7 @@ differs.
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TypeVar, cast, overload
 
 from pydantic import PrivateAttr
 
@@ -41,10 +41,13 @@ from .models import IWebClient
 from .sitemap import SiteBacking
 
 if TYPE_CHECKING:
-    from ..crawl import Crawl, CrawlConfig, CrawlState
+    from ..crawl import Crawl, CrawlConfig, CrawlState, PageCard
     from ..session import Session
-    from ...surfaces.interface import LazyWebClient
+    from ...surfaces.interface import Lazy, LazyField, LazyWebClient
 
+
+#: the per-page projection type a ``crawl(project=...)`` overload infers (see ``crawl``).
+_P = TypeVar("_P")
 
 _MODES = ("never", "auto", "always")
 
@@ -769,6 +772,60 @@ class WebClient(SessionCore, IWebClient):
             pass
 
     # -- crawl ---------------------------------------------------------------
+    # ``.pages`` is typed to what the ``project`` expression yields: the overloads infer the
+    # per-page type ``T`` (``Crawl[T]``) from ``project``'s static type -- no ``project`` ->
+    # the default ``doc.card()`` -> ``Crawl[PageCard]``; ``wq.doc.markdown()`` (a
+    # ``LazyField[str]``) -> ``Crawl[str]``; ``wq.doc`` (a ``LazyDocument``) -> ``Crawl[Document]``
+    # -- so ``for card in crawl.pages`` is checked, not ``Any``. A dict/other project falls
+    # back to ``Crawl[Any]``.
+    @overload
+    def crawl(
+        self, seeds: Any, *, config: "CrawlConfig | None" = ..., resume: "CrawlState | None" = ...,
+        scope: str | None = ..., auto: bool = ..., width: int = ..., depth: int = ...,
+        max_pages: int = ..., max_frontier: int = ..., same_origin: bool = ...,
+        allow_subdomains: bool = ..., allow_domains: list[str] | None = ...,
+        deny_domains: list[str] | None = ..., allow_countries: list[str] | None = ...,
+        deny_countries: list[str] | None = ..., include: str | None = ..., exclude: str | None = ...,
+        include_xhr: bool = ..., keywords: list[str] | None = ..., obey_robots: bool = ...,
+        browser: "bool | Literal['never', 'auto', 'always']" = ..., resolve: Any = ...,
+        driver: Any = ..., project: None = ...,
+    ) -> "Crawl[PageCard]": ...
+    @overload
+    def crawl(
+        self, seeds: Any, *, config: "CrawlConfig | None" = ..., resume: "CrawlState | None" = ...,
+        scope: str | None = ..., auto: bool = ..., width: int = ..., depth: int = ...,
+        max_pages: int = ..., max_frontier: int = ..., same_origin: bool = ...,
+        allow_subdomains: bool = ..., allow_domains: list[str] | None = ...,
+        deny_domains: list[str] | None = ..., allow_countries: list[str] | None = ...,
+        deny_countries: list[str] | None = ..., include: str | None = ..., exclude: str | None = ...,
+        include_xhr: bool = ..., keywords: list[str] | None = ..., obey_robots: bool = ...,
+        browser: "bool | Literal['never', 'auto', 'always']" = ..., resolve: Any = ...,
+        driver: Any = ..., project: "LazyField[_P]",
+    ) -> "Crawl[_P]": ...
+    @overload
+    def crawl(
+        self, seeds: Any, *, config: "CrawlConfig | None" = ..., resume: "CrawlState | None" = ...,
+        scope: str | None = ..., auto: bool = ..., width: int = ..., depth: int = ...,
+        max_pages: int = ..., max_frontier: int = ..., same_origin: bool = ...,
+        allow_subdomains: bool = ..., allow_domains: list[str] | None = ...,
+        deny_domains: list[str] | None = ..., allow_countries: list[str] | None = ...,
+        deny_countries: list[str] | None = ..., include: str | None = ..., exclude: str | None = ...,
+        include_xhr: bool = ..., keywords: list[str] | None = ..., obey_robots: bool = ...,
+        browser: "bool | Literal['never', 'auto', 'always']" = ..., resolve: Any = ...,
+        driver: Any = ..., project: "Lazy[_P]",
+    ) -> "Crawl[_P]": ...
+    @overload
+    def crawl(
+        self, seeds: Any, *, config: "CrawlConfig | None" = ..., resume: "CrawlState | None" = ...,
+        scope: str | None = ..., auto: bool = ..., width: int = ..., depth: int = ...,
+        max_pages: int = ..., max_frontier: int = ..., same_origin: bool = ...,
+        allow_subdomains: bool = ..., allow_domains: list[str] | None = ...,
+        deny_domains: list[str] | None = ..., allow_countries: list[str] | None = ...,
+        deny_countries: list[str] | None = ..., include: str | None = ..., exclude: str | None = ...,
+        include_xhr: bool = ..., keywords: list[str] | None = ..., obey_robots: bool = ...,
+        browser: "bool | Literal['never', 'auto', 'always']" = ..., resolve: Any = ...,
+        driver: Any = ..., project: Any = ...,
+    ) -> "Crawl[Any]": ...
     def crawl(
         self,
         seeds: Any,
@@ -796,7 +853,7 @@ class WebClient(SessionCore, IWebClient):
         resolve: Any = None,
         project: Any = None,
         driver: Any = None,
-    ) -> "Crawl":
+    ) -> "Crawl[Any]":
         """A scoped site traversal sharing this engine (a :class:`Crawl` core). Drive it
         with ``crawl.run()`` (batch → read ``.pages``) or ``crawl.step(select)`` (one
         round; ``select`` may be frontier edges/URLs or brand-new URLs to fetch next).

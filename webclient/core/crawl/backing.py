@@ -53,7 +53,7 @@ class CrawlBacking(Backing):
     io = frozenset({"step", "run"})
     gate = "ok"
 
-    def done(self, core: "Crawl") -> bool:
+    def done(self, core: "Crawl[Any]") -> bool:
         """Finished: closed, the frontier is empty, or the page budget is spent."""
         return (
             core.status == "closed"
@@ -61,13 +61,13 @@ class CrawlBacking(Backing):
             or len(core.pages) >= core.config.max_pages
         )
 
-    async def aexit(self, core: "Crawl", *exc: Any) -> None:
+    async def aexit(self, core: "Crawl[Any]", *exc: Any) -> None:
         """Close the crawl when its ``with`` block exits."""
         core.status = "closed"
 
     async def step(
-        self, core: "Crawl", select: "list[Edge] | list[str] | None" = None
-    ) -> "Crawl":
+        self, core: "Crawl[Any]", select: "list[Edge] | list[str] | None" = None
+    ) -> "Crawl[Any]":
         """Fetch one round. ``select`` is a subset of the frontier (edges or URLs) OR
         brand-new URLs to fetch next (any not in the frontier are added, bypassing the
         scope filters -- an explicit ask wins); ``None`` takes the top-``width`` scored
@@ -79,7 +79,7 @@ class CrawlBacking(Backing):
         await self._pump(core, lambda: self._select(core, select))
         return core
 
-    async def run(self, core: "Crawl") -> "Crawl":
+    async def run(self, core: "Crawl[Any]") -> "Crawl[Any]":
         """Drive the crawl to completion (the batch drain of the stream): expand the
         best-first frontier round by round until done. Equivalent to exhausting
         ``stream()`` -- ``config.order`` only governs a bare ``step()``, not the drive."""
@@ -89,7 +89,7 @@ class CrawlBacking(Backing):
                 break
         return core
 
-    async def _astream(self, core: "Crawl") -> "AsyncIterator[Any]":
+    async def _astream(self, core: "Crawl[Any]") -> "AsyncIterator[Any]":
         """The crawl's one engine: drive the best-first frontier round by round and
         yield each fetched page's retained projection as the round completes. Pausing
         (breaking the consumer) leaves the frontier + seen ledger intact, so the crawl
@@ -104,7 +104,7 @@ class CrawlBacking(Backing):
                 break
 
     async def _pump(
-        self, core: "Crawl", choose: "Callable[[], list[Edge]]"
+        self, core: "Crawl[Any]", choose: "Callable[[], list[Edge]]"
     ) -> "list[Any]":
         """One round: CLAIM edges under the step lock (``choose`` + budget + frontier removal is
         atomic, and the claim is RESERVED via ``_inflight`` so concurrent rounds can't over-claim
@@ -127,7 +127,7 @@ class CrawlBacking(Backing):
             core._inflight -= len(to_fetch)
         return produced
 
-    async def _fetch_edge(self, core: "Crawl", edge: Edge) -> Any:
+    async def _fetch_edge(self, core: "Crawl[Any]", edge: Edge) -> Any:
         """Fetch one edge, expand the frontier from its DOM, and return its retained
         projection (``None`` if robots-blocked or the fetch failed -- a
         :class:`Failure` is recorded either way, so the crawl degrades gracefully).
@@ -174,7 +174,7 @@ class CrawlBacking(Backing):
             if doc is not None and getattr(doc, "_page", None) is not None:
                 await core._client._arelease(doc)
 
-    def _lock(self, core: "Crawl") -> "asyncio.Lock":
+    def _lock(self, core: "Crawl[Any]") -> "asyncio.Lock":
         """The crawl's step lock, created lazily on its running loop (the sync check +
         assign means even the first two concurrent steps share one lock)."""
         if core._step_lock is None:
@@ -182,7 +182,7 @@ class CrawlBacking(Backing):
         return cast("asyncio.Lock", core._step_lock)
 
     # -- retention ------------------------------------------------------------
-    async def _retain(self, core: "Crawl", doc: "Document") -> Any:
+    async def _retain(self, core: "Crawl[Any]", doc: "Document") -> Any:
         """Evaluate the crawl's projection expression against the fetched page and keep
         the result -- ``config.project`` is a document-rooted :class:`Expr` (default
         ``doc.card()`` -> a :class:`PageCard`), so ``.pages`` is that expression's
@@ -192,7 +192,7 @@ class CrawlBacking(Backing):
         return await aevaluate(core.config.project, doc, client=core._client)
 
     # -- frontier selection + scoring -----------------------------------------
-    def _select(self, core: "Crawl", select: Any) -> "list[Edge]":
+    def _select(self, core: "Crawl[Any]", select: Any) -> "list[Edge]":
         if select is not None:
             wanted = [s.url if isinstance(s, Edge) else str(s) for s in select]
             existing = {e.url for e in core.frontier}
@@ -205,7 +205,7 @@ class CrawlBacking(Backing):
             return []  # pure manual: a bare step() fetches nothing -- the caller selects
         return self._drive_select(core)
 
-    def _drive_select(self, core: "Crawl") -> "list[Edge]":
+    def _drive_select(self, core: "Crawl[Any]") -> "list[Edge]":
         """The auto drive's selection, layered on the manual base: a custom :mod:`.drivers`
         driver if one is set (e.g. an LLM picking the edges most likely to reach a dataset),
         otherwise the built-in best-first heuristic (the top-``width`` frontier edges by
@@ -215,12 +215,12 @@ class CrawlBacking(Backing):
         ranked = sorted(core.frontier, key=lambda e: self._score(core, e), reverse=True)
         return ranked[: core.config.width]
 
-    def _score(self, core: "Crawl", edge: Edge) -> float:
+    def _score(self, core: "Crawl[Any]", edge: Edge) -> float:
         """Best-first ordering: the edge's discovery-time score minus a depth penalty
         (ties break toward shallower pages)."""
         return edge.score - core.config.scoring.depth * edge.depth
 
-    def _link_score(self, core: "Crawl", text: str, url: str, region: str) -> float:
+    def _link_score(self, core: "Crawl[Any]", text: str, url: str, region: str) -> float:
         """A weighted metric score for a discovered link (weights on
         ``config.scoring``): keyword matches (anchor + URL), on-page prominence (the
         region landmark -- the available proxy for the host element's position/size,
@@ -261,7 +261,7 @@ class CrawlBacking(Backing):
         return round(score, 3)
 
     # -- frontier growth ------------------------------------------------------
-    def _in_scope(self, core: "Crawl", url: str) -> bool:
+    def _in_scope(self, core: "Crawl[Any]", url: str) -> bool:
         """Whether ``url`` may enter the frontier under the config's scope rules --
         domain allow/deny, country (ccTLD) allow/deny, same-origin + subdomains, and
         the include/exclude path filters."""
@@ -288,7 +288,7 @@ class CrawlBacking(Backing):
         return True
 
     def _add_edge(
-        self, core: "Crawl", url: str, text: str, depth: int, score: float = 0.0,
+        self, core: "Crawl[Any]", url: str, text: str, depth: int, score: float = 0.0,
         *, force: bool = False,
     ) -> None:
         """Add one discovered URL to the frontier if unseen and (unless ``force``) in
@@ -309,7 +309,7 @@ class CrawlBacking(Backing):
         core._seen.add(key)
         core.frontier.append(Edge(url=url, text=text, depth=depth, score=score))
 
-    def _expand(self, core: "Crawl", doc: Any, depth: int) -> None:
+    def _expand(self, core: "Crawl[Any]", doc: Any, depth: int) -> None:
         """Add ``doc``'s anchor links to the frontier -- dropping page-asset links and
         scoring each by the metric scorer -- then re-sort/cap the frontier."""
         for a in doc.select_all("a[href]"):
@@ -320,7 +320,7 @@ class CrawlBacking(Backing):
             self._add_edge(core, url, text, depth, self._link_score(core, text, url, a.region))
         self._sort_frontier(core)
 
-    def _expand_xhr(self, core: "Crawl", doc: Any, depth: int) -> None:
+    def _expand_xhr(self, core: "Crawl[Any]", doc: Any, depth: int) -> None:
         """Add the data-API endpoints a browser render observed (its XHR/fetch calls)
         to the frontier, so a browser crawl covers the JSON APIs behind the page."""
         from ...models import NetworkEvent
@@ -334,7 +334,7 @@ class CrawlBacking(Backing):
                 self._add_edge(core, url, "[xhr]", depth, 0.5)
         self._sort_frontier(core)
 
-    def _sort_frontier(self, core: "Crawl") -> None:
+    def _sort_frontier(self, core: "Crawl[Any]") -> None:
         """Keep the frontier best-first (score desc, then shallowest) and hard-capped
         at ``config.max_frontier`` -- a small page budget can still discover hundreds of
         links per page, so the cap bounds memory while keeping the best edges."""
@@ -343,14 +343,14 @@ class CrawlBacking(Backing):
             del core.frontier[core.config.max_frontier :]
 
     # -- robots.txt (cached per host) -----------------------------------------
-    async def _allowed(self, core: "Crawl", url: str) -> bool:
+    async def _allowed(self, core: "Crawl[Any]", url: str) -> bool:
         host = _canon_host(url)
         if host not in core._robots:  # load this host's robots.txt once
             core._robots[host] = await self._load_robots(core, url)
         robots: "RobotFileParser | None" = core._robots[host]
         return robots is None or robots.can_fetch("*", url)
 
-    async def _load_robots(self, core: "Crawl", sample_url: str) -> Any:
+    async def _load_robots(self, core: "Crawl[Any]", sample_url: str) -> Any:
         from urllib.robotparser import RobotFileParser
 
         p = urlparse(sample_url)
