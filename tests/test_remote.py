@@ -253,6 +253,25 @@ def test_lazy_batches_doc_ops_into_one_call(remote):
     assert all(u.url.startswith("http") for u in hrefs)
 
 
+def test_async_collect_and_stream_work_over_remote(remote):
+    # aexecute/astream must ROUTE THROUGH THE SERVICE on a remote client, like sync execute --
+    # a remote engine has no local pool, so running aevaluate locally would AttributeError on
+    # the None pool. .acollect()/.astream() should match the sync .collect() results.
+    import asyncio
+
+    rc, server = remote
+    d = rc.fetch(server.url_for("/cards"))
+
+    async def main():
+        one = await d.lazy.select(".title").attr("text").acollect()
+        streamed = [t async for t in d.lazy.select_all(".title").attr("text").astream()]
+        return one, streamed
+
+    one, streamed = asyncio.run(main())
+    assert one == "Aeropress"
+    assert streamed == ["Aeropress", "Grinder"]
+
+
 def test_plan_execution_is_portable(remote):
     rc, server = remote
     plan = (

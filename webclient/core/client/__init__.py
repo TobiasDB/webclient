@@ -682,12 +682,16 @@ class WebClient(SessionCore, IWebClient):
         return _materialize(evaluate(expr, context, client=self))
 
     async def aexecute(self, expr: Any, context: Any = None) -> Any:
-        """Await a plan. An async client runs it loop-natively on the caller's
-        loop; a sync client bridges it off its background engine loop (so an async
-        caller of a sync client still doesn't block its own loop)."""
+        """Await a plan. A REMOTE client round-trips through the service (the same wire call as
+        sync ``execute``, run off the caller's loop so it never blocks); an async client runs it
+        loop-natively on the caller's loop; a sync client bridges it off its background engine
+        loop (so an async caller of a sync client still doesn't block its own loop)."""
         import asyncio
 
-        if self._the_engine()._mode == "async":
+        engine = self._the_engine()
+        if engine.is_remote:  # remote dispatch: the sync round-trip, off the caller's loop
+            return await asyncio.to_thread(engine.execute, self, expr, context)
+        if engine._mode == "async":
             return _materialize(await aevaluate(expr, context, client=self))
         result = await asyncio.wrap_future(
             self.loop().submit(aevaluate(expr, context, client=self))
@@ -706,14 +710,28 @@ class WebClient(SessionCore, IWebClient):
         self.bus.publish(PlanEvent(phase="done", detail={"rows": count}))
 
     async def astream(self, expr: Any, context: Any) -> Any:
-        """Async row stream (the same truly-incremental rows as ``_stream``). An
-        async client iterates loop-natively on the caller's loop; a sync client
-        bridges from its engine loop as rows complete."""
+        """Async row stream. A REMOTE client gets its rows in one service round-trip (the wire
+        transport is not incrementally streamed) and yields them, run off the caller's loop; an
+        async client iterates loop-natively on the caller's loop; a sync client bridges from its
+        engine loop as rows complete."""
+        engine = self._the_engine()
         self.bus.publish(PlanEvent(phase="started"))
         count = 0
+        if engine.is_remote:  # remote: one round-trip returns the rows; yield them off-loop
+            import asyncio
+
+            result = await asyncio.to_thread(
+                engine.execute, self, expr, context, stream=True
+            )
+            for row in result if isinstance(result, list) else [result]:
+                count += 1
+                self.bus.publish(PlanEvent(phase="row"))
+                yield row.get() if isinstance(row, Field) else row
+            self.bus.publish(PlanEvent(phase="done", detail={"rows": count}))
+            return
         rows = (
             astream(expr, context, client=self)
-            if self._the_engine()._mode == "async"
+            if engine._mode == "async"
             else self.loop().astream(astream(expr, context, client=self))
         )
         async for row in rows:

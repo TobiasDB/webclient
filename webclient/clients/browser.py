@@ -161,8 +161,12 @@ class BrowserClient(Client):
 
     kind = "page"
 
-    def __init__(self, page: Any) -> None:
+    def __init__(self, page: Any, context: Any = None, *, owns_context: bool = True) -> None:
         self.page = page
+        self._context = context
+        #: whether THIS client owns its context and should close it on release. False for a
+        #: reused (connected "my browser") context -- closing it would drop the user's session.
+        self._owns_context = owns_context and context is not None
 
     async def _wait_stable(
         self, page: Any, *, timeout: float = 8.0, quiet: float = 0.4, poll: float = 0.2
@@ -396,8 +400,15 @@ class BrowserClient(Client):
         return result
 
     async def aclose(self) -> None:
-        """Close this browser page (the leased unit)."""
+        """Close this browser page (the leased unit) AND its context when this client owns it --
+        so a released page frees its context immediately instead of contexts piling up until the
+        whole factory tears down. A reused (connected) context is left open (not ours to close)."""
         await self.page.close()
+        if self._owns_context:
+            try:
+                await self._context.close()
+            except Exception:  # pragma: no cover - context already gone
+                pass
 
 
 #: a small pool of realistic, INTERNALLY CONSISTENT desktop identities: the UA, platform,
@@ -559,10 +570,11 @@ class BrowserFactory(ClientFactory):
         are launch-only and would touch the user's real pages."""
         browser = await self._browser_()
         if self._connected and self._reuse_context and browser.contexts:
-            # reuse the user's real context: no new_context, no stealth/identity injection.
-            # We did NOT create it, so it is not tracked for close in aclose().
+            # reuse the user's real context: no new_context, no stealth/identity injection, and
+            # the client does NOT own it (owns_context=False) -- releasing the page must never
+            # close the user's session context.
             context = browser.contexts[0]
-            return BrowserClient(await context.new_page())
+            return BrowserClient(await context.new_page(), context, owns_context=False)
         opts: dict[str, Any] = {}
         # one COHERENT identity: a random one per page when fingerprinting, else the default
         # (which still fixes the HeadlessChrome UA leak). Everything -- UA, viewport, locale,
@@ -579,8 +591,11 @@ class BrowserFactory(ClientFactory):
         if self.stealth:
             await context.add_init_script(_STEALTH_BASE)      # identity-independent masks
             await context.add_init_script(_identity_js(fp))   # THIS identity's platform/GPU/cores
-        self._contexts.append(context)  # tracked so aclose() closes the contexts WE opened
-        return BrowserClient(await context.new_page())
+        # the client owns this fresh context and closes it on release (frees it immediately);
+        # _contexts is a teardown backstop for a CONNECTED browser whose pages are still leased
+        # at aclose (a launched browser's own close() sweeps any that remain).
+        self._contexts.append(context)
+        return BrowserClient(await context.new_page(), context, owns_context=True)
 
     async def aclose(self) -> None:
         """Tear down the factory. For a browser WE launched, close it (killing the process). For

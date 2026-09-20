@@ -254,3 +254,33 @@ def test_default_launches_and_aclose_kills_the_browser(monkeypatch):
         assert browser.closed is True  # we launched it, so we kill it
 
     _run(main())
+
+
+def test_page_release_frees_its_context_but_not_a_reused_one(monkeypatch):
+    # M2: releasing a page closes ITS context (no per-lease accumulation until teardown)...
+    browser = _FakeBrowser()
+    _install_fake_playwright(monkeypatch, browser)
+
+    async def launched():
+        f = BrowserFactory()  # launch -> fresh context per page, owned
+        client = await f.create()
+        ctx = browser.new_contexts[0]
+        assert client._owns_context is True
+        await client.aclose()
+        assert ctx.closed is True  # freed on release
+
+    _run(launched())
+
+    # ...but a reused (connected "my browser") context is the user's -- never closed on release.
+    existing = _FakeContext()
+    browser2 = _FakeBrowser(existing_context=existing)
+    _install_fake_playwright(monkeypatch, browser2)
+
+    async def reused():
+        f = BrowserFactory(cdp_endpoint="http://h:9222")  # reuse auto-on
+        client = await f.create()
+        assert client._owns_context is False
+        await client.aclose()
+        assert existing.closed is False  # user's session context left open
+
+    _run(reused())
