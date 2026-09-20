@@ -19,7 +19,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-_WS = re.compile(r"\s+")
+from ...dom import norm as _norm, tag as _tag, text_of
+
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")  # camelCase boundary
 _SEP = re.compile(r"[-_./]+")
 #: a token that looks like a build hash rather than a word (mixed case + digits, or a long
@@ -40,16 +41,6 @@ class DomName(BaseModel):
     def __bool__(self) -> bool:
         """Truthy when a non-empty label was found."""
         return bool(self.label)
-
-
-def _tag(el: Any) -> str:
-    """The element's lowercased tag name, or ``""`` for a non-element node."""
-    return el.tag.lower() if isinstance(getattr(el, "tag", None), str) else ""
-
-
-def _norm(s: str) -> str:
-    """Collapse runs of whitespace to single spaces and strip the ends."""
-    return _WS.sub(" ", s).strip()
 
 
 def _wordlike(s: str) -> bool:
@@ -96,7 +87,7 @@ def name(el: Any, *, max_len: int = 60) -> "DomName | None":
         if got:
             return got
     # 6: short visible text (a leaf control like <button>Read more</button>).
-    text = _norm("".join(el.itertext())) if hasattr(el, "itertext") else ""
+    text = text_of(el) if hasattr(el, "itertext") else ""
     if 0 < len(text) <= max_len:
         got = hit(text, "text")
         if got:

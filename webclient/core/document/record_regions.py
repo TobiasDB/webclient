@@ -16,6 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from ...dom import tag as _tag
 from .html import _is_noise_class  # the shared hashed-class definition (read-only import)
 
 _SKIP = frozenset({"script", "style", "noscript", "template", "svg", "path", "br", "hr"})
@@ -31,11 +32,6 @@ class RecordRegion(BaseModel):
     container_tag: str = ""
     container_id: str = ""
     score: float = 0.0  # count x content-richness x (chrome penalty) -- higher = more dataset-like
-
-
-def _tag(el: Any) -> str:
-    """The element's lowercased tag name, or ``""`` for a non-element node."""
-    return el.tag.lower() if isinstance(getattr(el, "tag", None), str) else ""
 
 
 def _semantic_classes(el: Any) -> "list[str]":

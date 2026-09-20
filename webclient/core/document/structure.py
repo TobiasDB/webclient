@@ -6,8 +6,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlparse
 
+from ...dom import text_of
 from ..web_core import Backing
-from .html import _norm, tree
+from .html import tree
 from .models import Form, Structure, TocEntry
 
 if TYPE_CHECKING:
@@ -35,9 +36,9 @@ class StructureBacking(Backing):
         host = urlparse(base).hostname or ""
 
         toc = [
-            TocEntry(level=int(el.tag[1]), text=_norm("".join(el.itertext())))
+            TocEntry(level=int(el.tag[1]), text=text_of(el))
             for el in root.cssselect(",".join(_HEADINGS))
-            if _norm("".join(el.itertext()))
+            if text_of(el)
         ]
         words = len("".join(root.itertext()).split())
         hrefs = [

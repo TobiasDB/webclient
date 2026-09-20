@@ -14,7 +14,6 @@ that residue behind the same interface.
 
 from __future__ import annotations
 
-import json
 import math
 import re
 from collections import Counter
@@ -22,6 +21,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
+from ...dom import json_leaves, parse_json
 from ...models import DOMUpdateEvent, NetworkEvent
 
 
@@ -209,23 +209,6 @@ def _text_tokens(s: str) -> "set[str]":
     return set(_WORD.findall(s)) | set(_VALUE.findall(s))
 
 
-def _json_leaves(data: Any, out: "list[str]", budget: int = 20000) -> None:
-    """Every scalar leaf (string / number / bool) of a parsed JSON value, as strings -- the
-    values a rendered node's text is most likely to echo. Bounded so a huge blob can't blow up."""
-    if len(out) >= budget:
-        return
-    if isinstance(data, dict):
-        for v in data.values():
-            _json_leaves(v, out, budget)
-    elif isinstance(data, list):
-        for v in data:
-            _json_leaves(v, out, budget)
-    elif isinstance(data, bool):
-        out.append("true" if data else "false")
-    elif isinstance(data, (str, int, float)):
-        out.append(str(data))
-
-
 def _body_tokens(body: "bytes | None") -> "set[str]":
     """The token set of a response body: JSON leaf strings/numbers when it parses as JSON,
     plus generic text tokens over the whole payload (covers non-JSON bodies and the inner
@@ -234,13 +217,10 @@ def _body_tokens(body: "bytes | None") -> "set[str]":
         return set()
     text = body.decode("utf-8", "replace")
     toks: set[str] = set()
-    try:
-        leaves: list[str] = []
-        _json_leaves(json.loads(text), leaves)
-        for leaf in leaves:
+    data = parse_json(text)  # ``None`` when not JSON -- the generic pass below still tokenises it
+    if data is not None:
+        for leaf in json_leaves(data):
             toks |= _text_tokens(leaf)
-    except (ValueError, RecursionError):
-        pass  # not JSON, or pathologically nested -- the generic pass below still tokenises it
     toks |= _text_tokens(text)
     return toks
 

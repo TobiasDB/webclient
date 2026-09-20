@@ -9,6 +9,9 @@ import re
 from typing import TYPE_CHECKING, Any, Literal, overload
 from urllib.parse import urljoin
 
+from ...dom import clean_href as _clean_href, decode_html
+from ...dom import norm as _norm
+from ...dom import parse_html, strip_wc_attrs as _strip_wc_attrs, tag as _tag, text_of
 from ...query.collection import Field
 from ..reference import Reference, from_url
 from ..web_core import Backing
@@ -27,34 +30,6 @@ _ASCII_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _ASCII_LOWER = "abcdefghijklmnopqrstuvwxyz"
 
 
-def _norm(text: str) -> str:
-    """Collapse all runs of whitespace to single spaces and strip the ends."""
-    return " ".join(text.split())
-
-
-#: our internal correlation stamps (data-wc-node / data-wc-*): never shown in the skeleton,
-#: never a selector, and stripped from any HTML we hand back as output.
-_WC_ATTR = re.compile(r'\s+data-wc-[\w-]+="[^"]*"')
-
-
-def _strip_wc_attrs(html_text: str) -> str:
-    """Remove our internal ``data-wc-*`` correlation-stamp attributes from HTML before it is
-    handed back as output (they are never part of the real document)."""
-    return _WC_ATTR.sub("", html_text)
-
-
-def _clean_href(value: "str | None") -> str:
-    """Normalise an href/src/action value the way a browser does before resolving
-    it: strip leading/trailing ASCII whitespace, drop internal tab/newline/CR, and
-    percent-encode any remaining raw spaces (a space is never valid unescaped in a
-    URL). Without this, a template's newlines or a text-like href such as
-    ``<a href="Read More">`` builds an un-fetchable URL (``.../Read More``)."""
-    if not value:
-        return ""
-    value = value.strip().translate({0x09: None, 0x0A: None, 0x0D: None})
-    return value.replace(" ", "%20")
-
-
 def tree(core: "Document") -> Any:
     """The parsed lxml root for a document (an element sub-core is its own
     element; otherwise parse ``content`` once and cache it on the core). Shared
@@ -67,62 +42,23 @@ def tree(core: "Document") -> Any:
     if core._element is not None:
         return core._element
     if core._tree is None:
-        from lxml import etree, html as _lh
-
         raw = core.content or b""
-        if core.kind == "xml":
-            # libxml2 reads the in-document ``<?xml encoding?>`` declaration natively
-            # from the bytes (namespaces/CDATA preserved).
-            parsed = etree.fromstring(
-                raw or b"<root/>", parser=etree.XMLParser(recover=True)
-            )
-            core._tree = parsed if parsed is not None else etree.fromstring(b"<root/>")
-        else:
-            # decode with the right charset, then hand lxml a str -- so a Python codec
-            # name (``latin-1``/``windows-1251``/``shift_jis``) that libxml2's own
-            # parser would reject still works. A blank/whitespace-only body would make
-            # lxml raise "Document is empty", so fall back to an empty document.
-            text = _html_text(core, raw)
-            core._tree = _lh.fromstring(text if text.strip() else "<html></html>")
+        # XML is parsed from raw bytes (libxml2 honours the in-document ``<?xml encoding?>``,
+        # preserving namespaces/CDATA/tag-case); HTML is decoded with the core's known charset
+        # first (so a Python codec libxml2 would reject still works) then parsed. Both degrade a
+        # blank body to an empty document rather than raising. See :func:`webclient.dom.parse_html`.
+        core._tree = (
+            parse_html(raw, xml=True)
+            if core.kind == "xml"
+            else parse_html(_html_text(core, raw))
+        )
     return core._tree
 
 
-_CHARSET_RE = re.compile(rb"""(?:charset|encoding)\s*=\s*["']?\s*([A-Za-z0-9_\-]+)""", re.I)
-
-
-def _sniff_charset(raw: bytes) -> str | None:
-    """The in-document charset from a ``<meta>`` declaration or BOM in the first 2 KB,
-    else ``None``. Mirrors a browser's encoding prescan; only consulted when no HTTP
-    charset was sent."""
-    if raw[:3] == b"\xef\xbb\xbf":
-        return "utf-8"
-    m = _CHARSET_RE.search(raw[:2048])
-    return m.group(1).decode("ascii", "ignore") if m else None
-
-
 def _html_text(core: "Document", raw: bytes) -> str:
-    """Decode HTML bytes with the correct charset (WHATWG precedence: HTTP
-    ``Content-Type`` charset, else an in-document ``<meta charset>`` / BOM, else
-    utf-8 with a latin-1 fallback). Invalid/unknown charset names degrade, never
-    raise."""
-    # strip a leading BOM (browsers do; a retained U+FEFF makes lxml treat a
-    # doctype-less single-block page's element as the root -> empty markdown).
-    enc = core.encoding or _sniff_charset(raw)
-    if enc:
-        try:
-            return raw.decode(enc, "replace").lstrip("﻿")
-        except LookupError:  # a bogus/unknown charset name -> fall through
-            pass
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1", "replace")
-    return text.lstrip("﻿")
-
-
-def _tag(el: Any) -> str:
-    """The element's lowercased tag name, or ``""`` for a non-element node."""
-    return el.tag.lower() if isinstance(el.tag, str) else ""
+    """Decode this document's HTML bytes to text using its known ``encoding`` (WHATWG
+    precedence handled by :func:`webclient.dom.decode_html`)."""
+    return decode_html(raw, core.encoding)
 
 
 def _inline(el: Any) -> str:
@@ -1136,10 +1072,7 @@ class HtmlBacking(Backing):
         if core._missing:
             return None
         el = core._element if core._element is not None else self._tree(core)
-        if own:
-            parts = [el.text or ""] + [c.tail or "" for c in el]
-            return _norm("".join(parts))
-        return _norm("".join(el.itertext()))
+        return text_of(el, own=own)
 
 
 __all__ = ["HtmlBacking"]

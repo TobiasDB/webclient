@@ -21,6 +21,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from ...dom import tag as _tag
+
 #: native tags that are click targets on their own (``a`` is handled separately -- only
 #: interactive with an ``href``).
 _CLICK_TAGS = frozenset({"button", "summary", "label", "option"})
@@ -56,11 +58,6 @@ class DomInteractive(BaseModel):
             scroll=self.scroll or other.scroll,
             source="+".join(dict.fromkeys(srcs)),  # ordered-unique
         )
-
-
-def _tag(el: Any) -> str:
-    """The element's lowercased tag name, or ``""`` for a non-element node."""
-    return el.tag.lower() if isinstance(getattr(el, "tag", None), str) else ""
 
 
 def interactive(el: Any) -> "DomInteractive | None":

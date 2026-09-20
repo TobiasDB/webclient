@@ -6,6 +6,7 @@ import json as _json
 import re
 from typing import TYPE_CHECKING, Any
 
+from ...dom import parse_json
 from ...query.collection import Field
 from ..web_core import Backing
 from .models import Element
@@ -175,10 +176,8 @@ class JsonBacking(Backing):
         if core._element is not None:
             return core._element  # a selected sub-value
         if core._data is None:
-            try:  # a mislabelled / truncated body must not crash a lenient caller
-                core._data = _json.loads(core.content or b"null")
-            except ValueError:
-                core._data = None  # degrade to "no data" (like html's empty tree)
+            # a mislabelled / truncated body must not crash a lenient caller -> "no data"
+            core._data = parse_json(core.content)
         return core._data
 
     def select(
