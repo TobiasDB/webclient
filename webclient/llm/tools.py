@@ -15,6 +15,8 @@ from ..interface import WebClient, default_client, doc
 
 
 def _client(client: WebClient | None) -> WebClient:
+    """The given client, or the process-local shared default -- so every tool works with no
+    explicit client passed."""
     return client if client is not None else default_client()
 
 

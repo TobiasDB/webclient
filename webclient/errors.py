@@ -22,6 +22,7 @@ class _Policy:
         self.name = name
 
     def __repr__(self) -> str:
+        """The policy's name (``RAISE`` / ``RETURN``)."""
         return self.name
 
 
@@ -39,6 +40,7 @@ _CURRENT: "_contextvars.ContextVar[_Policy]" = _contextvars.ContextVar(
 
 
 def current_policy() -> "_Policy":
+    """The ambient error policy in effect for the current context (RAISE at top level)."""
     return _CURRENT.get()
 
 
@@ -51,6 +53,8 @@ def lenient(optional: bool, error: object) -> bool:
 
 @_contextlib.contextmanager
 def default_policy(policy: "_Policy") -> "_Iterator[None]":
+    """Set the ambient error policy for the duration of the ``with`` block (restored on exit) --
+    how ``extract``/``filter`` run their sub-expressions under RETURN."""
     token = _CURRENT.set(policy)
     try:
         yield
@@ -105,6 +109,7 @@ class RenderError(WebException, LookupError):
 
 
 def render_error(message: str) -> RenderError:
+    """Build a structured :class:`RenderError` for an unknown/unavailable render format."""
     return RenderError(WebError(type="RenderError", message=message, retriable=False))
 
 

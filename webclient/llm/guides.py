@@ -58,8 +58,12 @@ def _lazy_op_reference() -> str:
     their docstrings -- so it always matches what the ops actually do."""
     from ..query.collection import Collection
     from ..core.document import Document
+    from ..core.document.live import LiveBacking
 
-    backings = [type(b) for b in Document.BACKINGS]
+    # The query guide teaches STATIC extraction, so the gloss for an op shared with the
+    # live-page backing (``select`` / ``select_all``) must come from the static backing,
+    # not LiveBacking's live-DOM variant -- skip LiveBacking as a gloss provider.
+    backings = [type(b) for b in Document.BACKINGS if not isinstance(b, LiveBacking)]
     doc_docs = _op_docs(_QUERY_OPS, backings)
     coll_docs = _op_docs(_COLLECTION_OPS, [Collection])
     lines = ["On the page or a selected element (a `wq.doc` chain):"]

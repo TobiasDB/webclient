@@ -34,6 +34,8 @@ class Tool:
 
 
 def _schema(**props: Any) -> dict[str, Any]:
+    """Build a JSON-Schema object from keyword property definitions, pulling out those marked
+    ``_required=True`` into the schema's ``required`` list (a terse way to declare a tool's input)."""
     required = [k for k, v in props.items() if v.pop("_required", False)]
     return {
         "type": "object",
@@ -44,6 +46,9 @@ def _schema(**props: Any) -> dict[str, Any]:
 
 
 def _crawl_result(crawl: Any) -> dict[str, Any]:
+    """Shape a finished crawl into a lean JSON result for an MCP tool: per-page records, the URL
+    list, the top-``width`` frontier edges (+ total) and the done flag -- so a big crawl doesn't
+    flood the client."""
     return {
         # a lean per-page record (the crawl holds Documents; a tool returns JSON)
         "pages": [

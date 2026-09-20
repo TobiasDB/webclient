@@ -30,6 +30,7 @@ class RetryPolicy(BaseModel, frozen=True):
 
     @classmethod
     def auto(cls) -> "RetryPolicy":
+        """The escalated retry variant: more attempts, exponential backoff, honouring Retry-After."""
         return cls(max=3, backoff="exp", respect_retry_after=True)
 
 
@@ -44,6 +45,7 @@ class RatePolicy(BaseModel, frozen=True):
 
     @classmethod
     def auto(cls) -> "RatePolicy":
+        """The polite adaptive variant: one request at a time per host, backing off on pressure."""
         return cls(per="host", concurrency=1, adaptive=True)
 
 
@@ -59,6 +61,7 @@ class ProxyPolicy(BaseModel, frozen=True):
 
     @classmethod
     def auto(cls) -> "ProxyPolicy":
+        """The default proxy variant: a session-sticky exit (rotated on a block)."""
         return cls(sticky="session")
 
 
@@ -71,6 +74,7 @@ class AntiBotPolicy(BaseModel, frozen=True):
 
     @classmethod
     def auto(cls) -> "AntiBotPolicy":
+        """The engaged variant: stealth on, captcha handled automatically."""
         return cls(level="stealth", captcha="auto")
 
 
@@ -88,6 +92,7 @@ class BrowserPolicy(BaseModel, frozen=True):
 
     @classmethod
     def auto(cls) -> "BrowserPolicy":
+        """The adaptive variant: render in a browser only when the static fetch falls short."""
         return cls(when="auto")
 
 
@@ -138,6 +143,8 @@ class Resolve(BaseModel, frozen=True):
 
     @classmethod
     def auto(cls) -> "Resolve":
+        """The fully-escalated bundle -- each concern's ``auto`` variant, so a fetch adapts to
+        whatever the response reveals (blocks, anti-bot, JS-gating)."""
         return cls(
             retry=RetryPolicy.auto(),
             rate=RatePolicy.auto(),
@@ -153,6 +160,7 @@ class _AutoSentinel:
     __slots__ = ()
 
     def __repr__(self) -> str:
+        """Render as ``AUTO``."""
         return "AUTO"
 
 
@@ -162,7 +170,9 @@ AUTO: Any = _AutoSentinel()
 
 class _HasAuto(Protocol):
     @classmethod
-    def auto(cls) -> Self: ...
+    def auto(cls) -> Self:
+        """Build this policy's escalate-on-evidence variant."""
+        ...
 
 
 P = TypeVar("P", bound=_HasAuto)

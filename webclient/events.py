@@ -43,6 +43,7 @@ class Subscription(BaseModel):
     _bus: "EventBus | None" = PrivateAttr(default=None)
 
     def cancel(self) -> None:
+        """Unsubscribe from the bus (idempotent -- a second cancel does nothing)."""
         if self._bus is not None:
             self._bus._remove(self.id)
             self._bus = None
@@ -63,6 +64,9 @@ class EventBus(BaseModel):
     _seq: dict[str | None, int] = PrivateAttr(default_factory=dict)
 
     def publish(self, event: Event) -> None:
+        """Stamp the event with a monotonic ``seq`` (per document id) and a timestamp, then
+        dispatch it synchronously to every subscriber whose topic pattern and correlation filters
+        match. Runs handlers on the publisher's thread."""
         with self._lock:
             key = event.document_id
             self._seq[key] = self._seq.get(key, 0) + 1
@@ -104,6 +108,7 @@ class EventBus(BaseModel):
         return sub
 
     def _remove(self, sub_id: str) -> None:
+        """Drop a subscription by id (thread-safe) -- the unsubscribe behind ``Subscription.cancel``."""
         with self._lock:
             self._subs.pop(sub_id, None)
 
@@ -123,15 +128,19 @@ class EventRegistry(BaseModel):
     _by_topic: dict[str, type[Event]] = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
+        """Pre-register the core event classes so their topics resolve out of the box."""
         for cls in CORE_EVENTS:
             self.register(cls)
 
     def register(self, cls: type[Event]) -> None:
+        """Register an event class under its default ``topic`` (so the wire can rebuild it)."""
         topic = cls.model_fields["topic"].default
         if isinstance(topic, str) and topic:
             self._by_topic[topic] = cls
 
     def resolve(self, topic: Topic) -> type[Event]:
+        """The event class for a topic: an exact match, else the nearest registered ancestor
+        (trailing segments dropped first, then the leading namespace), falling back to ``Event``."""
         parts = topic.split(".")
         for end in range(len(parts), 0, -1):
             found = self._by_topic.get(".".join(parts[:end]))

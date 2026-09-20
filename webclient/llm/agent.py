@@ -108,6 +108,8 @@ class AgentRun(BaseModel):
 
 
 def _observe(doc: "Document", step: int, max_steps: int, error: str) -> Observation:
+    """Snapshot the current page into an ``Observation`` (url / title / skeleton / step budget /
+    any error) -- what the policy model sees to choose the next action."""
     title = doc.title if doc.has_op("title") else None
     skeleton = doc.skeleton() if doc.has_op("skeleton") else ""
     return Observation(

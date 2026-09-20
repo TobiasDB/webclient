@@ -28,6 +28,7 @@ def _csv(values: "Iterable[object]") -> str:
 
 
 def _retry_headers(retry: "RetryPolicy") -> dict[str, str]:
+    """The retry policy encoded as ``X-WebClient-Retry-*`` request headers (for a proxy service)."""
     return {
         "X-WebClient-Retry-Max": str(retry.max),
         "X-WebClient-Retry-Backoff": retry.backoff,
@@ -37,6 +38,7 @@ def _retry_headers(retry: "RetryPolicy") -> dict[str, str]:
 
 
 def _rate_headers(rate: "RatePolicy") -> dict[str, str]:
+    """The rate policy encoded as ``X-WebClient-Rate-*`` request headers (non-default fields only)."""
     h: dict[str, str] = {"X-WebClient-Rate-Per": rate.per}
     if rate.rps is not None:
         h["X-WebClient-Rate-Rps"] = str(rate.rps)
@@ -50,6 +52,7 @@ def _rate_headers(rate: "RatePolicy") -> dict[str, str]:
 
 
 def _proxy_headers(proxy: "ProxyPolicy") -> dict[str, str]:
+    """The proxy policy encoded as ``X-WebClient-Proxy-*`` request headers (pool/geo/rotate-on)."""
     h: dict[str, str] = {"X-WebClient-Proxy": "on", "X-WebClient-Proxy-Sticky": proxy.sticky}
     if proxy.pool is not None:
         h["X-WebClient-Proxy-Pool"] = proxy.pool if isinstance(proxy.pool, str) else _csv(proxy.pool)

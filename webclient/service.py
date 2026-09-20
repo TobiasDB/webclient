@@ -34,12 +34,14 @@ class _DocStore(OrderedDict[str, Any]):
         self._cap = cap
 
     def __setitem__(self, key: str, value: Any) -> None:
+        """Store a document, marking it most-recently-used and evicting the oldest past the cap."""
         super().__setitem__(key, value)
         self.move_to_end(key)
         while len(self) > self._cap:
             self.popitem(last=False)  # evict least-recently-used
 
     def __getitem__(self, key: str) -> Any:
+        """Fetch a document, touching it as most-recently-used (raises ``KeyError`` if evicted)."""
         value = super().__getitem__(key)
         self.move_to_end(key)  # LRU touch on access
         return value

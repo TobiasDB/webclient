@@ -308,14 +308,30 @@ class Lazy(Generic[T]):
     _plan: "Plan"
     _client: Any
 
-    def collect(self, context: Any = ...) -> T: ...
-    async def acollect(self, context: Any = ...) -> T: ...
-    def stream(self, context: Any = ...) -> "Iterator[Any]": ...
-    def astream(self, context: Any = ...) -> "AsyncIterator[Any]": ...
-    def to_blob(self) -> str: ...  # the whole chain as a compact, rebuildable blob
-    def describe(self) -> str: ...  # a readable one-line rendering (round-trips via from_describe)
-    def explain(self) -> str: ...  # a SQL-EXPLAIN-style indented step tree (visualization)
-    def wireframe(self) -> str: ...  # a self-contained HTML wireframe of the plan
+    def collect(self, context: Any = ...) -> T:
+        """Evaluate the plan and materialise its result (sync)."""
+        ...
+    async def acollect(self, context: Any = ...) -> T:
+        """Evaluate the plan and materialise its result (async)."""
+        ...
+    def stream(self, context: Any = ...) -> "Iterator[Any]":
+        """Iterate the plan's rows one at a time (sync)."""
+        ...
+    def astream(self, context: Any = ...) -> "AsyncIterator[Any]":
+        """Iterate the plan's rows one at a time (async)."""
+        ...
+    def to_blob(self) -> str:
+        """The whole chain as a compact, rebuildable blob."""
+        ...
+    def describe(self) -> str:
+        """A readable one-line rendering (round-trips via ``from_describe``)."""
+        ...
+    def explain(self) -> str:
+        """A SQL-EXPLAIN-style indented step tree (visualization)."""
+        ...
+    def wireframe(self) -> str:
+        """A self-contained HTML wireframe of the plan."""
+        ...
 
 
 # >>> generated: lazy-tier <<<
@@ -540,8 +556,12 @@ class WebQuery:
         ref: "LazyReference"
         many: "LazyCollection[LazyDocument]"
 
-        def reference(self, url: str, **kwargs: Any) -> "LazyReference": ...
-        def field(self, name: str) -> "LazyField[Any]": ...
+        def reference(self, url: str, **kwargs: Any) -> "LazyReference":
+            """A lazy reference root starting from ``url`` (``wq.reference(url)``)."""
+            ...
+        def field(self, name: str) -> "LazyField[Any]":
+            """A value already extracted in the surrounding row/context (``wq.field(name)``)."""
+            ...
 
     else:
         doc = doc
