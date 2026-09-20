@@ -69,6 +69,59 @@ def test_paginate_stops_on_a_clamped_repeat(httpserver):
     assert len(pages) == 2
 
 
+# -- by="cursor": a keyset token read off each page -------------------------------------------
+
+def _cursor_page(records, cursor=None):
+    items = "".join(f'<article class="r"><span class="n">{n}</span></article>' for n in records)
+    more = f'<a class="more" data-cursor="{cursor}">More</a>' if cursor else ""
+    return f"<html><body><main>{items}</main>{more}</body></html>"
+
+
+def test_paginate_by_cursor_follows_a_keyset_token(httpserver):
+    # each page carries the NEXT page's cursor in an attribute (not a rel=next link); by="cursor"
+    # reads it and puts it in ?cursor=<token>. The last page has no token -> stop.
+    httpserver.expect_request("/feed", query_string="").respond_with_data(_cursor_page(["A", "B"], "k2"), content_type="text/html")
+    httpserver.expect_request("/feed", query_string="cursor=k2").respond_with_data(_cursor_page(["C", "D"], "k3"), content_type="text/html")
+    httpserver.expect_request("/feed", query_string="cursor=k3").respond_with_data(_cursor_page(["E"]), content_type="text/html")  # no cursor
+    plan = (
+        wq.reference(httpserver.url_for("/feed")).resolve()
+        .paginate(by="cursor", cursor="a.more", cursor_attr="data-cursor", name="cursor", max_pages=10)
+        .select_all("article.r").extract(n=wq.doc.select(".n").attr("text")).project()
+    )
+    assert [r["n"] for r in plan.collect()] == ["A", "B", "C", "D", "E"]  # walked by cursor token
+
+
+# -- early stops: a row cap and a recency cutoff ----------------------------------------------
+
+def test_paginate_stops_at_max_rows(httpserver):
+    # 2 rows/page, max_rows=3: page 1 (2) + page 2 (2) = 4 >= 3 -> stop; page 3 is never collected.
+    httpserver.expect_request("/m1").respond_with_data(_page(["A", "B"], "/m2"), content_type="text/html")
+    httpserver.expect_request("/m2").respond_with_data(_page(["C", "D"], "/m3"), content_type="text/html")
+    httpserver.expect_request("/m3").respond_with_data(_page(["E", "F"]), content_type="text/html")  # excluded by the cap
+    with WebClient() as wc:
+        pages = list(wc.fetch(httpserver.url_for("/m1")).paginate(by="link", records="article.r", max_rows=3, max_pages=10))
+    assert len(pages) == 2  # the row cap stopped the walk before page 3
+
+
+def _date_page(dates, next_url=None):
+    items = "".join(f'<article class="r"><time class="d">{d}</time></article>' for d in dates)
+    nxt = f'<a rel="next" href="{next_url}">Next</a>' if next_url else ""
+    return f"<html><body><main>{items}</main>{nxt}</body></html>"
+
+
+def test_paginate_stops_at_a_recency_cutoff(httpserver):
+    # newest-first dates; until/until_before stops once a page reaches records older than the cutoff.
+    httpserver.expect_request("/d1").respond_with_data(_date_page(["2026-03-01", "2026-02-01"], "/d2"), content_type="text/html")
+    httpserver.expect_request("/d2").respond_with_data(_date_page(["2026-01-15", "2025-12-20"], "/d3"), content_type="text/html")  # oldest < cutoff
+    httpserver.expect_request("/d3").respond_with_data(_date_page(["2025-06-01"]), content_type="text/html")  # must NOT be fetched
+    with WebClient() as wc:
+        pages = list(
+            wc.fetch(httpserver.url_for("/d1"))
+            .paginate(by="link", until="time.d", until_before="2026-01-01", max_pages=10)
+        )
+    assert len(pages) == 2  # d1 (all recent), d2 (crosses the cutoff, kept), then stop before d3
+
+
 # -- next_link(): the HTTP Link header + HTML rel=next -----------------------------------------
 
 def test_next_link_reads_the_http_link_header(httpserver):
