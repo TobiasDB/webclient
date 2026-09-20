@@ -1,14 +1,12 @@
 """Engine: the shared transport/execution resources a ``WebCore`` is bound to.
 
-The Engine owns the event loop, the transport ``ClientPool`` (leased http clients +
-browser pages), the event bus, per-host pacing, and injected page scripts -- the
-resources a ``WebClient`` and every session scoped on it SHARE. A session never owns
-an engine; it borrows its parent's (see :meth:`WebClient._the_engine`).
-
-Step 1a of the session-base refactor: this is extracted from ``WebClient`` with NO
-behaviour change. The name-scope allocator and the session registry still live on the
-client for now (they move onto the session base in a later sub-step); the Engine is
-purely the transport/loop/bus/pacing resource holder that the client delegates to.
+The Engine owns the event loop, the transport (a local ``ClientPool`` of leased http
+clients + browser pages, OR -- in ``"remote"`` mode -- a :class:`~.service.ServiceTransport`
+that POSTs plans to a service), the event bus, the dispatch mode, per-host pacing, injected
+page scripts, and the backings registered via ``use()`` -- the resources a ``WebClient`` and
+every session scoped on it SHARE. A session never owns an engine; it borrows its parent's
+(see :meth:`WebClient._the_engine`), so the whole session tree shares one loop / pool /
+bus / mode.
 """
 
 from __future__ import annotations
@@ -85,9 +83,12 @@ class Engine:
         return cast(str, self._service.open_session(ttl))
 
     def close_server_session(self, sid: str) -> None:
+        """Dispose the server-side session ``sid`` over the remote transport."""
         self._service.close_session(sid)
 
     def loop(self) -> Any:
+        """The engine loop -- one background asyncio ``EngineLoop`` the sync client bridges
+        blocking IO onto (created lazily, shared by every session on this engine)."""
         if self._loop is None:
             from .client.loop import EngineLoop  # lazy: avoid a client<->engine import cycle
 
@@ -96,10 +97,14 @@ class Engine:
 
     @property
     def pool(self) -> ClientPool:
+        """The transport lease pool (http clients + browser pages); ``None`` on a remote
+        engine, which dispatches over its service transport instead of a local pool."""
         return self._pool  # type: ignore[no-any-return]
 
     @property
     def bus(self) -> EventBus:
+        """The shared event bus every op/observation publishes to (created lazily, one per
+        engine, so all sessions on it see one stream)."""
         if self._bus is None:
             self._bus = EventBus()
         return self._bus  # type: ignore[no-any-return]

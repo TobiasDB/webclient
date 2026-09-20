@@ -153,10 +153,15 @@ class ServiceTransport:
         self.http = httpx.Client(timeout=timeout)
 
     def _headers(self) -> dict[str, str]:
+        """The bearer-auth header for a token-protected service (empty when no token)."""
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
     # -- execution: one Plan POSTed to /execute ------------------------------
     def execute(self, client: Any, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
+        """Run a plan on the service: POST it to ``/execute`` (threading the calling session's
+        server ``_server_sid`` and any context), then rebuild the response into real cores (a
+        ``Document`` handle / a ``Reference``) or a value, so a remote ``collect()`` matches a
+        local one. Each fresh handle is stamped with its producing plan for eviction-replay."""
         reject_sequence(expr)
         sid = getattr(client, "_server_sid", "")  # the calling session's server identity
         if sid:  # a session-scoped plan resolves through that server session
@@ -201,12 +206,14 @@ class ServiceTransport:
         return cast(str, resp.json()["id"])
 
     def close_session(self, sid: str) -> None:
+        """Delete the server-side session ``sid`` (best-effort -- a dispose never raises)."""
         try:
             self.http.delete(f"{self.url}/sessions/{sid}", headers=self._headers())
         except Exception:  # noqa: BLE001 - best-effort dispose
             pass
 
     def close(self) -> None:
+        """Close the HTTP connection to the service."""
         self.http.close()
 
 

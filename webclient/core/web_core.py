@@ -77,6 +77,8 @@ class Backing:
     gate: ClassVar[str] = "ok"
 
     def applies(self, core: Any) -> bool:  # Any: subclasses narrow to their core
+        """Whether this backing is in play for ``core``'s current state (default: always).
+        Probed cheaply against every core the client owns, so keep it defensive."""
         return True
 
     def on_load(self, core: Any, result: Any) -> None:
@@ -255,20 +257,25 @@ class WebCore:
         return [b for b in self.choose() if getattr(type(b), hook) is not base]
 
     def __enter__(self) -> "Self":
+        """Open the core as a context manager: fire each chosen backing's ``aenter`` hook
+        (bridged onto the loop). A core with no lifecycle backing is a no-op ``with``."""
         for b in self._lifecycle("aenter"):
             self._bridge_io(b.aenter(self))
         return self
 
     def __exit__(self, *exc: Any) -> None:
+        """Close the core's context: fire each chosen backing's ``aexit`` hook (bridged)."""
         for b in self._lifecycle("aexit"):
             self._bridge_io(b.aexit(self, *exc))
 
     async def __aenter__(self) -> "Self":
+        """The ``async with`` open: await each chosen backing's ``aenter`` on the caller's loop."""
         for b in self._lifecycle("aenter"):
             await b.aenter(self)
         return self
 
     async def __aexit__(self, *exc: Any) -> None:
+        """The ``async with`` close: await each chosen backing's ``aexit`` on the caller's loop."""
         for b in self._lifecycle("aexit"):
             await b.aexit(self, *exc)
 
@@ -283,6 +290,8 @@ class WebCore:
         return self
 
     async def acollect(self, context: Any = None) -> "Self":
+        """Async twin of :meth:`collect` -- identity, since an eager surface is already
+        materialised; it exists so mode-agnostic code can ``await x.acollect()`` uniformly."""
         return self
 
     @property
