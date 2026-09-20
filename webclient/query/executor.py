@@ -202,14 +202,44 @@ async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> An
         return await _arun(value, expr._plan.steps, 0, context, client)
 
 
+def _first_coll_op(steps: list[Step]) -> int:
+    """The index of the first whole-collection op (``extract``/``filter``/``project``/… -- see
+    ``_COLL_OPS``) in ``steps``, or ``len(steps)`` if there is none. The boundary that splits a
+    per-element PREFIX (element ops fanned out per element) from a collection SUFFIX (shaping run
+    once on the merged collection)."""
+    for j, s in enumerate(steps):
+        if s.kind == "get" and s.name in _COLL_OPS:
+            return j
+    return len(steps)
+
+
+def _merge_fanout(results: list[Any], root: str, client: Any) -> Any:
+    """Combine a per-element fan-out's results into the value the chain continues on. All single
+    cores -> a ``Collection`` of them (a per-element ``select``/``resolve``). All ``Collection``s
+    -> ONE flat ``Collection`` concatenating them in input order (a per-element ``select_all`` /
+    ``links`` -- the flat-map that keeps a multi-document plan flat, not nested). Otherwise (scalar
+    results, e.g. ``attr('text')`` per element) -> the plain list."""
+    from .collection import Collection
+    from ..core.web_core import WebCore
+
+    if results and all(isinstance(r, WebCore) for r in results):
+        return Collection(results, client=client, root=root)
+    if results and all(isinstance(r, Collection) for r in results):
+        merged = [item for coll in results for item in coll]  # flat-map: concat, input order
+        return Collection(merged, client=client, root=root)
+    return results
+
+
 async def _arun(
     value: Any, steps: list[Step], i: int, context: Any, client: Any
 ) -> Any:
-    """Walk the remaining plan steps over a running value: when the value is a Collection and the
-    next step isn't a whole-collection op, fan the rest of the chain out per element (concurrently);
-    otherwise apply steps one at a time. Returns the materialised result."""
+    """Walk the remaining plan steps over a running value. When the value is a Collection and the
+    next step is an ELEMENT op, fan out only the element-op PREFIX per element (up to the next
+    whole-collection op), FLAT-MAP the results into one Collection (so a per-element ``select_all``
+    yields a flat record Collection, not a nested list of Collections), then run the collection
+    SUFFIX (``extract``/``filter``/``project``/``limit``) once on the merged Collection. Otherwise
+    apply steps one at a time. Returns the materialised result."""
     from .collection import Collection
-    from ..core.web_core import WebCore
 
     while i < len(steps):
         step = steps[i]
@@ -217,14 +247,19 @@ async def _arun(
             step.kind == "get" and step.name in _COLL_OPS
         ):
             rest = steps[i:]
+            split = _first_coll_op(rest)  # prefix = element ops; suffix = the collection shaping
+            prefix = rest[:split]
             results = await fan_out(
                 list(value),
-                _per_element(lambda el: _arun(el, rest, 0, el, client)),
-                limit=_fanout_limit(client, rest),
+                _per_element(lambda el: _arun(el, prefix, 0, el, client)),
+                limit=_fanout_limit(client, prefix),
             )
-            if results and all(isinstance(r, WebCore) for r in results):
-                return Collection(results, client=client, root=value.root)
-            return results
+            merged = _merge_fanout(results, value.root, client)
+            if split < len(rest) and isinstance(merged, Collection):
+                # continue the whole-collection shaping (extract/filter/project/...) on the FLAT
+                # merged collection, so the rows are flat across every fanned-out element.
+                return await _arun(merged, rest[split:], 0, merged, client)
+            return merged
         value, i = await _aapply(value, steps, i, context, client)
     return value
 
