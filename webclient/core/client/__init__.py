@@ -22,7 +22,7 @@ from ...clients import (
     WaitConfig,
     WaitEvent,
 )
-from ...collection import Field
+from ...query.collection import Field
 from ...errors import WebError, WebException, error_for
 from ...events import EventBus
 from ...models import NavigationEvent, NetworkEvent, PlanEvent
@@ -111,7 +111,7 @@ def _seed_urls(seeds: Any) -> list[str]:
     """Normalise crawl seeds -- a URL string, a Reference (surface or core), or a
     list / :class:`Collection` of either (so ``wc.crawl(wc.sitemap(url))`` composes) --
     to a list of URL strings."""
-    from ...collection import Collection
+    from ...query.collection import Collection
 
     items = list(seeds) if isinstance(seeds, (list, tuple, Collection)) else [seeds]
     return [s if isinstance(s, str) else str(getattr(s, "url", s)) for s in items]

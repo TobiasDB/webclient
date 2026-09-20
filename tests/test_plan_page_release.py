@@ -16,7 +16,7 @@ from webclient import WebClient, wq
 from webclient.clients import ClientPool, HTTPXFactory
 from webclient.clients.base import ClientFactory
 from webclient.clients.browser import BrowserClient, PageResult
-from webclient.collection import Collection
+from webclient.query.collection import Collection
 
 
 class _FakePage:

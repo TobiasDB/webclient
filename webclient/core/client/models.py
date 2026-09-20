@@ -19,7 +19,7 @@ from ..reference.models import BrowserConfig, Resolve
 
 if TYPE_CHECKING:
     from ...clients import WaitConfig  # noqa: F401  (fetch wait strategy)
-    from ...collection import Collection  # noqa: F401  (sitemap -> Collection)
+    from ...query.collection import Collection  # noqa: F401  (sitemap -> Collection)
     from ..document import Document  # noqa: F401  (fetch -> Document)
     from ..reference import Reference  # noqa: F401  (ref/sitemap -> Reference)
 

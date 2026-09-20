@@ -24,7 +24,7 @@ from .expr import Expr
 from .plan import Arg, Plan, Step
 
 if TYPE_CHECKING:
-    from ..collection import Collection
+    from .collection import Collection
     from ..core.document import Document
 
 X = TypeVar("X")  # an item fan_out/fan_out_stream iterates
@@ -115,7 +115,7 @@ def _fanout_limit(client: Any, steps: "list[Step] | None" = None) -> int:
 def truthy(value: Any) -> bool:
     """Whether an evaluated value counts as true (a not-ok surface/field is
     false; otherwise normal truthiness)."""
-    from ..collection import Field
+    from .collection import Field
 
     if isinstance(value, Field):
         return bool(value)
@@ -202,7 +202,7 @@ async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> An
 async def _arun(
     value: Any, steps: list[Step], i: int, context: Any, client: Any
 ) -> Any:
-    from ..collection import Collection
+    from .collection import Collection
     from ..core.web_core import WebCore
 
     while i < len(steps):
@@ -270,13 +270,13 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
         return value
     # field(k) / reference(k) read an extracted column off the element's _row
     if name in ("field", "reference"):
-        from ..collection import _row_of
+        from .collection import _row_of
 
         row = _row_of(value, create=False)
         if row is not None:
             column = row.get(await _aarg(call.args[0], context, client))
             if name == "field":
-                from ..collection import Field
+                from .collection import Field
 
                 return column if isinstance(column, Field) else Field(column)
             return column
@@ -384,7 +384,7 @@ async def astream(
     (e.g. ``.transport()``/``.attr(...)``). Any other plan falls back to
     evaluate-then-yield.
     """
-    from ..collection import Collection
+    from .collection import Collection
 
     if not isinstance(expr, Expr):
         for row in expr if isinstance(expr, list) else [expr]:
@@ -462,7 +462,7 @@ async def _astream_collection(
     """Stream the final fan-out of ``base`` under ``shaping`` as elements
     complete. Rows (``...project()``) or per-element op results are yielded the
     moment each element finishes; a filtered-out element yields nothing."""
-    from ..collection import (
+    from .collection import (
         Field,
         _project_row,
         _row_of,

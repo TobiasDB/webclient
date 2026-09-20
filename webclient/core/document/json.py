@@ -6,7 +6,7 @@ import json as _json
 import re
 from typing import TYPE_CHECKING, Any
 
-from ...collection import Field
+from ...query.collection import Field
 from ..web_core import Backing
 from .models import Element
 

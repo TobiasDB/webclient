@@ -247,7 +247,7 @@ def test_astream_delivers_pages_on_the_caller_loop(site):
 
 
 def test_lazy_frontier_is_a_collection(wc, site):
-    from webclient.collection import Collection
+    from webclient.query.collection import Collection
 
     with wc.crawl(site.url_for("/"), browser=False) as crawl:
         crawl.step()  # discover some edges (the seed's links)

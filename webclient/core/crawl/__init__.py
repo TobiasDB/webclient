@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, ClassVar, Generic, Iterato
 
 from pydantic import PrivateAttr
 
-from ...collection import Collection
+from ...query.collection import Collection
 from ...query.expr import Expr
 from ...query.plan import Plan
 from ..session_core import SessionCore

@@ -6,7 +6,7 @@ import typing
 
 import pytest
 
-from webclient.collection import Field
+from webclient.query.collection import Field
 from webclient.core.document import Document, Element
 from webclient.core.reference import Reference
 from webclient.query.hints import (

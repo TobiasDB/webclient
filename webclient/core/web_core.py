@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 from pydantic import BaseModel
 
-from ..collection import Collection, Field
+from ..query.collection import Collection, Field
 from ..errors import WebError, WebException
 from ..query.expr import Expr, lazy_root
 from ..query.plan import Plan

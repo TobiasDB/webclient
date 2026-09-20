@@ -9,7 +9,7 @@ import re
 from typing import TYPE_CHECKING, Any, Literal, overload
 from urllib.parse import urljoin
 
-from ...collection import Field
+from ...query.collection import Field
 from ..reference import Reference, from_url
 from ..web_core import Backing
 from .models import Element

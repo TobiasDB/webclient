@@ -33,7 +33,7 @@ def _ns() -> dict[str, Any]:
     global _NS
     if _NS is None:
         from ..clients import WaitConfig
-        from ..collection import Collection, Field
+        from .collection import Collection, Field
         from ..core.client import WebClient
         from ..core.document import Document, Element
         from ..core.reference import HttpMethod, Reference

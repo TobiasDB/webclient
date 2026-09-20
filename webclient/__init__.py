@@ -1,7 +1,7 @@
 """webclient -- declarative web client (ground-up rewrite in progress)."""
 
 from .clients import DEFAULT_WAIT, WaitConfig, WaitEvent
-from .collection import Collection, Field
+from .query.collection import Collection, Field
 from .core.crawl import Crawl, Edge
 from .core.client.models import Robots
 from .core.document import Element, HtmlBacking, JsonBacking

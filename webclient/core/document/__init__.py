@@ -147,7 +147,7 @@ class Document(WebCore, IDocument):
         column whose select/attr misses raises; mark it ``error=RETURN`` for a
         ``None``. THE single-element extraction (``Collection.aextract`` fans it
         out); returns the document so extracts chain."""
-        from ...collection import apply_extract
+        from ...query.collection import apply_extract
 
         await apply_extract(self, exprs, self._client)
         return self
@@ -165,7 +165,7 @@ class Document(WebCore, IDocument):
         (e.g. from ``attr('href')``) becomes its URL string and a ``Field`` its
         value, so the row is JSON-ready. One ``dict`` (not a list) -- a document
         is one row. Pass ``model`` to validate the row into it (eager only)."""
-        from ...collection import _project_row, _row_of
+        from ...query.collection import _project_row, _row_of
 
         data = _project_row(_row_of(self, create=False) or {})
         if model is None:

@@ -30,7 +30,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from webclient.clients import WaitConfig  # noqa: E402
-from webclient.collection import Field  # noqa: E402
+from webclient.query.collection import Field  # noqa: E402
 from webclient.core.client import WebClient  # noqa: E402
 from webclient.core.crawl import Crawl  # noqa: E402
 from webclient.core.document import Document, Element  # noqa: E402
@@ -53,7 +53,7 @@ from webclient.models import E as _EventTypeVar  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SURFACES = ROOT / "webclient" / "interface.py"  # every dispatch-view stub
-COLLECTION = ROOT / "webclient" / "collection.py"
+COLLECTION = ROOT / "webclient" / "query" / "collection.py"
 MODELS = SURFACES  # the lazy tier lives in the one merged interface file too
 #: cores that implement their own eager ops -- the generated ``I<Core>`` interface
 #: is emitted into the core's own module (which the core inherits).

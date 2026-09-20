@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ...collection import Field
+from ...query.collection import Field
 from ..web_core import Backing
 from .models import PageCard
 

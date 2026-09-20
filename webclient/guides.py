@@ -56,7 +56,7 @@ def _op_docs(ops: "tuple[str, ...]", providers: "list[Any]") -> "dict[str, str]"
 def _lazy_op_reference() -> str:
     """The op reference, generated from the live document + collection surfaces and
     their docstrings -- so it always matches what the ops actually do."""
-    from .collection import Collection
+    from .query.collection import Collection
     from .core.document import Document
 
     backings = [type(b) for b in Document.BACKINGS]

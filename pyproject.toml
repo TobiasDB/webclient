@@ -58,7 +58,7 @@ strict = true
 [[tool.mypy.overrides]]
 module = [
     "webclient.interface",
-    "webclient.collection",
+    "webclient.query.collection",
     # the html backing hand-writes the same intentionally-overlapping backing
     # overloads (attr href->Reference vs str->Field; render by format) the stubs
     # are generated from -- the overlap is by design.

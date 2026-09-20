@@ -48,7 +48,7 @@ class _DocStore(OrderedDict[str, Any]):
 def _serialize(value: Any, store: dict[str, Any]) -> Any:
     """A Document -> a stored handle; a Reference -> its url; a Field -> its
     value; a Collection/list/dict recurse; scalars pass through."""
-    from .collection import Collection, Field
+    from .query.collection import Collection, Field
 
     if isinstance(value, Field):
         return value.get()

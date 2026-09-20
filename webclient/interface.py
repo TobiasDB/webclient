@@ -24,7 +24,7 @@ from .core.session import Session
 from .core.web_core import _wrap_result as wrap  # a list of cores -> a Collection
 
 if TYPE_CHECKING:
-    from .collection import Collection, Field
+    from .query.collection import Collection, Field
     from .core.document import Element
     from .events import EventBus
     from .models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
@@ -569,7 +569,7 @@ def filter(collection: "LazyCollection[T]", *predicates: Any) -> "LazyCollection
 #: the lazy roots -- an ``Expr`` rooted at each surface (statically the surface
 #: it authors plans for; at runtime an ``Expr``).
 if TYPE_CHECKING:
-    from .collection import Collection
+    from .query.collection import Collection
 
     doc: "Document"
     ref: "Reference"

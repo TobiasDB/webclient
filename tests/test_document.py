@@ -76,7 +76,7 @@ def test_select_missing_raises_unless_policy_returns():
 def test_empty_select_all_is_a_collection_not_a_bare_list():
     # a select_all that matches nothing must still be a Collection, so the headline
     # extract/project pattern doesn't AttributeError on a zero-match page.
-    from webclient.collection import Collection
+    from webclient.query.collection import Collection
 
     from webclient import doc as ldoc  # the lazy authoring root
 

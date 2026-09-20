@@ -19,9 +19,9 @@ T = TypeVar("T", covariant=True)
 M = TypeVar("M")  # a row model (e.g. a pydantic BaseModel) for project(model)
 
 if TYPE_CHECKING:
-    from .core.client import WebClient
-    from .core.client.loop import EngineLoop
-    from .interface import Document, Reference
+    from ..core.client import WebClient
+    from ..core.client.loop import EngineLoop
+    from ..interface import Document, Reference
 
 
 class Field(Generic[T]):
@@ -82,7 +82,7 @@ def _project_value(value: Any) -> Any:
     """Clean one projected row value to plain data: a ``Reference`` -> its URL
     string, a ``Field`` -> its value, a list -> its cleaned items (a
     ``Document``/element is left as-is -- an un-extracted element is not row data)."""
-    from .core.reference import Reference
+    from ..core.reference import Reference
 
     if isinstance(value, Field):
         return _project_value(value.get())
@@ -105,7 +105,7 @@ def _row_of(element: Any, *, create: bool = True) -> dict[str, Any] | None:
     its own row). ``create`` seeds an empty row on first access."""
     if isinstance(element, dict):
         return element
-    from .core.web_core import WebCore
+    from ..core.web_core import WebCore
 
     # a surface IS its core now (_row is a PrivateAttr on the concrete cores).
     core: Any = (
@@ -126,7 +126,7 @@ async def apply_extract(element: Any, columns: dict[str, Any], client: "WebClien
     ``None`` instead. THE one row-extraction implementation -- shared by the eager
     (:meth:`Collection.aextract`) and streaming (``executor._astream_collection``)
     paths so they cannot diverge."""
-    from .query.executor import aevaluate
+    from .executor import aevaluate
 
     row = _row_of(element)
     if row is None:
@@ -140,7 +140,7 @@ async def survives_filters(element: Any, predicates: "Iterable[Any]", client: "W
     references a missing field raises) -- mark an optional select ``error=RETURN`` /
     ``optional=True`` to treat a miss as a non-match. The one filter implementation,
     shared by eager and streaming paths."""
-    from .query.executor import aevaluate, truthy
+    from .executor import aevaluate, truthy
 
     for pred in predicates:
         if not truthy(await aevaluate(pred, element, client=client)):
@@ -214,7 +214,7 @@ class Collection(Generic[T]):
                 raise AttributeError(name)
 
             def fan(*args: Any, **kwargs: Any) -> Any:
-                from .core.web_core import WebCore
+                from ..core.web_core import WebCore
 
                 def apply(el: Any) -> Any:
                     attr = getattr(el, name)
@@ -234,7 +234,7 @@ class Collection(Generic[T]):
 
     # -- row shaping ----------------------------------------------------------
     def _loop(self) -> "EngineLoop":
-        from .core.client import default_client
+        from ..core.client import default_client
 
         return (self._client or default_client()).loop()
 
@@ -243,7 +243,7 @@ class Collection(Generic[T]):
         are evaluated in order against the element (a later column can reference
         an earlier one via ``field``; chained extracts accumulate); elements are
         evaluated concurrently, bounded by the pool. Fields store unwrapped."""
-        from .query.executor import fan_out
+        from .executor import fan_out
 
         async def one(el: Any) -> None:
             await apply_extract(el, exprs, self._client)
@@ -253,7 +253,7 @@ class Collection(Generic[T]):
 
     async def afilter(self, *predicates: Any) -> "Collection[T]":
         """Keep the elements for which every predicate is truthy."""
-        from .query.executor import fan_out
+        from .executor import fan_out
 
         async def keep(el: Any) -> bool:
             return await survives_filters(el, predicates, self._client)
@@ -263,7 +263,7 @@ class Collection(Generic[T]):
         return self._derive(kept)
 
     def _limit(self) -> int:
-        from .query.executor import _fanout_limit
+        from .executor import _fanout_limit
 
         return _fanout_limit(self._client)
 
