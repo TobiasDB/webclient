@@ -55,6 +55,7 @@ class _Op:
 
     @property
     def fans_out(self) -> bool:
+        """Whether this op fans one input into many (a ``select_all``) -- annotated in the viz."""
         return self.name == "select_all"
 
     @property
@@ -68,6 +69,8 @@ class _Op:
 
 
 def _group(steps: "Iterable[Step]") -> "list[_Op]":
+    """Fold a flat step list into display ops -- fusing a ``get`` + ``call`` into one method op,
+    and mapping prop/op/fn/when steps to their kinds -- the shared model the viz renders from."""
     steps = list(steps)
     ops: list[_Op] = []
     i, n = 0, len(steps)
@@ -91,10 +94,13 @@ def _group(steps: "Iterable[Step]") -> "list[_Op]":
 
 
 def _has_resolve(plan: Plan) -> bool:
+    """Whether a (sub-)plan contains a ``resolve`` -- i.e. it follows a link to a new page."""
     return any(st.kind == "get" and st.name == "resolve" for st in plan.steps)
 
 
 def _root_label(plan: Plan) -> str:
+    """The display label for a plan's root -- ``reference('url')`` for a sourced root, else the
+    root type name (or ``_`` for a context root)."""
     if plan.source is not None:
         return f"reference({_url_from_source(plan.source)!r})"
     return plan.root or "_"
@@ -112,6 +118,7 @@ def _sub_desc(plan: Plan) -> str:
 
 
 def _val(arg: Arg) -> str:
+    """Render an arg for the viz: a sub-plan as its compact describe form, a literal as its text/repr."""
     if arg.plan is not None:
         return _sub_desc(arg.plan)
     v = arg.value
@@ -247,6 +254,7 @@ _ARROW_SVG = (
 
 
 def _esc(text: str) -> str:
+    """HTML-escape a string (quotes included) for safe inlining into the wireframe markup."""
     return html.escape(text, quote=True)
 
 
@@ -261,6 +269,8 @@ def _tail_selector(plan: Plan) -> str:
 
 
 def _frame(src: str, body: str) -> str:
+    """Wrap ``body`` in a browser-frame card (chrome bar + source label) -- the wireframe's
+    representation of one page."""
     return (
         '<div class="wc-frame"><div class="wc-chrome">'
         '<span class="wc-dot"></span><span class="wc-dot"></span>'
@@ -315,6 +325,8 @@ def _chips(op: _Op) -> str:
 
 
 def _node(op: _Op) -> str:
+    """Render one op as its wireframe element -- a select box, an extract's field chips, a filter
+    badge, a project output card, and so on."""
     if op.name in ("select", "select_all"):
         return _box(op)
     if op.name == "extract":

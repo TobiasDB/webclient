@@ -48,14 +48,20 @@ class Expr:
 
     # -- recording -----------------------------------------------------------
     def _extend(self, step: Step) -> "Expr":
+        """A new ``Expr`` with ``step`` appended to the recorded plan (the core recording move,
+        keeping the same bound client/context)."""
         return Expr(self._plan.extend(step), self._client, self._context)
 
     def __getattr__(self, name: str) -> "Expr":
+        """Record attribute access as a ``get`` step -- so ``expr.foo`` extends the plan.
+        Underscore names are the safety boundary (they raise, never record)."""
         if name.startswith("_"):  # the one safety boundary
             raise AttributeError(name)
         return self._extend(Step(kind="get", name=name))
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Record a call step (its args/kwargs captured as plan args). ``_collect=True`` is an
+        escape hatch that evaluates the extended plan immediately instead of staying lazy."""
         eager = kwargs.pop("_collect", False)  # per-call eager escape hatch
         nxt = self._extend(
             Step(
@@ -67,39 +73,52 @@ class Expr:
         return nxt.collect() if eager else nxt
 
     def _op(self, name: str, other: Any = _MISSING) -> "Expr":
+        """Record a binary/unary operator as an ``op`` step (its operand captured as an arg) --
+        the shared builder behind the comparison/boolean dunders."""
         args = [] if other is _MISSING else [to_arg(other)]
         return self._extend(Step(kind="op", name=name, args=args))
 
     def __eq__(self, o: Any) -> "Expr":  # type: ignore[override]
+        """Record an ``==`` comparison as a lazy op (does not compare eagerly)."""
         return self._op("eq", o)
 
     def __ne__(self, o: Any) -> "Expr":  # type: ignore[override]
+        """Record a ``!=`` comparison as a lazy op."""
         return self._op("ne", o)
 
     def __lt__(self, o: Any) -> "Expr":
+        """Record a ``<`` comparison as a lazy op."""
         return self._op("lt", o)
 
     def __le__(self, o: Any) -> "Expr":
+        """Record a ``<=`` comparison as a lazy op."""
         return self._op("le", o)
 
     def __gt__(self, o: Any) -> "Expr":
+        """Record a ``>`` comparison as a lazy op."""
         return self._op("gt", o)
 
     def __ge__(self, o: Any) -> "Expr":
+        """Record a ``>=`` comparison as a lazy op."""
         return self._op("ge", o)
 
     def __and__(self, o: Any) -> "Expr":
+        """Record a boolean ``&`` (and) as a lazy op -- the way to combine lazy predicates."""
         return self._op("and", o)
 
     def __or__(self, o: Any) -> "Expr":
+        """Record a boolean ``|`` (or) as a lazy op."""
         return self._op("or", o)
 
     def __invert__(self) -> "Expr":
+        """Record a boolean ``~`` (not) as a lazy op."""
         return self._op("not")
 
     __hash__ = None  # type: ignore[assignment]
 
     def _coerce(self, what: str) -> NoReturn:
+        """Always raise -- the shared error for a Python coercion (truth/len/iter) attempted on a
+        lazy expr, pointing the caller at ``extract``/``filter``/``&|~`` instead."""
         raise TypeError(
             f"a lazy expression has no {what}: it records, it does not run. "
             "Use it inside extract(...) / filter(...) or with `& | ~` -- not "
@@ -107,12 +126,15 @@ class Expr:
         )
 
     def __bool__(self) -> bool:
+        """Refuse truthiness -- a lazy expr records, it doesn't run; use ``&|~`` instead."""
         return self._coerce("truth value")
 
     def __len__(self) -> int:
+        """Refuse ``len()`` -- a lazy expr has no materialised length (evaluate it first)."""
         return self._coerce("length")
 
     def __iter__(self) -> "Iterator[Any]":
+        """Refuse iteration -- a lazy expr has no rows until evaluated (use ``.collect``/``.stream``)."""
         return self._coerce("iterator")
 
     # -- evaluation ----------------------------------------------------------
@@ -121,9 +143,12 @@ class Expr:
     #: client round-trips over HTTP, all the same call. Users never call a
     #: client's ``execute`` directly. These names are reserved (non-recordable).
     def _ctx(self, context: Any) -> Any:
+        """The context to evaluate against: an explicit one wins, else the recorder's bound context."""
         return context if context is not None else self._context
 
     def _client_for(self, context: Any) -> Any:
+        """The engine that runs this plan: the bound client, else the context's, else the
+        process-local shared default client."""
         client = self._client or getattr(context, "_client", None)
         if client is None:
             from ..core.client import default_client
@@ -154,6 +179,7 @@ class Expr:
 
     @property
     def is_lazy(self) -> bool:
+        """Always ``True`` -- lets callers tell a recorder apart from a materialised value."""
         return True
 
     def to_blob(self) -> str:
@@ -185,10 +211,13 @@ class Expr:
         return _wireframe(self._plan)
 
     def __repr__(self) -> str:
+        """A ``lazy <describe()>`` rendering -- shows the recorded chain, not a value."""
         return f"lazy {self._plan.describe()}"
 
 
 def to_arg(value: Any) -> Arg:
+    """Wrap a call/operator argument as a plan ``Arg``: a nested ``Expr`` becomes a sub-plan
+    arg, any other value a literal arg."""
     if isinstance(value, Expr):
         return Arg(plan=value._plan)
     return Arg(value=value)
@@ -244,6 +273,8 @@ _BIN_OPS: "dict[type, str]" = {}
 
 
 def _init_ast_maps() -> None:
+    """Populate (once) the AST-node -> op-name tables used to translate a ``describe()``
+    expression's comparisons/boolean ops into plan ops."""
     import ast
 
     if _CMP_OPS:
@@ -256,6 +287,7 @@ def _init_ast_maps() -> None:
 
 
 def _literal(node: "ast.expr") -> Any:
+    """The constant value of an AST node if it is a literal, else ``_SENTINEL`` (not a literal)."""
     import ast
 
     try:
@@ -265,6 +297,8 @@ def _literal(node: "ast.expr") -> Any:
 
 
 def _node_arg(node: "ast.expr") -> Arg:
+    """Turn one argument AST node into a plan ``Arg``: a literal becomes a value arg, anything
+    else a nested sub-plan arg."""
     lit = _literal(node)
     return Arg(value=lit) if lit is not _SENTINEL else Arg(plan=_node_plan(node))
 
@@ -301,6 +335,9 @@ def _node_plan(node: "ast.expr") -> Plan:
 
 
 def _call_plan(node: "ast.Call") -> Plan:
+    """Translate a call node of a ``describe()`` expression into a Plan: a method call becomes
+    a get + call, and the free builders (``reference`` / ``is_ok`` etc. / ``when``) map to their
+    sourced-root / fn / when steps."""
     import ast
 
     args = [_node_arg(a) for a in node.args]

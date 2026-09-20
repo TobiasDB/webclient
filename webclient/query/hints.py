@@ -90,6 +90,8 @@ def _user_params(func: Any) -> inspect.Signature:
 
 
 def _hints(func: Any) -> dict[str, Any]:
+    """The resolved type hints of ``func`` (using the local namespace), falling back to the raw
+    annotation strings when a forward ref can't be resolved here."""
     try:
         return typing.get_type_hints(func, localns=_ns())
     except Exception:  # a forward ref we cannot resolve here -> raw strings

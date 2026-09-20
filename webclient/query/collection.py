@@ -34,40 +34,50 @@ class Field(Generic[T]):
         self._ok = ok and value is not None
 
     def get(self, default: Any = None) -> T:
+        """The field's value, or ``default`` when it is empty/missing."""
         return cast(T, self._value if self._ok else default)
 
     @property
     def value(self) -> T:
+        """The raw stored value (without the empty/missing fallback ``get`` applies)."""
         return cast(T, self._value)
 
     @property
     def ok(self) -> bool:
+        """Whether the field is present (matched and non-None)."""
         return self._ok
 
     def is_ok(self) -> "Field[bool]":
+        """A boolean ``Field`` of whether this field is present -- for use inside a lazy filter."""
         return Field(self._ok)
 
     def is_empty(self) -> "Field[bool]":
+        """A boolean ``Field`` of whether this field is empty by PRESENCE (missing / ``""``/``[]``/
+        ``{}``/``None``) -- a matched ``0``/``False`` is NOT empty, unlike ``bool(field)``."""
         # PRESENCE, not truthiness: a matched ``0`` / ``0.0`` / ``False`` field is NOT empty
         # (only "" / [] / {} / None / a miss are). Use this (and ``is_ok``) in ``filter`` --
         # they disagree with ``bool(field)`` on falsy-but-present values like a ``0`` price.
         return Field(not self._ok or self._value in ("", [], {}, None))
 
     def __bool__(self) -> bool:
-        # value TRUTHINESS (so ``0`` / ``False`` read as falsy) -- deliberately different from
-        # ``is_empty`` (presence). Query filters should use ``.is_ok()`` / ``.is_empty()``.
+        """Value TRUTHINESS (so ``0``/``False`` read as falsy) -- deliberately unlike
+        ``is_empty`` (presence); lazy filters should prefer ``is_ok``/``is_empty``."""
         return bool(self._value) if self._ok else False
 
     def __eq__(self, o: Any) -> bool:  # type: ignore[override]
+        """Compare by underlying value (unwrapping the other operand if it is a ``Field`` too)."""
         return bool(self.get() == (o.get() if isinstance(o, Field) else o))
 
     def __ne__(self, o: Any) -> bool:  # type: ignore[override]
+        """The negation of :meth:`__eq__`."""
         return not self.__eq__(o)
 
     def __hash__(self) -> int:
+        """Hash by value (empty fields hash to 0), so a field is usable as a dict/set key."""
         return hash(self._value) if self._ok else 0
 
     def __repr__(self) -> str:
+        """A ``Field(value)`` rendering, or ``Field(<empty>)`` when empty/missing."""
         return f"Field({self._value!r})" if self._ok else "Field(<empty>)"
 
 
@@ -164,15 +174,19 @@ class Collection(Generic[T]):
 
     # -- container ------------------------------------------------------------
     def __iter__(self) -> Iterator[T]:
+        """Iterate the collection's items."""
         return iter(self._items)
 
     def __len__(self) -> int:
+        """The number of items in the collection."""
         return len(self._items)
 
     def __getitem__(self, i: int) -> T:
+        """The item at index ``i``."""
         return cast(T, self._items[i])
 
     def __repr__(self) -> str:
+        """A compact ``Collection(N items)`` rendering."""
         return f"Collection({len(self._items)} items)"
 
     if TYPE_CHECKING:
@@ -234,6 +248,8 @@ class Collection(Generic[T]):
 
     # -- row shaping ----------------------------------------------------------
     def _loop(self) -> "EngineLoop":
+        """The engine loop the eager row-shaping ops bridge onto (this collection's client,
+        else the shared default)."""
         from ..core.client import default_client
 
         return (self._client or default_client()).loop()
@@ -263,6 +279,8 @@ class Collection(Generic[T]):
         return self._derive(kept)
 
     def _limit(self) -> int:
+        """The per-collection fan-out concurrency (the client's pool-portion), bounding how
+        many elements are extracted/filtered at once."""
         from .executor import _fanout_limit
 
         return _fanout_limit(self._client)
@@ -289,9 +307,13 @@ class Collection(Generic[T]):
         return self._derive(self._items[:n])
 
     @overload
-    def project(self) -> list[dict[str, Any]]: ...
+    def project(self) -> list[dict[str, Any]]:
+        """Project each element's row to a plain ``dict``."""
+        ...
     @overload
-    def project(self, model: type[M]) -> list[M]: ...
+    def project(self, model: type[M]) -> list[M]:
+        """Project each element's row validated into ``model``."""
+        ...
 
     def project(self, model: type[M] | None = None) -> list[Any]:
         """Materialise as a plain list: each element's extracted row (cleaned to
@@ -309,6 +331,8 @@ class Collection(Generic[T]):
         return [validate(r) if validate is not None else model(**r) for r in out]
 
     def _derive(self, items: list[Any]) -> "Collection[T]":
+        """A new collection of ``items`` inheriting this one's client / root / name -- the shared
+        way the shaping ops return a transformed collection."""
         out: Collection[T] = Collection(items, client=self._client, root=self.root)
         out.name = self.name
         return out

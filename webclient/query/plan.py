@@ -84,6 +84,8 @@ class Plan(BaseModel):
     steps: list[Step] = []
 
     def extend(self, step: Step) -> "Plan":
+        """A copy of this plan with ``step`` appended -- plans are immutable, so recording never
+        mutates a shared plan."""
         return self.model_copy(update={"steps": [*self.steps, step]})
 
     def to_blob(self) -> str:
@@ -155,6 +157,7 @@ class Plan(BaseModel):
 
 
 def _show(arg: Arg) -> str:
+    """Render a plan arg for ``describe()``: a sub-plan as its own describe form, a literal as its repr."""
     return arg.plan.describe() if arg.plan is not None else repr(arg.value)
 
 

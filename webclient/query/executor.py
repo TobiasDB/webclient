@@ -52,6 +52,8 @@ _ELEMENT_OPS_CACHE: "frozenset[str] | None" = None
 
 
 def _element_ops() -> "frozenset[str]":
+    """The set of Document ops (call + property) that fan out per element, read once from the
+    Document core's own op tables and cached -- so a new backing op streams without a manual list."""
     global _ELEMENT_OPS_CACHE
     if _ELEMENT_OPS_CACHE is None:
         from ..core.document import Document
@@ -78,6 +80,7 @@ _COLL_OPS = {"extract", "filter", "project", "limit", "documents"}
 
 
 def _iscoro(value: Any) -> bool:
+    """Whether ``value`` is a coroutine (an IO op's result to await, vs an in-memory value)."""
     return asyncio.iscoroutine(value)
 
 
@@ -202,6 +205,9 @@ async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> An
 async def _arun(
     value: Any, steps: list[Step], i: int, context: Any, client: Any
 ) -> Any:
+    """Walk the remaining plan steps over a running value: when the value is a Collection and the
+    next step isn't a whole-collection op, fan the rest of the chain out per element (concurrently);
+    otherwise apply steps one at a time. Returns the materialised result."""
     from .collection import Collection
     from ..core.web_core import WebCore
 
@@ -226,6 +232,9 @@ async def _arun(
 async def _aapply(
     value: Any, steps: list[Step], i: int, context: Any, client: Any
 ) -> tuple[Any, int]:
+    """Apply one step to the running value and return ``(new_value, next_index)``: a ``get`` reads
+    an attribute or (fused with a following ``call``) invokes a method; ``op``/``when``/``fn``
+    evaluate their operands and produce the value. Advances the index past what it consumed."""
     step = steps[i]
     if step.kind == "get":
         nxt = steps[i + 1] if i + 1 < len(steps) else None
@@ -253,6 +262,10 @@ async def _aapply(
 
 
 async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -> Any:
+    """Invoke method ``name`` on the running value with its call step's args. Handles the special
+    ops (``step`` replays an action sub-plan against the held page; ``field``/``reference`` read an
+    extracted column; the bound ops get their sub-plans unevaluated), and awaits + wraps an IO op's
+    result, registering any browser page it opened for release."""
     # step(action): a SEQUENCE step against ONE held live page. Replay the action
     # sub-plan (a wait_for/click/write/... chain) against the CURRENT doc -- the
     # same held page the resolve opened -- as a side effect, then hand the doc back
@@ -329,10 +342,14 @@ async def _check_divergence(doc: Any, recorded: str, client: Any) -> None:
 
 
 def _as_expr(arg: Arg, client: Any) -> Any:
+    """A plan arg as an UNEVALUATED ``Expr`` (for the bound ops that evaluate per element),
+    or its literal value -- never runs the sub-plan."""
     return Expr(arg.plan, client) if arg.plan is not None else arg.value
 
 
 async def _aarg(arg: Arg, context: Any, client: Any) -> Any:
+    """A plan arg EVALUATED to a concrete value: a literal as-is, a sub-plan run against the
+    current context."""
     if arg.plan is None:
         return arg.value
     return await aevaluate(Expr(arg.plan, client), context, client=client)

@@ -42,6 +42,8 @@ def field(name: str) -> Any:
 
 
 def _fn(name: str, expr: Any) -> Expr:
+    """Record a named ``fn`` step onto ``expr`` (or a fresh plan) -- the shared builder behind
+    the free-function op forms (``is_ok`` / ``is_empty`` / …)."""
     base = expr if isinstance(expr, Expr) else Expr(Plan())
     return base._extend(Step(kind="fn", name=name))
 
@@ -68,10 +70,13 @@ class _When:
         self._then: Any = _MISSING
 
     def then(self, value: Any) -> "_When":
+        """Set the value taken when the condition is truthy; returns self so ``.otherwise`` chains."""
         self._then = value
         return self
 
     def otherwise(self, value: Any) -> Any:
+        """Set the else-value and finish the branch -- returns the ``Expr`` recording the whole
+        ``when/then/otherwise``. Raises if ``.then(...)`` was never called."""
         if self._then is _MISSING:
             raise TypeError("when(...).then(...) before .otherwise(...)")
         step = Step(
