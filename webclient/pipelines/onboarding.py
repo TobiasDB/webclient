@@ -2192,21 +2192,41 @@ class _LoopAuthor(Author):
     """Authors by DRIVING THE INDEX QUERY LOOP (Phase 6): the model picks record/field NUMBERS
     from ``doc``'s element index and ``llm.query_agent.build_query`` assembles the durable
     ``select_all(record).extract(fields).project()`` query -- the model never writes a selector.
-    Returns the rebuilt query expr for ``write_query`` to test/validate like any other."""
 
-    def __init__(self, llm: LLM, doc: Any, brief: Brief) -> None:
+    Record detection is a HINT, not a requirement: the index engine is a best-effort FAST-PATH
+    tried ONCE. It hands off to ``fallback`` (the text author) when it can't help -- immediately
+    when ``record_options`` surfaces nothing (no wasted LLM calls on a doomed pick), or on the
+    next ``write_query`` retry if its query was rejected. So the index path can only ADD queries,
+    never block one: a page its detector can't classify degrades to the proven text engine."""
+
+    def __init__(self, llm: LLM, doc: Any, brief: Brief, fallback: "Author | None" = None) -> None:
         self._llm = llm
         self._doc = doc
         self._brief = brief
+        self._fallback = fallback
+        self._tried = False
 
     def author(self, follow_up: "str | None" = None) -> "list[Any]":
+        from ..core.document.element_index import record_options
+        from ..core.document.html import tree
         from ..llm.query_agent import build_query
         from ..query.expr import from_blob
 
-        run = build_query(self._doc, _llm_query_policy(self._llm, self._brief, follow_up))
-        if not run.blob:
-            raise AuthoringError(run.error or "the index query loop produced no query")
-        return [from_blob(run.blob)]
+        # a retry means the index engine's one shot was rejected -> hand off to text for recovery.
+        if self._tried and self._fallback is not None:
+            return self._fallback.author(follow_up)
+        self._tried = True
+
+        # no record hint at all -> don't burn LLM calls on a doomed index loop; go straight to text.
+        has_hint = bool(record_options(tree(self._doc))) if getattr(self._doc, "ok", True) else False
+        if has_hint:
+            run = build_query(self._doc, _llm_query_policy(self._llm, self._brief, follow_up))
+            if run.blob and run.row_count > 0:
+                return [from_blob(run.blob)]
+        if self._fallback is not None:
+            log.info("    index author had no usable query (detection weak) — using the text author")
+            return self._fallback.author(follow_up)
+        raise AuthoringError("the index query loop produced no query and no fallback was set")
 
 
 def _make_author(
@@ -2214,11 +2234,11 @@ def _make_author(
 ) -> Author:
     """Build the query author for a ``write_query`` run -- THE single Phase-6 seam. ``engine``
     selects it: ``"text"`` (the default) returns the :class:`_TextAuthor` (prompt the model for
-    query code); ``"index"`` returns the :class:`_LoopAuthor` (the model picks record/field
-    indexes and ``build_query`` builds the selectors). ``write_query``'s test / repair / retry /
-    artifact orchestration is the same either way."""
+    query code); ``"index"`` returns the :class:`_LoopAuthor` -- the index fast-path with the text
+    author as its FALLBACK, so record detection is a hint that can only help. ``write_query``'s
+    test / repair / retry / artifact orchestration is the same either way."""
     if engine == "index":
-        return _LoopAuthor(llm, doc, brief)
+        return _LoopAuthor(llm, doc, brief, fallback=_TextAuthor(llm, prompt))
     return _TextAuthor(llm, prompt)
 
 

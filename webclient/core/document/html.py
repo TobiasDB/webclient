@@ -220,15 +220,54 @@ def _regex_field(value: Any, pattern: "str | None", group: "int | str | None") -
     return Field(value) if value is not None else Field(None, ok=False)
 
 
+#: bare Tailwind display/flex/text-transform utilities that carry NO record meaning. Kept to the
+#: UNAMBIGUOUS ones -- ambiguous common words that could be a real hook (``container``/``block``/
+#: ``inline``/``static``/``border``/``rounded``/``shadow``) are spared here; their dashed forms
+#: (``border-2``/``rounded-lg``/…) are still caught by ``_UTILITY_PREFIX``.
+_UTILITY_BARE = frozenset({
+    "flex", "grid", "hidden", "relative", "absolute", "fixed", "sticky",
+    "inline-flex", "inline-block", "flow-root",
+    "truncate", "italic", "not-italic", "uppercase", "lowercase", "capitalize", "underline",
+    "line-through", "no-underline", "antialiased", "transform", "transition",
+})
+#: a Tailwind-style ``prop-value`` utility (``mt-6``/``px-4``/``text-center``/``bg-white``/…).
+#: Deliberately keyed on a KNOWN utility prop + a ``-value`` suffix, so a semantic ``feed-item``
+#: / ``post-title`` / ``sold-out`` (prop is not a utility) and bare ``row``/``col``/``card``
+#: (Bootstrap-semantic, no suffix) are spared. Grid ``col-span-2``/``row-start-1`` ARE stripped.
+_UTILITY_PREFIX = re.compile(
+    r"^-?(?:"
+    r"[mp][trblxyse]?|w|h|min-w|max-w|min-h|max-h|size|"
+    r"gap|gap-[xy]|space-[xy]|inset|inset-[xy]|top|right|bottom|left|z|"
+    r"grid-cols|grid-rows|col-span|col-start|col-end|row-span|row-start|row-end|"
+    r"order|basis|grow|shrink|flex|justify|justify-items|justify-self|items|self|content|place|"
+    r"text|font|leading|tracking|indent|align|whitespace|break|"
+    r"bg|from|via|to|border|divide|rounded|ring|outline|shadow|opacity|mix-blend|"
+    r"overflow|overscroll|object|aspect|columns|float|clear|"
+    r"cursor|select|resize|scroll|snap|touch|pointer-events|"
+    r"transition|duration|ease|delay|animate|"
+    r"scale|rotate|translate|skew|origin|"
+    r"fill|stroke|sr"
+    r")-\S+$"
+)
+
+
+def _is_utility_class(tok: str) -> bool:
+    """Whether a class is a layout/spacing/typography UTILITY (Tailwind & co.) that carries no
+    record identity -- so it should never anchor a selector or split a record signature."""
+    return tok in _UTILITY_BARE or bool(_UTILITY_PREFIX.match(tok))
+
+
 def _is_noise_class(tok: str) -> bool:
-    """Whether a class token is a HIGH-ENTROPY generated name (a CSS-module / hashed build
-    class like ``css-1a2b3c``, ``jsx-1837462``, ``Button_a1B2c``) rather than a semantic hook.
-    Kept deliberately CONSERVATIVE -- it is far worse to drop a real selector hook than to keep
-    a bit of noise -- so it fires only on an unmistakable hash shape and spares numbered or
-    PascalCase semantic names (``heading2``, ``results2024``, ``ProductCardItem``, ``USMap``):
-      * a known CSS-in-JS / CSS-module prefix (``css-``/``sc-``/``jsx-``/``emotion-``/…), or
-      * MIXED case AND a digit in the same token (``Button_a1B2`` -- webpack/vite hashes), or
-      * a long hex run as its own ``-``/``_`` segment (``b3f9a1c2ef``)."""
+    """Whether a class token is NOT a useful semantic hook -- either a HIGH-ENTROPY generated name
+    (a CSS-module / hashed build class like ``css-1a2b3c`` / ``jsx-1837462`` / ``Button_a1B2c``) or
+    a layout/spacing/typography UTILITY (``mt-6`` / ``flex`` / ``px-4`` / ``text-center``). Kept
+    deliberately CONSERVATIVE for the HASH half -- far worse to drop a real hook than keep noise --
+    so it spares numbered / PascalCase semantic names (``heading2``/``ProductCardItem``/``USMap``)
+    and Bootstrap-semantic bare words (``row``/``col``/``card``/``btn``); the utility half is keyed
+    on known utility props so ``feed-item``/``post-title``/``sold-out`` are spared too. Stripping
+    utilities is what stops a stray ``mt-6`` on one record from splitting its sibling group."""
+    if _is_utility_class(tok):  # checked BEFORE the length guard -- utilities are often < 5 chars
+        return True
     if len(tok) < 5:
         return False  # short classes are almost always meaningful (nav, btn, col, row, h1)
     if tok.lower().startswith(_NOISE_CLASS_PREFIX):

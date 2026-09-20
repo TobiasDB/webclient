@@ -46,9 +46,32 @@ def _child_tags(el: Any) -> "tuple[str, ...]":
     return tuple(_tag(c) for c in el if isinstance(c.tag, str) and _tag(c) not in _SKIP)
 
 
+#: tags that can be an anonymous per-record WRAPPER (the SPA/Tailwind norm: each record sits alone
+#: inside a class-less/utility-only div).
+_WRAPPER_TAGS = frozenset({"div", "span", "li", "section", "article"})
+
+
+def _unwrap(el: Any) -> Any:
+    """Descend through single-element-child, class-less-or-utility-only wrappers to the semantic
+    record inside -- so a record wrapped in an anonymous ``<div>`` (the SPA/Tailwind per-record
+    wrapper) is detected as its inner ``article.product``, not a bare ``div``. Stops at a wrapper
+    that has its OWN semantic class (it IS the record) or that has more than one element child.
+    Bounded to a few levels."""
+    for _ in range(4):
+        if _tag(el) not in _WRAPPER_TAGS or _semantic_classes(el):
+            break  # not an anonymous wrapper -> this element is the record
+        kids = [c for c in el if isinstance(getattr(c, "tag", None), str) and _tag(c) not in _SKIP]
+        if len(kids) != 1:
+            break
+        el = kids[0]
+    return el
+
+
 def _sig(el: Any) -> "tuple[str, frozenset[str], tuple[str, ...]]":
-    """A light structural signature: tag + semantic classes + immediate child tag shape.
+    """A light structural signature: tag + semantic classes + immediate child tag shape, taken on
+    the UNWRAPPED record (so records wrapped in anonymous divs still group by their inner shape).
     Two siblings share a signature when they are the same KIND of record."""
+    el = _unwrap(el)
     return (_tag(el), frozenset(_semantic_classes(el)), _child_tags(el))
 
 
@@ -89,8 +112,10 @@ def _richness(members: "list[Any]") -> float:
 
 
 def _item_selector(members: "list[Any]") -> str:
-    """A selector for the records: the shared tag, narrowed by a class common to ALL of
-    them (the most specific stable hook), else the bare tag."""
+    """A selector for the records: the shared tag (of the UNWRAPPED record, so an anonymous
+    wrapper yields the inner ``article.product`` not a bare ``div``), narrowed by a class common
+    to ALL of them (the most specific stable hook), else the bare tag."""
+    members = [_unwrap(m) for m in members]
     tag = _tag(members[0])
     common = set(_semantic_classes(members[0]))
     for m in members[1:]:

@@ -271,6 +271,36 @@ def test_write_query_index_engine_picks_indexes_not_css(httpserver):
     assert "select_all" in art.describe          # a normal, durable query came out the other side
 
 
+def test_index_engine_falls_back_to_text_when_detection_fails(httpserver):
+    # record detection is a HINT, not a requirement: on a page whose records don't form a
+    # detectable region (only 2 -> below min_items), author_engine="index" degrades to the TEXT
+    # author rather than failing. The index policy prompt is never even reached (no hint).
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/p").respond_with_data(
+        '<main><article class="product"><span class="name">A</span></article>'
+        '<article class="product"><span class="name">B</span></article></main>',
+        content_type="text/html",
+    )
+
+    seen = {"index": 0, "text": 0}
+
+    def llm(prompt: str) -> str:
+        if "PICKING NUMBERS" in prompt:  # the index policy prompt -- should NOT be reached (no hint)
+            seen["index"] += 1
+            return "{}"
+        seen["text"] += 1  # the text author's code-authoring prompt
+        return 'wq.doc.select_all("article.product").extract(name=wq.doc.select(".name").attr("text")).project()'
+
+    with WebClient() as wc:
+        art = write_query(
+            httpserver.url_for("/p"), Brief(description="products", fields=["name"]),
+            wc=wc, llm=llm, browser="never", retries=1, author_engine="index",
+        )
+    assert art is not None and art.complete and art.row_count == 2  # the fallback authored a working query
+    assert seen["text"] >= 1 and seen["index"] == 0  # text did the work; index policy never ran
+
+
 def test_sample_table_collapses_newlines_so_columns_dont_shift():
     # an output-summary bug: a value with a newline (an RSS description) broke the aligned
     # sample table so LATER columns rendered shifted/empty. Cells now collapse whitespace.
@@ -1486,11 +1516,14 @@ def test_evaluate_clips_a_huge_page_skeleton(httpserver):
     # a giant page must not blow the prompt: the skeleton is clipped to the char budget.
     from webclient.pipelines.onboarding import _MAX_SKELETON_CHARS
 
-    # distinct per-row structure so the skeleton's identical-sibling merge can't shrink
-    # it -- forcing it past the char budget (a repetitive real listing stays tiny).
+    # distinct per-row structure so the skeleton's identical-sibling merge can't shrink it --
+    # forcing it past the char budget (a repetitive real listing stays tiny). The class names
+    # are long and NON-utility (a bare ``p-{i}`` would read as the Tailwind padding utility and
+    # be stripped, and short unique names wouldn't fill the budget after that cleanup).
     rows = "".join(
-        f'<section class="prod-{i}" data-x="{i}"><h3 class="n-{i}">P{i}</h3>'
-        f'<span class="p-{i}">v{i}</span></section>' for i in range(3000)
+        f'<section class="product-listing-item-{i}" data-x="{i}">'
+        f'<h3 class="product-name-heading-{i}">P{i}</h3>'
+        f'<span class="product-price-value-{i}">v{i}</span></section>' for i in range(3000)
     )
     httpserver.expect_request("/big").respond_with_data(
         f"<main>{rows}</main>", content_type="text/html"
