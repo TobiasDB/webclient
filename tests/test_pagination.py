@@ -67,3 +67,38 @@ def test_paginate_stops_on_a_clamped_repeat(httpserver):
         pages = list(wc.fetch(httpserver.url_for("/c1")).paginate(by="link", max_pages=50))
     # c1, c2, then c2's next re-serves c1 (a repeat) -> stop; the repeat is not appended
     assert len(pages) == 2
+
+
+# -- next_link(): the HTTP Link header + HTML rel=next -----------------------------------------
+
+def test_next_link_reads_the_http_link_header(httpserver):
+    httpserver.expect_request("/api").respond_with_data(
+        "[]", content_type="application/json",
+        headers={"Link": '<http://api.example/items?page=2>; rel="next", <http://api.example/items?page=9>; rel="last"'},
+    )
+    with WebClient() as wc:
+        nxt = wc.fetch(httpserver.url_for("/api")).next_link()
+    assert nxt.ok and nxt.url == "http://api.example/items?page=2"  # the rel=next entry
+
+
+def test_next_link_reads_html_rel_next_else_empty(httpserver):
+    httpserver.expect_request("/a").respond_with_data(_page(["A"], "/b"), content_type="text/html")
+    httpserver.expect_request("/end").respond_with_data(_page(["Z"]), content_type="text/html")  # no next
+    with WebClient() as wc:
+        assert wc.fetch(httpserver.url_for("/a")).next_link().ok           # HTML rel=next present
+        assert not wc.fetch(httpserver.url_for("/end")).next_link().ok      # none -> not-ok reference
+
+
+def test_paginate_follows_the_link_header_for_api_pagination(httpserver):
+    # an API-style paginated source: rel=next lives in the HTTP Link header, NOT the HTML.
+    httpserver.expect_request("/l1").respond_with_data(
+        _page(["A", "B"]), content_type="text/html",
+        headers={"Link": f'<{httpserver.url_for("/l2")}>; rel="next"'},
+    )
+    httpserver.expect_request("/l2").respond_with_data(_page(["C"]), content_type="text/html")  # no next
+    plan = (
+        wq.reference(httpserver.url_for("/l1")).resolve()
+        .paginate(by="link", max_pages=5)
+        .select_all("article.r").extract(n=wq.doc.select(".n").attr("text")).project()
+    )
+    assert [r["n"] for r in plan.collect()] == ["A", "B", "C"]  # walked via the Link header

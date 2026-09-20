@@ -18,6 +18,7 @@ phases.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import urljoin
 
@@ -31,6 +32,16 @@ if TYPE_CHECKING:
 
 #: a hard ceiling so a pathological advance rule can never fetch without bound.
 _MAX_PAGES_CAP = 200
+
+#: an RFC 8288 ``Link:`` header entry pointing at the next page (``<url>; rel="next"``), as GitHub
+#: and other APIs paginate. The ``rel`` may sit after other link-params (``; title=…; rel=next``).
+_LINK_NEXT = re.compile(r'<([^>]+)>\s*;\s*[^,]*\brel\s*=\s*"?next"?', re.I)
+
+
+def _link_header_next(link_header: str) -> "str | None":
+    """The next-page URL from an HTTP ``Link:`` header (its ``rel="next"`` entry), or ``None``."""
+    m = _LINK_NEXT.search(link_header)
+    return m.group(1).strip() if m else None
 
 
 def _page_fingerprint(doc: "Document") -> int:
@@ -52,7 +63,7 @@ class PaginateBacking(Backing):
     ``Collection[Document]``. Sequential + HTTP; ``by="link"`` (rel=next) / ``by="param"`` (a
     page/offset param). Bounded and clamp-guarded."""
 
-    provides = frozenset({"paginate"})
+    provides = frozenset({"paginate", "next_link"})
     io = frozenset({"paginate"})  # fetches subsequent pages -> async / bridged
     collections = frozenset({"paginate"})  # returns a Collection of documents
     gate = "ok"
@@ -61,26 +72,39 @@ class PaginateBacking(Backing):
         """In play for any resolved document -- pagination starts from a fetched page one."""
         return True
 
+    def next_link(self, core: "Document") -> "Reference":
+        """The reference to the NEXT page of this dataset, or an empty (not-ok) reference when
+        there is none. Reads the HTTP ``Link: <url>; rel="next"`` header first (so a JSON/API
+        listing paginates), then an HTML ``a[rel="next"]`` / ``link[rel="next"]`` -- either way
+        resolved against the page's URL. The one place "where's the next page" is answered."""
+        from ..reference import from_url
+
+        base = core.final_url or core.url
+        headers = {k.lower(): v for k, v in core.response_headers.items()}
+        raw = headers.get("link")
+        if raw and (url := _link_header_next(raw)):
+            return from_url(urljoin(base, url))
+        if core.kind in ("html", "xml"):
+            root = tree(core)
+            if root is not None:
+                for node in root.cssselect('a[rel="next"], link[rel="next"]'):
+                    href = clean_href(node.get("href"))
+                    if href:
+                        return from_url(urljoin(base, href))
+        return from_url("")  # empty -> ok is False -> "no next page"
+
     def _next_ref(
         self, current: "Document", *, by: str, name: str, size: int, start: int, step: int, index: int
     ) -> "Reference | None":
         """The reference for the page AFTER ``current`` (the ``index``-th already collected), or
-        ``None`` to stop. ``by="link"`` reads a ``rel="next"`` link off ``current``; ``by="param"``
-        computes the next ``?name=`` value (a page number, or an offset when ``size`` is set)."""
+        ``None`` to stop. ``by="link"`` reads the next link off ``current`` (Link header /
+        rel=next); ``by="param"`` computes the next ``?name=`` value (a page number, or an offset
+        when ``size`` is set)."""
         if by == "param":
             value = (start + index * size) if size else (start + index * step)
             return cast("Reference", _ref_of(current).dispatch("with_params", **{name: str(value)}))
-        # by == "link": a discovered rel=next anchor/link on the page
-        root = tree(current)
-        if root is None:
-            return None
-        for node in root.cssselect('a[rel="next"], link[rel="next"]'):
-            href = clean_href(node.get("href"))
-            if href:
-                from ..reference import from_url
-
-                return from_url(urljoin(current.final_url or current.url, href))
-        return None
+        nxt = self.next_link(current)  # by == "link": Link header or an HTML rel=next
+        return nxt if nxt.ok else None
 
     async def paginate(
         self,
