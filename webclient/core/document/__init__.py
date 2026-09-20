@@ -29,6 +29,7 @@ from .metadata import MetadataBacking
 from .structure import StructureBacking
 from .flags import FlagsBacking
 from .regex import RegexBacking
+from .element_index import ElementIndexBacking
 
 if TYPE_CHECKING:
     from ...interface import LazyDocument
@@ -104,6 +105,7 @@ class Document(WebCore, IDocument):
         StructureBacking(),
         FlagsBacking(),
         RegexBacking(),
+        ElementIndexBacking(),
     )
 
     @property

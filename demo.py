@@ -266,6 +266,10 @@ def main() -> None:
         # skeleton(): a token-lean tag#id.class DOM outline -- an LLM reads this to
         # write CSS selectors for the page (see docs/llm-lazy-queries.md).
         print("skeleton:   ", page.skeleton(max_lines=3).replace("\n", " | "))
+        # controls()/element_table(): a numbered, CLASS-FREE table an agent picks indexes
+        # from -- we resolve each index to a durable selector (Phase 3, the loops' primitive).
+        print("controls:   ", [(c.index, c.role, c.selector) for c in page.controls()][:3])
+        print("elem table: ", page.element_table().replace("\n", " | ")[:64])
         print("elements:   ", [(e.type, e.text) for e in page.render("elements")][:3])
         print("links:      ", [r.path for r in page.render("links")])
         print("html:       ", page.render("html").strip()[:40])

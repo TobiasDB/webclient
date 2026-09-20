@@ -59,6 +59,23 @@ class XhrCall(BaseModel):
     url: str
 
 
+class IndexedElement(BaseModel):
+    """One entry in a document's indexed element table -- the DOM-addressing primitive an agent
+    reasons over WITHOUT seeing classes or authoring a selector. ``index`` is its position in the
+    numbered table; ``role`` is a coarse control/content role (button / textbox / link / text /
+    row / …); ``name`` is a short human label (aria-label / text / …); ``kind`` is whether it is
+    interactive or content-bearing; ``selector`` is the DURABLE, class-free CSS the loop resolves
+    the index to (for the recorded Plan). ``repeats`` > 1 marks a member of a repeated structure
+    (a record row), so a query agent can pick ``select_all`` knowingly."""
+
+    index: int
+    role: str = ""
+    name: str = ""
+    kind: Literal["interactive", "content"] = "interactive"
+    selector: str = ""
+    repeats: int = 1
+
+
 class Transport(BaseModel):
     """Transport facts -- free from any resolved document (values only for the
     few that *are* the summary; headers/cookies are key lists)."""
@@ -234,6 +251,9 @@ class IDocument(BaseModel):
         def buttons(self) -> "Flag": ...
         def card(self) -> "PageCard": ...
         def click(self, selector: str | None = ..., *, timeout: float | None = ..., optional: bool = ..., error: Any = ...) -> "Document": ...
+        def content_elements(self) -> "list[IndexedElement]": ...
+        def controls(self) -> "list[IndexedElement]": ...
+        def element_table(self, *, interactive: bool = ...) -> "str": ...
         def elements(self) -> "list[Element]": ...
         def evaluate(self, script: str, *, mutates: bool = ...) -> "Any": ...
         @overload
@@ -290,6 +310,7 @@ __all__ = [
     "TocEntry",
     "Form",
     "XhrCall",
+    "IndexedElement",
     "Transport",
     "PageCard",
     "Metadata",
