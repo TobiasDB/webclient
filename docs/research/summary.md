@@ -1,5 +1,15 @@
 # Case study: making `doc.summary()` / extraction genuinely top-of-class
 
+> NOTE (stale API, 2026-09-20): this case study predates a rename. The bundled
+> `doc.summary()` → faceted `Summary` (transport / metadata / structure / runtime /
+> probe) described below no longer exists. The lean projection is now `doc.card()` →
+> `PageCard` (flat: url / final_url / kind / title / description / flags /
+> final_tier / escalation), with the facets exposed as separate ops `doc.metadata()`
+> / `doc.structure()` / `doc.transport()`; the `runtime` and `probe` facets were
+> removed. Also: `webclient/core/document/summary.py` and `webclient/collection.py`
+> cited in Method are gone (see `status.py` for `card`, `query/collection.py` for
+> `extract`/`project`). Read for design intent, not current API.
+
 *Subject:* `/home/zeus/git/web-client` @ `refactor/async-core-backends`
 *Scope:* The page **summary / extraction** feature — `doc.summary()` → `Summary` (facet
 backings: transport / metadata / structure / runtime / probe) and

@@ -15,7 +15,7 @@ print(lazy_query_guide())          # the skill text
 ```
 
 - **MCP:** call the `lazy_query_guide` tool (no arguments).
-- **File:** `webclient/skills/lazy-queries.md` (packaged data; skill frontmatter + body).
+- **File:** `webclient/llm/skills/lazy-queries.md` (packaged data; skill frontmatter + body).
 
 For the surrounding workflow that *produces* the selectors a query uses — reading a
 page's token-lean **skeleton** (an HTML-tag outline, with `[xhr]`/`[js]` origin

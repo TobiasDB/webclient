@@ -5,6 +5,17 @@ each showcasing a feature (or two) end to end. They are documentation you can ru
 not tests — they hit the live internet, so output changes over time and a site may
 be down.
 
+> NOTE (stale API, 2026-09-20): several of these scripts predate a rename and will
+> now raise `AttributeError`. `doc.summary()` is now `doc.card()` (a flat
+> `PageCard`) with the facet ops `doc.metadata()` / `doc.structure()` /
+> `doc.transport()`; `wc.discover_sitemaps(url)` is now `wc.sitemap(url)`; and the
+> `browser="probe"` tier and the `summary().probe` / `summary().runtime` facets have
+> been removed. Affected scripts: `news_article_scraper.py` (`page.summary()`),
+> `summary_llm_view.py` (`wc.fetch(url).summary()`), `sitemap_mapper.py`
+> (`wc.discover_sitemaps(...)`), and `live_browser_events.py`
+> (`browser="probe"`, `summary().probe`, `summary().runtime`). They need updating to
+> the current API.
+
 Every example targets a **scraper-friendly** site on purpose:
 
 | example | site | why it's a good citizen | features |

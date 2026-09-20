@@ -3,6 +3,14 @@
 *Status: SHIPPED (P0–P2) + probe mode. Composes with the Summary `probe` facet (its
 read-side).*
 
+> NOTE (paths updated 2026-09-20): the `resiliency/` package was **deleted**. The
+> Policy models + `Resolve` bundle now live in `webclient/policy/models.py` (not
+> `core/reference/models.py`); the `X-WebClient-*` header emission is
+> `webclient/policy/headers.py` (not `resiliency/headers.py`); and the response
+> classification once called `resiliency/detect.py` now lives under
+> `webclient/signals/` (Signals → Flags). The shipped behaviour below still holds;
+> only the module paths moved.
+
 ## Update (2026-09-15) — what shipped
 
 - **Policy models** (`core/reference/models.py`): `RetryPolicy` / `RatePolicy` /

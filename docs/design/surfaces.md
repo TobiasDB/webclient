@@ -3,6 +3,16 @@
 *Status: design note (analysis only). Answers: why `surface.py` + `surfaces.py` +
 `models.py`, and can they become "simple generated models" like the lazy tier?*
 
+> NOTE (SUPERSEDED 2026-09-20): this note analyses a `surfaces/` package layout
+> (`surface.py` / `surfaces.py` / `models.py`) that **no longer exists**. In the
+> "everything is a Plan" rewrite the eager, async, remote and lazy surfaces were
+> merged into a single generated file, `webclient/interface.py`, and every core is
+> now a `WebCore` (its `__getattr__` dispatches) rather than a `Surface` wrapper —
+> so `Session` is no longer a separate surface class (a `WebClient` **is** the
+> session). The reasoning about the eager-runtime vs lazy-type-only axis is still
+> of historical interest, but the concrete module names, class list and the
+> proposed migration below are obsolete. Keep for history; do not treat as current.
+
 ## TL;DR
 
 The three layers are **not** incidental duplication. They split along one real

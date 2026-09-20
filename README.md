@@ -13,9 +13,9 @@ the cores, and the typed surface is **generated** from those backings
 (`scripts/gen_stubs.py`), so the types never drift from the runtime.
 
 > Status: a solid, well-typed engine kernel with a task-verb layer
-> (`webclient.tools`), truly incremental streaming, a stateful **crawl** +
+> (`webclient.llm.tools`), truly incremental streaming, a stateful **crawl** +
 > **sitemap.xml** discovery, token-lean **summary** facets, a resiliency policy
-> layer (adaptive/probe browser modes + proxy/rate/retry headers), serialisable
+> layer (adaptive browser modes + proxy/rate/retry headers), serialisable
 > lazy-expression **blobs**, and an **MCP** adapter. Runnable case studies live in
 > [`examples/`](examples/).
 
@@ -90,12 +90,12 @@ extraction queries with concrete examples.
 
 ## Task verbs -- for scripts and LLM tools
 
-`webclient.tools` wraps the surface in a few functions that hide the plan
+`webclient.llm.tools` wraps the surface in a few functions that hide the plan
 machinery and return ready-to-use values (markdown / text / links / rows) -- the
 shape a quick script or an LLM tool wants:
 
 ```python
-from webclient.tools import fetch_markdown, fetch_text, links, page_skeleton, extract
+from webclient.llm.tools import fetch_markdown, fetch_text, links, page_skeleton, extract
 
 md = fetch_markdown("https://example.com")               # -> str (markdown)
 text = fetch_text("https://example.com")                 # -> str (nav stripped)
@@ -109,11 +109,13 @@ rows = extract(                                          # -> list[dict]
 )
 ```
 
-`wc.search(query)` is robust: it sends a browser `User-Agent` (engines block a
-library one) and falls back across providers, with `browser=True` for the strongest
-anti-bot bypass. The same verbs are exposed as MCP tools and HTTP endpoints (incl.
-`POST /skeleton`), and `summary(url, "skeleton")` puts the selector map on the
-summary's `.skeleton` field.
+The same verbs are exposed as MCP tools and HTTP endpoints (incl. `POST /skeleton`);
+`page_skeleton(url)` returns the token-lean selector map for a page.
+
+> NOTE (updated 2026-09-20): there is no `wc.search(query)` client verb in the
+> current code — web search lives in the onboarding pipeline (`search_web`), not on
+> the client. `summary` is likewise not a task verb; a page's lean self-descriptor
+> is `doc.card()` (see the Summary section below).
 
 Each accepts an optional `client=` (defaults to a process-local one; pass your own
 `with WebClient() as wc` for lifecycle control).
@@ -170,22 +172,27 @@ wc.release(live)   # return the page to the pool
 
 ## Summary -- a page's token-lean view (for LLMs)
 
-`summary()` projects a page into a small, uniform structure -- transport facts,
-head/schema metadata, body shape -- keys and counts, not raw HTML. It is what an
-LLM reads *instead of* the page:
+A page projects into small, uniform structures -- keys and counts, not raw HTML --
+that an LLM reads *instead of* the page. `doc.card()` is the lean self-descriptor
+(the default crawl projection); the individual facet ops give more detail:
 
 ```python
-s = wc.summary("https://example.com/")
-s.metadata.title        # "Example Domain"  (metadata is None on a non-html page)
-s.structure.word_count  # 19
-s.structure.toc         # [TocEntry(level=1, text=...), ...]
+doc = wc.fetch("https://example.com/")
+card = doc.card()          # a PageCard: url / final_url / kind / title /
+                           # description / flags / final_tier / escalation
+card.title                 # "Example Domain"
+card.flags                 # detected flags (e.g. "spa", "login-wall"), by name
 
-wc.summary(url, "transport", "metadata")   # pick facets; a crawl carries a lean default
+doc.metadata()             # a Metadata facet (head/schema; None-ish on a non-html page)
+doc.structure()            # a Structure facet: word_count, toc, ...
+doc.transport()            # a Transport facet: final_url, final_tier, escalation, ...
 ```
 
-Facets: `transport`, `metadata`, `structure`, `runtime` (browser-only signals),
-`probe` (what resolution needed -- see below). Naming an arbitrary backing op (e.g.
-`summary(url, "title")`) adds it under `summary().extra`.
+> NOTE (updated 2026-09-20): the old bundled `summary()` op (a faceted `Summary`
+> object with `.metadata` / `.structure` / `.probe` / `.extra`) has been replaced by
+> the flat `doc.card()` (`PageCard`) plus the separate facet ops `doc.metadata()` /
+> `doc.structure()` / `doc.transport()`. There is no `wc.summary(url)` client verb,
+> and the `runtime` / `probe` facets no longer exist as ops.
 
 ## Crawl & sitemap
 
@@ -196,9 +203,8 @@ drive turn by turn, or let auto-drive best-first by keyword:
 with wc.crawl("https://books.example/", auto=True, max_pages=20,
               keywords=["pricing"]) as crawl:
     crawl.run()                     # or crawl.step(select=...) to steer each round
-for page in crawl.pages:            # each a lean .summary()
-    if page.transport and page.metadata:            # facets are None when N/A
-        print(page.transport.final_url, page.metadata.title)
+for page in crawl.pages:            # each a lean PageCard (the doc.card() projection)
+    print(page.final_url, page.title)               # flat fields; None when N/A
 for edge in crawl.frontier:         # discovered-but-unfetched, best links first
     print(edge.score, edge.url)     # nav/"read more"/article high; footer/legal low
 ```
@@ -211,31 +217,28 @@ links sink. Set `browser=True` to render JS-heavy pages first (each load waits f
 the DOM to settle, so client-rendered links are captured); a browser crawl also
 adds the page's XHR/data-API endpoints to the frontier.
 
-Each page carries a default summary tuned for site-mapping -- `transport` +
-`metadata` + `structure` (is it ok / what is it / what's on it); `structure` is
-free here since the crawl already parses each page to find links. The browser-only
-facets (`runtime`/`probe`) stay out unless you crawl with `browser=True`. Pass
-`facets=[...]` to widen or narrow it. `wc.discover_sitemaps(url)` discovers a site's real
-`sitemap.xml` URLs (robots `Sitemap:` directives, the well-known path, one level of
-`<sitemapindex>`); `wc.sitemap(url)` maps a site, seeding from that discovery.
+Each page is retained as a lean `PageCard` (the `doc.card()` projection: url /
+final_url / kind / title / description / flags / final_tier / escalation) -- enough
+to rebuild a `Reference`. Pass a `project=` document expression to `wc.crawl(...)`
+to reshape what `.pages` holds. `wc.sitemap(url)` hunts a site's real `sitemap.xml`
+page URLs (robots `Sitemap:` directives, the well-known path, one level of
+`<sitemapindex>`) and returns them as References -- feed them to a crawl with
+`wc.crawl(wc.sitemap(url))`. `wc.robots(url)` returns the site's `robots.txt`
+rules + `Sitemap:` directives.
 
 ## Resiliency -- browser tiers & policies
 
 `browser=` picks the transport tier, escalation is opt-in:
 
-- `False` (default) -- static only.
+- `False` / `"never"` (default) -- static only.
 - `"auto"` -- static, escalate to a browser only if the page looks JS-gated
   (empty / SPA shell). Conservative, to avoid paying for a browser needlessly.
 - `True` / `"always"` -- straight to a browser.
-- `"probe"` -- **explicit diagnostic**: resolve *both* tiers and compare, returning
-  the fuller document with an accurate `probe` facet (`was_browser_required`,
-  `render_gain` = how many visible words the browser recovered). The "can I scrape
-  this / what do I need" mode -- use it to build a content-complete summary.
 
-```python
-d = wc.fetch(url, browser="probe")
-p = d.summary().probe        # was_browser_required=True, render_gain=242 -> JS-gated
-```
+> NOTE (updated 2026-09-20): the `browser=` kwarg is now
+> `bool | Literal["never", "auto", "always"]`. The old `"probe"` tier (resolve both
+> tiers and compare, exposing a `probe` facet via `summary().probe`) has been
+> removed — both the tier and the `probe` facet are gone.
 
 A `Resolve` policy bundle (`retry` / `rate` / `proxy`) can be set on the client; its
 rate/retry/proxy concerns are declared to a downstream proxy service as
@@ -257,11 +260,12 @@ rows = from_blob(blob, wc).collect(wc.ref(url))   # rebuilt + name-validated, th
 
 ## MCP & task-verb endpoints
 
-`webclient.mcp` exposes the verbs (fetch/markdown/links/summary/search/crawl/
-discover_sitemaps) plus plan authoring as Model Context Protocol tools -- the way agents
-consume this category. The registry (`build_tools` / `dispatch`) works with no MCP
-SDK installed; `serve()` runs an stdio server. The HTTP service mirrors them as
-task-verb endpoints (`POST /markdown`, `/summary`, `/crawl`, `/plan`, ...).
+`webclient.llm.mcp` exposes the verbs (fetch_markdown / fetch_text / links /
+skeleton / sitemap / robots / crawl) plus plan authoring (validate_plan / run_plan /
+lazy_query_guide) as Model Context Protocol tools -- the way agents consume this
+category. The registry (`build_tools` / `dispatch`) works with no MCP SDK installed;
+`serve()` runs an stdio server. The HTTP service mirrors them as task-verb endpoints
+(`POST /markdown`, `/crawl`, `/plan`, ...).
 
 ## Dispatch modes -- sync, async, remote
 
@@ -328,18 +332,22 @@ if not d.ok:
   eager surface IS the core (`WebCore.__getattr__` dispatches); sync/async/remote
   are just dispatchers on it.
 - `core/<kind>/` -- one package per core (`reference` / `document` / `client` /
-  `session` / `crawl` / `remote`), each with the core (a pydantic model) and one
-  backing per module.
+  `session` / `crawl`), each with the core (a pydantic model) and one backing per
+  module. Remote is **not** a core package -- it is a dispatch mode of the engine
+  (`core/engine.py` + `core/service.py`, the remote transport).
 - `query/` -- the recorder engine: `expr.py` (the `Expr` recorder), `plan.py`
   (the serialisable `Plan` IR + `to_blob`/`from_blob` -- the wire form for the
-  service/remote), and `executor.py` (one async walk over a `Plan`).
-- `resiliency/` -- pure response classification (`detect.py`, so a local and a
-  remote resolve agree on what to escalate) + the `X-WebClient-*` policy headers.
-- `surfaces/eager.py` / `surfaces/lazy.py` / `collection.py` -- the typed eager
-  and lazy surfaces (generated by `scripts/gen_stubs.py` from the backing
-  signatures); `surfaces/lazy.py` also holds the `wq` authoring roots.
-- `service.py` + `mcp.py` + `clients/` -- the HTTP service (task verbs + `/execute`
-  + `/plan`), the MCP adapter, and the transport pool (http/browser leases).
+  service/remote), `executor.py` (one async walk over a `Plan`), and
+  `collection.py` (the fan-out `Collection`).
+- `policy/` -- the `Resolve` bundle + concern policies (`models.py`) and the
+  `X-WebClient-*` policy headers (`headers.py`). Response classification that
+  decides what to escalate now lives in `signals/`.
+- `interface.py` -- the typed eager, async, remote and lazy surfaces in one file
+  (generated by `scripts/gen_stubs.py` from the backing signatures); it also holds
+  the `wq` authoring roots.
+- `service.py` + `llm/mcp.py` + `clients/` -- the HTTP service (task verbs +
+  `/execute` + `/plan`), the MCP adapter, and the transport pool (http/browser
+  leases). Task verbs live in `llm/tools.py`.
 - `examples/` -- runnable live case studies (news scraper, catalogue crawler,
   lazy-expression extractor, sitemap mapper, browser events, error handling).
 
