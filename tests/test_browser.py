@@ -310,7 +310,7 @@ def test_recorder_captures_and_replays_a_goto(httpserver, wc):
 def test_agent_loop_drives_records_and_replays(httpserver, wc):
     # a type-safe page-scoped loop: the policy observes the page and returns a typed action;
     # the loop acts on the ONE held page, bounded, recording a replayable Plan.
-    from webclient.agent import Click, Done, Observation, drive
+    from webclient.llm.agent import Click, Done, Observation, drive
 
     httpserver.expect_request("/loopapp").respond_with_data(APP, content_type="text/html")
 
@@ -337,7 +337,7 @@ def test_agent_loop_drives_records_and_replays(httpserver, wc):
 def test_agent_loop_is_bounded(httpserver, wc):
     # a policy that never finishes and never changes the page stalls out -- the loop is
     # bounded and returns a verdict rather than looping forever.
-    from webclient.agent import WaitFor, drive
+    from webclient.llm.agent import WaitFor, drive
 
     httpserver.expect_request("/staticpage").respond_with_data(APP, content_type="text/html")
     page = wc.ref(httpserver.url_for("/staticpage")).resolve(browser=True).collect()

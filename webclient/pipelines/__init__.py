@@ -8,7 +8,7 @@ they stay testable offline with a stub model.
 
 from __future__ import annotations
 
-from .llm import (
+from ..clients.llm import (
     Budget,
     BudgetExceeded,
     LlmClient,
@@ -40,7 +40,7 @@ from .onboarding import (
     write_reference,
     write_resolve,
 )
-from .prompts import render_prompt
+from ..llm.prompts import render_prompt
 
 __all__ = [
     "Brief",

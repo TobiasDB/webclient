@@ -1156,7 +1156,7 @@ def test_query_runs_across_multiple_base_urls(httpserver):
 
 def test_model_price_includes_cache_read_and_write_costs():
     from webclient.pipelines import Usage
-    from webclient.pipelines.llm import ModelPrice, price_for
+    from webclient.clients.llm import ModelPrice, price_for
 
     price = price_for("claude-opus-5")  # input 5, output 25 per MTok
     # cache write ~1.25x input, cache read ~0.10x input -- first-class fields now
@@ -1219,7 +1219,7 @@ def test_ask_json_gives_up_after_retries():
 
 
 def test_model_pricing_is_configurable_on_the_client():
-    from webclient.pipelines.llm import LlmClient, ModelPrice, PRICING
+    from webclient.clients.llm import LlmClient, ModelPrice, PRICING
 
     client = LlmClient(model="claude-opus-5", auth="k",
                        pricing={**PRICING, "claude-opus-5": ModelPrice.of(6.0, 30.0)})
@@ -1230,7 +1230,7 @@ def test_model_pricing_is_configurable_on_the_client():
 
 def test_settings_pass_pricing_overrides_to_the_llm_client():
     from webclient import LlmSettings, Settings
-    from webclient.pipelines.llm import ModelPrice
+    from webclient.clients.llm import ModelPrice
 
     s = Settings(llm=LlmSettings(model="claude-opus-5",
                                  pricing={"claude-opus-5": ModelPrice.of(7.0, 35.0)}))
@@ -1333,7 +1333,7 @@ def _ok_response() -> "httpx.Response":
 
 
 def test_llm_retries_a_500_then_succeeds():
-    from webclient.pipelines.llm import LlmClient
+    from webclient.clients.llm import LlmClient
 
     calls = {"n": 0}
 
@@ -1349,7 +1349,7 @@ def test_llm_retries_a_500_then_succeeds():
 
 
 def test_llm_surfaces_a_400_with_the_api_message():
-    from webclient.pipelines.llm import LlmClient, LlmError
+    from webclient.clients.llm import LlmClient, LlmError
 
     def handler(req: "httpx.Request") -> "httpx.Response":
         return httpx.Response(400, json={
@@ -1364,7 +1364,7 @@ def test_llm_surfaces_a_400_with_the_api_message():
 
 
 def test_llm_gives_up_after_max_retries():
-    from webclient.pipelines.llm import LlmClient, LlmError
+    from webclient.clients.llm import LlmClient, LlmError
 
     def handler(req: "httpx.Request") -> "httpx.Response":
         return httpx.Response(529, json={"error": {"type": "overloaded", "message": "busy"}})
@@ -1376,7 +1376,7 @@ def test_llm_gives_up_after_max_retries():
 
 
 def test_min_interval_rate_limits(monkeypatch):
-    from webclient.pipelines import llm as llm_mod
+    from webclient.clients import llm as llm_mod
 
     slept: list[float] = []
     monkeypatch.setattr(llm_mod.time, "sleep", lambda s: slept.append(s))
@@ -1388,7 +1388,7 @@ def test_min_interval_rate_limits(monkeypatch):
 
 
 def test_ask_json_survives_an_llm_error():
-    from webclient.pipelines.llm import LlmError
+    from webclient.clients.llm import LlmError
     from webclient.pipelines.onboarding import _ask_json
 
     def boom(prompt: str) -> str:

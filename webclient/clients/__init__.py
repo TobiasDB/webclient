@@ -19,6 +19,18 @@ from .browser import (
     WaitEvent,
 )
 from .http import HTTPXClient, HTTPXFactory, charset_of, sniff_kind
+from .llm import (
+    PRICING,
+    Budget,
+    BudgetExceeded,
+    LlmClient,
+    LlmError,
+    LlmFactory,
+    ModelPrice,
+    Usage,
+    cheapest_model,
+    price_for,
+)
 from .pool import ClientPool, Lease, PoolStats
 
 __all__ = [
@@ -38,4 +50,14 @@ __all__ = [
     "PoolStats",
     "sniff_kind",
     "charset_of",
+    "LlmClient",
+    "LlmFactory",
+    "Budget",
+    "BudgetExceeded",
+    "LlmError",
+    "Usage",
+    "ModelPrice",
+    "PRICING",
+    "price_for",
+    "cheapest_model",
 ]

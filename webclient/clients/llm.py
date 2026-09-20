@@ -1,7 +1,7 @@
-"""A small, reusable LLM client for the pipelines -- and the cost budget that caps a
-run.
+"""The LLM transport client -- the pool-compatible :class:`~.base.Client` for the LLM
+medium -- and the cost budget that caps a run.
 
-The pipeline injects the model as a plain callable (:data:`LLM`, a
+A caller injects the model as a plain callable (:data:`LLM`, a
 ``Callable[[str], str]``): a prompt in, its completion text out. :class:`LlmClient`
 *is* such a callable, so ``onboard_company(..., llm=LlmClient(...))`` just works while
 the stub-``llm`` used in tests keeps working unchanged.
@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+
+from .base import Client, ClientFactory
 
 #: statuses worth retrying: rate limit (429), transient server / overload errors.
 _RETRIABLE_STATUS = frozenset({429, 500, 502, 503, 504, 529})
@@ -239,8 +241,14 @@ class Budget:
 
 
 @dataclass
-class LlmClient:
+class LlmClient(Client):
     """A reusable, dependency-light LLM client that is a drop-in :data:`LLM`.
+
+    Also a pool-compatible :class:`~.base.Client` (``kind = "llm"``): it can be leased and
+    recycled by a :class:`~.pool.ClientPool` like the http / browser clients (build it with
+    :class:`LlmFactory`), or -- since a completion is just ``client(prompt)`` -- used
+    directly. Either way it is the transport for the LLM medium, so it lives here with the
+    other clients rather than in the pipeline.
 
     Call it with a prompt string to get the completion text back. Configure the
     ``model``, the ``base_url`` (any Messages-API endpoint), and ``auth`` (an API key /
@@ -251,6 +259,7 @@ class LlmClient:
     ``http_client``; either keeps the client from touching the network.
     """
 
+    kind = "llm"  # the pool medium (a class attr, so not a dataclass field)
     model: str = DEFAULT_MODEL
     base_url: str | None = None
     auth: str | None = None
@@ -392,11 +401,29 @@ class LlmClient:
         if self.http_client is not None:
             self.http_client.close()
 
+    async def aclose(self) -> None:
+        """The pool ``Client`` teardown: close the underlying HTTP client."""
+        self.close()
+
     def __enter__(self) -> "LlmClient":
         return self
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+
+@dataclass
+class LlmFactory(ClientFactory):
+    """Builds :class:`LlmClient` leases for a :class:`~.pool.ClientPool` -- so an LLM is a
+    poolable medium (``kind = "llm"``) alongside http / browser. Each ``create`` hands back
+    a client configured from this factory's template (``model``/``base_url``/``auth``/...);
+    they can share one ``budget`` to cap spend across leases."""
+
+    kind = "llm"
+    template: "dict[str, Any]" = field(default_factory=dict)
+
+    async def create(self) -> LlmClient:
+        return LlmClient(**self.template)
 
 
 @dataclass
@@ -430,6 +457,7 @@ class _Conversation:
 
 __all__ = [
     "LlmClient",
+    "LlmFactory",
     "Budget",
     "BudgetExceeded",
     "LlmError",

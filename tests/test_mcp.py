@@ -1,4 +1,4 @@
-"""The MCP adapter (webclient.mcp): the task verbs + plan machinery as MCP tools.
+"""The MCP adapter (webclient.llm.mcp): the task verbs + plan machinery as MCP tools.
 
 The tool registry is plain data + handlers, so it is exercised here with no MCP
 SDK installed -- via ``dispatch`` (the same call the stdio server would make).
@@ -7,7 +7,7 @@ SDK installed -- via ``dispatch`` (the same call the stdio server would make).
 import pytest
 
 from webclient import WebClient, ref
-from webclient.mcp import build_tools, dispatch
+from webclient.llm.mcp import build_tools, dispatch
 
 PAGE = """
 <html><head><title>Shop</title></head><body>
@@ -67,7 +67,7 @@ def test_unknown_tool_raises(wc):
 def test_build_server_without_sdk_gives_a_clear_error(wc):
     # the mcp SDK is not installed in the gate env -- the error names the fix.
     pytest.importorskip  # noqa: B018  (keep import available for other tests)
-    from webclient.mcp import build_server
+    from webclient.llm.mcp import build_server
 
     try:
         import mcp  # noqa: F401

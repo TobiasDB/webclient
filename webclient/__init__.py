@@ -39,7 +39,7 @@ from .events import (
     NetworkEvent,
     PlanEvent,
 )
-from .agent import (
+from .llm.agent import (
     AgentRun,
     Click,
     Done,

@@ -58,8 +58,8 @@ from ..core.reference.models import (
 from ..guides import lazy_query_guide
 from ..query.expr import from_blob
 from ..interface import Reference, WebClient, wq
-from .llm import Budget, BudgetExceeded, LlmClient, LlmError
-from .prompts import render_prompt
+from ..clients.llm import Budget, BudgetExceeded, LlmClient, LlmError
+from ..llm.prompts import render_prompt
 
 #: the model: a prompt in, its completion text out. Inject any client (a Claude call,
 #: a local model, or a stub in tests). Kept deliberately minimal.
@@ -2710,8 +2710,8 @@ def onboard_company(
     """Run the whole pipeline for one company: search -> crawl -> select -> evaluate
     -> write the reference, resolve, and query for the best source found.
 
-    Pass a :class:`~webclient.pipelines.llm.Budget` to cap LLM spend for this run: when
-    an :class:`~webclient.pipelines.llm.LlmClient` is the injected ``llm`` the budget is
+    Pass a :class:`~webclient.clients.llm.Budget` to cap LLM spend for this run: when
+    an :class:`~webclient.clients.llm.LlmClient` is the injected ``llm`` the budget is
     attached to it, and if the cap is hit mid-pipeline the run stops and reports
     ``ok=False`` / ``reason="llm budget exceeded"`` instead of raising to the caller.
 

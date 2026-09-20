@@ -23,7 +23,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from .core.reference.models import BrowserConfig, Resolve
 
 if TYPE_CHECKING:
-    from .pipelines.llm import LlmClient
+    from .clients.llm import LlmClient
     from .interface import WebClient
 
 
@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     def llm_client(self, *, auth: str | None = None, **overrides: Any) -> "LlmClient":
         """An ``LlmClient`` configured from ``self.llm`` (auth from ``auth`` or the
         environment's ``ANTHROPIC_API_KEY``; the budget from ``llm.budget_usd``)."""
-        from .pipelines.llm import PRICING, Budget, LlmClient
+        from .clients.llm import PRICING, Budget, LlmClient
 
         kwargs: dict[str, Any] = {
             "model": self.llm.model,

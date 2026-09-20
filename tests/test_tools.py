@@ -1,9 +1,9 @@
-"""The task-verb layer (webclient.tools): thin markdown/rows helpers."""
+"""The task-verb layer (webclient.llm.tools): thin markdown/rows helpers."""
 
 import pytest
 
 from webclient import WebClient
-from webclient.tools import extract, fetch_markdown, fetch_text, links
+from webclient.llm.tools import extract, fetch_markdown, fetch_text, links
 
 PAGE = """
 <html><head><title>Shop</title></head><body>

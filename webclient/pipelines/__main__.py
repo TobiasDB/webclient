@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Sequence, cast
 
 from ..interface import WebClient
-from .llm import Budget, LlmClient, cheapest_model
+from ..clients.llm import Budget, LlmClient, cheapest_model
 from .onboarding import Brief, ddg_search, onboard
 
 

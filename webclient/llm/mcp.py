@@ -14,8 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .query.expr import from_plan
-from .interface import WebClient, default_client
+from ..query.expr import from_plan
+from ..interface import WebClient, default_client
 
 #: a JSON-schema fragment shared by the url-taking verbs.
 _URL = {"type": "string", "description": "an absolute http(s) URL"}
@@ -100,14 +100,14 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
         return {"valid": True, "describe": expr._plan.describe(), "blob": expr.to_blob()}
 
     def run_plan(a: dict[str, Any]) -> Any:
-        from .service import _serialize
+        from ..service import _serialize
 
         expr = from_plan(a.get("blob") or a["plan"], wc())
         context = wc().ref(a["url"]) if a.get("url") else None
         return _serialize(wc().execute(expr, context), {})
 
     def lazy_query_guide(a: dict[str, Any]) -> str:
-        from .guides import lazy_query_guide as _guide
+        from ..guides import lazy_query_guide as _guide
 
         return _guide()
 

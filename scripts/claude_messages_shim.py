@@ -30,7 +30,7 @@ from typing import Any
 
 # the shim lives in scripts/, so its sibling adapter is importable when run as a script
 from claude_llm_adapter import _SYSTEM, claude_code_result
-from webclient.pipelines.llm import LlmError
+from webclient.clients.llm import LlmError
 
 log = logging.getLogger("claude_shim")
 

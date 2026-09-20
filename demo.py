@@ -329,7 +329,7 @@ def main() -> None:
         #      returns a TYPED action (Click / Type / WaitFor / Scroll / Goto / Done); the
         #      loop acts on the ONE page, bounded, recording a replayable Plan. The policy
         #      here is a plain function; in production it's an LLM adapter (any model).
-        from webclient.agent import Done, Observation, Type, WaitFor, drive
+        from webclient.llm import Done, Observation, Type, WaitFor, drive
 
         def policy(obs: Observation):  # a scripted policy: add 2 to the cart, then finish
             if obs.step == 0:
