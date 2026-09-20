@@ -273,6 +273,79 @@ def test_recorded_replay_flags_sequence_divergence(httpserver, wc):
     assert any(getattr(e, "phase", "") == "divergence" for e in events)
 
 
+def test_goto_navigates_the_held_page_in_place(httpserver, wc):
+    # goto is an INTERACTION on the current page (not a new resolve): the same held page
+    # navigates and its content ops read the new URL.
+    httpserver.expect_request("/one").respond_with_data(
+        "<html><title>One</title><body><h1>page one</h1></body></html>", content_type="text/html")
+    httpserver.expect_request("/two").respond_with_data(
+        "<html><title>Two</title><body><h1>page two</h1></body></html>", content_type="text/html")
+    live = wc.ref(httpserver.url_for("/one")).resolve(browser=True).collect()
+    assert "page one" in live.text()
+    live.goto(httpserver.url_for("/two"))  # navigate the held page in place
+    try:
+        assert "page two" in live.text()  # same held page, new content
+    finally:
+        wc.release(live)
+
+
+def test_recorder_captures_and_replays_a_goto(httpserver, wc):
+    httpserver.expect_request("/one").respond_with_data(
+        "<html><title>One</title><body><h1>page one</h1></body></html>", content_type="text/html")
+    httpserver.expect_request("/two").respond_with_data(
+        "<html><title>Two</title><body><h1>page two</h1></body></html>", content_type="text/html")
+    with wc.record() as rec:
+        live = rec.ref(httpserver.url_for("/one")).resolve(browser=True).collect()
+        live.goto(httpserver.url_for("/two"))
+        plan = rec.plan
+    wc.release(live)
+    assert "goto" in plan.describe()  # the in-place navigation is a recorded step
+    fresh = plan.collect()  # replay: resolve(one) then goto(two)
+    try:
+        assert "page two" in fresh.text()
+    finally:
+        wc.release(fresh)
+
+
+def test_agent_loop_drives_records_and_replays(httpserver, wc):
+    # a type-safe page-scoped loop: the policy observes the page and returns a typed action;
+    # the loop acts on the ONE held page, bounded, recording a replayable Plan.
+    from webclient.agent import Click, Done, Observation, drive
+
+    httpserver.expect_request("/loopapp").respond_with_data(APP, content_type="text/html")
+
+    def policy(obs: Observation):
+        if obs.step == 0:
+            return Click(selector="#c1 button")  # reveal the hidden content
+        return Done(result="revealed")
+
+    with wc.record() as rec:
+        page = rec.ref(httpserver.url_for("/loopapp")).resolve(browser=True).collect()
+        run = drive(page, policy, max_steps=5)
+        plan = rec.plan
+    assert run.done and run.reason == "done" and run.result == "revealed" and run.steps == 1
+    assert page.select(".added", error=RETURN).ok  # the loop revealed the content
+    wc.release(page)
+    assert plan.describe().count(".step(") == 1  # the click was recorded as a step
+    fresh = plan.collect()  # the journey replays to the same reached state
+    try:
+        assert fresh.select(".added", error=RETURN).ok
+    finally:
+        wc.release(fresh)
+
+
+def test_agent_loop_is_bounded(httpserver, wc):
+    # a policy that never finishes and never changes the page stalls out -- the loop is
+    # bounded and returns a verdict rather than looping forever.
+    from webclient.agent import WaitFor, drive
+
+    httpserver.expect_request("/staticpage").respond_with_data(APP, content_type="text/html")
+    page = wc.ref(httpserver.url_for("/staticpage")).resolve(browser=True).collect()
+    run = drive(page, lambda obs: WaitFor(selector="body"), max_steps=10, max_stalls=2)
+    wc.release(page)
+    assert not run.done and run.reason == "stalled" and run.steps <= 10
+
+
 def test_reload_re_renders_the_base_page(httpserver, wc):
     # reload() re-renders the BASE page on a fresh browser tier (no interaction replay --
     # that lives in a recorded Plan now).

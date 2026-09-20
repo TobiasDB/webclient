@@ -30,7 +30,9 @@ _CHATTY_ROUND_TRIPS = 4
 #: the eager ops a recording session mirrors into its Plan (see ``WebClient.record``):
 #: the navigations that root a page journey and the live interactions that advance it.
 #: Reads (``select``/``attr``/``title``/...) are never recorded -- they don't change state.
-_RECORDABLE_OPS = frozenset({"resolve", "fetch", "click", "write", "wait_for", "goto"})
+_RECORDABLE_OPS = frozenset(
+    {"resolve", "fetch", "click", "write", "wait_for", "goto", "scroll"}
+)
 
 
 class UnsupportedOp(WebException, TypeError):

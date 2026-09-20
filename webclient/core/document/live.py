@@ -337,14 +337,15 @@ class LiveBacking(Backing):
     """Interaction + live selection on a browser page (capability ``page``)."""
 
     provides = frozenset(
-        {"click", "write", "wait_for", "select", "select_all", "evaluate", "screenshot"}
+        {"click", "write", "wait_for", "select", "select_all", "evaluate",
+         "screenshot", "goto", "scroll"}
     )
     collections = frozenset({"select_all"})
     props = frozenset({"dom_mutations", "console"})
     #: the always-IO browser interactions -> awaitable under async. ``select`` /
     #: ``select_all`` are omitted: on a *static* document (the common case) they
     #: are in-memory (HtmlBacking), so the surface types them synchronously.
-    io = frozenset({"click", "write", "wait_for", "evaluate", "screenshot"})
+    io = frozenset({"click", "write", "wait_for", "evaluate", "screenshot", "goto", "scroll"})
     #: the browser scripts this backing owns: the mutation observer (``init``,
     #: read by ``dom_mutations`` via ``drain``) and the buffer drain (``drain``
     #: phase, run after replay to discard load-time mutations). The client gathers
@@ -499,6 +500,47 @@ class LiveBacking(Backing):
 
     async def screenshot(self, core: "Document", selector: str | None = None) -> "Document":
         return await self._ashot(core, selector)
+
+    async def goto(
+        self, core: "Document", url: str, *, timeout: float | None = None
+    ) -> "Document":
+        """Navigate the HELD page in place to ``url`` -- an INTERACTION on the current page,
+        not a fresh ``resolve`` (no new page/lease). The captured content is refreshed, so
+        the document's content ops read the navigated page. Recorded as a ``.step`` under a
+        recording session, so an agent-loop journey that navigates replays faithfully."""
+        ms = (timeout or 30.0) * 1000
+        core._client.bus.publish(ActionEvent(
+            action="goto", args={"url": url}, document_id=core.name, source="core-action",
+        ))
+        try:
+            await core._page.evaluate("window.__wc_action_index=(window.__wc_action_index||0)+1")
+        except Exception:  # noqa: BLE001 - a page without the init script: correlation skips
+            pass
+        await core._page.goto(url, timeout=ms)
+        core.final_url = core._page.url  # the held page now shows ``url``
+        await drain(core)
+        return core
+
+    async def scroll(
+        self, core: "Document", selector: str | None = None, *, timeout: float | None = None
+    ) -> "Document":
+        """Scroll the held page -- an element into view (``selector``) or, by default, to the
+        bottom (to trigger lazy / infinite-scroll loading). The captured content is refreshed
+        afterward. Recorded + replayable like any interaction."""
+        ms = (timeout or 30.0) * 1000
+        core._client.bus.publish(ActionEvent(
+            action="scroll", args={"selector": selector}, document_id=core.name, source="core-action",
+        ))
+        try:
+            await core._page.evaluate("window.__wc_action_index=(window.__wc_action_index||0)+1")
+        except Exception:  # noqa: BLE001
+            pass
+        if selector is not None:
+            await core._page.locator(selector).first.scroll_into_view_if_needed(timeout=ms)
+        else:
+            await core._page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await drain(core)
+        return core
 
     # -- async bodies --------------------------------------------------------
     async def _aact(

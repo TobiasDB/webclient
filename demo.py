@@ -325,6 +325,28 @@ def main() -> None:
         print("replayed:   ", replayed.select("#cart li").attr("text"))
         wc.release(replayed)
 
+        # [agent] A type-safe, page-scoped agent loop: a policy observes the held page and
+        #      returns a TYPED action (Click / Type / WaitFor / Scroll / Goto / Done); the
+        #      loop acts on the ONE page, bounded, recording a replayable Plan. The policy
+        #      here is a plain function; in production it's an LLM adapter (any model).
+        from webclient.agent import Done, Observation, Type, WaitFor, drive
+
+        def policy(obs: Observation):  # a scripted policy: add 2 to the cart, then finish
+            if obs.step == 0:
+                return Type(selector="#qty", text="2")
+            if obs.step == 1:
+                return WaitFor(selector="#cart")
+            return Done(result="added to cart")
+
+        with wc.record() as rec2:
+            page = rec2.ref(f"{base}/app").resolve(browser=True)
+            page.click("#add")  # seed the cart, then hand off to the loop
+            run = drive(page, policy, max_steps=6)
+            journey = rec2.plan
+        wc.release(page)
+        print("agent:      ", run.reason, f"in {run.steps} step(s) — {run.result!r}")
+        print("journey:    ", journey.describe())
+
         # [flags] browser="auto" escalates a JS-gated page to a browser render on the
         #      response's flags. The /spa page injects its content via JS, so the spa
         #      flag fires (a browser remedy, built from static + rendered signals) and

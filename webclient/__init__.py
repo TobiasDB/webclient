@@ -39,6 +39,16 @@ from .events import (
     NetworkEvent,
     PlanEvent,
 )
+from .agent import (
+    AgentRun,
+    Click,
+    Done,
+    Goto,
+    Observation,
+    Scroll,
+    WaitFor,
+    drive,
+)
 from .guides import lazy_query_guide
 from .query.expr import from_blob, from_describe, from_plan
 from .surfaces import (
@@ -77,6 +87,14 @@ __all__ = [
     "Reference",
     "Crawl",
     "Edge",
+    "drive",
+    "Observation",
+    "AgentRun",
+    "Click",
+    "Done",
+    "Goto",
+    "Scroll",
+    "WaitFor",
     "Element",
     "Robots",
     "Resolve",
