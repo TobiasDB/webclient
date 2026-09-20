@@ -12,6 +12,13 @@ member of a repeated structure so a query agent can choose ``select_all`` knowin
 built from the parsed tree via :func:`index_elements`, so they work on a static resolved page,
 not only a live one. :func:`durable_selector` is the resolver: id / name / aria-label / a stable
 semantic class / a structural nth-of-type path -- never a volatile utility or hashed class.
+
+Note: the browser accessibility tree (CDP ``Accessibility.getFullAXTree``, once CDP is wired
+up) would be a higher-fidelity source of LLM-friendly role/name here -- clean a11y roles and
+computed accessible names -- and is worth revisiting as an alternate ``role``/``name`` source
+(same :class:`IndexedElement` shape) if the tag/aria-derived names below prove too noisy. Not
+pursued for now: it needs a live browser + CDP session, and the static-tree derivation covers
+the common cases without a new dependency.
 """
 
 from __future__ import annotations
