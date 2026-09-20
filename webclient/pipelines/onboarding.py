@@ -1364,8 +1364,8 @@ def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False, recen
     # Deliberately narrow: the packaged query spec + the skeleton + the ask. Nothing
     # about fetching, resolving, or running -- only CSS selectors and the query syntax.
     pager = (
-        "\nThe dataset spans multiple pages: also extract the next-page link "
-        '(a rel="next" anchor) as a field named "next" so the caller can follow it.'
+        "\nThe dataset spans multiple pages -- write the query for ONE page exactly as normal; "
+        "the pipeline follows the pagination automatically. Do NOT add a 'next' field."
         if paginated else ""
     )
     return render_prompt(
@@ -1427,14 +1427,24 @@ def _extraction_steps(doc_expr: Any) -> list[Any]:
     return steps
 
 
-def _executable_query(doc_expr: Any, url: str, resolve: "Resolve | None") -> Any:
+def _paginate_steps(max_pages: int = 50) -> list[Any]:
+    """The plan steps for ``.paginate(by="link", max_pages=N)`` -- spliced between the reference
+    resolve and the extraction so the shipped query walks the dataset's pages (rel=next / the HTTP
+    Link header) and the body extracts across all of them. Authoring still tests page one only."""
+    return list(wq.doc.paginate(by="link", max_pages=max_pages)._plan.steps)
+
+
+def _executable_query(
+    doc_expr: Any, url: str, resolve: "Resolve | None", *, paginate: bool = False, max_pages: int = 50
+) -> Any:
     """DETERMINISTICALLY wrap the model's DOCUMENT-level extraction into a SELF-CONTAINED
     query rooted at the source reference with a ``resolve`` step baked in, so
     ``from_blob(blob).collect()`` fetches + resolves + extracts with no context --
     executable exactly as output. The model supplies only the extraction; this function
     (no LLM) supplies the reference + resolve. When the source needs proxy / antibot, the
     FULL policy is baked in (``resolve(policy=...)``) so the blob re-fetches with it; a
-    plain source just bakes the browser tier."""
+    plain source just bakes the browser tier. ``paginate`` splices a ``.paginate(by="link")``
+    after the resolve, so a paginated source's blob pulls the WHOLE dataset (not page one)."""
     from ..query.expr import Expr
     from ..query.plan import Plan
 
@@ -1444,7 +1454,8 @@ def _executable_query(doc_expr: Any, url: str, resolve: "Resolve | None") -> Any
     else:
         tier = resolve.browser.when if (resolve is not None and resolve.browser is not None) else None
         rooted = ref.resolve(browser=tier) if tier else ref.resolve()
-    steps = [*rooted._plan.steps, *_extraction_steps(doc_expr)]
+    pag = _paginate_steps(max_pages) if paginate else []
+    steps = [*rooted._plan.steps, *pag, *_extraction_steps(doc_expr)]
     return Expr(Plan(root="Reference", source=rooted._plan.source, steps=steps), doc_expr._client)
 
 
@@ -1993,16 +2004,18 @@ def _short_fail_reason(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> 
 
 def _artifact_from(
     expr: Any, doc: Any, brief: Brief, candidate_url: str,
-    resolve: "Resolve | None", bases: "list[str]",
+    resolve: "Resolve | None", bases: "list[str]", *, paginate: bool = False,
 ) -> "tuple[QueryArtifact, list[Any]]":
     """Test one authored query against the source and build its :class:`QueryArtifact` (the
     self-contained, runnable blob + validation verdict + timeliness flag). Shared by the
-    one-shot and staged authors. Returns ``(artifact, extracted_rows)``."""
+    one-shot and staged authors. The extraction is TESTED on the fetched page one only (fast);
+    ``paginate`` bakes a ``.paginate(by="link")`` into the SHIPPED blob so ``run_query`` pulls
+    every page. Returns ``(artifact, extracted_rows)``."""
     tested, rows = _test_query(expr, doc) if doc.ok else (False, [])
     good = _populated_rows(rows)
     missing = _empty_required_fields(good, brief)  # required leaves empty on every row
     tnote, stale = _timeliness(good, brief)  # over ALL rows; a FLAG, never a ship blocker
-    exe = _executable_query(expr, candidate_url, resolve)  # self-contained + runnable
+    exe = _executable_query(expr, candidate_url, resolve, paginate=paginate)  # self-contained + runnable
     try:  # the visual step tree, from the VALID parsed plan (before/independent of testing)
         explain = exe.explain()
     except Exception:  # noqa: BLE001 - never let rendering the explain break authoring
@@ -2440,7 +2453,7 @@ def write_query(
             follow_up = _split_section_follow_up(empties, exprs)
             continue
         expr = exprs[0]
-        art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases)
+        art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases, paginate=paginated)
         if art.complete:
             if not _should_retry_for_recency(art, attempt, tries):
                 note = f" (STALE flag: {art.timeliness})" if art.stale else ""
@@ -2456,7 +2469,7 @@ def write_query(
         # swapping in the nearest real class present in the record, then re-validate.
         repaired = _repair_query(expr, doc)
         if repaired is not None:
-            rart, _rrows = _artifact_from(repaired, doc, brief, candidate_url, resolve, bases)
+            rart, _rrows = _artifact_from(repaired, doc, brief, candidate_url, resolve, bases, paginate=paginated)
             if rart.complete and not _should_retry_for_recency(rart, attempt, tries):
                 note = f" (STALE flag: {rart.timeliness})" if rart.stale else ""
                 log.info("%s: ✓ complete after auto-repairing a selector%s — %d row(s)",

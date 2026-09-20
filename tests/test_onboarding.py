@@ -301,6 +301,36 @@ def test_index_engine_falls_back_to_text_when_detection_fails(httpserver):
     assert seen["text"] >= 1 and seen["index"] == 0  # text did the work; index policy never ran
 
 
+def test_write_query_paginates_a_paginated_source(httpserver):
+    # paginated=True: the model authors a ONE-PAGE query; the pipeline bakes .paginate(by="link")
+    # into the shipped blob, so run_query pulls the WHOLE dataset (the page-1-only bug, fixed).
+    from webclient.pipelines.onboarding import run_query, write_query
+
+    httpserver.expect_request("/p1").respond_with_data(
+        '<main><article class="r"><span class="n">A</span></article>'
+        '<article class="r"><span class="n">B</span></article></main>'
+        '<a rel="next" href="/p2">next</a>',
+        content_type="text/html",
+    )
+    httpserver.expect_request("/p2").respond_with_data(
+        '<main><article class="r"><span class="n">C</span></article></main>',  # no next
+        content_type="text/html",
+    )
+
+    def llm(prompt: str) -> str:  # a normal single-page extraction (no 'next' field)
+        return 'wq.doc.select_all("article.r").extract(n=wq.doc.select(".n").attr("text")).project()'
+
+    with WebClient() as wc:
+        art = write_query(
+            httpserver.url_for("/p1"), Brief(description="items", fields=["n"]),
+            wc=wc, llm=llm, browser="never", retries=0, paginated=True,
+        )
+        assert art is not None and ".paginate(" in art.describe  # pagination baked into the blob
+        assert art.row_count == 2  # authoring TESTED page one only (fast)
+        rows = run_query(art, wc=wc)  # the shipped query walks every page
+    assert [r["n"] for r in rows] == ["A", "B", "C"]
+
+
 def test_sample_table_collapses_newlines_so_columns_dont_shift():
     # an output-summary bug: a value with a newline (an RSS description) broke the aligned
     # sample table so LATER columns rendered shifted/empty. Cells now collapse whitespace.
