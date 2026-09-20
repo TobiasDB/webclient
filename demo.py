@@ -129,6 +129,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 f"<html><body><h1>feed p{page} for {user}</h1>{nxt}" "</body></html>"
             ).encode()
             ctype = "text/html"
+        elif self.path.startswith("/releases"):  # a paginated dataset (rel=next)
+            from urllib.parse import parse_qs, urlparse
+
+            page = int(parse_qs(urlparse(self.path).query).get("p", ["1"])[0])
+            recs = "".join(
+                f'<article class="rel">v{page}.{i}</article>' for i in range(2)
+            )
+            nxt = f'<link rel="next" href="/releases?p={page + 1}">' if page < 3 else ""
+            body = f"<html><head>{nxt}</head><body><main>{recs}</main></body></html>".encode()
+            ctype = "text/html"
         elif self.path == "/login":  # sets a session cookie
             self.send_response(200)
             self.send_header("Set-Cookie", "token=tok; Path=/")
@@ -378,6 +388,18 @@ def main() -> None:
         qrun = build_query(shop, qpolicy)
         print("query agent:", qrun.describe[:60])
         print("query rows: ", qrun.row_count, qrun.sample[:2])
+
+        # [paginate] Walk a paginated dataset into a Collection of same-structure pages
+        #      (rel=next), then the body extracts across ALL pages -- not page 1 only.
+        #      Bounded by max_pages and guarded against out-of-range clamps.
+        pages = wc.fetch(f"{base}/releases?p=1").paginate(by="link", max_pages=5)
+        print("paginate:   ", len(list(pages)), "pages walked")
+        dataset = (
+            wq.reference(f"{base}/releases?p=1").resolve()
+            .paginate(by="link", max_pages=5)
+            .select_all("article.rel").extract(v=wq.doc.attr("text")).project()
+        ).collect()
+        print("dataset:    ", [r["v"] for r in dataset])
 
         # [flags] browser="auto" escalates a JS-gated page to a browser render on the
         #      response's flags. The /spa page injects its content via JS, so the spa

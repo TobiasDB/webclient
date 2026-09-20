@@ -30,6 +30,7 @@ from .structure import StructureBacking
 from .flags import FlagsBacking
 from .regex import RegexBacking
 from .element_index import ElementIndexBacking
+from .paginate import PaginateBacking
 
 if TYPE_CHECKING:
     from ...interface import LazyDocument
@@ -106,6 +107,7 @@ class Document(WebCore, IDocument):
         FlagsBacking(),
         RegexBacking(),
         ElementIndexBacking(),
+        PaginateBacking(),
     )
 
     @property
