@@ -63,6 +63,7 @@ class Crawl(SessionCore, ICrawl[T], Generic[T]):
     _store: dict[str, Any] = PrivateAttr(default_factory=dict)  # SessionCore.store (unused for now)
     _seen: set[str] = PrivateAttr(default_factory=set)  # dedup ledger (canonical urls)
     _robots: dict[str, Any] = PrivateAttr(default_factory=dict)  # per-host RobotFileParser
+    _robots_lock: Any = PrivateAttr(default=None)  # asyncio.Lock (lazy): one robots load at a time
     #: serialises ``step`` rounds so a step's frontier-claim + page-budget + expansion
     #: is atomic. Without it, concurrently-awaited steps (async mode) each read the
     #: same ``len(pages)`` before appending, so each claims the full remaining budget

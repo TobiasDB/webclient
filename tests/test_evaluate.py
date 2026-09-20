@@ -421,3 +421,22 @@ def test_per_call_collect_is_eager(site, wc):
         wc.ref(site.url_for("/cards")).resolve().select(".title", _collect=True)
     )  # a materialised Document
     assert title.attr("text") == "Aeropress"  # eager from here (a str)
+
+
+def test_documents_flattens_a_list_column_and_skips_missing_or_empty():
+    # Collection.documents(column) flattens a list/Collection-valued column across all elements
+    # into one Collection; an element missing the column, or with an empty list, contributes
+    # nothing (no crash on the empty / absent case).
+    from webclient.query.collection import Collection
+
+    a, b, c = {"id": 1}, {"id": 2}, {"id": 3}
+    rows = [
+        {"kids": [a, b]},   # a populated list column
+        {"kids": []},       # an empty list -> contributes nothing
+        {"other": c},       # missing the column entirely -> skipped
+        {"kids": [c]},      # more items, appended in order
+    ]
+    flat = list(Collection(rows).documents("kids"))
+    assert flat == [a, b, c]
+    # a column that is absent on EVERY element -> an empty Collection, not an error
+    assert list(Collection(rows).documents("nope")) == []

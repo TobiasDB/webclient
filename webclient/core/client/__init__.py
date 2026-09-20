@@ -582,7 +582,9 @@ class WebClient(SessionCore, IWebClient):
         # is a common anti-bot tell -- the server drops a client it dislikes before any
         # response. Under ``auto`` treat it as an anti-bot trigger and escalate to a
         # (stealth, and fingerprinted when configured) browser, whose real TLS/HTTP2
-        # stack often clears it. Its own failure then surfaces normally.
+        # stack often clears it. Its own failure then surfaces normally. (No _capture is
+        # skipped here: a transport failure returned resp=None with no response, so the
+        # static hop produced no navigation events to carry onto the browser doc.)
         if mode == "auto" and _looks_like_bot_block(doc.error):
             return await self._escalate_to_browser(
                 ref, list(doc._events), doc.content,

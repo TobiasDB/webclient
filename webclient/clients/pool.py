@@ -48,6 +48,9 @@ class ClientPool:
 
     #: kinds whose clients are recycled on release (else closed)
     _RECYCLE = frozenset({"http"})
+    #: the concurrency cap for a kind with no explicit limit -- shared by the semaphore AND the
+    #: stats denominators so an un-limited kind can't lease at one cap while stats reports another.
+    _DEFAULT_LIMIT = 10
 
     def __init__(
         self,
@@ -68,7 +71,7 @@ class ClientPool:
     def _semaphore(self, kind: str) -> asyncio.Semaphore:
         """The per-kind concurrency gate, created lazily at that kind's limit (default 10)."""
         if kind not in self._sem:
-            self._sem[kind] = asyncio.Semaphore(self._limits.get(kind, 10))
+            self._sem[kind] = asyncio.Semaphore(self._limits.get(kind, self._DEFAULT_LIMIT))
         return self._sem[kind]
 
     async def lease(self, kind: str) -> Lease:
@@ -134,7 +137,7 @@ class ClientPool:
         its total is the concurrency cap (the limit)."""
         if kind in self._RECYCLE:
             return self._created.get(kind, 0)
-        return self._limits.get(kind, 0)
+        return self._limits.get(kind, self._DEFAULT_LIMIT)
 
     def _free(self, kind: str) -> int:
         """Clients available to lease right now. Recycled kinds hand back idle warm
@@ -144,7 +147,7 @@ class ClientPool:
         ``free`` can never exceed ``total`` -- see ``pages_free``/``pages_total``."""
         if kind in self._RECYCLE:
             return len(self._idle.get(kind, []))
-        return self._limits.get(kind, 0) - self._held.get(kind, 0)
+        return self._limits.get(kind, self._DEFAULT_LIMIT) - self._held.get(kind, 0)
 
     def stats(self) -> PoolStats:
         """A snapshot of pool occupancy (http/page total + free) for observability."""

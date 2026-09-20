@@ -349,8 +349,12 @@ class CrawlBacking(Backing):
         """Whether ``url`` is crawlable under its host's robots.txt (fetched and cached once per
         host); allowed when there is no robots file."""
         host = _canon_host(url)
-        if host not in core._robots:  # load this host's robots.txt once
-            core._robots[host] = await self._load_robots(core, url)
+        if host not in core._robots:  # load this host's robots.txt ONCE
+            if core._robots_lock is None:  # sync check+assign on the one loop -> racers share it
+                core._robots_lock = asyncio.Lock()
+            async with core._robots_lock:  # serialise loads; re-check inside so a racer waits, not re-fetches
+                if host not in core._robots:
+                    core._robots[host] = await self._load_robots(core, url)
         robots: "RobotFileParser | None" = core._robots[host]
         return robots is None or robots.can_fetch("*", url)
 
