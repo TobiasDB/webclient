@@ -49,7 +49,7 @@ from .llm.agent import (
     WaitFor,
     drive,
 )
-from .guides import lazy_query_guide
+from .llm.guides import lazy_query_guide
 from .query.expr import from_blob, from_describe, from_plan
 from .interface import (
     AsyncDocument,

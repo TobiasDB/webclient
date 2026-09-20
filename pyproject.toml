@@ -35,10 +35,11 @@ include = ["webclient*"]
 # PEP 561: ship the py.typed marker so downstream type checkers use the inline
 # types (the package is mypy --strict + pyright clean).
 [tool.setuptools.package-data]
-webclient = ["py.typed", "skills/*.md"]
+webclient = ["py.typed"]
+"webclient.llm" = ["skills/*.md"]
 # The onboarding pipeline's prompts + reusable briefs ship as package data (loaded
-# via importlib.resources from webclient.pipelines).
-"webclient.pipelines.prompts" = ["*.md"]
+# via importlib.resources from their package)..
+"webclient.llm.prompts" = ["*.md"]
 "webclient.pipelines" = ["briefs/*.md"]
 
 # The `onboard` CLI: `onboard <brief> <company> [<company> ...]`.

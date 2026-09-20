@@ -55,7 +55,7 @@ from ..core.reference.models import (
     ProxyPolicy,
     Resolve,
 )
-from ..guides import lazy_query_guide
+from ..llm.guides import lazy_query_guide
 from ..query.expr import from_blob
 from ..interface import Reference, WebClient, wq
 from ..clients.llm import Budget, BudgetExceeded, LlmClient, LlmError

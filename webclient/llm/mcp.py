@@ -107,7 +107,7 @@ def build_tools(client: WebClient | None = None) -> list[Tool]:
         return _serialize(wc().execute(expr, context), {})
 
     def lazy_query_guide(a: dict[str, Any]) -> str:
-        from ..guides import lazy_query_guide as _guide
+        from .guides import lazy_query_guide as _guide
 
         return _guide()
 

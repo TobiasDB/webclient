@@ -2,7 +2,7 @@
 collection surfaces' docstrings, it teaches schema -> query, and it carries none of
 the "lazy / doesn't run" framing (the author just writes a query)."""
 
-from webclient.guides import lazy_query_guide
+from webclient.llm.guides import lazy_query_guide
 
 
 def test_op_reference_is_generated_from_live_docstrings():

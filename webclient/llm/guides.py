@@ -27,7 +27,7 @@ _MARKER = "<!-- OP-REFERENCE -->"
 
 def _skill(name: str) -> str:
     """The text of a bundled skill (``webclient/skills/<name>.md``)."""
-    return files("webclient").joinpath(f"skills/{name}.md").read_text(encoding="utf-8")
+    return files("webclient.llm").joinpath(f"skills/{name}.md").read_text(encoding="utf-8")
 
 
 def _first_sentence(doc: str | None) -> str:
@@ -56,8 +56,8 @@ def _op_docs(ops: "tuple[str, ...]", providers: "list[Any]") -> "dict[str, str]"
 def _lazy_op_reference() -> str:
     """The op reference, generated from the live document + collection surfaces and
     their docstrings -- so it always matches what the ops actually do."""
-    from .query.collection import Collection
-    from .core.document import Document
+    from ..query.collection import Collection
+    from ..core.document import Document
 
     backings = [type(b) for b in Document.BACKINGS]
     doc_docs = _op_docs(_QUERY_OPS, backings)
