@@ -49,7 +49,7 @@ log = logging.getLogger("webclient.pipelines.onboarding")
 
 from ..core.crawl import from_picks
 from ..core.document.models import Flag
-from ..core.reference.models import (
+from ..policy import (
     AntiBotPolicy,
     BrowserPolicy,
     ProxyPolicy,

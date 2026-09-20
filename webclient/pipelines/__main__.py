@@ -114,7 +114,7 @@ def main(argv: "Sequence[str] | None" = None) -> int:
 
     budget = Budget(max_usd=args.budget)
     llm = _build_llm(args, budget, parser)
-    from ..core.reference.models import BrowserConfig
+    from ..policy import BrowserConfig
     with WebClient(browser_config=BrowserConfig(proxy=args.proxy)) as wc, llm:
         results = onboard(
             args.companies, brief, wc=wc, llm=llm, search=ddg_search,

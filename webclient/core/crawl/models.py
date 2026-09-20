@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, Field
 
 from ..document.models import PageCard  # the default projection's output (re-exported)
-from ..reference.models import Resolve
+from ...policy import Resolve
 
 if TYPE_CHECKING:
     from . import Crawl  # noqa: F401  (step/run return the crawl itself)

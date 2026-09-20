@@ -588,8 +588,8 @@ def main() -> None:
 
     # [#7] The resiliency policy bundle is declared to a proxy service as request
     #      headers (the service is assumed to exist; here we just show the headers).
-    from webclient.core.reference.models import ProxyPolicy, RatePolicy, Resolve
-    from webclient.resiliency import policy_headers
+    from webclient.policy import ProxyPolicy, RatePolicy, Resolve
+    from webclient.policy import policy_headers
 
     declared = policy_headers(
         Resolve(proxy=ProxyPolicy(pool="residential", geo="us"), rate=RatePolicy(rps=2))

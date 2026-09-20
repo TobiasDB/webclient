@@ -28,10 +28,10 @@ from ...events import EventBus
 from ...models import NavigationEvent, NetworkEvent, PlanEvent
 from ...query.executor import aevaluate, astream, evaluate
 from ..document import Document
-from ...resiliency import policy_headers
+from ...policy import policy_headers
 from ...signals import flags_from_response
 from ..reference import Reference, from_url
-from ..reference.models import ProxyPolicy, Resolve
+from ...policy import ProxyPolicy, Resolve
 from ..engine import Engine
 from ..session_core import SessionCore
 from ..web_core import Backing

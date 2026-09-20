@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from ..reference.models import BrowserConfig, Resolve
+from ...policy import BrowserConfig, Resolve
 
 if TYPE_CHECKING:
     from ...clients import WaitConfig  # noqa: F401  (fetch wait strategy)

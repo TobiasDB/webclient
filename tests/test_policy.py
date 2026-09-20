@@ -13,7 +13,7 @@ from webclient import (
     RetryPolicy,
 )
 from webclient.core.document import Document
-from webclient.core.reference.models import resolve_policy
+from webclient.policy import resolve_policy
 
 
 def test_policy_defaults_and_auto_variants():

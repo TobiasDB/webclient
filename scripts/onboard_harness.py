@@ -38,7 +38,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from webclient import WebClient
-from webclient.core.reference.models import BrowserConfig
+from webclient.policy import BrowserConfig
 from webclient.pipelines import Brief, SearchHit, onboard_company
 
 # per-thread log capture: every company runs in its own thread against ONE shared client;

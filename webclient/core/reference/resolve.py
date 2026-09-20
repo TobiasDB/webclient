@@ -37,7 +37,7 @@ class ResolveBacking(Backing):
         alone still works for the common case. ``keep_alive`` (browser only) marks the live
         page as caller-owned so a plan won't auto-release it. ``wait`` picks the render wait."""
         from ...errors import lenient
-        from .models import Resolve
+        from ...policy import Resolve
 
         pol: "Resolve | None" = None
         if policy is not None:

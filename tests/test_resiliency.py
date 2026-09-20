@@ -172,7 +172,7 @@ def test_auto_fails_on_a_login_wall(httpserver, wc):
 def test_resolve_policy_is_sent_as_proxy_headers(httpserver):
     from werkzeug.wrappers import Response
 
-    from webclient.core.reference.models import ProxyPolicy, RatePolicy, Resolve
+    from webclient.policy import ProxyPolicy, RatePolicy, Resolve
 
     seen: dict[str, str] = {}
 
@@ -250,7 +250,7 @@ def test_no_webclient_headers_leak_on_a_direct_connection(httpserver):
     # rate/retry policy is configured.
     from werkzeug.wrappers import Response
 
-    from webclient.core.reference.models import RatePolicy, Resolve
+    from webclient.policy import RatePolicy, Resolve
 
     seen: dict[str, str] = {}
 

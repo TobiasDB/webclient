@@ -1243,7 +1243,7 @@ def test_summary_prints_scores_flags_reference_resolve_and_a_table():
     import io
     import logging as _logging
 
-    from webclient.core.reference.models import BrowserPolicy, ProxyPolicy, Resolve
+    from webclient.policy import BrowserPolicy, ProxyPolicy, Resolve
     from webclient.pipelines import onboarding as ob
     from webclient.pipelines.onboarding import CandidateEval, OnboardingResult, QueryArtifact
 
@@ -1498,7 +1498,7 @@ def test_executable_query_bakes_the_full_resolve_policy(httpserver):
     # F2: a proxy/antibot source bakes the FULL Resolve into the blob (not just the browser
     # tier), so the shipped query re-fetches WITH the policy instead of un-proxied.
     from webclient import from_blob, wq
-    from webclient.core.reference.models import AntiBotPolicy, BrowserPolicy, ProxyPolicy, Resolve
+    from webclient.policy import AntiBotPolicy, BrowserPolicy, ProxyPolicy, Resolve
     from webclient.pipelines.onboarding import _executable_query
 
     r = Resolve(proxy=ProxyPolicy.auto(), antibot=AntiBotPolicy(level="stealth"),
@@ -1522,7 +1522,7 @@ def test_output_query_is_self_contained_and_executable(httpserver):
     # produces a SELF-CONTAINED blob: from_blob(blob).collect() (no context) fetches,
     # resolves and extracts -- executable as is.
     from webclient import WebClient, from_blob, wq
-    from webclient.core.reference.models import Resolve
+    from webclient.policy import Resolve
     from webclient.pipelines.onboarding import _executable_query
 
     httpserver.expect_request("/p").respond_with_data(
@@ -1543,7 +1543,7 @@ def test_executable_query_strips_stray_navigation_from_the_model():
     # deterministic join: even if the model prefixed a resolve, only its extraction is
     # used (one reference + one resolve, supplied by the pipeline -- not the model).
     from webclient import wq
-    from webclient.core.reference.models import Resolve
+    from webclient.policy import Resolve
     from webclient.pipelines.onboarding import _executable_query
 
     stray = wq.ref.resolve().select_all(".r").extract(n=wq.doc.select(".n").attr("text")).project()

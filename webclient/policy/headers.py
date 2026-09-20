@@ -1,4 +1,4 @@
-"""Translate a :class:`~webclient.core.reference.models.Resolve` bundle into the
+"""Translate a :class:`.models.Resolve` bundle into the
 request headers a proxy / unblocker service reads.
 
 Rate-limit, retry and proxy behaviour that a downstream proxy service performs is
@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Iterable
 
 if TYPE_CHECKING:
-    from ..core.reference.models import (
+    from .models import (
         ProxyPolicy,
         RatePolicy,
         Resolve,

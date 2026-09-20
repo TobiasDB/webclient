@@ -84,7 +84,7 @@ def test_stealth_fingerprints_are_internally_consistent():
 def test_client_wide_proxy_reaches_http_and_browser_factories():
     # one BrowserConfig.proxy routes BOTH the httpx client and the browser through the same proxy.
     from webclient import WebClient
-    from webclient.core.reference.models import BrowserConfig
+    from webclient.policy import BrowserConfig
 
     with WebClient(browser_config=BrowserConfig(proxy="http://user:pw@127.0.0.1:8888")) as wc:
         factories = wc.pool._factories

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .core.reference.models import BrowserConfig, Resolve
+from .policy import BrowserConfig, Resolve
 
 if TYPE_CHECKING:
     from .clients.llm import LlmClient

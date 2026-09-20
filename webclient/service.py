@@ -279,7 +279,7 @@ def create_app(
         (a dict from the remote client's ``model_dump``); ``None`` when absent."""
         if not value:
             return None
-        from .core.reference.models import Resolve
+        from .policy import Resolve
 
         return Resolve.model_validate(value)
 

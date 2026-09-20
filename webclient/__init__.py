@@ -5,7 +5,7 @@ from .query.collection import Collection, Field
 from .core.crawl import Crawl, Edge
 from .core.client.models import Robots
 from .core.document import Element, HtmlBacking, JsonBacking
-from .core.reference.models import (
+from .policy import (
     AUTO,
     AntiBotPolicy,
     BrowserConfig,
