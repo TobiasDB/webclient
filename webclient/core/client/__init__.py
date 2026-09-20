@@ -579,12 +579,13 @@ class WebClient(SessionCore, IWebClient):
                 ref, list(doc._events), doc.content,
                 tiers=["static", "browser"], keep_alive=keep_alive, wait=wait,
             )
-        flags = self._observe(doc, resp)
         # browser="auto": a FLAG-driven escalation ladder. Read the request+static
         # flags; a login wall fails (no transport fixes credentials), an anti-bot
         # challenge escalates to a fresh proxy exit (then a stealth browser for a
         # named vendor), a SPA escalates to a browser render. Re-read after each hop.
-        # Bounded: static -> (proxy) -> browser.
+        # Bounded: static -> (proxy) -> browser. Only auto MODE reads flags, so a plain
+        # fetch never pays for detection (or its HTML parse) at all.
+        flags = self._observe(doc, resp) if mode == "auto" else None
         if mode == "auto" and doc.error is None and flags is not None:
             if flags["login_required"].present:  # a credential wall -- fail loudly
                 doc.error = WebError(

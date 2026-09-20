@@ -271,6 +271,7 @@ async def drain(doc: "Document") -> None:
         doc._events.extend(xhr_events(result.get("xhr", []), doc, doc._xhr_bodies))
     doc.content = (await doc._page.content()).encode()  # keep content current
     doc._tree = None  # invalidate the cached lxml parse of the old content
+    doc._flag_cache = None  # ...and the memoised flag set (the DOM just changed)
 
 
 def console_event(level: str, text: str, doc: "Document") -> ConsoleEvent:

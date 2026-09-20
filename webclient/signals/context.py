@@ -10,23 +10,13 @@ Pure (no cores, no lxml) so the request/static half runs on a remote resolve too
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-_TAGS = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.I | re.S)
-_ANYTAG = re.compile(r"<[^>]+>")
-
-
-def norm(text: str) -> str:
-    """Collapse whitespace to single spaces (a shared helper, no lxml)."""
-    return " ".join(text.split())
-
-
-def visible_text(html: str) -> str:
-    """Rough visible text: drop script/style, strip tags, collapse whitespace."""
-    return " ".join(_ANYTAG.sub(" ", _TAGS.sub(" ", html)).split())
+# from the shared toolkit; norm/visible_text are lxml-free and re-exported so ``context``
+# stays remote-safe, and ``parse_html`` is lxml-lazy (degrades to ``None`` without lxml).
+from ..dom import norm as norm, parse_html, visible_text as visible_text
 
 
 def _lower_headers(headers: "Mapping[Any, Any] | Iterable[tuple[Any, Any]]") -> dict[str, str]:
@@ -89,6 +79,11 @@ class Context:
         low = text.lower()[:8000]
         is_html = "html" in hmap.get("content-type", "") or "<html" in low or "<!doctype html" in low
         cookie_names = list(cookies.keys()) if isinstance(cookies, Mapping) else list(cookies)
+        # When no facet tree was supplied, parse the static HTML ourselves so tree-based
+        # detectors take the accurate cssselect path. ``parse_html`` returns ``None`` when lxml
+        # is absent (a slim/remote install), so the regex fallbacks remain the degraded path.
+        if tree is None and is_html:
+            tree = parse_html(text)
         return cls(
             status=status,
             headers=hmap,

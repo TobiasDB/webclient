@@ -12,7 +12,7 @@ extended by registering a detector, no change here.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from ...signals import Context, flags as detect_flags, framework as detect_framework
 from ...signals import dom as _dom  # noqa: F401  (registers the rendered/tree detectors)
@@ -59,9 +59,14 @@ class FlagsBacking(Backing):
         )
 
     def _flags(self, core: "Document") -> "dict[str, Flag]":
-        """The full flag set from the signal registry, keyed by flag name (the shared
-        source every per-flag accessor reads)."""
-        return detect_flags(self._context(core))
+        """The full flag set from the signal registry, keyed by flag name (the shared source
+        every per-flag accessor reads). Memoised on the document so reading several flags is ONE
+        detection pass, not one per accessor; the cache is cleared when the content changes
+        (``drain`` after a live interaction), and a static document never changes."""
+        cached = core._flag_cache
+        if cached is None:
+            cached = core._flag_cache = detect_flags(self._context(core))
+        return cast("dict[str, Flag]", cached)
 
     # -- per-flag typed accessors ---------------------------------------------
     def spa(self, core: "Document") -> Flag:

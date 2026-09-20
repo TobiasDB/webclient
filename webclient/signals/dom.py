@@ -14,7 +14,8 @@ import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlparse
 
-from .context import Context, norm
+from ..dom import norm
+from .context import Context
 from .registry import Hit, detector, flag
 
 if TYPE_CHECKING:
