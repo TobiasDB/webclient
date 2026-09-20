@@ -334,6 +334,35 @@ def test_agent_loop_drives_records_and_replays(httpserver, wc):
         wc.release(fresh)
 
 
+def test_agent_loop_drives_by_index(httpserver, wc):
+    # Phase 4: the policy targets a control BY INDEX from the observation's element table (no
+    # selector authored); the loop resolves the index -> the durable selector, acts, and records
+    # a normal selector step -- so the journey still replays.
+    from webclient.llm.agent import Click, Done, Observation, drive
+
+    httpserver.expect_request("/idxapp").respond_with_data(APP, content_type="text/html")
+
+    def policy(obs: Observation):
+        if obs.step == 0:
+            btn = next(e for e in obs.elements if e.role == "button")  # pick "grow" by index
+            return Click(index=btn.index)
+        return Done(result="grown")
+
+    with wc.record() as rec:
+        page = rec.ref(httpserver.url_for("/idxapp")).resolve(browser=True).collect()
+        run = drive(page, policy, max_steps=5)
+        plan = rec.plan
+    assert run.done and run.result == "grown"
+    assert page.select(".added", error=RETURN).ok  # the index-resolved click revealed content
+    wc.release(page)
+    assert plan.describe().count(".step(") == 1  # recorded as a normal (durable) selector step
+    fresh = plan.collect()  # and it replays against a fresh render
+    try:
+        assert fresh.select(".added", error=RETURN).ok
+    finally:
+        wc.release(fresh)
+
+
 def test_agent_loop_is_bounded(httpserver, wc):
     # a policy that never finishes and never changes the page stalls out -- the loop is
     # bounded and returns a verdict rather than looping forever.

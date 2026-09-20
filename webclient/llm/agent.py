@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field
 
+from ..core.document.models import IndexedElement
 from ..loop import BoundedLoop
 
 if TYPE_CHECKING:
@@ -38,40 +39,50 @@ if TYPE_CHECKING:
 # -- what the policy sees ----------------------------------------------------
 class Observation(BaseModel):
     """A snapshot of the held page handed to the policy each turn: the loop position and
-    budget, the current URL/title, and a token-lean ``skeleton`` of the DOM (interactive
-    controls marked) -- enough for a policy to choose the next action. ``error`` carries the
-    last action's failure message (so the policy can recover) or ``""``."""
+    budget, the current URL/title, a token-lean ``skeleton`` of the DOM, and ``elements`` -- the
+    numbered, class-free table of interactive controls (:class:`IndexedElement`) the policy can
+    target BY INDEX. ``error`` carries the last action's failure message (so the policy can
+    recover) or ``""``."""
 
     step: int
     max_steps: int
     url: str = ""
     title: str | None = None
     skeleton: str = ""
+    elements: list[IndexedElement] = []
     error: str = ""
 
 
 # -- the typed action set (a discriminated union) ----------------------------
+# The target actions accept EITHER a class-free ``index`` into the observation's element table
+# (the loop resolves it to a durable selector) OR an explicit ``selector`` -- so a policy can
+# reason purely in indexes (the Phase-4 path) yet a selector policy still works (additive).
 class Click(BaseModel):
     action: Literal["click"] = "click"
-    selector: str
+    index: int | None = None
+    selector: str = ""
 
 
 class Type(BaseModel):
-    """Type ``text`` into ``selector`` (the document's ``write``)."""
+    """Type ``text`` into the target element (by ``index`` or ``selector``) -- the document's
+    ``write``."""
 
     action: Literal["type"] = "type"
-    selector: str
+    index: int | None = None
+    selector: str = ""
     text: str
 
 
 class WaitFor(BaseModel):
     action: Literal["wait_for"] = "wait_for"
-    selector: str
+    index: int | None = None
+    selector: str = ""
 
 
 class Scroll(BaseModel):
     action: Literal["scroll"] = "scroll"
-    selector: str | None = None  # None = scroll to the bottom (reveal lazy content)
+    index: int | None = None
+    selector: str | None = None  # None (and no index) = scroll to the bottom (reveal lazy content)
 
 
 class Goto(BaseModel):
@@ -110,18 +121,39 @@ class AgentRun(BaseModel):
 
 
 def _observe(doc: "Document", step: int, max_steps: int, error: str) -> Observation:
-    """Snapshot the current page into an ``Observation`` (url / title / skeleton / step budget /
-    any error) -- what the policy model sees to choose the next action."""
+    """Snapshot the current page into an ``Observation`` (url / title / skeleton / the interactive
+    element table / step budget / any error) -- what the policy model sees to choose the next
+    action. The element table lets the policy target a control by INDEX, class-free."""
     title = doc.title if doc.has_op("title") else None
     skeleton = doc.skeleton() if doc.has_op("skeleton") else ""
+    elements = doc.controls() if doc.has_op("controls") else []
     return Observation(
         step=step, max_steps=max_steps, url=getattr(doc, "url", "") or "",
-        title=title, skeleton=skeleton, error=error,
+        title=title, skeleton=skeleton, elements=elements, error=error,
     )
 
 
+def _resolve(act: Any, obs: Observation) -> Any:
+    """Turn an INDEX-based action into a selector action using the current observation's element
+    table -- the index the agent picked is looked up to its durable selector, so the loop then
+    executes and RECORDS a normal ``action + selector``. A selector/no-target action passes
+    through. An index with no matching element resolves to no selector, so :func:`_apply` skips
+    it (freshness: the element vanished this round -> re-observe next round, don't act blindly)."""
+    idx = getattr(act, "index", None)
+    if idx is None:
+        return act
+    el = next((e for e in obs.elements if e.index == idx), None)
+    if el is None or not el.selector:
+        return act
+    return act.model_copy(update={"selector": el.selector})
+
+
 def _apply(doc: "Document", act: Any) -> None:
-    """Execute one action as an ordinary document interaction (so it records + replays)."""
+    """Execute one action as an ordinary document interaction (so it records + replays). An
+    index-based action whose index did not resolve to a selector this round is a NO-OP (the
+    element is stale/gone -- skip and re-observe next round rather than act on a stale index)."""
+    if getattr(act, "index", None) is not None and not act.selector:
+        return  # freshness: an unresolved index -> skip, re-observe next round
     if isinstance(act, Click):
         doc.click(act.selector)
     elif isinstance(act, Type):
@@ -162,7 +194,9 @@ def drive(
     specialised for a live page; returns the :class:`AgentRun` verdict."""
     loop: "BoundedLoop[Document, Observation, Any]" = BoundedLoop(
         observe=lambda d, step, err: _observe(d, step, max_steps, err),
-        decide=policy,
+        # the policy may target a control by INDEX; resolve it to a durable selector against the
+        # just-observed element table before applying (so the recorded step is a normal selector).
+        decide=lambda obs: _resolve(policy(obs), obs),
         done_result=_done_result,
         apply=_apply,
         progress=_progress,

@@ -332,12 +332,15 @@ def main() -> None:
         # [agent] A type-safe, page-scoped agent loop: a policy observes the held page and
         #      returns a TYPED action (Click / Type / WaitFor / Scroll / Goto / Done); the
         #      loop acts on the ONE page, bounded, recording a replayable Plan. The policy
-        #      here is a plain function; in production it's an LLM adapter (any model).
+        #      here is a plain function; in production it's an LLM adapter (any model). It can
+        #      target a control BY INDEX from obs.elements (Phase 4) -- the loop resolves the
+        #      index to a durable selector, so the recorded step still replays.
         from webclient.llm import Done, Observation, Type, WaitFor, drive
 
         def policy(obs: Observation):  # a scripted policy: add 2 to the cart, then finish
             if obs.step == 0:
-                return Type(selector="#qty", text="2")
+                qty = next((e for e in obs.elements if e.role == "textbox"), None)
+                return Type(index=qty.index, text="2") if qty else Type(selector="#qty", text="2")
             if obs.step == 1:
                 return WaitFor(selector="#cart")
             return Done(result="added to cart")
