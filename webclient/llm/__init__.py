@@ -24,12 +24,21 @@ from .agent import (
 )
 from .mcp import Tool, build_server, build_tools, dispatch, serve
 from .prompts import render_prompt
+from .query_agent import (
+    QueryDecision,
+    QueryObservation,
+    QueryPolicy,
+    QueryRun,
+    build_query,
+)
 from .tools import extract, fetch_markdown, fetch_text, links, page_skeleton
 
 __all__ = [
-    # agent loop
+    # interaction loop
     "drive", "Observation", "Action", "AgentRun", "Policy",
     "Click", "Type", "WaitFor", "Scroll", "Goto", "Done",
+    # query loop
+    "build_query", "QueryObservation", "QueryDecision", "QueryRun", "QueryPolicy",
     # mcp
     "Tool", "build_tools", "dispatch", "build_server", "serve",
     # task verbs

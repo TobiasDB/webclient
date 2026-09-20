@@ -24,7 +24,7 @@ from .html import _is_noise_class, tree
 from .interactivity import interactive
 from .models import IndexedElement
 from .naming import _wordlike, name as _name
-from .record_regions import _path, _scan
+from .record_regions import _path, _scan, find_record_regions
 
 if TYPE_CHECKING:
     from . import Document
@@ -148,6 +148,43 @@ def _repeat_counts(root: Any) -> "dict[str, int]":
     return counts
 
 
+def record_options(root: Any, *, top_k: int = 5) -> "list[IndexedElement]":
+    """The repeated-record REGIONS of ``root`` as numbered options -- what a query agent picks
+    its ``select_all`` container from. Each entry's ``selector`` is the region's item selector
+    and ``repeats`` its member count (best-scoring regions first, up to ``top_k``)."""
+    out: list[IndexedElement] = []
+    for region in find_record_regions(root, top_k=top_k):
+        out.append(IndexedElement(
+            index=len(out) + 1, role="record", name=f"{region.count} items",
+            kind="content", selector=region.item_selector, repeats=region.count,
+        ))
+    return out
+
+
+def field_options(root: Any, record_selector: str, *, limit: int = 40) -> "list[IndexedElement]":
+    """The extractable FIELD leaves inside the FIRST instance of ``record_selector`` as numbered
+    options -- what a query agent picks its extract columns from. Each ``selector`` is scoped to
+    the record subtree (``durable_selector(..., within=record)``), so it evaluates per row."""
+    records = root.cssselect(record_selector)
+    if not records:
+        return []
+    first = records[0]
+    out: list[IndexedElement] = []
+    for leaf in first.iter():
+        if not isinstance(getattr(leaf, "tag", None), str):
+            continue
+        txt = text_of(leaf)
+        if not txt or any(isinstance(c.tag, str) and text_of(c) for c in leaf):
+            continue  # only leaves whose text is their own (not a container's aggregated text)
+        out.append(IndexedElement(
+            index=len(out) + 1, role=_role(leaf, False), name=txt[:60],
+            kind="content", selector=durable_selector(leaf, within=first),
+        ))
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _render_table(rows: "list[IndexedElement]") -> str:
     """The numbered element table an agent reads: one ``N  role "name"`` line per element (with a
     ``(repeats ×K)`` tag on a repeated row). No selectors, no classes -- indexes in, and the loop
@@ -190,4 +227,7 @@ class ElementIndexBacking(Backing):
         return _render_table(rows)
 
 
-__all__ = ["ElementIndexBacking", "durable_selector", "index_elements"]
+__all__ = [
+    "ElementIndexBacking", "durable_selector", "index_elements",
+    "record_options", "field_options",
+]

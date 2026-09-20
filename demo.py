@@ -38,6 +38,8 @@ PAGE = b"""
     <a class="link" href="/items/1">view</a><span class="price">$39</span></div>
   <div class="card"><h2 class="title">Grinder</h2>
     <a class="link" href="/items/2">view</a><span class="price">$129</span></div>
+  <div class="card"><h2 class="title">Kettle</h2>
+    <a class="link" href="/items/3">view</a><span class="price">$79</span></div>
 </main>
 <footer>fine print</footer>
 </body></html>
@@ -107,6 +109,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body, ctype = ITEM % (1, b"Aeropress"), "application/json"
         elif self.path == "/items/2":
             body, ctype = ITEM % (2, b"Grinder"), "application/json"
+        elif self.path == "/items/3":
+            body, ctype = ITEM % (3, b"Kettle"), "application/json"
         elif self.path.startswith("/feed"):  # paginated + cookie-aware
             from urllib.parse import parse_qs, urlparse
 
@@ -353,6 +357,27 @@ def main() -> None:
         wc.release(page)
         print("agent:      ", run.reason, f"in {run.steps} step(s) — {run.result!r}")
         print("journey:    ", journey.describe())
+
+        # [query agent] The QUERY twin of the loop: a policy picks a RECORD + FIELDS by
+        #      index (build_query), and we assemble a durable
+        #      select_all(record).extract(fields).project() query -- the model never
+        #      authors a selector. Scripted here; an LLM adapter in production.
+        from webclient.llm import QueryDecision, QueryObservation, build_query
+
+        def qpolicy(obs: QueryObservation):
+            if obs.step == 0 and obs.records:  # pick the top repeated record region
+                return QueryDecision(record=obs.records[0].index)
+            if obs.fields:  # add name + price columns from the record's leaves, then done
+                cols = {"name": obs.fields[0].index}
+                price = next((f for f in obs.fields if f.name.startswith("$")), None)
+                if price:
+                    cols["price"] = price.index
+                return QueryDecision(fields=cols, done=True)
+            return QueryDecision(done=True)
+
+        qrun = build_query(shop, qpolicy)
+        print("query agent:", qrun.describe[:60])
+        print("query rows: ", qrun.row_count, qrun.sample[:2])
 
         # [flags] browser="auto" escalates a JS-gated page to a browser render on the
         #      response's flags. The /spa page injects its content via JS, so the spa
