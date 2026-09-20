@@ -5,27 +5,16 @@ each showcasing a feature (or two) end to end. They are documentation you can ru
 not tests — they hit the live internet, so output changes over time and a site may
 be down.
 
-> NOTE (stale API, 2026-09-20): several of these scripts predate a rename and will
-> now raise `AttributeError`. `doc.summary()` is now `doc.card()` (a flat
-> `PageCard`) with the facet ops `doc.metadata()` / `doc.structure()` /
-> `doc.transport()`; `wc.discover_sitemaps(url)` is now `wc.sitemap(url)`; and the
-> `browser="probe"` tier and the `summary().probe` / `summary().runtime` facets have
-> been removed. Affected scripts: `news_article_scraper.py` (`page.summary()`),
-> `summary_llm_view.py` (`wc.fetch(url).summary()`), `sitemap_mapper.py`
-> (`wc.discover_sitemaps(...)`), and `live_browser_events.py`
-> (`browser="probe"`, `summary().probe`, `summary().runtime`). They need updating to
-> the current API.
-
 Every example targets a **scraper-friendly** site on purpose:
 
 | example | site | why it's a good citizen | features |
 |---|---|---|---|
-| `news_article_scraper.py` | text.npr.org | NPR's text-only edition: tiny pages, stable markup, meant for low-bandwidth/accessibility | fetch, `render("text"/"markdown")`, `summary()`, select/attr, Reference resolve |
+| `news_article_scraper.py` | text.npr.org | NPR's text-only edition: tiny pages, stable markup, meant for low-bandwidth/accessibility | fetch, `render("text"/"markdown")`, `structure()`, select/attr, Reference resolve |
 | `product_catalog_crawler.py` | books.toscrape.com | a sandbox built explicitly for scraping practice | `crawl`, `select_all`/`extract`/`project(Model)` |
 | `lazy_expression_extract.py` | quotes.toscrape.com | scraping sandbox | lazy `Expr`, `to_blob`/`from_blob`, `project(Model)`, pagination |
-| `sitemap_mapper.py` | webscraper.io | a scraping-tools company's own site (real `sitemap.xml`) | `discover_sitemaps()` + `sitemap()` map |
-| `live_browser_events.py` | quotes.toscrape.com/js | JS-rendered sandbox page | live browser render, `events`, `summary().runtime` |
-| `summary_llm_view.py` | mixed | — | `summary()` as an LLM's token-lean view of a page |
+| `sitemap_mapper.py` | webscraper.io | a scraping-tools company's own site (real `sitemap.xml`) | `sitemap()` discovery + `crawl()` seeded from it |
+| `live_browser_events.py` | quotes.toscrape.com/js | JS-rendered sandbox page | live browser render, `events`, `spa()` / `framework()` |
+| `summary_llm_view.py` | mixed | — | `card()` + `metadata()`/`structure()` as an LLM's token-lean view |
 | `error_handling.py` | httpbin.org (+ local guards) | httpbin exists to return chosen statuses/delays | structured errors, `optional=`, select-miss, SSRF/robots |
 
 ## Run

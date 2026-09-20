@@ -1,14 +1,16 @@
-"""Case study: summary() as an LLM's token-lean view of a page.
+"""Case study: card() + facets as an LLM's token-lean view of a page.
 
-The `summary()` facet object is designed to be what an LLM reads *instead of* raw
-HTML: transport facts, head/schema metadata, and body structure -- keys and counts,
-not the whole document. This prints that view for three very different pages so you
-can see how compact and uniform it is.
+``doc.card()`` returns a lean :class:`PageCard` -- url / kind / title / description /
+the flags that fired / how the bytes were obtained -- what an LLM reads *instead of*
+raw HTML. For a markup page the separate ``metadata()`` (head/schema) and
+``structure()`` (body shape: keys and counts, not the whole document) facets round it
+out. This prints that view for three very different pages so you can see how compact
+and uniform it is.
 
 Sites: text.npr.org (an article), books.toscrape.com (a shop), httpbin.org/json
 (a JSON API) -- all scraper-friendly.
 
-Features: summary(), summary(*facets) selection, the facet models.
+Features: card()/PageCard, metadata(), structure(), the facet models.
 Run:  env/bin/python examples/summary_llm_view.py
 """
 
@@ -28,14 +30,17 @@ PAGES = [
 
 def show(wc: WebClient, label: str, url: str) -> None:
     print(f"\n=== {label}: {url} ===")
-    summary = wc.fetch(url).summary()
-    # exclude_none keeps the view lean -- only facets that apply appear.
-    data = summary.model_dump(exclude_none=True)
-    # trim the two potentially-long lists so the print stays readable
-    if summary.structure:
-        data["structure"]["toc"] = data["structure"]["toc"][:3]
-        data["structure"]["link_sample"] = data["structure"]["link_sample"][:3]
-    print(json.dumps(data, indent=2, default=str)[:1400])
+    doc = wc.fetch(url)
+    # the lean overview -- works on any kind (a JSON API included).
+    view = {"card": doc.card().model_dump(exclude_none=True)}
+    # the head/schema + body-shape facets apply to markup pages only.
+    if doc.kind in ("html", "xml"):
+        st = doc.structure().model_dump(exclude_none=True)
+        st["toc"] = st.get("toc", [])[:3]           # trim long lists so the print stays readable
+        st["link_sample"] = st.get("link_sample", [])[:3]
+        view["metadata"] = doc.metadata().model_dump(exclude_none=True)
+        view["structure"] = st
+    print(json.dumps(view, indent=2, default=str)[:1400])
 
 
 def main() -> None:

@@ -11,13 +11,11 @@ What it shows:
   * ``browser="auto"``: escalation is deliberately *conservative* -- it fires on an
     empty / SPA-shell page, but this page ships a non-empty shell, so ``auto`` does
     not escalate it (returns 0 quotes);
-  * ``browser="probe"``: the explicit "can I scrape this / what do I need"
-    diagnostic -- it resolves *both* tiers and compares, so it catches exactly this
-    injected-content case (was_browser_required + how many words the browser
-    recovered), and returns the fuller browser document.
+  * ``browser="always"``: force the browser tier -> all ten quotes, plus the
+    ``spa`` flag / detected framework the render exposes.
 
-Features: live browser render, events / events_of, summary().runtime,
-browser="probe".
+Features: live browser render, events / events_of, doc.spa() / doc.framework(),
+browser="always".
 Needs a Playwright chromium (``playwright install chromium``).
 Run:  env/bin/python examples/live_browser_events.py
 """
@@ -42,14 +40,6 @@ def main() -> None:
         print(f"browser='auto': {len(auto.select_all('.quote'))} quotes "
               f"(auto stayed static -- page shell is non-empty)")
 
-        # 'probe': resolve both tiers and compare -> a definitive answer.
-        probed = wc.fetch(JS_PAGE, browser="probe")
-        p = probed.summary().probe
-        print(f"browser='probe': {len(probed.select_all('.quote'))} quotes; "
-              f"browser_required={p.was_browser_required} "
-              f"render_gain={p.render_gain} words (JS injects the content)")
-        wc.release(probed)
-
         live = wc.fetch(JS_PAGE, browser="always")  # force the browser tier
         print(f"browser='always': {len(live.select_all('.quote'))} quotes rendered")
 
@@ -58,9 +48,9 @@ def main() -> None:
         for nav in live.events_of(NavigationEvent):
             print(f"  navigation -> status {nav.status_code} (source {nav.source})")
 
-        runtime = live.summary().runtime
-        if runtime is not None:
-            print(f"runtime facet: is_spa={runtime.is_spa} framework={runtime.framework}")
+        spa = live.spa()  # a Flag built from the render's evidence (injected content / XHR)
+        print(f"spa flag: present={spa.present} confidence={spa.confidence} "
+              f"framework={live.framework()}")
 
         wc.release(live)  # return the browser page to the pool
 

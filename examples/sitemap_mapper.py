@@ -8,7 +8,7 @@ What it does: (1) discover the site's declared sitemap URLs (reads robots.txt fo
 level); (2) map a bounded slice -- a single-domain crawl that honours the real
 sitemap by seeding the frontier from it -- and show a lean summary per page.
 
-Features: discover_sitemaps() discovery, sitemap() map.
+Features: sitemap() discovery, crawl() seeded from the sitemap.
 Run:  env/bin/python examples/sitemap_mapper.py
 """
 
@@ -22,7 +22,7 @@ UA = "webclient-examples/0.1"
 
 def discover(wc: WebClient) -> None:
     print("== discovery: real sitemap.xml URLs ==")
-    refs = list(wc.discover_sitemaps(SITE))
+    refs = list(wc.sitemap(SITE))  # reads robots Sitemap: dirs / sitemap.xml, expands the index
     print(f"discovered {len(refs)} URLs from the sitemap")
     for r in refs[:8]:
         print(f"  {r.url}")
@@ -33,12 +33,12 @@ def discover(wc: WebClient) -> None:
 
 def map_slice(wc: WebClient) -> None:
     print("== map a bounded slice (seeded from the sitemap) ==")
-    site = wc.sitemap(SITE, max_pages=8, depth=1)
-    print(f"mapped {len(site.pages)} pages, done={site.done}")
-    for page in site.pages:
-        title = page.metadata.title if page.metadata else "?"
-        url = page.transport.final_url if page.transport else "?"
-        print(f"  {title[:44]:<44}  {url}")
+    seeds = wc.sitemap(SITE)  # feed the real sitemap URLs straight into a bounded crawl
+    with wc.crawl(seeds, max_pages=8, depth=1, obey_robots=True, browser=False) as crawl:
+        crawl.run()
+        print(f"mapped {len(crawl.pages)} pages, done={crawl.done}")
+        for page in crawl.pages:  # PageCards (the default crawl projection)
+            print(f"  {(page.title or '?')[:44]:<44}  {page.final_url or page.url}")
 
 
 def main() -> None:

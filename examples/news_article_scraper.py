@@ -8,7 +8,7 @@ What it does: read the front page, pick the top story links, and for each story
 pull the headline, the readable body, and a token-lean summary -- the fields a
 reading-list tool or an LLM summariser actually wants.
 
-Features: fetch, render("text"/"markdown"), summary(), render("links"),
+Features: fetch, render("text"/"markdown"), structure(), render("links"),
 Reference.resolve(). Run:  env/bin/python examples/news_article_scraper.py
 """
 
@@ -51,13 +51,13 @@ def scrape() -> None:
                 print(f"[{i}] {ref.path}: {exc.error.type} (skipped)")
                 continue
 
-            s = page.summary()  # token-lean structured overview
+            st = page.structure()  # body shape: toc, counts, forms, links
             body = page.render("text", main_content_only=True)
             print(f"[{i}] {page.title}")
             print(f"     url:     {page.final_url or page.url}")
-            if s.structure:
-                print(f"     length:  {s.structure.word_count} words "
-                      f"(~{s.structure.reading_time_min} min read)")
+            if st.word_count:
+                print(f"     length:  {st.word_count} words "
+                      f"(~{st.reading_time_min} min read)")
             print(f"     lead:    {_clean(body)}")
             print()
 
