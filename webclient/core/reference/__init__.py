@@ -32,7 +32,9 @@ class Reference(WebCore, IReference):
     if TYPE_CHECKING:  # narrow WebCore.lazy (Any) to this core's lazy surface
 
         @property
-        def lazy(self) -> "LazyReference": ...
+        def lazy(self) -> "LazyReference":
+            """This reference's lazy surface -- ops record an ``Expr`` to run later."""
+            ...
 
     # typed non-optional: a core is bound to its client before any op runs (an
     # unbound resolve gets a default via ``WebCore._bridge_io``). ``_session`` is
@@ -43,6 +45,7 @@ class Reference(WebCore, IReference):
 
     @property
     def ok(self) -> bool:
+        """Whether this is a well-formed request spec (it has a host to resolve)."""
         return bool(self.hostname)  # a well-formed request spec
 
     def _derive(self, copy: "Reference") -> "Reference":

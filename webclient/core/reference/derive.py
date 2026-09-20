@@ -23,6 +23,8 @@ class DeriveBacking(Backing):
     gate = "ok"
 
     def url(self, core: "Reference") -> str:
+        """The reference's full URL string, reassembled from its parts (scheme/host/port/path/
+        query/fragment), omitting a default port."""
         port = ""
         if core.port is not None and core.port != DEFAULT_PORTS.get(core.scheme):
             port = f":{core.port}"
@@ -34,14 +36,17 @@ class DeriveBacking(Backing):
         return out
 
     def replace(self, core: "Reference", **fields: Any) -> "Reference":
+        """A new reference with the given request-spec fields overridden (method/headers/…)."""
         return core._derive(core.model_copy(update=fields))
 
     def with_params(self, core: "Reference", **params: str) -> "Reference":
+        """A new reference with these query parameters added/overridden (others kept)."""
         return core._derive(
             core.model_copy(update={"params": {**core.params, **params}})
         )
 
     def join(self, core: "Reference", href: str) -> "Reference":
+        """A new reference for ``href`` resolved against this one's URL (relative-link resolution)."""
         from . import from_url
 
         return from_url(urljoin(self.url(core), href))

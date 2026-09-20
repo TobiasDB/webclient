@@ -166,6 +166,8 @@ class NameScope:
         self._lock = threading.Lock()
 
     def add(self, kind: str, obj: Any) -> str:
+        """Store ``obj`` under a fresh unique name (``kind:index-seq``), evicting the
+        least-recently-used entry when the cap is exceeded; returns the name. Thread-safe."""
         with self._lock:
             self.seq += 1
             name = f"{kind}:{self.index:03d}-{self.seq:03d}"
@@ -176,6 +178,7 @@ class NameScope:
             return name
 
     def get(self, name: str) -> Any:
+        """The stored object for ``name`` (touched as most-recently-used), or ``None``. Thread-safe."""
         with self._lock:
             obj = self._items.get(name)
             if obj is not None:
@@ -183,10 +186,12 @@ class NameScope:
             return obj
 
     def clear(self) -> None:
+        """Drop every stored object. Thread-safe."""
         with self._lock:
             self._items.clear()
 
     def __len__(self) -> int:
+        """The number of stored objects. Thread-safe."""
         with self._lock:
             return len(self._items)
 
@@ -195,13 +200,16 @@ class WebClient(SessionCore, IWebClient):
     """The engine: its Core Fields (policy) + eager verbs come from the
     ``IWebClient`` model/interface it inherits (:mod:`.models`); this core adds the
     machinery (loop, ClientPool, bus, name scopes, transport + plan execution). Its
-    user-facing verbs are backings (``FetchBacking``); a remote
-    backend is just a subclass that swaps ``execute``, sessions a scoped subclass."""
+    user-facing verbs are backings (``FetchBacking``). Sync / async / remote are
+    dispatch MODES on the shared ``Engine`` (not subclasses): a remote engine simply
+    round-trips ``execute`` over the wire. A session is a scoped child WebClient."""
 
     if TYPE_CHECKING:  # narrow WebCore.lazy (Any) to this core's lazy surface
 
         @property
-        def lazy(self) -> "LazyWebClient": ...
+        def lazy(self) -> "LazyWebClient":
+            """This client's lazy surface -- authoring verbs record an ``Expr`` to run later."""
+            ...
 
     #: the shared transport/execution resources (loop / pool / bus / pacing / page
     #: scripts). The ROOT client owns one; a session borrows its parent's (its own
@@ -242,9 +250,12 @@ class WebClient(SessionCore, IWebClient):
 
     @property
     def bus(self) -> EventBus:
+        """The engine's event bus (shared by every session on this engine)."""
         return self._the_engine().bus
 
     def model_post_init(self, _ctx: Any) -> None:
+        """Finish construction: open the root name scope, build the transport engine, and
+        arm the TTL clock (a no-op for a root client, an expiry timer for a session)."""
         self._scope = NameScope(0, cap=self.names_cap)
         self._init_transport()
         self._arm_ttl()  # a ttl'd client (a session) starts its expiry clock
@@ -291,6 +302,7 @@ class WebClient(SessionCore, IWebClient):
 
     # -- loop / lifecycle ----------------------------------------------------
     def loop(self) -> EngineLoop:
+        """The engine loop the sync client bridges blocking IO onto (shared per engine)."""
         return cast(EngineLoop, self._the_engine().loop())
 
     def bridge(self, coro: Any) -> Any:
@@ -321,6 +333,8 @@ class WebClient(SessionCore, IWebClient):
         return self._the_engine().pool
 
     def close(self) -> None:
+        """Close this client: mark it closed, and (for the ROOT, which owns the engine) tear down
+        the transport pool / remote service / engine loop and cascade-close its sessions. Idempotent."""
         if self._closed:
             return
         super().close()  # SessionCore: status="closed", dispose any server sid, clear the scope
@@ -332,15 +346,19 @@ class WebClient(SessionCore, IWebClient):
 
     # -- context manager: a core IS the eager client (``with WebClient() ...``) --
     def __enter__(self) -> Self:
+        """Enter a ``with`` block; the client closes (tearing down transport) on exit."""
         return self
 
     def __exit__(self, *exc: object) -> None:
+        """Close the client on block exit."""
         self.close()
 
     # -- async context manager (``async with AsyncWebClient() ...``). The async
     # client is the same core in ``"async"`` mode; close its loop-native pool on
     # the caller's loop (a sync client has no caller-loop pool -- close in a thread).
     async def aclose(self) -> None:
+        """Async close: for an async-mode client, close the loop-native pool on the caller's loop
+        and cascade to sessions; otherwise run the blocking :meth:`close` in a thread. Idempotent."""
         if self._closed:
             return
         if self._the_engine()._mode == "async":
@@ -356,9 +374,11 @@ class WebClient(SessionCore, IWebClient):
         await asyncio.to_thread(self.close)
 
     async def __aenter__(self) -> Self:
+        """Enter an ``async with`` block; the client async-closes on exit."""
         return self
 
     async def __aexit__(self, *exc: object) -> None:
+        """Async-close the client on block exit."""
         await self.aclose()
 
     async def _host_blocked(self, ref: Reference) -> bool:
@@ -851,7 +871,9 @@ class WebClient(SessionCore, IWebClient):
         include_xhr: bool = ..., keywords: list[str] | None = ..., obey_robots: bool = ...,
         browser: "bool | Literal['never', 'auto', 'always']" = ..., resolve: Any = ...,
         driver: Any = ..., project: None = ...,
-    ) -> "Crawl[PageCard]": ...
+    ) -> "Crawl[PageCard]":
+        """No ``project`` -> pages are the default ``PageCard``."""
+        ...
     @overload
     def crawl(
         self, seeds: Any, *, config: "CrawlConfig | None" = ..., resume: "CrawlState | None" = ...,
@@ -863,7 +885,9 @@ class WebClient(SessionCore, IWebClient):
         include_xhr: bool = ..., keywords: list[str] | None = ..., obey_robots: bool = ...,
         browser: "bool | Literal['never', 'auto', 'always']" = ..., resolve: Any = ...,
         driver: Any = ..., project: "LazyField[_P]",
-    ) -> "Crawl[_P]": ...
+    ) -> "Crawl[_P]":
+        """A ``LazyField[_P]`` project -> pages typed as its value ``_P``."""
+        ...
     @overload
     def crawl(
         self, seeds: Any, *, config: "CrawlConfig | None" = ..., resume: "CrawlState | None" = ...,
@@ -875,7 +899,9 @@ class WebClient(SessionCore, IWebClient):
         include_xhr: bool = ..., keywords: list[str] | None = ..., obey_robots: bool = ...,
         browser: "bool | Literal['never', 'auto', 'always']" = ..., resolve: Any = ...,
         driver: Any = ..., project: "Lazy[_P]",
-    ) -> "Crawl[_P]": ...
+    ) -> "Crawl[_P]":
+        """A ``Lazy[_P]`` project (e.g. a ``LazyDocument``) -> pages typed as ``_P``."""
+        ...
     @overload
     def crawl(
         self, seeds: Any, *, config: "CrawlConfig | None" = ..., resume: "CrawlState | None" = ...,
@@ -887,7 +913,9 @@ class WebClient(SessionCore, IWebClient):
         include_xhr: bool = ..., keywords: list[str] | None = ..., obey_robots: bool = ...,
         browser: "bool | Literal['never', 'auto', 'always']" = ..., resolve: Any = ...,
         driver: Any = ..., project: Any = ...,
-    ) -> "Crawl[Any]": ...
+    ) -> "Crawl[Any]":
+        """A dict / other project -> pages fall back to ``Crawl[Any]``."""
+        ...
     def crawl(
         self,
         seeds: Any,
@@ -1007,6 +1035,9 @@ class WebClient(SessionCore, IWebClient):
         keep_alive: "bool | float" = False,
         wait: "WaitConfig | None" = None,
     ) -> Document:
+        """Resolve ``ref`` on a leased LIVE browser page and return a document still holding it
+        (optionally replaying an interaction chain, and keeping the page alive for the caller) --
+        the live-page path behind interaction/recording, as opposed to the settled-content fetch."""
         lease = await self.pool.lease("page")
         browser = cast(Any, lease.client)  # the leased BrowserClient (subclass)
         try:
@@ -1064,6 +1095,8 @@ class WebClient(SessionCore, IWebClient):
             raise
 
     async def areload(self, core: Document) -> Document:
+        """Re-resolve a document from its source reference on a fresh fetch -- via a live browser
+        render when it was browser-tier, else a plain HTTP refetch. Raises if it has no source ref."""
         ref = core._ref
         if ref is None:
             raise ValueError("cannot reload a document with no source reference")

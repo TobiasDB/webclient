@@ -68,6 +68,7 @@ _PAGE_PATH_RE = re.compile(r"/(?:page|pg)/(\d+)(?=/|$)", re.I)
 
 
 def _path(url: str) -> str:
+    """The path component of a URL (``""`` when it has none)."""
     return urlparse(url).path or ""
 
 

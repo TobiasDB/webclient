@@ -193,6 +193,8 @@ class CrawlBacking(Backing):
 
     # -- frontier selection + scoring -----------------------------------------
     def _select(self, core: "Crawl[Any]", select: Any) -> "list[Edge]":
+        """The frontier edges to visit next: a caller-supplied list (adding any brand-new URLs as
+        forced edges), else the whole current frontier."""
         if select is not None:
             wanted = [s.url if isinstance(s, Edge) else str(s) for s in select]
             existing = {e.url for e in core.frontier}
@@ -344,6 +346,8 @@ class CrawlBacking(Backing):
 
     # -- robots.txt (cached per host) -----------------------------------------
     async def _allowed(self, core: "Crawl[Any]", url: str) -> bool:
+        """Whether ``url`` is crawlable under its host's robots.txt (fetched and cached once per
+        host); allowed when there is no robots file."""
         host = _canon_host(url)
         if host not in core._robots:  # load this host's robots.txt once
             core._robots[host] = await self._load_robots(core, url)
@@ -351,6 +355,8 @@ class CrawlBacking(Backing):
         return robots is None or robots.can_fetch("*", url)
 
     async def _load_robots(self, core: "Crawl[Any]", sample_url: str) -> Any:
+        """Fetch and parse a host's robots.txt (derived from ``sample_url``'s origin), returning a
+        parser or ``None`` when it is missing/empty."""
         from urllib.robotparser import RobotFileParser
 
         p = urlparse(sample_url)

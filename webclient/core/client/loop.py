@@ -30,11 +30,14 @@ class EngineLoop:
         self._thread.start()
 
     def _main(self) -> None:
+        """The background thread's body: bind the event loop to this thread and run it forever
+        (until :meth:`stop`)."""
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
 
     @property
     def closed(self) -> bool:
+        """Whether the loop thread has stopped (so no more work can be bridged onto it)."""
         return not self._thread.is_alive()
 
     def on_loop_thread(self) -> bool:
@@ -49,6 +52,8 @@ class EngineLoop:
         return asyncio.run_coroutine_threadsafe(coro, self._loop)
 
     def run(self, coro: Coroutine[Any, Any, T], timeout: float | None = None) -> T:
+        """Run ``coro`` on the engine loop from a SYNC caller and block for its result. Refuses to
+        run from the loop thread itself (a bus handler must not block the loop) or once stopped."""
         # Re-entrancy guard, unconditional (ISSUES #28): a bus handler runs
         # on this thread and must never block on it.
         if threading.current_thread() is self._thread:
@@ -176,6 +181,8 @@ class EngineLoop:
                     pass
 
     def stop(self) -> None:
+        """Stop the loop and join its thread: refuse new blocking work, cancel and settle every
+        outstanding task in bounded rounds (so none is destroyed while pending), then close the loop."""
         if not self.closed:
             # Refuse new blocking work from other threads before we start
             # tearing down, so a racing ``run`` cannot strand a coroutine on the

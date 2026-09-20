@@ -36,6 +36,8 @@ class Robots(BaseModel):
     sitemaps: list[str] = []  # the Sitemap: directive URLs (seed a crawl from these)
 
     def _parser(self) -> Any:
+        """A ``RobotFileParser`` built from the retained robots.txt body -- so ``allowed``/``delay``
+        work anywhere, including over the wire, without re-fetching."""
         from urllib.robotparser import RobotFileParser
 
         rp = RobotFileParser()

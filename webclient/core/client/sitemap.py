@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 
 def _origin(url: str) -> str:
+    """The ``scheme://host`` origin of a URL, or ``""`` when it isn't absolute."""
     p = urlparse(url)
     return f"{p.scheme}://{p.netloc}" if p.scheme and p.netloc else ""
 
@@ -127,6 +128,8 @@ class SiteBacking(Backing):
     async def _fetch_locs(
         self, core: "WebClient", src: str
     ) -> "tuple[str, list[str]]":
+        """Fetch one sitemap ``src`` and return its ``(kind, urls)`` -- the kind (``index`` vs a
+        urlset) and its absolute ``<loc>`` links. Empty on a failed/empty fetch."""
         doc = await core.afetch(core.ref(src), optional=True)
         if not doc.ok or not doc.content:
             return "", []
@@ -136,6 +139,8 @@ class SiteBacking(Backing):
     def _collect(
         self, urls: list[str], seen: set[str], out: list[Reference], limit: int
     ) -> None:
+        """Append the not-yet-seen ``urls`` to ``out`` as references (deduped via ``seen``),
+        stopping once ``limit`` is reached."""
         for u in urls:
             if len(out) >= limit:
                 return

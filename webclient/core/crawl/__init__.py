@@ -45,6 +45,7 @@ class _CrawlLazy:
 
     @property
     def frontier(self) -> "Collection[Edge]":
+        """The crawl's pending edges (not-yet-visited links) as a queryable ``Collection``."""
         return Collection(list(self._crawl.frontier), client=self._crawl._client)
 
 
