@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field
 
+from ..loop import BoundedLoop
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -132,6 +134,18 @@ def _apply(doc: "Document", act: Any) -> None:
         doc.goto(act.url)
 
 
+def _done_result(act: Any) -> "str | None":
+    """The interaction loop's terminal check: a :class:`Done` ends the loop with its result;
+    any other action keeps it running."""
+    return act.result if isinstance(act, Done) else None
+
+
+def _progress(doc: "Document") -> str:
+    """A cheap signature of visible page progress (its skeleton) for stall detection -- two
+    identical signatures in a row mean the last action changed nothing."""
+    return doc.skeleton() if doc.has_op("skeleton") else ""
+
+
 def drive(
     doc: "Document",
     policy: "Callable[[Observation], Any]",
@@ -144,26 +158,21 @@ def drive(
     a row that don't change the page). Each action is one of the document's interaction ops,
     so running ``drive`` inside ``with wc.record()`` captures the journey into ``rec.plan``
     (replayable). The loop stays on the one page: :class:`Goto` navigates it in place, never
-    opening a new one. Returns the :class:`AgentRun` verdict."""
-    stalls = 0
-    prev = ""
-    error = ""
-    for step in range(max_steps):
-        obs = _observe(doc, step, max_steps, error)
-        act = policy(obs)
-        if isinstance(act, Done):
-            return AgentRun(done=True, reason="done", steps=step, result=act.result)
-        try:
-            _apply(doc, act)
-            error = ""
-        except Exception as exc:  # noqa: BLE001 - surface it to the verdict, don't crash
-            return AgentRun(done=False, reason="error", steps=step, error=str(exc))
-        current = doc.skeleton() if doc.has_op("skeleton") else ""
-        stalls = stalls + 1 if current == prev else 0
-        prev = current
-        if stalls >= max_stalls:
-            return AgentRun(done=False, reason="stalled", steps=step + 1)
-    return AgentRun(done=False, reason="budget", steps=max_steps)
+    opening a new one. The interaction loop is the :class:`~webclient.loop.BoundedLoop` base
+    specialised for a live page; returns the :class:`AgentRun` verdict."""
+    loop: "BoundedLoop[Document, Observation, Any]" = BoundedLoop(
+        observe=lambda d, step, err: _observe(d, step, max_steps, err),
+        decide=policy,
+        done_result=_done_result,
+        apply=_apply,
+        progress=_progress,
+        max_rounds=max_steps,
+        max_stalls=max_stalls,
+    )
+    v = loop.run(doc)
+    return AgentRun(
+        done=v.done, reason=v.reason, steps=v.rounds, result=v.result, error=v.error
+    )
 
 
 __all__ = [
