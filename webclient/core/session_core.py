@@ -17,7 +17,10 @@ this base. No behaviour change.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+import time
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+from pydantic import BaseModel
 
 from .web_core import WebCore
 
@@ -25,8 +28,31 @@ if TYPE_CHECKING:
     from .engine import Engine
 
 
-class SessionCore(WebCore):
-    """A scope on a shared :class:`~.engine.Engine` (see the module docstring)."""
+class ISession(BaseModel):
+    """The shared session-lifecycle FIELDS -- the ``I<Core>`` interface a session inherits
+    (like ``IWebClient`` / ``ICrawl`` hold their core's fields). Declared ONCE here, so
+    every session kind carries the same ``id`` / ``status`` / ``ttl`` / ``expires_at``.
+    ``id`` is "" on the root client (an identity session names itself); ``ttl`` /
+    ``expires_at`` bound its lifetime (``None`` = unbounded)."""
+
+    id: str = ""
+    status: Literal["running", "expired", "closed"] = "running"
+    ttl: float | None = None
+    expires_at: float | None = None
+
+
+class SessionCore(WebCore, ISession):
+    """A scope on a shared :class:`~.engine.Engine` with ONE session LIFECYCLE (see the
+    module docstring). Every session -- the root :class:`~.client.WebClient`, a ``Session``,
+    a ``Crawl``, a ``Record`` -- carries the shared :class:`ISession` fields and the same
+    ``close`` / guard here, so the lifecycle is declared ONCE. What differs is each
+    session's own DATA (an identity session's cookies, a crawl's frontier/pages, a
+    recorder's plan) and behaviour (its backing) -- the implementations own their typing;
+    :class:`SessionCore` only offers the storage interface + lifecycle.
+
+    (``_parent`` -- the owning session a child borrows from -- is a PrivateAttr the concrete
+    cores declare; the methods below read it defensively with ``getattr``, so the root
+    client, which has none, resolves to itself.)"""
 
     def _the_engine(self) -> "Engine":
         """The engine this session is bound to: a child session borrows its parent's
@@ -41,6 +67,35 @@ class SessionCore(WebCore):
         crawl keeps its frontier/seen here, a recorder its plan. Scoped to this session
         -- nested sessions each have their own, all sharing the one engine."""
         return cast("dict[str, Any]", cast(Any, self)._store)  # _store lives on the concrete core
+
+    # -- lifecycle (shared by every session kind) ----------------------------
+    def _arm_ttl(self) -> None:
+        """Start the ttl clock: set ``expires_at`` from ``ttl`` (called at construction by a
+        session that takes a ttl). A no-op when unbounded or already armed."""
+        if self.ttl is not None and self.expires_at is None:
+            self.expires_at = time.time() + self.ttl
+
+    def _guard(self) -> None:
+        """Refuse to act on a closed or past-ttl session (marking it ``expired`` on the way)."""
+        if self.status == "closed":
+            raise RuntimeError("session is closed")
+        if self.expires_at is not None and time.time() > self.expires_at:
+            self.status = "expired"
+            raise RuntimeError("session has expired")
+
+    def close(self) -> None:
+        """Close THIS session (not the shared engine): mark it closed, dispose any server-side
+        session it holds, and release its name scope. The root :class:`WebClient` overrides
+        this to also tear down the engine it owns."""
+        if self.status == "closed":
+            return
+        self.status = "closed"
+        sid = getattr(self, "_server_sid", "")
+        if sid:  # a remote session -- dispose its server session over the shared transport
+            self._the_engine().close_server_session(sid)
+        scope = getattr(self, "_scope", None)
+        if scope is not None:
+            scope.clear()
 
 
 __all__ = ["SessionCore"]

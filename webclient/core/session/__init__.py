@@ -10,8 +10,7 @@ no backing class of its own (it is a subclassed core, not a new medium).
 
 from __future__ import annotations
 
-import time
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from pydantic import PrivateAttr
@@ -27,23 +26,23 @@ if TYPE_CHECKING:
 
 
 class Session(WebClient):
-    """A ``WebClient`` scoped to one logical identity."""
+    """A ``WebClient`` scoped to one logical identity. The session LIFECYCLE (id / status /
+    ttl / expires / close / guard) is the shared :class:`~..session_core.SessionCore`; a
+    Session adds only its own DATA -- the identity it injects into requests (headers +
+    cookies) -- and the fetch pipeline that applies it."""
 
-    id: str = ""
-    status: Literal["running", "expired", "closed"] = "running"
+    #: this session's identity DATA (its typed store): sent on every request, and the
+    #: response's Set-Cookie is absorbed back into ``cookies``.
     session_headers: dict[str, str] = {}
     cookies: dict[str, str] = {}
-    ttl: float | None = None
-    expires_at: float | None = None
 
-    _parent: Any = PrivateAttr(default=None)  # the owning engine core
+    _parent: Any = PrivateAttr(default=None)  # the owning client (shares its engine + name scope)
 
     def model_post_init(self, ctx: Any) -> None:
         super().model_post_init(ctx)
-        if not self.id:
+        if not self.id:  # an identity session names itself; the root client keeps id=""
             self.id = f"sess-{uuid4().hex[:8]}"
-        if self.ttl is not None and self.expires_at is None:
-            self.expires_at = time.time() + self.ttl
+        self._arm_ttl()
 
     def _init_transport(self) -> None:
         """A session shares the parent's pool (set in ``bind``)."""
@@ -69,20 +68,7 @@ class Session(WebClient):
     def bus(self) -> "EventBus":
         return cast("EventBus", self._parent.bus)
 
-    # -- lifecycle -----------------------------------------------------------
-    def _guard(self) -> None:
-        if self.status == "closed":
-            raise RuntimeError("session is closed")
-        if self.expires_at is not None and time.time() > self.expires_at:
-            self.status = "expired"
-            raise RuntimeError("session has expired")
-
-    def close(self) -> None:  # not the parent engine
-        self.status = "closed"
-        if self._server_sid:  # a remote session -- dispose its server session (shared transport)
-            self._the_engine().close_server_session(self._server_sid)
-        if self._scope is not None:
-            self._scope.clear()
+    # lifecycle (id/status/ttl/expires/close/_guard) is inherited from SessionCore.
 
     # -- fetch: the parent's pipeline + this session's identity --------------
     async def afetch(

@@ -305,12 +305,11 @@ class WebClient(SessionCore, IWebClient):
     def close(self) -> None:
         if self._closed:
             return
-        if self._server_sid:  # a remote SESSION -- dispose its server session (shared transport)
-            self._the_engine().close_server_session(self._server_sid)
-        if self._engine is not None:  # a session borrows its parent's engine (its own is None)
-            self._engine.close()  # tear down the transport pool + engine loop
-        for session in self._sessions:  # cascade to sessions
-            session.status = "closed"
+        super().close()  # SessionCore: status="closed", dispose any server sid, clear the scope
+        if self._engine is not None:  # the ROOT owns the engine (a child's is None) -- tear it down
+            self._engine.close()  # transport pool / remote service + engine loop
+            for session in self._sessions:  # cascade to sessions
+                session.status = "closed"
         self._closed = True
 
     # -- context manager: a core IS the eager client (``with WebClient() ...``) --
@@ -327,10 +326,11 @@ class WebClient(SessionCore, IWebClient):
         if self._closed:
             return
         if self._the_engine()._mode == "async":
-            if self._engine is not None:  # a session borrows its parent's engine
+            self.status = "closed"
+            if self._engine is not None:  # the ROOT owns the engine (a child's is None)
                 await self._engine.aclose_async()  # close the pool loop-natively
-            for session in self._sessions:  # cascade to sessions
-                session.status = "closed"
+                for session in self._sessions:  # cascade to sessions
+                    session.status = "closed"
             self._closed = True
             return
         import asyncio

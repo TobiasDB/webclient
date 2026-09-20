@@ -154,7 +154,8 @@ class ICrawl(BaseModel, Generic[T]):
 
     config: CrawlConfig = CrawlConfig()  # all the tuning knobs (grouped + documented)
     scope: str = ""  # the registrable domain the crawl is bound to (derived from seeds)
-    status: Literal["running", "closed"] = "running"
+    # ``status`` (running / closed / expired) is the shared session lifecycle -- it comes
+    # from ``SessionCore`` (``Crawl`` inherits it), not re-declared here.
     # -- live state ----------------------------------------------------------
     #: the retained pages -- a lean :class:`PageCard` each by default (``T``), or the whole
     #: :class:`Document` under a ``project=wq.doc`` projection. ``T`` is unbound at runtime,
@@ -172,7 +173,7 @@ class ICrawl(BaseModel, Generic[T]):
         """An LLM/human-readable digest: status, the pages crawled, and the top of the
         frontier -- so ``print(crawl)`` is useful without digging through the lists."""
         head = (
-            f"crawl [{self.status}] scope={self.scope or '-'} · "
+            f"crawl [{getattr(self, 'status', 'running')}] scope={self.scope or '-'} · "
             f"{len(self.pages)} page(s), {len(self.frontier)} frontier link(s)"
         )
         lines = [head]
