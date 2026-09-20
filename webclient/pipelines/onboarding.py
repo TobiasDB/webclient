@@ -34,6 +34,7 @@ so the whole pipeline runs offline against a stub model + a local server in test
 
 from __future__ import annotations
 
+import abc
 import json
 import logging
 import os
@@ -1690,17 +1691,6 @@ def _populated_rows(rows: "list[Any]") -> "list[Any]":
     return out
 
 
-def _required_columns(brief: Brief) -> "list[str]":
-    """The top-level schema field names that must be populated (non-optional)."""
-    opt = {p.split(".")[0] for p in brief.optional}
-    req: list[str] = []
-    for f in brief.fields:
-        top = f.split(".")[0]
-        if top and top not in opt and top not in req:
-            req.append(top)
-    return req
-
-
 def _required_leaf_paths(brief: Brief) -> "list[str]":
     """The required LEAF field paths (dotted). A leaf is a field with no deeper field under
     it (``price.value`` / ``price.unit`` are leaves; ``price`` is their branch). A leaf is
@@ -2098,12 +2088,32 @@ def _combined_artifact(
     return art, combined_good, [len(g) for g in part_goods]
 
 
-class _Author:
-    """Drives the query-authoring turns. The PAGE (guide + skeleton + brief) is the OPENING
-    message; each retry sends only the short feedback. If the model keeps a conversation (an
-    :class:`LlmClient` exposes ``.conversation()``), the page stays in context and is re-read
-    from cache instead of re-submitted every attempt; a plain ``Callable[[str], str]`` has no
-    memory, so the page is re-sent with each turn (the fallback -- same behaviour as before)."""
+class AuthoringError(Exception):
+    """The author could not produce a valid query this turn (e.g. the model's reply didn't parse).
+    :func:`write_query` catches it and retries with feedback -- distinct from an ``LlmError`` (a
+    transport/API failure, which aborts)."""
+
+
+class Author(abc.ABC):
+    """The query-authoring ENGINE seam. ``write_query`` owns the test / repair / recency-retry /
+    artifact orchestration; the author owns only "produce the next candidate query expressions".
+    This is the ONE boundary Phase 6 swaps -- from :class:`_TextAuthor` (prompt the model for
+    query CODE and parse it) to an index-loop author (the model picks record/field indexes and
+    ``llm.query_agent.build_query`` assembles the query). The orchestration is engine-agnostic."""
+
+    @abc.abstractmethod
+    def author(self, follow_up: "str | None" = None) -> "list[Any]":
+        """The next candidate as 1..N query exprs (one per section). ``follow_up`` is the feedback
+        from the last rejected attempt (``None`` on the first). Raises :class:`AuthoringError` when
+        it cannot produce a valid query, so ``write_query`` retries with feedback."""
+
+
+class _TextAuthor(Author):
+    """Authors by prompting the model for query CODE and parsing it (the current engine). The PAGE
+    (guide + skeleton + brief) is the OPENING message; each retry sends only the short feedback. If
+    the model keeps a conversation (an :class:`LlmClient` exposes ``.conversation()``), the page
+    stays in context and is re-read from cache instead of re-submitted every attempt; a plain
+    ``Callable[[str], str]`` has no memory, so the page is re-sent each turn (the fallback)."""
 
     def __init__(self, llm: LLM, opening: str) -> None:
         conv = getattr(llm, "conversation", None)
@@ -2112,13 +2122,35 @@ class _Author:
         self._opening = opening
         self._opened = False
 
-    def send(self, follow_up: "str | None" = None) -> str:
+    def _send(self, follow_up: "str | None" = None) -> str:
+        """One authoring turn -> the model's raw reply (the opening on the first turn, then only
+        the feedback for a conversational model, else the opening re-sent with the feedback)."""
         if self._chat is not None:  # stateful: the page once, then just the follow-up
             msg = self._opening if not self._opened else (follow_up or "Try again.")
             self._opened = True
             return str(self._chat.send(msg))
         # stateless callable: no memory -> the page must ride along every turn
         return self._llm(self._opening if not follow_up else f"{self._opening}\n\n{follow_up}")
+
+    def author(self, follow_up: "str | None" = None) -> "list[Any]":
+        """Send the turn and parse the reply into 1..N section queries; an unparsable reply is an
+        :class:`AuthoringError` so ``write_query`` retries with the "reply with ONLY query code"
+        feedback."""
+        reply = self._send(follow_up)
+        try:
+            return _parse_queries(reply)  # 1 wq.doc chain, or one per section (split on ---)
+        except Exception as exc:  # noqa: BLE001 - unparsable query code -> a retryable authoring miss
+            log.debug("      unparseable reply: %.200r", reply.strip())
+            raise AuthoringError(str(exc)) from exc
+
+
+def _make_author(llm: LLM, prompt: str, doc: Any, brief: Brief) -> Author:
+    """Build the query author for a ``write_query`` run -- THE single seam Phase 6 swaps. Today it
+    returns the :class:`_TextAuthor` (prompt the model for query code); Phase 6 returns an
+    index-loop author that drives ``llm.query_agent.build_query`` over ``doc`` (the model picks
+    record/field indexes, we build the selectors) at this one boundary, leaving ``write_query``'s
+    test / repair / retry / artifact orchestration unchanged."""
+    return _TextAuthor(llm, prompt)
 
 
 def _resolve_on_non_link(expr: Any) -> "str | None":
@@ -2258,7 +2290,7 @@ def write_query(
     best_complete: QueryArtifact | None = None  # a complete-but-STALE fallback (recency retries)
     attempts: list[str] = []  # why each rejected attempt was rejected, for the onboard output
     nudged_empty = False  # a split query with an empty section is nudged ONCE, then accepted
-    author = _Author(llm, prompt)  # the page rides in the OPENING; retries send only feedback
+    author: Author = _make_author(llm, prompt, doc, brief)  # the seam Phase 6 swaps (build_query)
     follow_up: "str | None" = None
     tries = retries + 1
 
@@ -2268,15 +2300,12 @@ def write_query(
     for attempt in range(tries):
         tag = f"    query {attempt + 1}/{tries}"
         try:
-            reply = author.send(follow_up)
+            exprs = author.author(follow_up)  # the authoring seam: 1..N query exprs (Phase 6 swaps it)
         except LlmError as exc:  # a bad-request / exhausted-retry API error
             log.warning("%s: LLM call failed (%s)", tag, exc)
             break
-        try:
-            exprs = _parse_queries(reply)  # 1 wq.doc chain, or one per section (split on ---)
-        except Exception as exc:  # noqa: BLE001 - unparsable query code -> retry with feedback
+        except AuthoringError as exc:  # unparsable/unusable query -> retry with feedback
             log.info("%s: reply was not a valid query (%s) — retrying", tag, exc)
-            log.debug("      unparseable reply: %.200r", reply.strip())  # the detail, at debug
             attempts.append(f"attempt {attempt + 1}: not a valid query ({exc})")
             follow_up = ("Your previous reply was not a valid query. Reply with ONLY query code --"
                          " one wq.doc... chain, or, for a split dataset, one chain PER section"

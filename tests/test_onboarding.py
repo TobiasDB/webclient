@@ -201,6 +201,42 @@ def test_write_query_auto_repairs_a_near_miss_field_selector(httpserver):
     assert art.sample[0]["name"] == "W0"
 
 
+def test_write_query_uses_a_swappable_author_seam(httpserver, monkeypatch):
+    # the authoring ENGINE is a swappable seam (_make_author): write_query owns the test/repair/
+    # artifact orchestration and asks the Author only for the candidate query exprs. Phase 6 swaps
+    # the text author for an index-loop author here. Inject a fake author that returns exprs with
+    # NO llm and confirm write_query still produces a working artifact around it.
+    from webclient.pipelines import onboarding
+    from webclient.pipelines.onboarding import Author, _parse_query, write_query
+
+    httpserver.expect_request("/p").respond_with_data(
+        "<main>" + "".join(
+            f'<article class="product"><span class="name">P{i}</span>'
+            f'<span class="price">{i}9</span></article>' for i in range(3)
+        ) + "</main>",
+        content_type="text/html",
+    )
+
+    class FakeAuthor(Author):  # a non-LLM authoring engine
+        def author(self, follow_up=None):
+            return [_parse_query(
+                'wq.doc.select_all("article.product").extract('
+                'name=wq.doc.select(".name").attr("text"),'
+                ' price=wq.doc.select(".price").attr("text")).project()'
+            )]
+
+    monkeypatch.setattr(onboarding, "_make_author", lambda *a, **k: FakeAuthor())
+
+    with WebClient() as wc:
+        art = write_query(
+            httpserver.url_for("/p"),
+            Brief(description="products", fields=["name", "price"]),
+            wc=wc, llm=lambda p: "", browser="never", retries=0,
+        )
+    assert art is not None and art.complete and art.row_count == 3
+    assert art.sample[0] == {"name": "P0", "price": "09"}
+
+
 def test_sample_table_collapses_newlines_so_columns_dont_shift():
     # an output-summary bug: a value with a newline (an RSS description) broke the aligned
     # sample table so LATER columns rendered shifted/empty. Cells now collapse whitespace.
