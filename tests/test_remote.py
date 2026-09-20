@@ -1,7 +1,7 @@
-"""Remote-backend tests: the same WebClient in ``"remote"`` dispatch mode (over a
-``RemoteConnection``), driving a real (in-process) uvicorn server on an ephemeral port
--- no local browser/lxml, exercising the true HTTP path. Remote documents are lazy
-handles; value ops run through ``rc.execute`` (deferred/batched)."""
+"""Remote-backend tests: the same WebClient whose ENGINE is in ``"remote"`` mode (a
+``core.service.ServiceTransport``), driving a real (in-process) uvicorn server on an
+ephemeral port -- no local browser/lxml, exercising the true HTTP path. Remote documents
+are lazy handles; value ops run through ``rc.execute`` (deferred/batched)."""
 
 import threading
 import time
@@ -80,7 +80,7 @@ def test_wc_remote_opens_a_context_managed_remote_session(remote):
 
     rc, server = remote
     with WebClient() as wc:
-        with wc.remote(rc._conn.url, token="secret") as rr:
+        with wc.remote(rc._the_engine()._service.url, token="secret") as rr:
             assert rr._dispatch_mode() == "remote"  # its engine's mode is remote
             d = rr.fetch(server.url_for("/cards"))
             assert d.ok and d.title == "Shop"
@@ -287,12 +287,12 @@ def test_plan_matches_local_client(remote, httpserver):
 
 
 def test_same_facade_over_a_remote_core(remote):
-    """The remote client is literally a WebClient in "remote" dispatch mode -- no
-    subtype: just the core with a RemoteConnection (``_conn``) it delegates to."""
+    """The remote client is literally a WebClient whose ENGINE is in "remote" mode -- no
+    subtype, no _conn: the engine holds the service transport it dispatches through."""
     rc, server = remote
     assert isinstance(rc, WebClient)
     assert rc.core is rc  # the eager surface IS the core
-    assert rc._dispatch_mode() == "remote" and rc._conn is not None
+    assert rc._dispatch_mode() == "remote" and rc._the_engine().is_remote
 
 
 def test_sessions(remote, httpserver):

@@ -211,11 +211,11 @@ class WebClient(SessionCore, IWebClient):
     #: this session's own state (a ``SessionCore.store``); empty on the root client.
     _store: dict[str, Any] = PrivateAttr(default_factory=dict)
     _closed: bool = PrivateAttr(default=False)
-    #: the remote transport when this client is in ``"remote"`` dispatch mode (a
-    #: ``core.remote.RemoteConnection``), else ``None`` -- set by ``remote()`` /
-    #: ``core.remote.connect``. When set, ``execute``/``crawl``/``session``/``close``
-    #: route through it: remote is a dispatch mode + this connection, not a subtype.
-    _conn: Any = PrivateAttr(default=None)
+    #: a remote SESSION's server-side identity: the id of the server session this client's
+    #: plans resolve through (``""`` = the root remote client / a local client). Read by the
+    #: engine's remote transport (``core.service.ServiceTransport.execute``) so the sid
+    #: travels with the calling session, not on the (engine-shared) transport.
+    _server_sid: str = PrivateAttr(default="")
     #: per-op remote round-trips + the one-time .lazy nag (only used in remote mode).
     _remote_hops: int = PrivateAttr(default=0)
     _nagged: bool = PrivateAttr(default=False)
@@ -305,8 +305,8 @@ class WebClient(SessionCore, IWebClient):
     def close(self) -> None:
         if self._closed:
             return
-        if self._conn is not None:  # remote: dispose the connection (or server session)
-            self._conn.close()
+        if self._server_sid:  # a remote SESSION -- dispose its server session (shared transport)
+            self._the_engine().close_server_session(self._server_sid)
         if self._engine is not None:  # a session borrows its parent's engine (its own is None)
             self._engine.close()  # tear down the transport pool + engine loop
         for session in self._sessions:  # cascade to sessions
@@ -588,11 +588,12 @@ class WebClient(SessionCore, IWebClient):
 
     # -- plan execution (machinery): the surface's sync/async entry ----------
     def execute(self, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
-        """Run a recorded plan on this engine (sync bridge). In ``"remote"`` mode the
-        plan is POSTed to the service over ``self._conn`` instead of run locally;
+        """Run a recorded plan (sync bridge). When this engine is in ``"remote"`` mode the
+        plan is POSTed to the service through the engine's transport instead of run locally;
         ``stream=True`` yields rows."""
-        if self._conn is not None:  # remote dispatch: one round-trip to the service
-            return self._conn.execute(self, expr, context, stream=stream)
+        engine = self._the_engine()
+        if engine.is_remote:  # remote dispatch: one round-trip through the engine's transport
+            return engine.execute(self, expr, context, stream=stream)
         if stream:
             return self._stream(expr, context)
         return _materialize(evaluate(expr, context, client=self))
@@ -646,33 +647,28 @@ class WebClient(SessionCore, IWebClient):
         headers: dict[str, str] | None = None,
         **kw: Any,
     ) -> "Session":
-        """A new session sharing this engine (a scoped ``Session``). In ``"remote"``
-        mode it opens a SERVER-SIDE session and returns a ``Session`` whose ``_conn``
-        carries that session id, so its plans resolve through the server session and
-        closing it disposes the server session."""
+        """A new session sharing this engine (a scoped ``Session``). In ``"remote"`` mode it
+        opens a SERVER-SIDE session and stamps its id on the child (``_server_sid``), so the
+        child's plans resolve through that server session and closing it disposes it."""
         from ..session import Session
 
         core = Session(ttl=ttl, session_headers=headers or {}, **kw)
         core.bind(self)
-        if self._conn is not None:  # a server-side session over a child connection
-            from ..remote import open_remote_session
-
-            core._conn = open_remote_session(self, ttl)
+        if self._the_engine().is_remote:  # a server-side session over the shared transport
+            core._server_sid = self._the_engine().open_server_session(ttl)
         return core
 
     def remote(self, url: str, *, token: str | None = None) -> "WebClient":
-        """Open a REMOTE SESSION: a client whose engine lives SERVER-SIDE. Its ops execute
-        on the service at ``url`` (``remote`` is just a dispatch mode); the server holds any
-        page or large result they produce, bounded by THIS session's lifecycle -- ``with
-        wc.remote(url) as rc: ...`` disposes the server-side state on exit. A session-like
-        core, uniform with ``session`` / ``crawl`` (its engine is the server's, not this
-        client's -- a session lives where its execution is). Remote is not a subtype: this
-        is a fresh ``WebClient`` put into ``"remote"`` dispatch mode over a
-        ``RemoteConnection`` (see :func:`core.remote.connect`); ``execute`` / ``crawl`` /
-        ``session`` / ``close`` route through that connection while it is set."""
-        from ..remote import connect
-
-        return connect(WebClient(timeout=self.timeout), url, token)
+        """Open a REMOTE client: a ``WebClient`` whose ENGINE dispatches over the service at
+        ``url``. Its ops execute server-side (``remote`` is just the engine's transport mode);
+        the server holds any page or large result they produce, bounded by this client's
+        lifecycle -- ``with wc.remote(url) as rc: ...`` disposes the connection on exit. Remote
+        is NOT a subtype and needs no ``_conn``: this is a fresh ``WebClient`` on a fresh
+        engine put into remote mode (``Engine.go_remote``), so ``execute`` / ``crawl`` /
+        ``session`` route through the engine's transport uniformly."""
+        rc = WebClient(timeout=self.timeout)
+        rc._the_engine().go_remote(url, token, self.timeout)
+        return rc
 
     # -- recorder ------------------------------------------------------------
     def record(self, *, secrets: "list[str] | None" = None) -> "Session":

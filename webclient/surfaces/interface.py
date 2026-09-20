@@ -265,13 +265,13 @@ else:  # at runtime a dispatch view IS the core (a dispatch mode, not a subtype)
     AsyncWebClient = _async_client  # the core in async-dispatcher mode
 
     def RemoteWebClient(url, token=None, **policy):  # type: ignore[no-untyped-def]
-        """A ``WebClient`` in ``"remote"`` dispatch mode -- the same surface, executed
-        server-side. Remote is not a subtype: this builds a plain ``WebClient`` (with any
-        ``**policy`` kwargs) and puts it into remote mode over a ``RemoteConnection`` via
-        ``connect`` -- its verbs round-trip a one-step plan to the service."""
-        from ..core.remote import connect
-
-        return connect(WebClient(**policy), url, token)
+        """A ``WebClient`` whose ENGINE dispatches over the service at ``url`` -- the same
+        surface, executed server-side. Remote is not a subtype: this builds a plain
+        ``WebClient`` (with any ``**policy`` kwargs) and puts its engine into remote mode
+        (``Engine.go_remote``); its verbs round-trip a one-step plan to the service."""
+        rc = WebClient(**policy)
+        rc._the_engine().go_remote(url, token, rc.timeout)
+        return rc
 
 #: A live (browser-backed) document is a Document with the ``page`` capability.
 LiveDocument = Document

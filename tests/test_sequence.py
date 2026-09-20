@@ -108,7 +108,7 @@ def test_remote_allows_a_complete_sequence_but_rejects_an_open_one():
     # entirely inside one server-side /execute and never crosses the wire, so it runs
     # remotely like any browser plan. An OPEN one (returns a live page/element) stays
     # engine-local and fails clearly, telling the caller to close it with .project().
-    from webclient.core.remote import _reject_sequence
+    from webclient.core.service import reject_sequence
 
     complete = (
         wq.ref.resolve(browser="always")
@@ -116,7 +116,7 @@ def test_remote_allows_a_complete_sequence_but_rejects_an_open_one():
         .extract(a=wq.doc.select(".va").attr("text"))
         .project()
     )
-    _reject_sequence(complete)  # does not raise -- a complete sequence runs remotely
+    reject_sequence(complete)  # does not raise -- a complete sequence runs remotely
 
     open_seq = (
         wq.ref.resolve(browser="always")
@@ -124,10 +124,10 @@ def test_remote_allows_a_complete_sequence_but_rejects_an_open_one():
         .select_all(".va")  # returns a live selection, not data
     )
     with pytest.raises(NotImplementedError):
-        _reject_sequence(open_seq)
+        reject_sequence(open_seq)
 
     # an ordinary (non-sequence) plan is untouched by the guard
-    _reject_sequence(wq.ref.resolve().select_all(".card").project())  # does not raise
+    reject_sequence(wq.ref.resolve().select_all(".card").project())  # does not raise
 
 
 def test_sequence_release_survives_repeats_without_leaking(wc, url):

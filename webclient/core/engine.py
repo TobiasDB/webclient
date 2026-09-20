@@ -13,7 +13,7 @@ purely the transport/loop/bus/pacing resource holder that the client delegates t
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from ..clients import BrowserFactory, ClientPool, HTTPXFactory, PageScript
 from ..events import EventBus
@@ -31,6 +31,10 @@ class Engine:
         self._mode: str = "sync"
         self._loop: Any = None  # EngineLoop (lazy)
         self._pool: Any = None  # ClientPool (None when transport=False, e.g. a remote client)
+        #: the REMOTE transport when ``_mode == "remote"`` (a ``core.service.ServiceTransport``),
+        #: else None. An engine in remote mode holds this instead of a local pool; every op's
+        #: plan is POSTed through it (see :meth:`execute`). Set by ``WebClient.remote``.
+        self._service: Any = None
         self._bus: Any = None  # EventBus (lazy)
         self._host_next: dict[str, float] = {}  # host -> earliest next request time
         self._page_scripts: list[Any] = []  # scripts injected via inject_script
@@ -55,6 +59,33 @@ class Engine:
             },
             limits={"http": bc.pool_http, "page": bc.pool_pages},
         )
+
+    # -- remote dispatch: the engine's transport IS the difference ------------
+    @property
+    def is_remote(self) -> bool:
+        """Whether this engine dispatches over a remote :mod:`.service` transport."""
+        return self._service is not None
+
+    def go_remote(self, url: str, token: str | None, timeout: float) -> None:
+        """Put this engine into ``"remote"`` mode over the service at ``url`` -- swap the
+        local pool for a :class:`~.service.ServiceTransport` the engine dispatches through."""
+        from .service import ServiceTransport
+
+        self._mode = "remote"
+        self._pool = None  # no local pool: execution is a remote round-trip
+        self._service = ServiceTransport(url, token, timeout)
+
+    def execute(self, client: Any, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
+        """POST a plan over the remote transport (remote mode only). The engine decides how
+        the result comes back -- a lazy handle for a document, real data for a scalar."""
+        return self._service.execute(client, expr, context, stream=stream)
+
+    def open_server_session(self, ttl: float | None) -> str:
+        """Open a server-side session over the remote transport; returns its id."""
+        return cast(str, self._service.open_session(ttl))
+
+    def close_server_session(self, sid: str) -> None:
+        self._service.close_session(sid)
 
     def loop(self) -> Any:
         if self._loop is None:
@@ -96,7 +127,10 @@ class Engine:
             self._host_next = {h: t for h, t in schedule.items() if t > now}
 
     def close(self) -> None:
-        """Tear down the transport (close the pool on the engine loop, then stop it)."""
+        """Tear down the transport: the remote service connection, or the local pool on the
+        engine loop, then stop the loop."""
+        if self._service is not None:
+            self._service.close()
         if self._loop is not None and not self._loop.closed and self._pool is not None:
             self._loop.run(self._pool.aclose())
         if self._loop is not None:
