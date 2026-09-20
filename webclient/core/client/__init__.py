@@ -185,6 +185,15 @@ class NameScope:
                 self._items.move_to_end(name)  # LRU touch
             return obj
 
+    def rebind(self, name: str, obj: Any) -> None:
+        """Replace the object stored under an EXISTING name (a later transport hop of ONE fetch
+        reusing its slot), so a single logical fetch keeps one name instead of orphaning the
+        earlier hop's. Thread-safe; a no-op if the name is gone (evicted)."""
+        with self._lock:
+            if name in self._items:
+                self._items[name] = obj
+                self._items.move_to_end(name)
+
     def clear(self) -> None:
         """Drop every stored object. Thread-safe."""
         with self._lock:
@@ -578,6 +587,7 @@ class WebClient(SessionCore, IWebClient):
             return await self._escalate_to_browser(
                 ref, list(doc._events), doc.content,
                 tiers=["static", "browser"], keep_alive=keep_alive, wait=wait,
+                reuse=doc.name,  # the browser doc reuses this fetch's slot
             )
         # browser="auto": a FLAG-driven escalation ladder. Read the request+static
         # flags; a login wall fails (no transport fixes credentials), an anti-bot
@@ -598,8 +608,9 @@ class WebClient(SessionCore, IWebClient):
                 if antibot.present and antibot.remedy in ("proxy", "stealth"):
                     tiers.append("proxy")  # rotate an exit via the proxy service
                     proxy_headers = {**policy_headers(Resolve(proxy=ProxyPolicy.auto())), **headers}
+                    fetch_name = doc.name  # the static hop's slot -- the proxy hop reuses it
                     doc, resp = await self._afetch_once(ref, proxy_headers)
-                    self._register(doc, ref)
+                    self._register(doc, ref, reuse=fetch_name)
                     doc._tiers = list(tiers)
                     flags = self._observe(doc, resp)
                 want_browser = flags is not None and doc.error is None and (
@@ -616,6 +627,7 @@ class WebClient(SessionCore, IWebClient):
                         rendered = await self._escalate_to_browser(
                             ref, list(doc._events), doc.content,
                             tiers=[*tiers, "browser"], keep_alive=keep_alive, wait=wait,
+                            reuse=doc.name,  # the browser doc reuses this fetch's slot
                         )
                     except Exception:  # noqa: BLE001 - a blocked/failed render is not fatal
                         rendered = None
@@ -655,13 +667,15 @@ class WebClient(SessionCore, IWebClient):
         tiers: "list[str] | None" = None,
         keep_alive: "bool | float" = False,
         wait: "WaitConfig | None" = None,
+        reuse: "str | None" = None,
     ) -> Document:
         """The static tier said this page is JS-gated; render it in a browser. The
         static hop's events are carried onto the browser doc so ``doc.events`` keeps
         the full trail (both tiers); the static HTML is kept so ``skeleton()`` can
         mark server-initial vs client-injected nodes, and the tier trail is recorded
-        on the document for the ``transport`` facet."""
-        doc = await self._alive(ref, keep_alive=keep_alive, wait=wait)
+        on the document for the ``transport`` facet. ``reuse`` (the escalating fetch's doc
+        name) makes the browser doc take that slot rather than a fresh one."""
+        doc = await self._alive(ref, keep_alive=keep_alive, wait=wait, reuse=reuse)
         doc._static_html = static_html
         doc._tiers = tiers or ["static", "browser"]
         if static_events:
@@ -1053,10 +1067,12 @@ class WebClient(SessionCore, IWebClient):
         *,
         keep_alive: "bool | float" = False,
         wait: "WaitConfig | None" = None,
+        reuse: "str | None" = None,
     ) -> Document:
         """Resolve ``ref`` on a leased LIVE browser page and return a document still holding it
         (optionally replaying an interaction chain, and keeping the page alive for the caller) --
-        the live-page path behind interaction/recording, as opposed to the settled-content fetch."""
+        the live-page path behind interaction/recording, as opposed to the settled-content fetch.
+        ``reuse`` (an escalating fetch's doc name) makes the live doc take that slot."""
         lease = await self.pool.lease("page")
         browser = cast(Any, lease.client)  # the leased BrowserClient (subclass)
         try:
@@ -1093,7 +1109,7 @@ class WebClient(SessionCore, IWebClient):
             if isinstance(keep_alive, (int, float)) and not isinstance(keep_alive, bool):
                 self._expire_page(doc, float(keep_alive))  # TTL safety-net release
             doc._tiers = ["browser"]  # the tier trail for the transport facet
-            self._register(doc, ref)
+            self._register(doc, ref, reuse=reuse)
             # a browser render is a navigation too: emit the NavigationEvent the
             # static path emits (via ``_capture``), so ``doc.events`` is populated
             # for a browser fetch and static/browser parity holds. Navigation first,
@@ -1160,9 +1176,12 @@ class WebClient(SessionCore, IWebClient):
         asyncio.ensure_future(_expire())
 
     # -- naming / recovery ---------------------------------------------------
-    def _register(self, doc: Document, ref: Reference) -> None:
+    def _register(self, doc: Document, ref: Reference, *, reuse: "str | None" = None) -> None:
         """Give the reference and document scoped names in the owning scope
-        (a session's, else the client's) and index them for recovery."""
+        (a session's, else the client's) and index them for recovery. ``reuse`` is a name from
+        an EARLIER hop of the same fetch: the doc takes that slot instead of a fresh name, so one
+        logical fetch (static -> proxy -> browser) keeps ONE doc name rather than orphaning each
+        superseded hop."""
         import time
 
         session = ref._session
@@ -1170,7 +1189,11 @@ class WebClient(SessionCore, IWebClient):
         if not ref.name:
             ref.name = scope.add("ref", ref)
         doc.root = ref.name
-        doc.id = doc.name = scope.add("doc", doc)
+        if reuse:  # a later hop of the same fetch -> reuse the slot, don't allocate a new name
+            scope.rebind(reuse, doc)
+            doc.id = doc.name = reuse
+        else:
+            doc.id = doc.name = scope.add("doc", doc)
         doc.created = doc.accessed = time.time()
         doc._ref = ref
 

@@ -66,3 +66,28 @@ def test_document_extract_is_the_single_element_form(site):
         )  # a Reference column projects to its URL string
 
 
+
+
+def test_fetch_hops_reuse_one_doc_name(monkeypatch):
+    # M3: the transport hops of ONE fetch (static -> proxy -> browser) must share a single
+    # scope slot, not register 2-3 orphaned docs. _register(reuse=<name>) rebinds the slot.
+    with WebClient() as wc:
+        ref = wc.ref("https://x.co/")
+
+        def n_docs():
+            return sum(1 for k in wc._scope._items if k.startswith("doc:"))
+
+        d1 = Document(url="https://x.co/", status_code=200, content=b"<p>1</p>", kind="html")
+        wc._register(d1, ref)
+        name = d1.name
+        assert n_docs() == 1
+
+        d2 = Document(url="https://x.co/", status_code=200, content=b"<p>2</p>", kind="html")
+        wc._register(d2, ref, reuse=name)  # a later hop of the SAME fetch
+        assert d2.name == name and n_docs() == 1  # still ONE doc slot, not two
+        assert wc.document(name) is d2  # the slot now holds the latest hop
+
+        # a genuinely separate fetch still gets its own slot
+        d3 = Document(url="https://y.co/", status_code=200, content=b"<p>3</p>", kind="html")
+        wc._register(d3, wc.ref("https://y.co/"))
+        assert d3.name != name and n_docs() == 2
