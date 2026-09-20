@@ -21,7 +21,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Sequence, cast
 
-from ..surfaces import WebClient
+from ..interface import WebClient
 from .llm import Budget, LlmClient, cheapest_model
 from .onboarding import Brief, ddg_search, onboard
 

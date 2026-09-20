@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from .surfaces import Document
+    from .interface import Document
 
 
 # -- what the policy sees ----------------------------------------------------

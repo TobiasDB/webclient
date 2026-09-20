@@ -51,7 +51,7 @@ from .agent import (
 )
 from .guides import lazy_query_guide
 from .query.expr import from_blob, from_describe, from_plan
-from .surfaces import (
+from .interface import (
     AsyncDocument,
     AsyncReference,
     AsyncWebClient,

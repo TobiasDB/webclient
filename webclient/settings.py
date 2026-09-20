@@ -24,7 +24,7 @@ from .core.reference.models import BrowserConfig, Resolve
 
 if TYPE_CHECKING:
     from .pipelines.llm import LlmClient
-    from .surfaces import WebClient
+    from .interface import WebClient
 
 
 class LlmSettings(BaseModel):
@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     # -- builders ------------------------------------------------------------
     def client(self, **overrides: Any) -> "WebClient":
         """A ``WebClient`` configured from these settings (per-call ``overrides`` win)."""
-        from .surfaces import WebClient
+        from .interface import WebClient
 
         kwargs: dict[str, Any] = {
             "timeout": self.timeout,

@@ -30,7 +30,7 @@ def _default_project() -> Any:
     """The default retention expression: ``doc.card()`` -- a serializable, always-used
     projection that yields a :class:`PageCard` per page (built lazily so importing the
     lazy ``doc`` root doesn't cycle at module load)."""
-    from ...surfaces import doc
+    from ...interface import doc
 
     return doc.card()
 

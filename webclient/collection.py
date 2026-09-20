@@ -21,7 +21,7 @@ M = TypeVar("M")  # a row model (e.g. a pydantic BaseModel) for project(model)
 if TYPE_CHECKING:
     from .core.client import WebClient
     from .core.client.loop import EngineLoop
-    from .surfaces import Document, Reference
+    from .interface import Document, Reference
 
 
 class Field(Generic[T]):

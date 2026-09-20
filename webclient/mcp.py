@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .query.expr import from_plan
-from .surfaces import WebClient, default_client
+from .interface import WebClient, default_client
 
 #: a JSON-schema fragment shared by the url-taking verbs.
 _URL = {"type": "string", "description": "an absolute http(s) URL"}

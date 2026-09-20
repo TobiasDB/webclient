@@ -57,7 +57,7 @@ from ..core.reference.models import (
 )
 from ..guides import lazy_query_guide
 from ..query.expr import from_blob
-from ..surfaces import Reference, WebClient, wq
+from ..interface import Reference, WebClient, wq
 from .llm import Budget, BudgetExceeded, LlmClient, LlmError
 from .prompts import render_prompt
 

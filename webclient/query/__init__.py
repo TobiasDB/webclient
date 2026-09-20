@@ -5,7 +5,7 @@ serialisable IR (:mod:`~webclient.query.plan` -- ``Plan``), and one async
 evaluator (:mod:`~webclient.query.executor`). Grouped under this package so the
 query machinery is separable from the cores/surfaces it drives. The lazy
 authoring layer (``wq``/``doc``/``ref``/``many`` + the free builders) lives with
-the lazy surfaces (:mod:`webclient.surfaces.lazy`), re-exported from
+the lazy surfaces (:mod:`webclient.interface.lazy`), re-exported from
 :mod:`webclient`.
 """
 

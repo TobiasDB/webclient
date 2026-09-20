@@ -27,7 +27,7 @@ from webclient import (
     WebClient,
     wq,
 )
-from webclient.surfaces import (
+from webclient.interface import (
     Lazy,
     LazyCollection,
     LazyDocument,

@@ -13,23 +13,24 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast, overload
 
-from ..query.expr import Expr, to_arg
-from ..query.plan import Plan, Step
-from ..core.client import WebClient
-from ..core.client import async_client as _async_client
-from ..core.document import Document
-from ..core.reference import HttpMethod, Reference
-from ..core.reference import from_url as _core_from_url
-from ..core.session import Session
+from .query.expr import Expr, to_arg
+from .query.plan import Plan, Step
+from .core.client import WebClient
+from .core.client import async_client as _async_client
+from .core.document import Document
+from .core.reference import HttpMethod, Reference
+from .core.reference import from_url as _core_from_url
+from .core.session import Session
+from .core.web_core import _wrap_result as wrap  # a list of cores -> a Collection
 
 if TYPE_CHECKING:
-    from ..collection import Collection, Field
-    from ..core.document import Element
-    from ..events import EventBus
-    from ..models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
-    from ..clients import ClientPool, WaitConfig
-    from ..core.document.models import Flag, Metadata, PageCard, Signal, Structure, Transport, XhrCall
-    from ..core.client.models import Robots
+    from .collection import Collection, Field
+    from .core.document import Element
+    from .events import EventBus
+    from .models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
+    from .clients import ClientPool, WaitConfig
+    from .core.document.models import Flag, Metadata, PageCard, Signal, Structure, Transport, XhrCall
+    from .core.client.models import Robots
 
 T = TypeVar("T")
 S = TypeVar("S")
@@ -291,7 +292,7 @@ def from_url(
 def default_client() -> "WebClient":
     """The process-local shared client (recreated after close) -- the surface over
     the one engine every unbound operation shares (see ``core.client``)."""
-    from ..core.client import default_client as _default
+    from .core.client import default_client as _default
 
     return _default()
 
@@ -504,7 +505,7 @@ _MISSING: Any = object()
 def reference(url: str, **kwargs: Any) -> "Reference":
     """A lazy reference root starting from ``url``: an ``Expr`` recording a plan
     rooted at that request spec (statically a ``Reference``)."""
-    from ..core.reference import from_url
+    from .core.reference import from_url
 
     spec = from_url(url, **kwargs).model_dump()
     return cast("Reference", Expr(Plan(root="Reference", source=spec)))
@@ -568,7 +569,7 @@ def filter(collection: "LazyCollection[T]", *predicates: Any) -> "LazyCollection
 #: the lazy roots -- an ``Expr`` rooted at each surface (statically the surface
 #: it authors plans for; at runtime an ``Expr``).
 if TYPE_CHECKING:
-    from ..collection import Collection
+    from .collection import Collection
 
     doc: "Document"
     ref: "Reference"
@@ -617,6 +618,7 @@ wq = WebQuery()
 
 
 __all__ = [
+    "wrap",
     "Reference", "Document", "AsyncReference", "AsyncDocument", "RemoteReference",
     "RemoteDocument", "LiveDocument", "Session", "WebClient", "AsyncWebClient",
     "RemoteWebClient", "default_client", "from_url",

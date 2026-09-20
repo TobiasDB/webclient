@@ -43,7 +43,7 @@ from .sitemap import SiteBacking
 if TYPE_CHECKING:
     from ..crawl import Crawl, CrawlConfig, CrawlState, PageCard
     from ..session import Session
-    from ...surfaces.interface import Lazy, LazyField, LazyWebClient
+    from ...interface import Lazy, LazyField, LazyWebClient
 
 
 #: the per-page projection type a ``crawl(project=...)`` overload infers (see ``crawl``).
@@ -727,7 +727,7 @@ class WebClient(SessionCore, IWebClient):
         if op in ("resolve", "fetch"):
             browser = kwargs.get("browser", False)
             if op == "fetch":  # receiver is the client; the url is the first arg
-                from ...surfaces import reference
+                from ...interface import reference
 
                 src_plan = cast(Any, reference(str(args[0])))._plan
             else:  # receiver is the reference -- carry its spec MINUS any auth/secret
@@ -738,7 +738,7 @@ class WebClient(SessionCore, IWebClient):
                 src_plan = Plan(root="Reference", source=spec)
             self._record_chain = Expr(src_plan, client).resolve(browser=browser)
         elif self._record_chain is not None:  # an interaction advances the held page
-            from ...surfaces import wq
+            from ...interface import wq
 
             sel = args[0] if args else kwargs.get("selector")
             call = cast(Any, wq).doc

@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 
 from .errors import WebException
 from .query.expr import from_plan
-from .surfaces import Document, Reference, WebClient
+from .interface import Document, Reference, WebClient
 
 
 class _DocStore(OrderedDict[str, Any]):

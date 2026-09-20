@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     # are defined below in this module).
     from ...collection import Collection, Field  # noqa: F401
     from ...models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event  # noqa: F401
-    from ...surfaces.interface import LazyDocument  # noqa: F401
+    from ...interface import LazyDocument  # noqa: F401
     from ..reference import Reference  # noqa: F401
     from . import Document  # noqa: F401
 
