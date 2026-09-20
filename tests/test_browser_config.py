@@ -94,3 +94,163 @@ def test_client_wide_proxy_reaches_http_and_browser_factories():
     with WebClient() as wc2:
         assert wc2.pool._factories["http"].proxy is None
         assert wc2.pool._factories["page"].proxy is None
+
+
+# -- CDP / remote / reuse-context (Phase 1): connect instead of launch ---------
+
+def test_cdp_config_threads_through_to_the_factory():
+    cfg = BrowserConfig(cdp_endpoint="http://127.0.0.1:9222", reuse_context=True)
+    assert cfg.cdp_endpoint == "http://127.0.0.1:9222" and cfg.reuse_context is True
+    assert cfg.ws_endpoint is None
+    with WebClient(browser_config=cfg) as wc:
+        page = wc.pool._factories["page"]
+        assert page.cdp_endpoint == "http://127.0.0.1:9222" and page.reuse_context is True
+
+
+def test_reuse_context_auto_is_on_for_cdp_and_off_otherwise():
+    # None (auto) -> reuse for a cdp_endpoint ("my browser"), fresh context otherwise.
+    assert BrowserFactory(cdp_endpoint="http://h:9222")._reuse_context is True
+    assert BrowserFactory(ws_endpoint="ws://h/x")._reuse_context is False
+    assert BrowserFactory()._reuse_context is False
+    # explicit wins over the auto default either way.
+    assert BrowserFactory(cdp_endpoint="http://h:9222", reuse_context=False)._reuse_context is False
+    assert BrowserFactory(ws_endpoint="ws://h/x", reuse_context=True)._reuse_context is True
+
+
+class _FakePage:
+    async def close(self):
+        pass
+
+
+class _FakeContext:
+    def __init__(self):
+        self.pages_opened = 0
+        self.closed = False
+        self.init_scripts = 0
+
+    async def add_init_script(self, _script):
+        self.init_scripts += 1
+
+    async def new_page(self):
+        self.pages_opened += 1
+        return _FakePage()
+
+    async def close(self):
+        self.closed = True
+
+
+class _FakeBrowser:
+    version = "141.0.7000.0"
+
+    def __init__(self, *, existing_context=None):
+        self.contexts = [existing_context] if existing_context is not None else []
+        self.new_contexts = []
+        self.closed = False
+
+    async def new_context(self, **_opts):
+        ctx = _FakeContext()
+        self.new_contexts.append(ctx)
+        return ctx
+
+    async def close(self):
+        self.closed = True
+
+
+class _FakeChromium:
+    """Records which connection method the factory chose."""
+
+    def __init__(self, browser):
+        self._browser = browser
+        self.calls = []  # (method, arg)
+
+    async def launch(self, **kw):
+        self.calls.append(("launch", kw))
+        return self._browser
+
+    async def connect_over_cdp(self, endpoint):
+        self.calls.append(("connect_over_cdp", endpoint))
+        return self._browser
+
+    async def connect(self, ws):
+        self.calls.append(("connect", ws))
+        return self._browser
+
+
+class _FakePW:
+    def __init__(self, chromium):
+        self.chromium = chromium
+        self.stopped = False
+
+    async def stop(self):
+        self.stopped = True
+
+
+def _install_fake_playwright(monkeypatch, browser):
+    chromium = _FakeChromium(browser)
+
+    class _Starter:
+        async def start(self):
+            return _FakePW(chromium)
+
+    import playwright.async_api as pa
+    monkeypatch.setattr(pa, "async_playwright", lambda: _Starter())
+    return chromium
+
+
+def _run(coro):
+    import asyncio
+    return asyncio.run(coro)
+
+
+def test_cdp_endpoint_attaches_over_cdp_and_reuses_the_context(monkeypatch):
+    existing = _FakeContext()  # the user's real, logged-in context
+    browser = _FakeBrowser(existing_context=existing)
+    chromium = _install_fake_playwright(monkeypatch, browser)
+
+    async def main():
+        f = BrowserFactory(cdp_endpoint="http://127.0.0.1:9222")  # reuse auto-on for cdp
+        await f._browser_()
+        assert f._connected is True
+        assert chromium.calls == [("connect_over_cdp", "http://127.0.0.1:9222")]
+        await f.create()
+        # reused the existing context (opened a page in it); no fresh context, no stealth inject
+        assert existing.pages_opened == 1 and browser.new_contexts == []
+        assert existing.init_scripts == 0
+        await f.aclose()
+        # a connected browser is DETACHED, never killed; its context is the user's, left open
+        assert browser.closed is False and existing.closed is False
+
+    _run(main())
+
+
+def test_ws_endpoint_attaches_to_a_server_with_a_fresh_context(monkeypatch):
+    browser = _FakeBrowser()  # a remote pool: no pre-existing context
+    chromium = _install_fake_playwright(monkeypatch, browser)
+
+    async def main():
+        f = BrowserFactory(ws_endpoint="ws://host/abc")  # reuse auto-off -> fresh context
+        await f._browser_()
+        assert f._connected is True
+        assert chromium.calls == [("connect", "ws://host/abc")]
+        await f.create()
+        assert len(browser.new_contexts) == 1  # opened our own isolated context
+        await f.aclose()
+        assert browser.closed is False  # connected -> detach, don't kill
+        assert browser.new_contexts[0].closed is True  # but close the context WE opened
+
+    _run(main())
+
+
+def test_default_launches_and_aclose_kills_the_browser(monkeypatch):
+    browser = _FakeBrowser()
+    chromium = _install_fake_playwright(monkeypatch, browser)
+
+    async def main():
+        f = BrowserFactory()  # no endpoints -> launch
+        await f._browser_()
+        assert f._connected is False
+        assert chromium.calls[0][0] == "launch"
+        await f.aclose()
+        assert browser.closed is True  # we launched it, so we kill it
+
+    _run(main())

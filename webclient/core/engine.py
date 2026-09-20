@@ -53,6 +53,8 @@ class Engine:
                 "page": BrowserFactory(
                     headless=bc.headless, stealth=bc.stealth, fingerprint=bc.fingerprint,
                     channel=bc.channel, proxy=bc.proxy,  # ...and the browser
+                    cdp_endpoint=bc.cdp_endpoint, ws_endpoint=bc.ws_endpoint,
+                    reuse_context=bc.reuse_context,
                 ),
             },
             limits={"http": bc.pool_http, "page": bc.pool_pages},

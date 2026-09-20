@@ -109,6 +109,21 @@ class BrowserConfig(BaseModel, frozen=True):
     #: the machine's installed Google Chrome (the latest stable, and less bot-detectable
     #: than headless Chromium) -- set it when Chrome is installed.
     channel: str | None = None
+    #: attach to an ALREADY-RUNNING Chromium/Chrome/Edge over CDP instead of launching one
+    #: (``http://host:9222`` or its ``webSocketDebuggerUrl``) -- e.g. the user's real,
+    #: logged-in browser (reusing its cookies/session/tabs) or a remote debugging endpoint.
+    #: A connected browser is never launched by us, so ``channel``/``proxy``/stealth launch
+    #: flags do not apply to it. Mutually exclusive with ``ws_endpoint``.
+    cdp_endpoint: str | None = None
+    #: attach to a Playwright SERVER (``playwright launch-server``) over its websocket --
+    #: higher fidelity than CDP, for a remote browser pool we control. Also a connected
+    #: (not launched) browser. Mutually exclusive with ``cdp_endpoint``.
+    ws_endpoint: str | None = None
+    #: for a CONNECTED browser, reuse its existing (first) context -- the user's real session
+    #: and open tabs -- rather than opening an isolated one. ``None`` = auto: reuse for a
+    #: ``cdp_endpoint`` ("my browser"), a fresh context otherwise. A reused context gets NO
+    #: stealth/identity injection (it would touch the user's real pages). Ignored when launching.
+    reuse_context: bool | None = None
     headless: bool = True
     stealth: bool = True
     fingerprint: bool = False

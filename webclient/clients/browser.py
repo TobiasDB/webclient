@@ -490,34 +490,61 @@ class BrowserFactory(ClientFactory):
     def __init__(
         self, *, headless: bool = True, stealth: bool = True, fingerprint: bool = False,
         channel: "str | None" = None, proxy: "str | None" = None,
+        cdp_endpoint: "str | None" = None, ws_endpoint: "str | None" = None,
+        reuse_context: "bool | None" = None,
     ) -> None:
         self.headless = headless
         self.stealth = stealth
         self.fingerprint = fingerprint
         self.channel = channel  # None = bundled chromium; "chrome" = installed Google Chrome
         self.proxy = proxy  # a proxy URL routing all browser traffic (same one httpx uses)
+        self.cdp_endpoint = cdp_endpoint  # attach over CDP instead of launching
+        self.ws_endpoint = ws_endpoint    # attach to a Playwright server instead of launching
+        self.reuse_context = reuse_context  # None = auto (reuse for cdp, fresh otherwise)
         self._pw: Any = None
         self._browser: Any = None
+        #: True when we ATTACHED to a browser we did not launch (CDP / ws server) -- we must
+        #: never kill it, only detach, and stealth/identity are launch-only so they don't apply.
+        self._connected = False
         self._major = "141"  # the real engine major version, read on first launch
         self._contexts: list[Any] = []
 
+    @property
+    def _reuse_context(self) -> bool:
+        """Whether ``create`` reuses the connected browser's existing context: the explicit
+        ``reuse_context`` when set, else auto -- reuse for a ``cdp_endpoint`` ("my browser"),
+        a fresh context otherwise. Only meaningful while connected."""
+        if self.reuse_context is not None:
+            return self.reuse_context
+        return self.cdp_endpoint is not None
+
     async def _browser_(self) -> Any:
-        """Lazily launch (and memoise) the one shared browser process for this factory,
-        applying stealth args / channel / proxy and reading back its real engine major
-        version so spoofed user-agents match the engine actually running."""
+        """Lazily obtain (and memoise) the one shared browser for this factory. Branches on the
+        config: ``cdp_endpoint`` attaches to an already-running browser over CDP, ``ws_endpoint``
+        attaches to a Playwright server, else we LAUNCH one (applying stealth args / channel /
+        proxy). Either way the real engine major version is read so spoofed UAs match it. A
+        connected browser sets ``_connected`` -- we never kill it, and launch-only options are
+        skipped."""
         if self._browser is None:
             from playwright.async_api import async_playwright
 
             self._pw = await async_playwright().start()
-            launch: dict[str, Any] = {
-                "headless": self.headless,
-                "args": list(_STEALTH_ARGS) if self.stealth else [],
-            }
-            if self.channel:  # drive real Google Chrome (latest stable) instead of chromium
-                launch["channel"] = self.channel
-            if self.proxy:  # route ALL browser traffic through the proxy (Playwright parses auth)
-                launch["proxy"] = {"server": self.proxy}
-            self._browser = await self._pw.chromium.launch(**launch)
+            if self.cdp_endpoint is not None:  # attach to a running Chromium/Chrome/Edge
+                self._browser = await self._pw.chromium.connect_over_cdp(self.cdp_endpoint)
+                self._connected = True
+            elif self.ws_endpoint is not None:  # attach to a Playwright launch-server
+                self._browser = await self._pw.chromium.connect(self.ws_endpoint)
+                self._connected = True
+            else:
+                launch: dict[str, Any] = {
+                    "headless": self.headless,
+                    "args": list(_STEALTH_ARGS) if self.stealth else [],
+                }
+                if self.channel:  # drive real Google Chrome (latest stable) instead of chromium
+                    launch["channel"] = self.channel
+                if self.proxy:  # route ALL browser traffic through the proxy (Playwright parses auth)
+                    launch["proxy"] = {"server": self.proxy}
+                self._browser = await self._pw.chromium.launch(**launch)
             try:  # match the spoofed UA version to the ACTUAL engine
                 self._major = (self._browser.version or "").split(".")[0] or self._major
             except Exception:  # pragma: no cover - version unavailable
@@ -525,10 +552,17 @@ class BrowserFactory(ClientFactory):
         return self._browser
 
     async def create(self) -> BrowserClient:
-        """Open a fresh page in its own context, wrapped as a ``BrowserClient``: each page
-        gets one coherent identity (default, or a random fingerprint) and, under stealth,
-        the identity-independent masks plus that identity's platform/GPU/cores init scripts."""
+        """Open a page as a ``BrowserClient``. Normally a fresh isolated context with one coherent
+        identity (default or a random fingerprint) plus, under stealth, the automation masks. For a
+        CONNECTED browser with context reuse ("my browser"), open the page in its EXISTING context
+        instead -- reusing the real session/tabs -- with NO identity/stealth injection, since those
+        are launch-only and would touch the user's real pages."""
         browser = await self._browser_()
+        if self._connected and self._reuse_context and browser.contexts:
+            # reuse the user's real context: no new_context, no stealth/identity injection.
+            # We did NOT create it, so it is not tracked for close in aclose().
+            context = browser.contexts[0]
+            return BrowserClient(await context.new_page())
         opts: dict[str, Any] = {}
         # one COHERENT identity: a random one per page when fingerprinting, else the default
         # (which still fixes the HeadlessChrome UA leak). Everything -- UA, viewport, locale,
@@ -545,16 +579,25 @@ class BrowserFactory(ClientFactory):
         if self.stealth:
             await context.add_init_script(_STEALTH_BASE)      # identity-independent masks
             await context.add_init_script(_identity_js(fp))   # THIS identity's platform/GPU/cores
-        self._contexts.append(context)
+        self._contexts.append(context)  # tracked so aclose() closes the contexts WE opened
         return BrowserClient(await context.new_page())
 
     async def aclose(self) -> None:
-        """Shut down the shared browser process and the Playwright driver, dropping all
-        contexts (the factory-level teardown for the ``page`` kind)."""
+        """Tear down the factory. For a browser WE launched, close it (killing the process). For
+        a CONNECTED browser we only detach -- close the contexts/pages we opened but never the
+        browser itself (it is the user's / a remote pool's) -- then stop the Playwright driver."""
         if self._browser is not None:
-            await self._browser.close()
+            if self._connected:
+                for context in self._contexts:  # close only the contexts we opened (not a reused one)
+                    try:
+                        await context.close()
+                    except Exception:  # pragma: no cover - a context already gone on detach
+                        pass
+            else:
+                await self._browser.close()  # kill the browser we launched
             await self._pw.stop()
             self._browser = self._pw = None
+            self._connected = False
             self._contexts.clear()
 
 
