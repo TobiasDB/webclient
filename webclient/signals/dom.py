@@ -27,6 +27,7 @@ _SPA_MAIN_RATIO = 0.15  # lower bar when the injection is main-area + same-origi
 
 
 def _xhr_events(ctx: Context) -> list[Any]:
+    """The captured XHR/fetch network events (empty without a browser render)."""
     return [e for e in ctx.events if getattr(e, "resource_type", None) in ("xhr", "fetch")]
 
 
@@ -99,6 +100,8 @@ def _injection(ctx: Context) -> "tuple[float, bool, int, int]":
 
 @detector(flag="spa", name="body_injected", stage="rendered")
 def _body_injected(ctx: Context) -> Hit | None:
+    """SPA evidence (rendered): a large share of the page's text was injected after the initial
+    response -- the content is built client-side."""
     ratio, _, _, _ = _injection(ctx)
     if ratio >= _SPA_RATIO:
         return Hit(0.9, f"{ratio:.0%} of the page's text was injected after the initial response", ratio)
@@ -107,6 +110,8 @@ def _body_injected(ctx: Context) -> Hit | None:
 
 @detector(flag="spa", name="xhr_composed", stage="network")
 def _xhr_composed(ctx: Context) -> Hit | None:
+    """SPA evidence (network, strong): main content composed from same-origin XHR/fetch calls --
+    the page's real data comes from its own API."""
     ratio, in_main, same_origin, _ = _injection(ctx)
     if in_main and same_origin >= 1 and ratio >= _SPA_MAIN_RATIO:
         return Hit(0.95, f"main content composed from {same_origin} same-origin XHR call(s)", same_origin)
@@ -115,6 +120,8 @@ def _xhr_composed(ctx: Context) -> Hit | None:
 
 @detector(flag="spa", name="xhr_composed_cross_origin", stage="network")
 def _xhr_composed_cross_origin(ctx: Context) -> Hit | None:
+    """SPA evidence (network): main content composed from a CROSS-origin DATA endpoint (a CaaS/CDN
+    content API) -- still an SPA, at lower confidence than the same-origin case."""
     # main content built from a CROSS-origin data endpoint (a CaaS/CDN content API, e.g.
     # Adobe Milo's milo.adobe.com) -- still an SPA, at a lower confidence than same-origin
     # since a cross-origin data call is a slightly weaker signal.
@@ -130,10 +137,13 @@ def _xhr_composed_cross_origin(ctx: Context) -> Hit | None:
 # the counts in render_stats; these flags surface that so the pipeline renders + reads it.
 
 def _shadow_value(signals: "list[Signal]", ctx: Context) -> "int | None":
+    """The number of shadow roots the render inlined (the shadow_dom flag's payload), or ``None``."""
     return int((ctx.render_stats or {}).get("shadow", 0) or 0) or None
 
 
 def _iframe_value(signals: "list[Signal]", ctx: Context) -> "int | None":
+    """The iframe count behind the flag -- inlined frames from the render, else counted from the
+    tree / raw HTML; ``None`` when there are none."""
     n = int((ctx.render_stats or {}).get("frames", 0) or 0)
     if not n:
         n = len(ctx.tree.cssselect("iframe")) if ctx.tree is not None else ctx.low.count("<iframe")
@@ -146,6 +156,8 @@ flag("iframe", value=_iframe_value)
 
 @detector(flag="shadow_dom", name="shadow_roots_inlined", stage="rendered")
 def _shadow_inlined(ctx: Context) -> Hit | None:
+    """shadow_dom evidence (rendered): the render inlined one or more shadow roots that a plain
+    HTML snapshot would miss."""
     n = int((ctx.render_stats or {}).get("shadow", 0) or 0)
     if n > 0:
         return Hit(0.9, f"{n} shadow root(s) inlined from the live page", n)
@@ -159,6 +171,8 @@ _SHADOW_RE = re.compile(r"\.attachShadow\s*\(|shadowrootmode\s*=|<template[^>]*\
 
 @detector(flag="shadow_dom", name="attach_shadow_marker", stage="static")
 def _attach_shadow(ctx: Context) -> Hit | None:
+    """shadow_dom evidence (static): a real ``attachShadow()`` call or declarative
+    ``shadowrootmode`` template in the HTML -- not a bare mention of the word."""
     if _SHADOW_RE.search(ctx.text or ""):  # a real usage, not the word inside an article/blob
         return Hit(0.5, "the page uses shadow DOM (attachShadow() / shadowrootmode)")
     return None
@@ -166,6 +180,7 @@ def _attach_shadow(ctx: Context) -> Hit | None:
 
 @detector(flag="iframe", name="iframes_inlined", stage="rendered")
 def _iframe_inlined(ctx: Context) -> Hit | None:
+    """iframe evidence (rendered): the render inlined one or more same-origin iframe bodies."""
     n = int((ctx.render_stats or {}).get("frames", 0) or 0)
     if n > 0:
         return Hit(0.85, f"{n} same-origin iframe(s) inlined from the live page", n)
@@ -174,6 +189,8 @@ def _iframe_inlined(ctx: Context) -> Hit | None:
 
 @detector(flag="iframe", name="iframe_element", stage="static")
 def _iframe_element(ctx: Context) -> Hit | None:
+    """iframe evidence (static): iframe element(s) present in the tree, or the raw HTML in a
+    treeless (remote / no-lxml) context."""
     if ctx.tree is not None:
         if fr := ctx.tree.cssselect("iframe"):
             return Hit(0.6, f"{len(fr)} iframe element(s) on the page", len(fr))
@@ -187,6 +204,7 @@ def _iframe_element(ctx: Context) -> Hit | None:
 
 
 def _pagination_value(signals: "list[Signal]", ctx: Context) -> Any:
+    """The next-page hint carried by the pagination signals (a rel=next / page-param URL), if any."""
     return next((s.value for s in signals if s.value), None)
 
 
@@ -195,6 +213,7 @@ flag("pagination", value=_pagination_value)
 
 @detector(flag="pagination", name="rel_next_link", stage="static")
 def _rel_next(ctx: Context) -> Hit | None:
+    """pagination evidence (strong): a ``rel="next"`` link/anchor -- the canonical next-page marker."""
     if ctx.tree is not None and ctx.tree.cssselect('a[rel="next"], link[rel="next"]'):
         return Hit(0.9, "a rel=next link")
     return None
@@ -202,6 +221,7 @@ def _rel_next(ctx: Context) -> Hit | None:
 
 @detector(flag="pagination", name="pagination_ui", stage="static")
 def _pagination_ui(ctx: Context) -> Hit | None:
+    """pagination evidence: a pagination/pager widget (by class or aria-label)."""
     if ctx.tree is not None and ctx.tree.cssselect(
         '.pagination, [class*="pagination"], [class*="pager"], [aria-label*="agination"]'
     ):
@@ -211,6 +231,8 @@ def _pagination_ui(ctx: Context) -> Hit | None:
 
 @detector(flag="pagination", name="page_param_links", stage="static")
 def _page_param_links(ctx: Context) -> Hit | None:
+    """pagination evidence: a link carrying a page parameter (``?page=`` / ``/page/`` etc.);
+    its resolved URL is the next-page value."""
     if ctx.tree is None:
         return None
     base = ctx.final_url or ctx.url
@@ -223,6 +245,7 @@ def _page_param_links(ctx: Context) -> Hit | None:
 
 @detector(flag="pagination", name="numbered_sequence", stage="static")
 def _numbered_sequence(ctx: Context) -> Hit | None:
+    """pagination evidence: three or more purely-numeric links -- a ``1 2 3`` page-number strip."""
     if ctx.tree is None:
         return None
     nums = [t for el in ctx.tree.cssselect("a[href]") if (t := norm("".join(el.itertext()))).isdigit()]
@@ -247,6 +270,8 @@ _TAB_WIDGET_RE = re.compile(
 
 @detector(flag="tabbed", name="aria_tabs", stage="static")
 def _aria_tabs(ctx: Context) -> Hit | None:
+    """tabbed evidence (strong): ARIA tab roles (tablist/tab/tabpanel), from the tree or the raw
+    HTML in a treeless context."""
     if ctx.tree is not None:
         if ctx.tree.cssselect('[role="tablist"], [role="tab"], [role="tabpanel"]'):
             return Hit(0.9, "ARIA tab roles (tablist / tab / tabpanel)")
@@ -258,6 +283,8 @@ def _aria_tabs(ctx: Context) -> Hit | None:
 
 @detector(flag="tabbed", name="tab_widget", stage="static")
 def _tab_widget(ctx: Context) -> Hit | None:
+    """tabbed evidence: a tab widget (nav-tabs / tab-pane / data-tab), from the tree or raw HTML.
+    Deliberately conservative so a plain ``<table>`` never trips it."""
     # conservative selectors -- avoid bare [class*="tab"] (it matches "table")
     if ctx.tree is not None:
         if ctx.tree.cssselect(
@@ -274,6 +301,8 @@ def _tab_widget(ctx: Context) -> Hit | None:
 
 
 def _forms_value(signals: "list[Signal]", ctx: Context) -> "list[Form] | None":
+    """The forms flag's payload: each ``<form>`` as a ``Form`` (method, resolved action, field
+    names). ``None`` in a treeless context or when there are none."""
     if ctx.tree is None:
         return None
     from ..core.document.models import Form
@@ -295,6 +324,7 @@ flag("forms", value=_forms_value)
 
 @detector(flag="forms", name="form_element", stage="static")
 def _form_element(ctx: Context) -> Hit | None:
+    """forms evidence: one or more ``<form>`` elements on the page."""
     if ctx.tree is not None and (forms := ctx.tree.cssselect("form")):
         return Hit(0.9, f"{len(forms)} form(s)")
     return None
@@ -304,6 +334,8 @@ def _form_element(ctx: Context) -> Hit | None:
 
 
 def _buttons_value(signals: "list[Signal]", ctx: Context) -> list[str] | None:
+    """The buttons flag's payload: a sample (up to 10) of button labels on the page. ``None`` in a
+    treeless context or when there are none."""
     if ctx.tree is None:
         return None
     btns = ctx.tree.cssselect('button, input[type="submit"], input[type="button"]')
@@ -316,6 +348,7 @@ flag("buttons", value=_buttons_value)
 
 @detector(flag="buttons", name="button_element", stage="static")
 def _button_element(ctx: Context) -> Hit | None:
+    """buttons evidence: ``<button>`` / submit / button inputs on the page."""
     if ctx.tree is not None and (btns := ctx.tree.cssselect('button, input[type="submit"], input[type="button"]')):
         return Hit(0.9, f"{len(btns)} button(s)")
     return None
@@ -323,6 +356,7 @@ def _button_element(ctx: Context) -> Hit | None:
 
 @detector(flag="buttons", name="role_button", stage="static")
 def _role_button(ctx: Context) -> Hit | None:
+    """buttons evidence: ``role="button"`` elements (buttons that aren't ``<button>`` tags)."""
     if ctx.tree is not None and ctx.tree.cssselect('[role="button"]'):
         return Hit(0.6, "role=button elements")
     return None
@@ -330,6 +364,7 @@ def _role_button(ctx: Context) -> Hit | None:
 
 @detector(flag="buttons", name="onclick_attr", stage="static")
 def _onclick_attr(ctx: Context) -> Hit | None:
+    """buttons evidence (weak): elements carrying an inline ``onclick`` handler."""
     if ctx.tree is not None and ctx.tree.cssselect("[onclick]"):
         return Hit(0.4, "onclick handlers")
     return None

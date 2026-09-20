@@ -30,6 +30,8 @@ def visible_text(html: str) -> str:
 
 
 def _lower_headers(headers: "Mapping[Any, Any] | Iterable[tuple[Any, Any]]") -> dict[str, str]:
+    """Normalise headers to a dict with lowercased keys AND values, so detectors can match
+    case-insensitively without re-lowering."""
     items = headers.items() if isinstance(headers, Mapping) else headers
     return {str(k).lower(): str(v).lower() for k, v in items}
 
@@ -56,10 +58,13 @@ class Context:
 
     @property
     def header_blob(self) -> str:
+        """All header names and values joined into one string -- a cheap haystack for a detector
+        that just wants to substring-search the headers."""
         return " ".join(self.headers.keys()) + " " + " ".join(self.headers.values())
 
     @property
     def cookie_blob(self) -> str:
+        """All cookie names joined (lowercased) into one searchable string."""
         return " ".join(str(c).lower() for c in self.cookies)
 
     @classmethod
