@@ -7,6 +7,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ...dom import parse_json
+from ...dom.json import json_skeleton
 from ...query.collection import Field
 from ..web_core import Backing
 from .models import Element
@@ -21,64 +22,8 @@ def _strip(v: Any) -> Any:
     return v.strip() if isinstance(v, str) else v
 
 
-def _json_type(v: Any) -> str:
-    """The shape name of a JSON scalar (objects/arrays are rendered structurally)."""
-    if v is None:
-        return "null"
-    if isinstance(v, bool):
-        return "bool"
-    if isinstance(v, (int, float)):
-        return "number"
-    return "string"
-
-
-def _merge_keys(items: list[Any]) -> "dict[str, Any]":
-    """A representative object for an array of objects: the union of keys, each mapped
-    to a sample value (so ``results[].name`` paths are visible from one element)."""
-    merged: dict[str, Any] = {}
-    for it in items:
-        if isinstance(it, dict):
-            for k, v in it.items():
-                if k not in merged or merged[k] in (None, "", [], {}):
-                    merged[k] = v
-    return merged
-
-
-def _json_skeleton(
-    data: Any, *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30
-) -> str:
-    """A token-lean JSON shape outline: keys with value types, an array as ``[N]`` with
-    its element shape (object keys merged across items), nested paths kept -- so an LLM
-    can write dotted-path queries (``select('results[0].name')`` / ``extract``). The
-    JSON twin of the DOM skeleton; a sample scalar is shown, truncated to
-    ``text_chars``."""
-    lines: list[str] = []
-
-    def sample(v: Any) -> str:
-        s = str(v)
-        return s if len(s) <= text_chars else s[:text_chars] + "…"
-
-    def walk(v: Any, key: str, depth: int) -> None:
-        if len(lines) >= max_lines or depth > max_depth:
-            return
-        pad = "  " * depth
-        label = f"{key}: " if key else ""
-        if isinstance(v, dict):
-            lines.append(f"{pad}{label}{{}}" if not v else f"{pad}{label}{{")
-            if v:
-                for k, item in v.items():
-                    walk(item, k, depth + 1)
-                lines.append(f"{pad}}}")
-        elif isinstance(v, list):
-            lines.append(f"{pad}{label}[{len(v)}]")
-            if v:  # show one representative element's shape (merged object keys)
-                rep = _merge_keys(v) if any(isinstance(i, dict) for i in v) else v[0]
-                walk(rep, "", depth + 1)
-        else:
-            lines.append(f"{pad}{label}{_json_type(v)}  = {sample(v)}")
-
-    walk(data, "", 0)
-    return "\n".join(lines[:max_lines])
+#: back-compat alias -- the outline now lives in :mod:`webclient.dom.json`.
+_json_skeleton = json_skeleton
 
 
 def _json_elements(value: Any) -> list[Element]:

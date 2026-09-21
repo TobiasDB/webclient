@@ -59,21 +59,8 @@ class XhrCall(BaseModel):
     url: str
 
 
-class IndexedElement(BaseModel):
-    """One entry in a document's indexed element table -- the DOM-addressing primitive an agent
-    reasons over WITHOUT seeing classes or authoring a selector. ``index`` is its position in the
-    numbered table; ``role`` is a coarse control/content role (button / textbox / link / text /
-    row / …); ``name`` is a short human label (aria-label / text / …); ``kind`` is whether it is
-    interactive or content-bearing; ``selector`` is the DURABLE, class-free CSS the loop resolves
-    the index to (for the recorded Plan). ``repeats`` > 1 marks a member of a repeated structure
-    (a record row), so a query agent can pick ``select_all`` knowingly."""
-
-    index: int
-    role: str = ""
-    name: str = ""
-    kind: Literal["interactive", "content"] = "interactive"
-    selector: str = ""
-    repeats: int = 1
+#: the indexed-element table row (defined with its builder in :mod:`webclient.dom.index`).
+from ...dom.index import IndexedElement  # noqa: E402
 
 
 class Transport(BaseModel):

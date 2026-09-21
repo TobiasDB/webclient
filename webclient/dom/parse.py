@@ -1,4 +1,4 @@
-"""Stateless DOM / HTML-string / JSON helpers -- the shared low-level toolkit.
+"""Stateless HTML-string / element helpers -- the parse half of :mod:`webclient.dom`.
 
 Every module that reads a parsed tree, decodes or scans HTML text, or walks a JSON
 value goes through here, so the primitives live in ONE place (no more four copies of
@@ -15,7 +15,6 @@ load time -- the element helpers call methods on an element the caller already h
 
 from __future__ import annotations
 
-import json as _json
 import re
 from typing import Any
 
@@ -23,8 +22,7 @@ __all__ = [
     "norm", "tag", "local_name", "text_of",
     "sniff_charset", "decode_html", "parse_html",
     "visible_text", "strip_wc_attrs", "clean_href",
-    "parse_json", "json_leaves",
-]
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -142,43 +140,3 @@ def clean_href(value: "str | None") -> str:
         return ""
     value = value.strip().translate({0x09: None, 0x0A: None, 0x0D: None})
     return value.replace(" ", "%20")
-
-
-# --------------------------------------------------------------------------- #
-# JSON helpers
-# --------------------------------------------------------------------------- #
-
-def parse_json(data: "str | bytes | None") -> Any:
-    """Parse a JSON body, returning the value or ``None`` when it is empty or does not parse
-    (a mislabelled / truncated body must never crash a lenient caller)."""
-    if not data:
-        return None
-    try:
-        return _json.loads(data)
-    except (ValueError, RecursionError):
-        return None
-
-
-def json_leaves(data: Any, *, budget: int = 20000) -> "list[str]":
-    """Every scalar leaf (string / number / bool) of a parsed JSON value, as strings -- the
-    values a rendered node's text is most likely to echo. Bounded by ``budget`` so a huge
-    blob can't blow up the caller."""
-    out: list[str] = []
-    _walk_leaves(data, out, budget)
-    return out
-
-
-def _walk_leaves(data: Any, out: "list[str]", budget: int) -> None:
-    """Recurse ``data``, appending its scalar leaves to ``out`` until ``budget`` is reached."""
-    if len(out) >= budget:
-        return
-    if isinstance(data, dict):
-        for v in data.values():
-            _walk_leaves(v, out, budget)
-    elif isinstance(data, list):
-        for v in data:
-            _walk_leaves(v, out, budget)
-    elif isinstance(data, bool):
-        out.append("true" if data else "false")
-    elif isinstance(data, (str, int, float)):
-        out.append(str(data))

@@ -1,17 +1,24 @@
 """HtmlBacking: tree ops for html/xml (select/attr, incl. attr("text")) plus the
-markdown / text / elements / links render helpers -- all html-only."""
+markdown / text / elements / links render front doors -- all html-only.
+
+The backing owns STATE and wiring (the cached parse, the document's events, the
+correlation substrate, sub-core creation); every pure tree algorithm lives in
+:mod:`webclient.dom` (markdown / skeleton / select / landmarks / classes / regex)."""
 
 from __future__ import annotations
 
-import copy
-import json
-import re
 from typing import TYPE_CHECKING, Any, Literal, overload
 from urllib.parse import urljoin
 
 from ...dom import clean_href as _clean_href, decode_html
 from ...dom import norm as _norm
 from ...dom import parse_html, strip_wc_attrs as _strip_wc_attrs, tag as _tag, text_of
+from ...dom.classes import is_noise_class as _is_noise_class  # noqa: F401  (back-compat re-export)
+from ...dom.landmarks import landmark_of
+from ...dom.markdown import HEADINGS as _HEADINGS, SKIP as _SKIP, to_markdown, to_text
+from ...dom.regex import regex_extract as _regex_extract
+from ...dom.select import find as _find_in
+from ...dom.skeleton import skeleton as _skeleton
 from ...query.collection import Field
 from ..reference import Reference, from_url
 from ..web_core import Backing
@@ -20,14 +27,6 @@ from .models import Element
 if TYPE_CHECKING:
     from . import Document
     from .correlate import Correlation
-
-_HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
-_SKIP = {"script", "style"}
-_NOISE = "script, style, nav, aside, footer, header"
-_MAIN = "main, article, [role=main], #content, #main"
-_BARE_TAG = re.compile(r"^[A-Za-z_][\w-]*$")  # a lone element-name selector (no combinators)
-_ASCII_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-_ASCII_LOWER = "abcdefghijklmnopqrstuvwxyz"
 
 
 def tree(core: "Document") -> Any:
@@ -61,156 +60,6 @@ def _html_text(core: "Document", raw: bytes) -> str:
     return decode_html(raw, core.encoding)
 
 
-def _inline(el: Any) -> str:
-    """The element's inline text -- its own and descendants' text with nested block/list/table
-    children skipped -- collapsed to a single line (used building the markdown/skeleton view)."""
-    parts = [el.text or ""]
-    for child in el:
-        tag = _tag(child)
-        if tag in _SKIP or tag in ("ul", "ol", "table"):
-            # block children are rendered by _md_blocks, not inlined -- keep the
-            # tail text but do not concatenate the block's own text here.
-            parts.append(child.tail or "")
-            continue
-        inner = _inline(child)
-        if tag == "a":
-            parts.append(f"[{inner}]({child.get('href', '')})")
-        elif tag in ("strong", "b"):
-            parts.append(f"**{inner}**")
-        elif tag in ("em", "i"):
-            parts.append(f"*{inner}*")
-        elif tag == "code":
-            parts.append(f"`{inner}`")
-        elif tag == "img":
-            parts.append(f"![{child.get('alt', '')}]({child.get('src', '')})")
-        else:
-            parts.append(inner)
-        parts.append(child.tail or "")
-    return _norm("".join(parts))
-
-
-def _list_md(el: Any, depth: int) -> list[str]:
-    """Markdown for a ``ul``/``ol``, recursing into nested lists with indentation.
-    Each item's own text comes from ``_inline`` (which skips its child lists)."""
-    lines: list[str] = []
-    ordered = _tag(el) == "ol"
-    idx = 0
-    for li in el:
-        if _tag(li) != "li":
-            continue
-        idx += 1
-        marker = f"{idx}." if ordered else "-"
-        lines.append("  " * depth + f"{marker} {_inline(li)}".rstrip())
-        for sub in li:
-            if _tag(sub) in ("ul", "ol"):
-                lines.extend(_list_md(sub, depth + 1))
-    return lines
-
-
-def _table_md(table: Any) -> str:
-    """A GFM pipe table: the first row is the header, the rest the body (ragged
-    rows are padded). Cells are the element's collapsed text."""
-    rows: list[list[str]] = []
-    for tr in table.iter("tr"):
-        cells = [_norm("".join(c.itertext())) for c in tr if _tag(c) in ("td", "th")]
-        if cells:
-            rows.append(cells)
-    if not rows:
-        return ""
-    width = max(len(r) for r in rows)
-    rows = [r + [""] * (width - len(r)) for r in rows]
-    md = ["| " + " | ".join(rows[0]) + " |", "| " + " | ".join(["---"] * width) + " |"]
-    for r in rows[1:]:
-        md.append("| " + " | ".join(r) + " |")
-    return "\n".join(md)
-
-
-def _md_blocks(el: Any, out: list[str]) -> None:
-    """Walk an element's children and append their Markdown block forms (headings, lists,
-    tables, paragraphs) to ``out`` -- the recursive core of the HTML-to-Markdown rendering."""
-    for child in el:
-        tag = _tag(child)
-        if tag in _SKIP:
-            continue
-        if tag in _HEADINGS:
-            out.append("#" * int(tag[1]) + " " + _inline(child))
-        elif tag == "p":
-            out.append(_inline(child))
-        elif tag in ("ul", "ol"):
-            lines = _list_md(child, 0)
-            if lines:
-                out.append("\n".join(lines))
-        elif tag == "table":
-            table = _table_md(child)
-            if table:
-                out.append(table)
-        elif tag == "pre":
-            out.append("```\n" + "".join(child.itertext()).strip("\n") + "\n```")
-        elif tag == "blockquote":
-            out.append("> " + _inline(child))
-        elif tag == "img":
-            out.append(f"![{child.get('alt', '')}]({child.get('src', '')})")
-        else:
-            _md_blocks(child, out)
-
-
-#: tags with no selector value that only add tokens -- dropped from the skeleton.
-_SKELETON_SKIP = frozenset({
-    "script", "style", "noscript", "template", "svg", "path", "head", "meta",
-    "link", "br", "hr", "source", "track", "wbr", "picture", "canvas", "defs",
-})
-#: selector-relevant attributes to surface (in this order): form/input targets,
-#: accessibility + SPA test hooks -- the ones an LLM actually writes selectors on.
-#: A form input's ``value`` stays hidden (may be sensitive); a DISPLAY ``value``
-#: (``<data>``/``<meter>``/…) is surfaced separately below. ``href``/``src`` show as
-#: presence flags below. Values are collapsed + clipped to stay token-lean.
-_SKELETON_ATTRS = (
-    "role", "type", "name", "placeholder", "for", "aria-label", "alt", "title",
-    "data-testid", "data-test", "data-cy", "data-id", "data-qa", "contenteditable",
-)
-_SKELETON_ATTRS_SET = frozenset(_SKELETON_ATTRS)  # for de-duping the value-bearing data-* scan
-_MAX_CLASSES = 8  # cap utility-class soup (tailwind &c.) so a node stays token-lean
-
-#: VALUE-BEARING attributes -- where a field's value lives in an attribute, not the text
-#: (``<time datetime>``, ``<meta content>``). Surfaced WITH their value so the LLM sees to
-#: read the attribute, not the (often empty / formatted) text. Pairs with ``attr(name)``.
-_VALUE_ATTRS = ("datetime", "content")
-#: tags whose ``value`` is a DISPLAY value (safe to show), unlike a form input's ``value``
-#: (excluded as possibly sensitive): ``<data>``/``<meter>``/``<progress>``/``<option>``/``<li>``.
-_VALUE_TAGS = frozenset({"data", "meter", "progress", "option", "li"})
-#: value-bearing ``data-*`` names (``data-price``/``data-rating``/…) -- worth showing with
-#: their value; generic/analytics ``data-*`` (``data-ga-id`` …) are left out as noise.
-_VALUE_DATA_RE = re.compile(
-    r"^data-(price|value|amount|cost|total|rating|score|rank|count|qty|quantity|"
-    r"stock|date|time|sku|code|number|num|id|key|index|state|status)$"
-)
-
-#: tags whose interactivity is SELF-EVIDENT -- marking them "clickable" would be noise. The
-#: skeleton only flags NON-obvious controls (a div/span made clickable via role/onclick/…).
-_OBVIOUS_INTERACTIVE = frozenset({
-    "a", "button", "input", "select", "textarea", "summary", "label", "option", "details",
-})
-
-#: CSS-in-JS / CSS-module class prefixes -- always generated, never a stable selector hook.
-_NOISE_CLASS_PREFIX = ("css-", "sc-", "jsx-", "emotion-", "chakra-", "mui", "makestyles", "jss")
-_HEX_SEG = re.compile(r"[0-9a-f]*[0-9][0-9a-f]*")  # hex chars incl. at least one digit
-
-
-def _regex_extract(value: str, pattern: str, group: "int | str | None") -> "str | None":
-    """Search ``value`` for ``pattern`` and return the requested ``group`` (an index or
-    named group; ``None`` -> group 1 when the pattern captures, else the whole match).
-    ``None`` when the pattern does not match, or the group is absent."""
-    m = re.search(pattern, value)
-    if m is None:
-        return None
-    if group is not None:
-        try:
-            return m.group(group)
-        except IndexError:  # a bad group index / unknown group name
-            return None
-    return m.group(1) if m.groups() else m.group(0)
-
-
 def _regex_field(value: Any, pattern: "str | None", group: "int | str | None") -> "Field[str]":
     """Wrap an extracted ``value`` as a ``Field``, applying an optional regex ``pattern``.
     A ``None`` value or a non-matching pattern is a LENIENT miss (an empty ``Field``) so it
@@ -218,153 +67,6 @@ def _regex_field(value: Any, pattern: "str | None", group: "int | str | None") -
     if value is not None and pattern is not None:
         value = _regex_extract(value if isinstance(value, str) else str(value), pattern, group)
     return Field(value) if value is not None else Field(None, ok=False)
-
-
-#: bare Tailwind display/flex/text-transform utilities that carry NO record meaning. Kept to the
-#: UNAMBIGUOUS ones -- ambiguous common words that could be a real hook (``container``/``block``/
-#: ``inline``/``static``/``border``/``rounded``/``shadow``) are spared here; their dashed forms
-#: (``border-2``/``rounded-lg``/…) are still caught by ``_UTILITY_PREFIX``.
-_UTILITY_BARE = frozenset({
-    "flex", "grid", "hidden", "relative", "absolute", "fixed", "sticky",
-    "inline-flex", "inline-block", "flow-root",
-    "truncate", "italic", "not-italic", "uppercase", "lowercase", "capitalize", "underline",
-    "line-through", "no-underline", "antialiased", "transform", "transition",
-})
-#: a Tailwind-style ``prop-value`` utility (``mt-6``/``px-4``/``text-center``/``bg-white``/…).
-#: Deliberately keyed on a KNOWN utility prop + a ``-value`` suffix, so a semantic ``feed-item``
-#: / ``post-title`` / ``sold-out`` (prop is not a utility) and bare ``row``/``col``/``card``
-#: (Bootstrap-semantic, no suffix) are spared. Grid ``col-span-2``/``row-start-1`` ARE stripped.
-_UTILITY_PREFIX = re.compile(
-    r"^-?(?:"
-    r"[mp][trblxyse]?|w|h|min-w|max-w|min-h|max-h|size|"
-    r"gap|gap-[xy]|space-[xy]|inset|inset-[xy]|top|right|bottom|left|z|"
-    r"grid-cols|grid-rows|col-span|col-start|col-end|row-span|row-start|row-end|"
-    r"order|basis|grow|shrink|flex|justify|justify-items|justify-self|items|self|content|place|"
-    r"text|font|leading|tracking|indent|align|whitespace|break|"
-    r"bg|from|via|to|border|divide|rounded|ring|outline|shadow|opacity|mix-blend|"
-    r"overflow|overscroll|object|aspect|columns|float|clear|"
-    r"cursor|select|resize|scroll|snap|touch|pointer-events|"
-    r"transition|duration|ease|delay|animate|"
-    r"scale|rotate|translate|skew|origin|"
-    r"fill|stroke|sr"
-    r")-\S+$"
-)
-
-
-def _is_utility_class(tok: str) -> bool:
-    """Whether a class is a layout/spacing/typography UTILITY (Tailwind & co.) that carries no
-    record identity -- so it should never anchor a selector or split a record signature."""
-    return tok in _UTILITY_BARE or bool(_UTILITY_PREFIX.match(tok))
-
-
-def _is_noise_class(tok: str) -> bool:
-    """Whether a class token is NOT a useful semantic hook -- either a HIGH-ENTROPY generated name
-    (a CSS-module / hashed build class like ``css-1a2b3c`` / ``jsx-1837462`` / ``Button_a1B2c``) or
-    a layout/spacing/typography UTILITY (``mt-6`` / ``flex`` / ``px-4`` / ``text-center``). Kept
-    deliberately CONSERVATIVE for the HASH half -- far worse to drop a real hook than keep noise --
-    so it spares numbered / PascalCase semantic names (``heading2``/``ProductCardItem``/``USMap``)
-    and Bootstrap-semantic bare words (``row``/``col``/``card``/``btn``); the utility half is keyed
-    on known utility props so ``feed-item``/``post-title``/``sold-out`` are spared too. Stripping
-    utilities is what stops a stray ``mt-6`` on one record from splitting its sibling group."""
-    if _is_utility_class(tok):  # checked BEFORE the length guard -- utilities are often < 5 chars
-        return True
-    if len(tok) < 5:
-        return False  # short classes are almost always meaningful (nav, btn, col, row, h1)
-    if tok.lower().startswith(_NOISE_CLASS_PREFIX):
-        return True
-    has_upper = any(c.isupper() for c in tok)
-    has_lower = any(c.islower() for c in tok)
-    has_digit = any(c.isdigit() for c in tok)
-    if has_upper and has_lower and has_digit:
-        return True  # mixed-case AND a digit -> a generated hash, never a hand-written class
-    for seg in re.split(r"[-_]", tok):  # a bare hex hash segment (emotion/styled hashes)
-        if len(seg) >= 8 and _HEX_SEG.fullmatch(seg):
-            return True
-    return False
-
-
-def _semantic_classes(classes: "list[str]") -> "list[str]":
-    """The meaningful class tokens, dropping high-entropy generated ones (:func:`_is_noise_class`)."""
-    return [c for c in classes if not _is_noise_class(c)]
-
-
-def _kept_children(el: Any) -> "list[Any]":
-    """Child *elements* worth showing: real tags (not comments/PIs) that aren't
-    structural noise."""
-    return [
-        c for c in el if isinstance(c.tag, str) and _tag(c) not in _SKELETON_SKIP
-    ]
-
-
-def _selector_sig(el: Any) -> str:
-    """An HTML open-tag signature for ONE element: ``<tag id="x" class="a b"
-    role="button" href>`` -- the tag with its id, (capped) classes, a few
-    selector-relevant attributes (``role``/``type``/``name``/``data-testid`` …), and
-    ``href``/``src`` presence (name only, not the value). Real HTML syntax an LLM
-    reads natively, and everything it needs to write a CSS selector for the node.
-    Classes are capped so utility-class soup can't blow up a line."""
-    tag = _tag(el) or "?"
-    parts = [tag]
-    eid = el.get("id")
-    if eid:
-        parts.append(f'id="{_norm(eid)}"')
-    classes = _semantic_classes(str(el.get("class") or "").split())  # drop hashed build classes
-    if classes:
-        shown = " ".join(classes[:_MAX_CLASSES])
-        if len(classes) > _MAX_CLASSES:
-            shown += f" …+{len(classes) - _MAX_CLASSES}"
-        parts.append(f'class="{shown}"')
-    for attr in _SKELETON_ATTRS:
-        val = el.get(attr)
-        if val is not None and val != "":
-            parts.append(f'{attr}="{_norm(val)[:24]}"')
-    # value-bearing attributes: surface WITH their value, so the LLM sees the field lives in
-    # an attribute (a machine date in `datetime`, a price in `content`/`data-price`), not text.
-    for attr in _VALUE_ATTRS:
-        val = el.get(attr)
-        if val is not None and val != "":
-            parts.append(f'{attr}="{_norm(val)[:24]}"')
-    if tag in _VALUE_TAGS:  # a DISPLAY value (not a form input's -- those stay hidden)
-        v = el.get("value")
-        if v is not None and v != "":
-            parts.append(f'value="{_norm(v)[:24]}"')
-    shown_data = 0  # value-bearing data-* (price/rating/…), capped; skip the ones already shown
-    for name, v in (el.attrib.items() if hasattr(el, "attrib") else []):
-        if shown_data >= 3:
-            break
-        if (name not in _SKELETON_ATTRS_SET and not name.startswith("data-wc-")
-                and _VALUE_DATA_RE.match(name) and v):
-            parts.append(f'{name}="{_norm(str(v))[:24]}"')
-            shown_data += 1
-    if el.get("href") is not None:  # a link/area target (presence, not the url)
-        parts.append("href")
-    if el.get("src") is not None:  # img/media/iframe source (presence)
-        parts.append("src")
-    return "<" + " ".join(parts) + ">"
-
-
-_SKELETON_LEGEND = (
-    '# skeleton: an HTML-tag outline (open tags only, indentation = nesting). '
-    '"…"=sample text'
-)
-
-
-def _struct_sig(el: Any, memo: "dict[int, str]", budget: int = 6) -> str:
-    """A RECURSIVE structural signature (this element + its kept children, bounded
-    depth). Two siblings merge only when their structure is identical, so a
-    collapsed ``… ×N`` never hides a differently-shaped sibling (e.g. an item with
-    an extra badge) -- the safe, lossless form of list merging. Cached per element."""
-    if budget <= 0:
-        return _selector_sig(el) + "(…)"
-    key = id(el)
-    cached = memo.get(key)
-    if cached is not None:
-        return cached
-    inner = ",".join(_struct_sig(k, memo, budget - 1) for k in _kept_children(el))
-    sig = f"{_selector_sig(el)}({inner})"
-    if budget == 6:  # only cache the full-depth signature (the one merge compares)
-        memo[key] = sig
-    return sig
 
 
 def _xhr_endpoints(core: "Document") -> "list[str]":
@@ -420,236 +122,6 @@ def _correlation(core: "Document") -> "Correlation | None":
     ):
         correlator = ContentCorrelator()
     return correlator.correlate(net, dom)
-
-
-def _static_sig_set(static_html: "bytes | None") -> "frozenset[str] | None":
-    """The set of ``_selector_sig`` values present in the STATIC (pre-JS) HTML, used
-    to mark rendered nodes as initial vs injected. ``None`` if there is no static
-    baseline (a plain ``browser="always"`` fetch, or a static-only fetch)."""
-    if not static_html:
-        return None
-    from lxml import html as _lh
-
-    try:
-        root = _lh.fromstring(static_html)
-    except Exception:  # unparseable shell -> treat everything as dynamic
-        return frozenset()
-    return frozenset(
-        _selector_sig(el) for el in root.iter() if isinstance(el.tag, str)
-    )
-
-
-_JSON_SCRIPT = 'script[type="application/json"], script[type="application/ld+json"]'
-
-
-def _json_islands(root: Any, *, max_islands: int = 4, preview_lines: int = 12) -> list[str]:
-    """Injected-JSON islands in the page: ``<script type="application/json">`` /
-    ``ld+json`` blobs (a ``__NEXT_DATA__`` / catalog payload) whose records the DOM does
-    NOT render. The skeleton strips scripts, so these are otherwise invisible -- surfacing
-    them (a selector + a small JSON shape preview) is what tells the LLM to
-    ``select("script#…").as_json()`` into the blob instead of scraping an empty shell."""
-    from .json import _json_skeleton  # local: avoid a module-level html<->json cycle
-
-    out: list[str] = []
-    try:
-        scripts = root.cssselect(_JSON_SCRIPT)
-    except Exception:  # noqa: BLE001 - a tree the selector engine can't run -> no islands
-        return out
-    for el in scripts[:max_islands]:
-        raw = "".join(el.itertext()).strip()
-        if len(raw) < 2:
-            continue
-        try:
-            data = json.loads(raw)
-        except ValueError:
-            continue  # not real JSON (an inline config with JS, etc.)
-        if not isinstance(data, (dict, list)):
-            continue
-        sid = el.get("id")
-        sel = f"script#{sid}" if sid else 'script[type="application/json"]'
-        shape = "\n".join("    " + ln for ln in _json_skeleton(
-            data, max_lines=preview_lines).splitlines()[:preview_lines])
-        out.append(f"{sel}  ->  .as_json() then dotted-path in:\n{shape}")
-    return out
-
-
-#: page-chrome landmarks -- navigation / footer / sidebar, by tag or ARIA role. Dropped from
-#: the skeleton under ``drop_chrome`` so a huge page's records aren't buried under menus. A bare
-#: ``<header>`` tag is NOT dropped (an <article>/<section> header holds the record's title); only
-#: an explicit ``role="banner"`` page header is.
-_CHROME_TAGS = frozenset({"nav", "footer", "aside"})
-_CHROME_ROLES = frozenset({"navigation", "contentinfo", "complementary", "search", "banner"})
-
-
-def _is_chrome(el: Any) -> bool:
-    """Whether the element is page chrome (nav/footer/aside, or an ARIA landmark role) --
-    the parts dropped from the skeleton under ``drop_chrome`` so records aren't buried."""
-    if _tag(el).rsplit("}", 1)[-1] in _CHROME_TAGS:
-        return True
-    role = (el.get("role") or "").strip().lower() if hasattr(el, "get") else ""
-    return role in _CHROME_ROLES
-
-
-def _skeleton(
-    root: Any,
-    *,
-    max_lines: int = 400,
-    text_chars: int = 40,
-    max_depth: int = 30,
-    max_siblings: int = 200,
-    legend: bool = True,
-    collapse: bool = False,
-    drop_chrome: bool = False,
-    static_html: "bytes | None" = None,
-    xhr_endpoints: "list[str] | None" = None,
-    correlation: "Correlation | None" = None,
-    region_marks: "dict[str, str] | None" = None,
-    mark_interactive: bool = False,
-) -> str:
-    """A token-lean DOM skeleton: an indented outline of HTML open-tag signatures
-    with structural noise (script/style/svg/meta/comments/…) removed and a short
-    text hint on leaf nodes -- a faithful outline of the page, every sibling shown,
-    so an LLM can write CSS selectors (incl. ``:nth-child``) without the raw HTML.
-    Bounded by ``max_lines`` / ``max_depth`` / ``max_siblings``.
-
-    ``collapse`` (off by default) opts into merging consecutive *structurally-
-    identical* siblings to ``… ×N`` -- a uniform list of 50 cards becomes one line
-    (a differently-shaped sibling is never merged away) -- for very repetitive pages
-    where faithfulness costs too many tokens.
-
-    When ``static_html`` (the pre-JS response) is supplied, a node whose signature
-    is NOT in that baseline is marked ``[xhr]`` (if the page issued XHR/fetch
-    requests) or ``[js]`` -- so the LLM sees which content is server-initial vs
-    client-loaded."""
-    lines: list[str] = []
-    memo: dict[int, str] = {}
-    static_sigs = _static_sig_set(static_html)
-    inject_tag = " [xhr]" if xhr_endpoints else " [js]"
-
-    def origin(el: Any) -> str:
-        # only annotated when there's a static baseline to diff against.
-        if static_sigs is None:
-            return ""
-        return "" if _selector_sig(el) in static_sigs else inject_tag
-
-    def phase_note(el: Any) -> str:
-        # which XHR request(s) / action this node's content followed (the correlation
-        # stamp) -- an ANNOTATION, never a selector; data-wc-node itself is never shown.
-        if correlation is None:
-            return ""
-        node = el.get("data-wc-node") if hasattr(el, "get") else None
-        if not node:
-            return ""
-        cands = correlation.candidates_for(node)
-        action = correlation.action_for(node)
-        parts = []
-        if cands:
-            parts.append(f"req[{', '.join(str(c) for c in cands)}]")
-        if action:
-            parts.append(f"act[{action}]")
-        return f"  ← after {' '.join(parts)}" if parts else ""
-
-    def record_note(el: Any) -> str:
-        # flag the dominant repeating region (the dataset) with a suggested select_all;
-        # matched by canonical XPath (lxml proxies have no stable id()).
-        from .record_regions import mark_for
-
-        return mark_for(region_marks, el) if region_marks else ""
-
-    def interact_note(el: Any) -> str:
-        # mark NON-obvious controls: a <div>/<span>/… made clickable via role/onclick/tabindex
-        # (static/semantic) OR a JS listener / cursor:pointer (the dynamic data-wc-int stamp,
-        # which catches event delegation) -- the ones the tag alone doesn't reveal. hover /
-        # scroll targets are marked wherever seen. A plain <a>/<button> is left alone (noise).
-        if not mark_interactive:
-            return ""
-        kinds = set((el.get("data-wc-int") or "").split()) if hasattr(el, "get") else set()
-        marks: list[str] = []
-        if _tag(el) not in _OBVIOUS_INTERACTIVE:
-            from .interactivity import interactive
-
-            if "click" in kinds or (interactive(el) is not None):
-                marks.append("clickable")
-        if "hover" in kinds:
-            marks.append("hover")
-        if "scroll" in kinds:
-            marks.append("scroll")
-        return f"  ← {'/'.join(marks)}" if marks else ""
-
-    def walk(el: Any, depth: int) -> None:
-        if depth > max_depth:
-            lines.append("  " * depth + "…")
-            return
-        children = _kept_children(el)
-        if drop_chrome:  # drop nav/footer/sidebar landmarks so records aren't buried
-            children = [c for c in children if not _is_chrome(c)]
-        i = 0
-        shown = 0
-        while i < len(children):
-            if len(lines) >= max_lines:
-                lines.append("  " * depth + "… (truncated)")
-                return
-            if shown >= max_siblings:
-                lines.append("  " * depth + f"… ({len(children) - i} more)")
-                return
-            child = children[i]
-            if collapse:  # merge consecutive structurally-identical siblings
-                ssig = _struct_sig(child, memo)  # on STRUCTURE, not just the sig
-                j = i + 1
-                while j < len(children) and _struct_sig(children[j], memo) == ssig:
-                    j += 1
-            else:  # faithful: one line per sibling
-                j = i + 1
-            count = j - i
-            kids = _kept_children(child)
-            text = _norm("".join(child.itertext())) if not kids else ""
-            hint = f'  "{text[:text_chars]}…"' if len(text) > text_chars else (
-                f'  "{text}"' if text else ""
-            )
-            suffix = f" ×{count}" if count > 1 else ""
-            lines.append(
-                "  " * depth + _selector_sig(child) + origin(child) + phase_note(child)
-                + record_note(child) + interact_note(child) + suffix + hint
-            )
-            walk(child, depth + 1)  # the representative's structure (all N share it)
-            i = j
-            shown += 1
-
-    walk(root, 0)
-    header: list[str] = []
-    if legend:
-        leg = _SKELETON_LEGEND
-        if collapse:
-            leg += ' ×N=N identical siblings collapsed;'
-        if static_sigs is not None:
-            leg += "  [xhr]/[js]=client-injected (unmarked=server-initial)"
-        if correlation is not None and correlation.requests:
-            leg += '  "← after [n]"=this content followed request [n] below'
-        if region_marks:
-            leg += '  "← RECORD LIST"=the repeating dataset region (select_all target)'
-        if mark_interactive:
-            leg += '  "← clickable"=a non-obvious control (div/span made clickable)'
-        header.append(leg)
-    if correlation is not None and correlation.requests:
-        header.append("# XHR/fetch requests (completion order, seconds since the first):")
-        for r in correlation.requests[:12]:
-            header.append(f"#  [{r.index}] {r.method} {r.url}  {r.t_s:.2f}s")
-        if len(correlation.requests) > 12:
-            header.append(f"#  … (+{len(correlation.requests) - 12} more)")
-    if xhr_endpoints:
-        shown_ep = xhr_endpoints[:8]
-        more = f" (+{len(xhr_endpoints) - 8} more)" if len(xhr_endpoints) > 8 else ""
-        header.append("# XHR/fetch data APIs: " + ", ".join(shown_ep) + more)
-    for island in _json_islands(root):  # injected-JSON blobs the DOM doesn't render
-        header.append("# injected JSON island (records live here, not in the DOM): " + island)
-    return "\n".join([*header, *lines])
-
-
-def _main_container(root: Any) -> Any:
-    """The page's main-content element (``<main>``/``role=main``/article), or the whole
-    root when there is no distinct main region."""
-    found = root.cssselect(_MAIN)
-    return found[0] if found else root
 
 
 def _html_elements(root: Any) -> list[Element]:
@@ -726,32 +198,6 @@ def _miss(parent: "Document", message: str, error: Any) -> "Document":
     return sub
 
 
-#: the page landmarks ``region`` classifies an element into (the HTML sectioning
-#: elements + their ARIA-role and class/id equivalents).
-_LANDMARKS = frozenset({"nav", "main", "article", "header", "footer", "aside"})
-
-#: ARIA landmark ``role`` -> the landmark it denotes.
-_LANDMARK_ROLES = {
-    "navigation": "nav",
-    "main": "main",
-    "article": "article",
-    "banner": "header",
-    "contentinfo": "footer",
-    "complementary": "aside",
-}
-
-#: class / id substring hints, tried (in order) when an ancestor has no landmark
-#: tag or ARIA role -- the first hit classifies the region.
-_LANDMARK_HINTS = (
-    ("footer", "footer"),
-    ("masthead", "header"),
-    ("breadcrumb", "nav"),
-    ("menu", "nav"),
-    ("nav", "nav"),
-    ("sidebar", "aside"),
-)
-
-
 class HtmlBacking(Backing):
     """Tree ops for html/xml. ``select``/``select_all`` yield element
     Documents; ``text_content`` reads the element's decoded text (all
@@ -774,27 +220,7 @@ class HtmlBacking(Backing):
         ``role``, or class/id hint. A standard-web-semantics primitive: "is this
         link in the nav, the article, or the footer?" (a crawl scores links by
         it; an LLM can filter on it)."""
-        node = core._element
-        hops = 0
-        while node is not None and hops < 25:
-            tag = _tag(node).rsplit("}", 1)[-1]  # strip any XML namespace
-            if tag in _LANDMARKS:
-                return tag
-            role = (node.get("role") or "").strip().lower() if hasattr(node, "get") else ""
-            if role in _LANDMARK_ROLES:
-                return _LANDMARK_ROLES[role]
-            hint = (
-                f"{node.get('class') or ''} {node.get('id') or ''}".lower()
-                if hasattr(node, "get")
-                else ""
-            )
-            if hint.strip():
-                for needle, landmark in _LANDMARK_HINTS:
-                    if needle in hint:
-                        return landmark
-            node = node.getparent()
-            hops += 1
-        return ""
+        return landmark_of(core._element)
 
     # -- named render front doors (typed sugar over ``render(format)``) --------
     def markdown(self, core: "Document", *, main_content_only: bool = False) -> str:
@@ -876,7 +302,7 @@ class HtmlBacking(Backing):
         ``← clickable``. (A human-readable label for any element is available as the reusable
         :func:`webclient.core.document.naming.name` primitive -- not repeated here, since the
         tag signature already surfaces aria-label / alt / title / placeholder.)"""
-        from .record_regions import region_marks as _region_marks
+        from ...dom.records import region_marks as _region_marks
 
         static_html = core._static_html if annotate_origin else None
         xhr = _xhr_endpoints(core) if annotate_origin else None
@@ -906,6 +332,7 @@ class HtmlBacking(Backing):
         """The page's ``<title>`` text (whitespace-normalised), or ``None`` when absent."""
         node = self._find(core, "title")
         return _norm("".join(node[0].itertext())) if node else None
+
 
     @overload
     def render(
@@ -944,23 +371,9 @@ class HtmlBacking(Backing):
                 if (href := _clean_href(el.get("href")))
             ]
         if format == "markdown":
-            target = _main_container(root) if options.get("main_content_only") else root
-            blocks: list[str] = []
-            _md_blocks(target, blocks)
-            return "\n\n".join(b for b in blocks if b.strip())
+            return to_markdown(root, main_content_only=bool(options.get("main_content_only")))
         if format == "text":
-            target = copy.deepcopy(_main_container(root))
-            for noise in target.cssselect(_NOISE):
-                if noise.getparent() is not None:
-                    noise.getparent().remove(noise)
-            blocks = [
-                _norm("".join(el.itertext()))
-                for el in target.iter()
-                if _tag(el) in _HEADINGS or _tag(el) in ("p", "li", "pre", "blockquote")
-            ]
-            return "\n\n".join(b for b in blocks if b) or _norm(
-                "".join(target.itertext())
-            )
+            return to_text(root, main_content_only=bool(options.get("main_content_only", True)))
         if format == "elements":
             return _html_elements(root)
         if format == "skeleton":
@@ -974,32 +387,10 @@ class HtmlBacking(Backing):
         return tree(core)
 
     def _find(self, core: "Document", selector: str) -> list[Any]:
-        """Resolve a CSS or XPath ``selector`` to the matching elements, scoped to this node.
-        Rejects attribute/text selectors (use ``attr``), scopes a leading ``//`` to the current
-        node, and falls back to a case-insensitive local-name match for a bare XML tag."""
-        if selector.rstrip().endswith(("text()",)) or "/@" in selector:
-            raise ValueError(
-                "select yields elements; use .attr() for an attribute or text"
-            )
-        root = self._tree(core)
-        if selector.startswith("//"):
-            # lxml: element.xpath("//...") searches the WHOLE document, not the element.
-            # A leading "//" inside a selected record means "descendant of THIS node", so
-            # scope it with a leading "." (harmless at document level -- same result).
-            selector = "." + selector
-        if selector.startswith("/") or selector.startswith("./"):
-            return list(root.xpath(selector))
-        matches = list(root.cssselect(selector))
-        if not matches and core.kind == "xml" and _BARE_TAG.match(selector.strip()):
-            # XML element names are case-SENSITIVE, but scrapers (and LLMs) lowercase them and
-            # RSS/Atom feeds spell them pubDate/lastBuildDate/... . When an exact match found
-            # nothing, fall back to a case-insensitive local-name match for a bare tag so a
-            # lowercased field tag still resolves (local-name() also ignores any ns prefix).
-            tag = selector.strip().lower()
-            matches = list(root.xpath(
-                f".//*[translate(local-name(),{_ASCII_UPPER!r},{_ASCII_LOWER!r})=$t]", t=tag,
-            ))
-        return matches
+        """Resolve a CSS or XPath ``selector`` to the matching elements, scoped to this node
+        (:func:`webclient.dom.select.find`; the XML case-insensitive fallback applies to an
+        xml document)."""
+        return _find_in(self._tree(core), selector, xml=core.kind == "xml")
 
     def select(
         self,
