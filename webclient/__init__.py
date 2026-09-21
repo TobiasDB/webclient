@@ -16,7 +16,9 @@ from .policy import (
     RetryPolicy,
 )
 from .core.web_core import Backing, WebCore
-from .settings import LlmSettings, Settings
+from . import log as _log  # noqa: F401  (installs the package NullHandler)
+from .log import configure_logging, log_events
+from .settings import LlmSettings, Settings, current as current_settings, use as use_settings
 from .errors import (
     RAISE,
     RETURN,
@@ -111,6 +113,10 @@ __all__ = [
     "Backing",
     "Settings",
     "LlmSettings",
+    "current_settings",
+    "use_settings",
+    "configure_logging",
+    "log_events",
     "WebCore",
     "HtmlBacking",
     "JsonBacking",

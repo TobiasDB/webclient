@@ -14,6 +14,7 @@ fields + its backings' ops (see ``scripts.gen_stubs``), never hand-written.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
@@ -24,8 +25,7 @@ from ..errors import WebError, WebException
 from ..query.expr import Expr, lazy_root
 from ..query.plan import Plan
 
-#: per-op remote round-trips (on server-side handles) before nudging toward .lazy.
-_CHATTY_ROUND_TRIPS = 4
+log = logging.getLogger(__name__)
 
 #: the eager ops a recording session mirrors into its Plan (see ``WebClient.record``):
 #: the navigations that root a page journey and the live interactions that advance it.
@@ -391,11 +391,11 @@ class WebCore:
             client._remote_hops = hops
         except AttributeError:  # not a remote client (no counter slot) -- nothing to nag
             return
-        if hops == _CHATTY_ROUND_TRIPS and not getattr(client, "_nagged", False):
-            client._nagged = True
-            import logging
+        from ..settings import current
 
-            logging.getLogger("webclient").warning(
+        if hops == current().limits.chatty_round_trips and not getattr(client, "_nagged", False):
+            client._nagged = True
+            log.warning(
                 "remote client made %d per-op round-trips; batch a chain or "
                 "fan-out with .lazy -- e.g. doc.lazy.select(...).attr('text')"
                 ".collect() -- to run it in one round-trip",

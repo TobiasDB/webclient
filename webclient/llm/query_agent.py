@@ -175,7 +175,7 @@ def _apply(state: _QueryState, inc: _Increment) -> None:
 
 
 def build_query(
-    doc: "Document", policy: "Callable[[QueryObservation], Any]", *, max_rounds: int = 4
+    doc: "Document", policy: "Callable[[QueryObservation], Any]", *, max_rounds: "int | None" = None
 ) -> QueryRun:
     """Author an extraction query for ``doc`` with ``policy`` -- the query twin of ``drive``. Each
     round the policy sees the record + field options (by index) and the current sample, and returns
@@ -183,6 +183,10 @@ def build_query(
     indexes to durable selectors and grows a ``select_all(...).extract(...).project()`` Expr,
     re-running it for a sample. Bounded by ``max_rounds``; a 0-row query feeds back as an error to
     correct. Returns the authored query (blob/describe), its sample, and the verdict."""
+    from ..settings import current
+
+    if max_rounds is None:
+        max_rounds = current().loops.query_max_rounds
     state = _QueryState(doc=doc)
 
     def decide(obs: QueryObservation) -> _Increment:
@@ -201,6 +205,7 @@ def build_query(
         progress=lambda s: s.key,
         max_rounds=max_rounds,
         max_stalls=2,
+        name="query loop",
     )
     verdict = loop.run(state)
     expr = state.expr()

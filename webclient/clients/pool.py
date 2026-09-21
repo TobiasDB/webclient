@@ -11,10 +11,14 @@ just leases.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from pydantic import BaseModel
 
 from .base import Client, ClientFactory
+
+
+log = logging.getLogger(__name__)
 
 
 class PoolStats(BaseModel):
@@ -83,6 +87,8 @@ class ClientPool:
         try:
             await asyncio.wait_for(sem.acquire(), self.acquire_timeout)
         except asyncio.TimeoutError:
+            log.error("pool exhausted: no %s lease within %.0fs (held=%d waiting=%d)",
+                      kind, self.acquire_timeout, self._held[kind], self._waiting[kind])
             raise TimeoutError(
                 f"pool exhausted: no {kind} lease within {self.acquire_timeout}s"
             ) from None
@@ -94,10 +100,12 @@ class ClientPool:
             else:
                 client = await self._factories[kind].create()
                 self._created[kind] += 1
+                log.debug("pool: created %s #%d", kind, self._created[kind])
         except BaseException:
             self._semaphore(kind).release()  # don't leak the permit on create failure
             raise
         self._held[kind] += 1
+        log.debug("pool: leased %s (held=%d idle=%d)", kind, self._held[kind], len(self._idle[kind]))
         return Lease(self, client)
 
     async def release(self, lease: Lease) -> None:

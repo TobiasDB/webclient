@@ -25,7 +25,6 @@ from .context import Context
 if TYPE_CHECKING:
     from ..core.document.models import Flag, Signal, Stage
 
-_PRESENT = 0.5  # a flag's confidence must reach this to be "present"
 
 #: a detector's finding: its confidence (0-1) plus the evidence it read.
 class Hit(NamedTuple):
@@ -98,8 +97,10 @@ def build_flag(name: str, signals: "list[Signal]", *, remedy: str | None = None,
     for s in signals:  # contra evidence reduces the confidence
         if s.contra:
             conf *= 1.0 - min(1.0, max(0.0, s.confidence))
+    from ..settings import current
+
     conf = round(conf, 3)
-    present = conf >= _PRESENT
+    present = conf >= current().detection.present_threshold
     return Flag(
         name=name, present=present, confidence=conf, signals=list(signals),
         remedy=cast(Any, remedy) if present else None, value=value,

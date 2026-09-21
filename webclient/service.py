@@ -12,6 +12,7 @@ client records, validated (``from_plan``) before it runs.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import OrderedDict
 from typing import Any, cast
@@ -22,6 +23,9 @@ from fastapi.responses import JSONResponse
 from .errors import WebException
 from .query.expr import from_plan
 from .interface import Document, Reference, WebClient
+from .settings import current as _settings
+
+log = logging.getLogger(__name__)
 
 
 class _DocStore(OrderedDict[str, Any]):
@@ -105,9 +109,9 @@ def _error(
 def create_app(
     wc: WebClient | None = None,
     token: str | None = None,
-    max_docs: int = 1024,
-    max_sessions: int = 256,
-    max_session_docs: int = 256,
+    max_docs: int | None = None,
+    max_sessions: int | None = None,
+    max_session_docs: int | None = None,
     block_private_hosts: bool = False,
 ) -> FastAPI:
     """A FastAPI app exposing a WebClient over ``/execute`` (Bearer-token
@@ -118,6 +122,12 @@ def create_app(
     resource policy -- the handles a session may hold), and ``block_private_hosts``
     turns on the SSRF guard for a hosted server (refuses plans that resolve to
     loopback/private hosts)."""
+    caps = _settings().service
+    max_docs = caps.max_docs if max_docs is None else max_docs
+    max_sessions = caps.max_sessions if max_sessions is None else max_sessions
+    max_session_docs = caps.max_session_docs if max_session_docs is None else max_session_docs
+    log.info("service: max_docs=%d max_sessions=%d max_session_docs=%d ssrf_guard=%s",
+             max_docs, max_sessions, max_session_docs, block_private_hosts)
     app = FastAPI()
     app.state.wc = (
         wc if wc is not None else WebClient(block_private_hosts=block_private_hosts)
@@ -170,6 +180,8 @@ def create_app(
                 "dispatch",
             )
         sid = expr._plan.session_id
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug("execute session=%s plan=%s", sid, expr._plan.describe())
         # a session-scoped plan runs on the server-side session (its identity /
         # cookies) and its handles live in that session's own store, else on the
         # shared client + shared store.
@@ -248,6 +260,7 @@ def create_app(
             )
         session = app.state.wc.session(ttl=body.get("ttl"))
         app.state.sessions[session.id] = session
+        log.info("session opened %s ttl=%s (%d live)", session.id, body.get("ttl"), len(app.state.sessions))
         app.state.session_docs[session.id] = _DocStore(max_session_docs)  # its own bounded store
         return {"id": session.id, "status": session.status}
 
@@ -273,6 +286,7 @@ def create_app(
             )
         app.state.sessions[sid].close()
         _drop_session(sid)  # dispose the session AND its per-session document store
+        log.info("session closed %s", sid)
         return {"id": sid, "status": "closed"}
 
     # -- crawl / sitemap -----------------------------------------------------

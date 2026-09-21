@@ -11,6 +11,7 @@ domain -- clean layering.
 
 from __future__ import annotations
 
+import logging
 import json
 import os
 from dataclasses import dataclass, field
@@ -25,6 +26,9 @@ Phase = Literal["init", "load", "inline", "drain"]
 #: bounds on response-body capture (content-matching correlation) -- keep memory + time capped.
 _BODY_MAX_BYTES = 256 * 1024  # per body
 _BODY_MAX_COUNT = 100  # total bodies kept
+
+
+log = logging.getLogger(__name__)
 
 
 def _want_bodies() -> bool:
@@ -330,6 +334,7 @@ class BrowserClient(Client):
         (content + the REAL navigation status/headers + captured console/network/DOM facts)."""
         # the main-document Response -- the REAL status/headers of the navigation
         # (Playwright hands it back from ``goto``). ``None`` for a non-HTTP nav.
+        log.debug("browser: goto %s (wait=%s)", url, wait.event.name if hasattr(wait, "event") else wait)
         response = await page.goto(url, wait_until="domcontentloaded")
         await self._do_wait(page, wait)  # let JS/lazy content load before snapshotting
         # fold shadow-DOM / same-origin iframe content into the light DOM BEFORE the
@@ -361,6 +366,7 @@ class BrowserClient(Client):
             network=list(network),
             bodies=await self._read_bodies(responses),  # XHR bodies for content correlation
         )
+        log.debug("browser: %s -> %d, %d console, %d requests", page.url, status, len(console), len(network))
         for s in scripts:  # drain the load-time observer buffer -> result.mutations
             if s.phase == "drain":
                 drained = await page.evaluate(s.source)
@@ -540,6 +546,9 @@ class BrowserFactory(ClientFactory):
             from playwright.async_api import async_playwright
 
             self._pw = await async_playwright().start()
+            log.info("browser: %s", f"connect cdp {self.cdp_endpoint}" if self.cdp_endpoint
+                     else f"connect ws {self.ws_endpoint}" if self.ws_endpoint
+                     else f"launch {self.channel or 'chromium'} headless={self.headless} stealth={self.stealth}")
             if self.cdp_endpoint is not None:  # attach to a running Chromium/Chrome/Edge
                 self._browser = await self._pw.chromium.connect_over_cdp(self.cdp_endpoint)
                 self._connected = True

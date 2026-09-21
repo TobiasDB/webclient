@@ -4,6 +4,7 @@ sniffing helpers that go with it."""
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Literal, cast
 
 import httpx
@@ -17,6 +18,9 @@ _IDEMPOTENT = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
 if TYPE_CHECKING:
     from ..core.document import Document
     from ..core.reference import Reference
+
+
+log = logging.getLogger(__name__)
 
 
 class HTTPXClient(Client):
@@ -94,6 +98,7 @@ class HTTPXClient(Client):
                 ref, headers=headers, cookies=cookies, timeout=timeout
             )
         except Exception as exc:  # transport failure -> a not-ok document
+            log.warning("%s %s -> transport error: %s", ref.method.upper(), ref.dispatch("url"), exc)
             doc = Document(
                 url=ref.dispatch("url"),
                 status_code=0,
@@ -125,6 +130,8 @@ class HTTPXClient(Client):
         doc._set_cookies = set_cookies
         if not (200 <= resp.status_code < 300):
             doc.error = error_for(resp.status_code)
+        log.debug("%s %s -> %d %s %dB %.0fms", ref.method.upper(), doc.url, resp.status_code,
+                  doc.kind, len(resp.content), (doc.elapsed or 0.0) * 1000)
         return doc, resp
 
     async def reset(self) -> None:

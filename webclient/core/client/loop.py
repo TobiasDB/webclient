@@ -6,10 +6,13 @@ coroutines via ``run``.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from typing import Any, AsyncIterator, Coroutine, Iterator, TypeVar
 
 T = TypeVar("T")
+
+log = logging.getLogger(__name__)
 
 _SENTINEL = object()
 
@@ -28,6 +31,7 @@ class EngineLoop:
             target=self._main, name="webclient-engine", daemon=True
         )
         self._thread.start()
+        log.debug("engine loop started (%s)", self._thread.name)
 
     def _main(self) -> None:
         """The background thread's body: bind the event loop to this thread and run it forever
@@ -183,6 +187,9 @@ class EngineLoop:
     def stop(self) -> None:
         """Stop the loop and join its thread: refuse new blocking work, cancel and settle every
         outstanding task in bounded rounds (so none is destroyed while pending), then close the loop."""
+        from ...settings import current
+
+        grace = current().limits.engine_stop_timeout
         if not self.closed:
             # Refuse new blocking work from other threads before we start
             # tearing down, so a racing ``run`` cannot strand a coroutine on the
@@ -212,7 +219,9 @@ class EngineLoop:
                 done.set()
 
             asyncio.run_coroutine_threadsafe(_drain(), self._loop)
-            done.wait(timeout=5)
-            self._thread.join(timeout=5)
+            if not done.wait(timeout=grace):
+                log.warning("engine loop did not drain within %.1fs", grace)
+            self._thread.join(timeout=grace)
+            log.debug("engine loop stopped")
         if not self._loop.is_running():
             self._loop.close()

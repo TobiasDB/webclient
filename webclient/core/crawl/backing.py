@@ -12,6 +12,7 @@ discovery + projection -- so a crawl is one backing over existing cores.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, cast
 from urllib.parse import urlparse, urlsplit
 
@@ -41,6 +42,9 @@ if TYPE_CHECKING:
 
     from ..document import Document
     from . import Crawl
+
+
+log = logging.getLogger(__name__)
 
 
 class CrawlBacking(Backing):
@@ -125,6 +129,10 @@ class CrawlBacking(Backing):
             produced = [p for p in results if p is not None]
             core.pages.extend(produced)
             core._inflight -= len(to_fetch)
+            if to_fetch:
+                log.info("crawl round: fetched %d/%d, %d pages, frontier %d, failures %d",
+                         len(produced), len(to_fetch), len(core.pages), len(core.frontier),
+                         len(core.failures))
         return produced
 
     async def _fetch_edge(self, core: "Crawl[Any]", edge: Edge) -> Any:
@@ -166,6 +174,7 @@ class CrawlBacking(Backing):
                 self._expand_xhr(core, doc, edge.depth + 1)
             return await self._retain(core, doc)  # project while the page is still live
         except Exception as exc:  # never let one bad edge abort the whole crawl
+            log.warning("crawl: %s failed (%s: %s)", edge.url, type(exc).__name__, exc)
             core.failures.append(
                 Failure(url=edge.url, reason=type(exc).__name__, depth=edge.depth)
             )

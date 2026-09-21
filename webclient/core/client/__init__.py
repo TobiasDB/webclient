@@ -12,6 +12,7 @@ differs.
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TypeVar, cast, overload
 
@@ -57,6 +58,9 @@ _BOT_BLOCK_HINTS = (
     "http2", "http/2", "protocol error", "connection reset", "server disconnected",
     "connection closed", "econnreset",
 )
+
+
+log = logging.getLogger(__name__)
 
 
 def _looks_like_bot_block(error: Any) -> bool:
@@ -524,6 +528,7 @@ class WebClient(SessionCore, IWebClient):
         mode = _browser_mode(browser)
         wait = _wait_of(browser, wait)
         if self.block_private_hosts and await self._host_blocked(ref):
+            log.warning("fetch refused: %r is a private/loopback host (SSRF guard)", ref.hostname)
             doc = Document(
                 url=ref.dispatch("url"),
                 status_code=0,
@@ -573,6 +578,8 @@ class WebClient(SessionCore, IWebClient):
                 after = _retry_after_seconds(resp.headers.get("retry-after"))
                 if after is not None:
                     delay = min(after, 60.0)  # cap so a huge value can't stall us
+            log.info("retry %d/%d for %s after %.2fs (%s)", attempt + 1, max_retries,
+                     doc.url, delay, doc.error.type if doc.error else "?")
             await asyncio.sleep(delay)
             attempt += 1
             doc, resp = await self._afetch_once(ref, headers)
@@ -586,6 +593,8 @@ class WebClient(SessionCore, IWebClient):
         # skipped here: a transport failure returned resp=None with no response, so the
         # static hop produced no navigation events to carry onto the browser doc.)
         if mode == "auto" and _looks_like_bot_block(doc.error):
+            log.info("auto: %s looks bot-blocked at the transport (%s) -> browser", doc.url,
+                     doc.error.message if doc.error else "")
             return await self._escalate_to_browser(
                 ref, list(doc._events), doc.content,
                 tiers=["static", "browser"], keep_alive=keep_alive, wait=wait,
@@ -600,6 +609,7 @@ class WebClient(SessionCore, IWebClient):
         flags = self._observe(doc, resp) if mode == "auto" else None
         if mode == "auto" and doc.error is None and flags is not None:
             if flags["login_required"].present:  # a credential wall -- fail loudly
+                log.info("auto: %s is behind a login wall -- no transport remedy", doc.url)
                 doc.error = WebError(
                     type="LoginRequired",
                     message=_flag_reason(flags["login_required"], "a login wall blocks the content"),
@@ -608,6 +618,7 @@ class WebClient(SessionCore, IWebClient):
                 tiers = ["static"]
                 antibot = flags["anti_bot_triggered"]
                 if antibot.present and antibot.remedy in ("proxy", "stealth"):
+                    log.info("auto: %s anti-bot challenge (%s) -> proxy hop", doc.url, antibot.value)
                     tiers.append("proxy")  # rotate an exit via the proxy service
                     proxy_headers = {**policy_headers(Resolve(proxy=ProxyPolicy.auto())), **headers}
                     fetch_name = doc.name  # the static hop's slot -- the proxy hop reuses it
@@ -622,6 +633,8 @@ class WebClient(SessionCore, IWebClient):
                         and flags["anti_bot_triggered"].remedy == "stealth")
                 )
                 if want_browser:
+                    log.info("auto: %s -> browser (%s)", doc.url,
+                             "spa" if flags is not None and flags["spa"].present else "stealth for anti-bot")
                     if resp is not None:  # keep the static hop's navigation/network events
                         self._capture(doc, ref, resp)
                     static_doc = doc  # the usable static hop to fall back to
@@ -631,7 +644,9 @@ class WebClient(SessionCore, IWebClient):
                             tiers=[*tiers, "browser"], keep_alive=keep_alive, wait=wait,
                             reuse=doc.name,  # the browser doc reuses this fetch's slot
                         )
-                    except Exception:  # noqa: BLE001 - a blocked/failed render is not fatal
+                    except Exception as exc:  # noqa: BLE001 - a blocked/failed render is not fatal
+                        log.warning("auto: browser hop for %s failed (%s: %s); falling back to the "
+                                    "static hop", doc.url, type(exc).__name__, exc)
                         rendered = None
                     if rendered is not None and rendered.ok:
                         return rendered  # the richer, browser-rendered document

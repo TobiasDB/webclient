@@ -11,10 +11,13 @@ bus / mode.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, cast
 
 from ..clients import BrowserFactory, ClientPool, HTTPXFactory, PageScript
 from ..events import EventBus
+
+log = logging.getLogger(__name__)
 
 
 class Engine:
@@ -47,6 +50,8 @@ class Engine:
     def _init_transport(self, bc: Any) -> None:
         """Build the transport pool eagerly (cheap -- no browser launch until a page is
         leased) so it is never lazily created from two threads at once."""
+        from ..settings import current
+
         self._pool = ClientPool(
             {
                 "http": HTTPXFactory(proxy=bc.proxy),  # same client-wide proxy for httpx...
@@ -58,7 +63,10 @@ class Engine:
                 ),
             },
             limits={"http": bc.pool_http, "page": bc.pool_pages},
+            acquire_timeout=current().limits.pool_acquire_timeout,
         )
+        log.debug("engine transport: http=%d pages=%d headless=%s stealth=%s",
+                  bc.pool_http, bc.pool_pages, bc.headless, bc.stealth)
 
     # -- remote dispatch: the engine's transport IS the difference ------------
     @property
@@ -74,6 +82,7 @@ class Engine:
         self._mode = "remote"
         self._pool = None  # no local pool: execution is a remote round-trip
         self._service = ServiceTransport(url, token, timeout)
+        log.info("engine in remote mode -> %s", url)
 
     def execute(self, client: Any, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
         """POST a plan over the remote transport (remote mode only). The engine decides how
@@ -130,12 +139,15 @@ class Engine:
             await asyncio.sleep(wait)
         now = time.monotonic()
         schedule[host] = now + min_interval
-        if len(schedule) > 4096:  # bound the map: drop hosts whose window has passed
+        from ..settings import current
+
+        if len(schedule) > current().limits.host_schedule_max:  # bound the map: drop passed windows
             self._host_next = {h: t for h, t in schedule.items() if t > now}
 
     def close(self) -> None:
         """Tear down the transport: the remote service connection, or the local pool on the
         engine loop, then stop the loop."""
+        log.debug("engine close (mode=%s)", self._mode)
         if self._service is not None:
             self._service.close()
         if self._loop is not None and not self._loop.closed and self._pool is not None:

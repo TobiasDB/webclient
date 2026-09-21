@@ -14,6 +14,7 @@ evaluate-then-yield.
 
 from __future__ import annotations
 
+import logging
 import asyncio
 import operator
 from contextlib import asynccontextmanager
@@ -49,6 +50,9 @@ _DROP = object()
 #: op is streamable automatically -- there is no hand-maintained list to forget
 #: (which used to silently degrade streaming to evaluate-then-yield).
 _ELEMENT_OPS_CACHE: "frozenset[str] | None" = None
+
+
+log = logging.getLogger(__name__)
 
 
 def _element_ops() -> "frozenset[str]":
@@ -199,6 +203,8 @@ async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> An
         client = client or expr._client or getattr(context, "_client", None)
         if isinstance(context, Expr):  # an Expr context (wc.ref(url)) runs first
             context = await aevaluate(context, client=client)
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug("evaluate %s", expr._plan.describe())
         value = _start(expr._plan, context, client)
         return await _arun(value, expr._plan.steps, 0, context, client)
 

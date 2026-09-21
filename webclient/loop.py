@@ -17,12 +17,15 @@ will build an ``Expr``), so the base carries no recording machinery.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel
 
 if True:  # keep the runtime import surface tiny; the callables are structural
     from collections.abc import Callable
+
+log = logging.getLogger(__name__)
 
 S = TypeVar("S")  # the driven STATE (e.g. a live Document, a crawl, a query-in-progress)
 O = TypeVar("O")  # an OBSERVATION handed to decide
@@ -65,16 +68,21 @@ class BoundedLoop(Generic[S, O, D]):
         done_result: "Callable[[D], str | None]",
         apply: "Callable[[S, D], None]",
         progress: "Callable[[S], Any] | None" = None,
-        max_rounds: int = 20,
-        max_stalls: int = 3,
+        max_rounds: "int | None" = None,
+        max_stalls: "int | None" = None,
+        name: str = "loop",
     ) -> None:
+        from .settings import current
+
+        budgets = current().loops
         self._observe = observe
         self._decide = decide
         self._done_result = done_result
         self._apply = apply
         self._progress = progress
-        self.max_rounds = max_rounds
-        self.max_stalls = max_stalls
+        self.max_rounds = budgets.max_rounds if max_rounds is None else max_rounds
+        self.max_stalls = budgets.max_stalls if max_stalls is None else max_stalls
+        self.name = name
 
     def run(self, state: S) -> LoopVerdict:
         """Drive ``state`` round by round until a terminal condition, returning the verdict.
@@ -86,20 +94,25 @@ class BoundedLoop(Generic[S, O, D]):
         error = ""
         for i in range(self.max_rounds):
             decision = self._decide(self._observe(state, i, error))
+            log.debug("%s round %d/%d: %r", self.name, i + 1, self.max_rounds, decision)
             result = self._done_result(decision)
             if result is not None:
+                log.info("%s done after %d round(s)", self.name, i)
                 return LoopVerdict(done=True, reason="done", rounds=i, result=result)
             try:
                 self._apply(state, decision)
                 error = ""
             except Exception as exc:  # noqa: BLE001 - surface it to the verdict, never crash
+                log.warning("%s stopped on error at round %d: %s", self.name, i + 1, exc)
                 return LoopVerdict(done=False, reason="error", rounds=i, error=str(exc))
             if self._progress is not None:
                 current = self._progress(state)
                 stalls = stalls + 1 if current == prev else 0
                 prev = current
                 if stalls >= self.max_stalls:
+                    log.info("%s stalled after %d round(s)", self.name, i + 1)
                     return LoopVerdict(done=False, reason="stalled", rounds=i + 1)
+        log.info("%s hit its round budget (%d)", self.name, self.max_rounds)
         return LoopVerdict(done=False, reason="budget", rounds=self.max_rounds)
 
 

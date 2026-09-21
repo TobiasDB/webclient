@@ -219,7 +219,9 @@ def _body_tokens(body: "bytes | None") -> "set[str]":
     toks: set[str] = set()
     data = parse_json(text)  # ``None`` when not JSON -- the generic pass below still tokenises it
     if data is not None:
-        for leaf in json_leaves(data):
+        from ...settings import current
+
+        for leaf in json_leaves(data, budget=current().limits.json_leaf_budget):
             toks |= _text_tokens(leaf)
     toks |= _text_tokens(text)
     return toks

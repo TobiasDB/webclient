@@ -202,6 +202,7 @@ def drive(
         progress=_progress,
         max_rounds=max_steps,
         max_stalls=max_stalls,
+        name="interaction loop",
     )
     v = loop.run(doc)
     return AgentRun(
