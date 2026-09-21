@@ -34,6 +34,7 @@ from .paginate import PaginateBacking
 
 if TYPE_CHECKING:
     from ...interface import LazyDocument
+    from ...query.collection import Collection
     from ..client import WebClient  # noqa: F401
     from ..reference import Reference
 
@@ -185,6 +186,83 @@ class Document(WebCore, IDocument):
             return data
         validate = getattr(model, "model_validate", None)
         return validate(data) if validate is not None else model(**data)
+
+    # -- pagination: walk this dataset's pages into a Collection --------------------
+    # A BOUND op (hand-written, like extract), so the executor hands ``stop``/``key``
+    # to it UNEVALUATED and the walk evaluates them per page -- a semantic stop the
+    # DSL expresses, not just a literal cutoff. The walk itself lives in ``.paginate``
+    # (the module); this is the thin method that runs it and lifts the pages to a
+    # Collection so ``select_all(...).extract(...).project()`` fans out across them.
+    async def apaginate(
+        self,
+        *,
+        by: str = "link",
+        max_pages: int = 20,
+        max_rows: int = 0,
+        name: str = "page",
+        start: int = 1,
+        step: int = 1,
+        size: int = 0,
+        cursor: str = "",
+        cursor_attr: str = "text",
+        records: str = "",
+        until: str = "",
+        until_before: str = "",
+        stop: Any = None,
+        key: Any = None,
+    ) -> "Collection[Document]":
+        """The pages of this dataset as a ``Collection[Document]``, page one first -- chain
+        ``select_all(...).extract(...).project()`` to extract the WHOLE dataset (the body runs
+        across every page, not page one only).
+
+        HOW TO ADVANCE (``by``): ``"link"`` follows ``rel=next`` (an HTML ``a/link[rel=next]`` or an
+        HTTP ``Link:`` header, so an API paginates); ``"param"`` walks ``?{name}=`` from ``start`` by
+        ``step`` (or by ``size`` as an offset); ``"cursor"`` reads a keyset token off each page (the
+        ``cursor`` selector's ``cursor_attr`` -- ``cursor="a.next"`` + ``cursor_attr="data-after"``, or
+        a JSON path ``cursor="pageInfo.endCursor"``) and carries it in ``?{name}=``.
+
+        WHERE TO STOP (all optional, so a long dataset isn't walked whole for a few rows): ``max_pages``
+        caps the page count; ``max_rows`` with ``records`` (the record selector) stops once that many
+        rows are collected; ``until`` (a per-record ordering field) with ``until_before`` stops after
+        the first page whose OLDEST value sorts below the cutoff (the recency case); ``stop`` is a
+        predicate expression evaluated against each page (``stop=wq.doc.select('.last').is_ok()`` --
+        truthy means this page is the last). ``key`` is an expression giving each page a dedup key
+        (``key=wq.doc.select('article', index=0).attr('text')``); a repeated key stops the walk (a
+        semantic clamp guard, for pages that repeat records but differ in chrome/timestamps)."""
+        from ...query.collection import Collection
+        from .paginate import walk
+
+        pages = await walk(
+            self, by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start,
+            step=step, size=size, cursor=cursor, cursor_attr=cursor_attr, records=records,
+            until=until, until_before=until_before, stop=stop, key=key, client=self._client,
+        )
+        return Collection(pages, client=self._client, root=self.name or self.root)
+
+    def paginate(
+        self,
+        *,
+        by: str = "link",
+        max_pages: int = 20,
+        max_rows: int = 0,
+        name: str = "page",
+        start: int = 1,
+        step: int = 1,
+        size: int = 0,
+        cursor: str = "",
+        cursor_attr: str = "text",
+        records: str = "",
+        until: str = "",
+        until_before: str = "",
+        stop: Any = None,
+        key: Any = None,
+    ) -> "Collection[Document]":
+        """Eager form of :meth:`apaginate` (bridged onto the engine loop)."""
+        return self._client.loop().run(self.apaginate(
+            by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start, step=step,
+            size=size, cursor=cursor, cursor_attr=cursor_attr, records=records, until=until,
+            until_before=until_before, stop=stop, key=key,
+        ))
 
 
 __all__ = ["Document", "Element", "HtmlBacking", "JsonBacking"]

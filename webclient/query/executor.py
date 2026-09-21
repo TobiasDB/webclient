@@ -73,8 +73,9 @@ _OPS = {
 }
 
 #: bound ops: their expression args are passed unevaluated (evaluated per
-#: element inside the op); the executor calls their async ``a<name>`` form.
-_BINDS = {"extract", "filter"}
+#: element/page inside the op); the executor calls their async ``a<name>`` form.
+#: ``paginate`` is bound so its ``stop``/``key`` predicates evaluate per page.
+_BINDS = {"extract", "filter", "paginate"}
 #: ops acting on a Collection as a whole (everything else fans out per element)
 _COLL_OPS = {"extract", "filter", "project", "limit", "documents"}
 

@@ -487,6 +487,12 @@ def _lazy_class(core: type) -> str:
             # Collection ops); hand-written like the eager Document.extract/project.
             'def extract(self, **exprs: Any) -> "LazyDocument": ...',
             'def project(self) -> "Lazy[dict[str, Any]]": ...',
+            # pagination: a hand-written BOUND op on Document (not a backing), so its
+            # stop/key sub-plans are recorded and evaluated per page. Yields the pages.
+            'def paginate(self, *, by: str = ..., max_pages: int = ..., max_rows: int = ..., '
+            'name: str = ..., start: int = ..., step: int = ..., size: int = ..., cursor: str = ..., '
+            'cursor_attr: str = ..., records: str = ..., until: str = ..., until_before: str = ..., '
+            'stop: Any = ..., key: Any = ...) -> "LazyCollection[LazyDocument]": ...',
             'def field(self, name: str) -> "LazyField[Any]": ...',
             'def reference(self, name: str) -> "LazyReference": ...',
             # sequence authoring: .step(action) chains an ACTION (a wait_for/click/

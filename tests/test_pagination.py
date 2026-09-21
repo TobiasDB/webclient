@@ -122,6 +122,54 @@ def test_paginate_stops_at_a_recency_cutoff(httpserver):
     assert len(pages) == 2  # d1 (all recent), d2 (crosses the cutoff, kept), then stop before d3
 
 
+# -- bound-op power: an Expr stop predicate and an Expr dedup key -------------------------------
+
+def _marked_page(records, next_url=None, mark=False):
+    items = "".join(f'<article class="r"><span class="n">{n}</span></article>' for n in records)
+    done = '<div class="done"></div>' if mark else ""
+    nxt = f'<a rel="next" href="{next_url}">Next</a>' if next_url else ""
+    return f"<html><body><main>{items}</main>{done}{nxt}</body></html>"
+
+
+def test_paginate_stops_on_an_expr_predicate(httpserver):
+    # paginate is a BOUND op: the ``stop`` sub-plan is evaluated against each page. Here it stops
+    # once a page carries a ``.done`` marker -- BEFORE the natural rel=next end (p3 is never fetched).
+    httpserver.expect_request("/s1").respond_with_data(_marked_page(["A"], "/s2"), content_type="text/html")
+    httpserver.expect_request("/s2").respond_with_data(_marked_page(["B"], "/s3", mark=True), content_type="text/html")
+    httpserver.expect_request("/s3").respond_with_data(_marked_page(["C"], "/s4"), content_type="text/html")  # must NOT be fetched
+    plan = (
+        wq.reference(httpserver.url_for("/s1")).resolve()
+        .paginate(by="link", stop=wq.doc.select("div.done", optional=True).is_ok(), max_pages=10)
+        .select_all("article.r").extract(n=wq.doc.select(".n").attr("text")).project()
+    )
+    assert [r["n"] for r in plan.collect()] == ["A", "B"]  # stopped at the page with .done
+
+
+def _keyed_page(first, stamp, next_url=None):
+    # the first record is the page's identity; a per-request stamp makes the BYTES differ each time
+    # (so a content-hash clamp guard would NOT catch a repeat -- only a semantic key does).
+    nxt = f'<a rel="next" href="{next_url}">Next</a>' if next_url else ""
+    return (
+        f'<html><body><main><article class="r"><span class="n">{first}</span></article>'
+        f'<time>{stamp}</time></main>{nxt}</body></html>'
+    )
+
+
+def test_paginate_dedups_pages_by_an_expr_key(httpserver):
+    # key= gives each page a semantic identity (its first record); a repeat stops the walk even
+    # though the raw bytes differ page to page (the <time> stamp changes), which a content hash misses.
+    httpserver.expect_request("/k1").respond_with_data(_keyed_page("A", "t1", "/k2"), content_type="text/html")
+    httpserver.expect_request("/k2").respond_with_data(_keyed_page("B", "t2", "/k3"), content_type="text/html")
+    httpserver.expect_request("/k3").respond_with_data(_keyed_page("A", "t3", "/k4"), content_type="text/html")  # first record repeats
+    with WebClient() as wc:
+        pages = list(
+            wc.fetch(httpserver.url_for("/k1")).paginate(
+                by="link", key=wq.doc.select("article.r .n", index=0).attr("text"), max_pages=10
+            )
+        )
+    assert len(pages) == 2  # k1(A), k2(B), then k3's key "A" repeats -> stop (k3 dropped)
+
+
 # -- next_link(): the HTTP Link header + HTML rel=next -----------------------------------------
 
 def test_next_link_reads_the_http_link_header(httpserver):

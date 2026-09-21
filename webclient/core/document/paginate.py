@@ -1,4 +1,4 @@
-"""PaginateBacking: walk a paginated dataset into a ``Collection`` of same-structure pages.
+"""Pagination: walk a paginated dataset into a ``Collection`` of same-structure pages.
 
 Pagination is the complement of crawl: crawl walks across STRUCTURE (different pages), paginate
 walks across CONTENT within one structure -- an ordered series of pages that share a shape, so one
@@ -7,24 +7,31 @@ extraction authored on any page is valid on all. ``doc.paginate(...)`` yields th
 then runs across every page via the executor's flat-map, so ``.collect()`` returns the WHOLE
 dataset's rows -- not page 1 only.
 
-This is the HTTP, sequential core. Advance strategies: ``by="link"`` follows a ``rel="next"`` link
+``paginate`` is a BOUND op (hand-written on ``Document`` as ``apaginate``, like ``extract`` -- the
+executor passes its ``stop``/``key`` sub-plans UNEVALUATED and this walk evaluates them per page):
+that is what lets a caller stop on a semantic predicate the DSL expresses rather than only a literal
+cutoff. This module owns the walk (:func:`walk`), the advance (:func:`_next_ref`), and ``next_link``
+(the one backing op left here -- "where is the next page"). ``Document.apaginate`` is the thin bound
+method that runs :func:`walk` and wraps the pages in a ``Collection``.
+
+The walk is HTTP + sequential. Advance strategies: ``by="link"`` follows a ``rel="next"`` link
 discovered on each page; ``by="param"`` increments a page/offset query parameter; ``by="cursor"``
 reads a keyset/cursor token off each page (a selector + attribute, or a JSON path) and carries it in
-the next request -- so a cursor API paginates too. The walk is bounded by ``max_pages`` and guarded
-against the common out-of-range CLAMP (``?page=999`` re-serving an earlier page) by a per-page content
-fingerprint (a repeated page stops the walk rather than looping forever), and can stop EARLY on
-``max_rows`` (enough records collected) or on a recency cutoff (``until``/``until_before`` -- stop once
-a page reaches records older than a date), so a long dataset isn't walked whole for a few recent rows.
+the next request -- so a cursor API paginates too. It is bounded by ``max_pages`` and guarded against
+the common out-of-range CLAMP (``?page=999`` re-serving an earlier page) by a per-page key -- a
+content fingerprint by default, or a semantic ``key=<Expr>`` -- so a repeat stops the walk rather than
+looping. It can stop EARLY on ``max_rows`` (enough records collected), a recency cutoff
+(``until``/``until_before`` -- literal selector + value), or a general ``stop=<Expr>`` predicate
+(truthy against a page -> that page is the last), so a long dataset isn't walked whole for a few rows.
 
-The stop conditions are literal selectors/values, so ``paginate`` stays a plain in-tree op; an
-Expr-valued predicate (``until=<Expr>``) and cross-page key dedup are a later sugar, and interacted
-(load-more / infinite scroll) pagers and the semantics flags (ordered/filtered/live) are later phases.
+Interacted (load-more / infinite scroll) pagers and the semantics flags (ordered/filtered/live) are
+later phases.
 """
 
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urljoin
 
 from ...dom import clean_href
@@ -101,14 +108,11 @@ def _past_cutoff(doc: "Document", until: str, before: str) -> bool:
 
 
 class PaginateBacking(Backing):
-    """The ``paginate`` op: from a resolved page, follow the dataset's pages into one
-    ``Collection[Document]``. Sequential + HTTP; ``by="link"`` (rel=next) / ``by="param"`` (a
-    page/offset param) / ``by="cursor"`` (a keyset token read off each page). Bounded and
-    clamp-guarded, with optional early stops on a row cap or a recency cutoff."""
+    """The ``next_link`` op: "where is the next page of this dataset?" -- read once per page and
+    followed by ``by="link"`` pagination. (The walk itself is the bound op ``Document.apaginate``,
+    which lives on the core so it can evaluate ``stop``/``key`` Exprs per page; see :func:`walk`.)"""
 
-    provides = frozenset({"paginate", "next_link"})
-    io = frozenset({"paginate"})  # fetches subsequent pages -> async / bridged
-    collections = frozenset({"paginate"})  # returns a Collection of documents
+    provides = frozenset({"next_link"})
     gate = "ok"
 
     def applies(self, core: "Document") -> bool:
@@ -136,88 +140,112 @@ class PaginateBacking(Backing):
                         return from_url(urljoin(base, href))
         return from_url("")  # empty -> ok is False -> "no next page"
 
-    def _next_ref(
-        self, current: "Document", *, by: str, name: str, size: int, start: int, step: int,
-        index: int, cursor: str, cursor_attr: str,
-    ) -> "Reference | None":
-        """The reference for the page AFTER ``current`` (the ``index``-th already collected), or
-        ``None`` to stop. ``by="link"`` reads the next link off ``current`` (Link header /
-        rel=next); ``by="param"`` computes the next ``?name=`` value (a page number, or an offset
-        when ``size`` is set); ``by="cursor"`` reads a keyset token off ``current`` (the ``cursor``
-        selector's ``cursor_attr``) and carries it in ``?name=`` -- no token means no next page."""
-        if by == "cursor":
-            token = _read_one(current, cursor, cursor_attr)
-            if not token:
-                return None  # the page carries no next-cursor -> the last page
-            return cast("Reference", _ref_of(current).dispatch("with_params", **{name: token}))
-        if by == "param":
-            value = (start + index * size) if size else (start + index * step)
-            return cast("Reference", _ref_of(current).dispatch("with_params", **{name: str(value)}))
-        nxt = self.next_link(current)  # by == "link": Link header or an HTML rel=next
-        return nxt if nxt.ok else None
 
-    async def paginate(
-        self,
-        core: "Document",
-        *,
-        by: "Literal['link', 'param', 'cursor']" = "link",
-        max_pages: int = 20,
-        max_rows: int = 0,
-        name: str = "page",
-        start: int = 1,
-        step: int = 1,
-        size: int = 0,
-        cursor: str = "",
-        cursor_attr: str = "text",
-        records: str = "",
-        until: str = "",
-        until_before: str = "",
-    ) -> "list[Document]":
-        """The pages of this dataset as documents, page one first. Fetches each next page until
-        there is no next page, a page comes back empty/not-ok, a page REPEATS an earlier one (an
-        out-of-range clamp), or a stop is reached.
-
-        HOW TO ADVANCE (``by``): ``"link"`` follows ``rel=next`` (an HTML ``a/link[rel=next]`` or an
-        HTTP ``Link:`` header, so an API paginates); ``"param"`` walks ``?{name}=`` from ``start`` by
-        ``step`` (or by ``size`` as an offset); ``"cursor"`` reads a keyset token off each page (the
-        ``cursor`` selector's ``cursor_attr`` -- e.g. ``cursor="a.next"`` + ``cursor_attr="data-after"``,
-        or a JSON path ``cursor="pageInfo.endCursor"``) and carries it in ``?{name}=``.
-
-        WHERE TO STOP EARLY (all optional, so a long dataset isn't walked whole for a few rows):
-        ``max_pages`` caps the page count; ``max_rows`` with ``records`` (the record selector) stops
-        once that many rows have been collected; ``until`` (a per-record ordering field, e.g. a date)
-        with ``until_before`` stops after the first page whose OLDEST value sorts below the cutoff --
-        the recency case ("only pages back to this date").
-
-        The result is a ``Collection[Document]``; chain ``select_all(...).extract(...).project()`` to
-        extract the whole dataset (the body runs across every page)."""
-        bound = max(1, min(max_pages, _MAX_PAGES_CAP))
-        pages: list[Document] = [core]
-        seen = {_page_fingerprint(core)}
-        rows = _row_count(core, records)
-        current = core
-        while len(pages) < bound:
-            if max_rows and rows >= max_rows:
-                break  # collected enough rows -> no need to fetch further pages
-            if until and until_before and _past_cutoff(current, until, until_before):
-                break  # this page already reaches the cutoff; every later page is older -> stop
-            nxt = self._next_ref(
-                current, by=by, name=name, size=size, start=start, step=step,
-                index=len(pages), cursor=cursor, cursor_attr=cursor_attr,
-            )
-            if nxt is None:
-                break
-            page = await core._client.afetch(nxt, optional=True)
-            if not (page.ok and page.content):
-                break  # ran off the end (a 404 / empty page)
-            fp = _page_fingerprint(page)
-            if fp in seen:
-                break  # the same page again -> an out-of-range clamp; stop rather than loop
-            seen.add(fp)
-            pages.append(page)
-            rows += _row_count(page, records)
-            current = page
-        return pages
+def _next_ref(
+    current: "Document", *, by: str, name: str, size: int, start: int, step: int,
+    index: int, cursor: str, cursor_attr: str,
+) -> "Reference | None":
+    """The reference for the page AFTER ``current`` (the ``index``-th already collected), or
+    ``None`` to stop. ``by="link"`` reads the next link off ``current`` (Link header / rel=next);
+    ``by="param"`` computes the next ``?name=`` value (a page number, or an offset when ``size`` is
+    set); ``by="cursor"`` reads a keyset token off ``current`` (the ``cursor`` selector's
+    ``cursor_attr``) and carries it in ``?name=`` -- no token means no next page."""
+    if by == "cursor":
+        token = _read_one(current, cursor, cursor_attr)
+        if not token:
+            return None  # the page carries no next-cursor -> the last page
+        return cast("Reference", _ref_of(current).dispatch("with_params", **{name: token}))
+    if by == "param":
+        value = (start + index * size) if size else (start + index * step)
+        return cast("Reference", _ref_of(current).dispatch("with_params", **{name: str(value)}))
+    nxt = current.next_link()  # by == "link": Link header or an HTML rel=next
+    return nxt if nxt.ok else None
 
 
-__all__ = ["PaginateBacking"]
+def _key_of(value: Any) -> Any:
+    """A hashable clamp-key from an evaluated ``key`` Expr value: a ``Field`` unwrapped to its
+    scalar, a list/collection frozen to a tuple, anything else as-is."""
+    from ...query.collection import Collection, Field
+
+    if isinstance(value, Field):
+        value = value.get()
+    if isinstance(value, (list, tuple, Collection)):
+        return tuple(str(v) for v in value)
+    return value
+
+
+async def _page_key(doc: "Document", key: Any, client: Any) -> Any:
+    """The clamp-key for ``doc``: a semantic ``key`` Expr evaluated against the page (so pages that
+    differ only by chrome/timestamps but repeat their records are caught), else a content hash."""
+    if key is None:
+        return _page_fingerprint(doc)
+    from ...query.executor import aevaluate
+
+    return _key_of(await aevaluate(key, doc, client=client))
+
+
+async def _stop_here(stop: Any, doc: "Document", client: Any) -> bool:
+    """Whether the ``stop`` predicate Expr is truthy against ``doc`` (this page is then the last)."""
+    from ...query.executor import aevaluate, truthy
+
+    return truthy(await aevaluate(stop, doc, client=client))
+
+
+async def walk(
+    doc: "Document",
+    *,
+    by: str = "link",
+    max_pages: int = 20,
+    max_rows: int = 0,
+    name: str = "page",
+    start: int = 1,
+    step: int = 1,
+    size: int = 0,
+    cursor: str = "",
+    cursor_attr: str = "text",
+    records: str = "",
+    until: str = "",
+    until_before: str = "",
+    stop: Any = None,
+    key: Any = None,
+    client: Any = None,
+) -> "list[Document]":
+    """Walk ``doc``'s dataset into a flat list of pages (page one first). Fetches each next page
+    (see :func:`_next_ref`) until there is no next page, a page comes back empty/not-ok, a page
+    REPEATS an earlier one (by ``key``, else a content fingerprint -- an out-of-range clamp), or a
+    stop fires: ``max_pages``, ``max_rows`` (with ``records``), the ``until``/``until_before``
+    recency cutoff, or the ``stop`` predicate. ``stop``/``key`` are Exprs (or ``None``) evaluated
+    per page -- the bound-op capability. The engine ``client`` fetches subsequent pages."""
+    client = client if client is not None else doc._client
+    bound = max(1, min(max_pages, _MAX_PAGES_CAP))
+    pages: list[Document] = [doc]
+    seen = {await _page_key(doc, key, client)}
+    rows = _row_count(doc, records)
+    current = doc
+    while len(pages) < bound:
+        if max_rows and rows >= max_rows:
+            break  # collected enough rows -> no need to fetch further pages
+        if until and until_before and _past_cutoff(current, until, until_before):
+            break  # this page already reaches the cutoff; every later page is older -> stop
+        if stop is not None and await _stop_here(stop, current, client):
+            break  # the predicate says this page is the last
+        nxt = _next_ref(
+            current, by=by, name=name, size=size, start=start, step=step,
+            index=len(pages), cursor=cursor, cursor_attr=cursor_attr,
+        )
+        if nxt is None:
+            break
+        page = await client.afetch(nxt, optional=True)
+        if not (page.ok and page.content):
+            break  # ran off the end (a 404 / empty page)
+        k = await _page_key(page, key, client)
+        if k in seen:
+            break  # the same page again -> an out-of-range clamp; stop rather than loop
+        seen.add(k)
+        pages.append(page)
+        rows += _row_count(page, records)
+        current = page
+    return pages
+
+
+__all__ = ["PaginateBacking", "walk"]
