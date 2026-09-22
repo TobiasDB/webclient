@@ -71,6 +71,7 @@ class BoundedLoop(Generic[S, O, D]):
         max_rounds: "int | None" = None,
         max_stalls: "int | None" = None,
         name: str = "loop",
+        bus: Any = None,
     ) -> None:
         from .settings import current
 
@@ -83,6 +84,15 @@ class BoundedLoop(Generic[S, O, D]):
         self.max_rounds = budgets.max_rounds if max_rounds is None else max_rounds
         self.max_stalls = budgets.max_stalls if max_stalls is None else max_stalls
         self.name = name
+        self.bus = bus  # an EventBus to publish LoopEvents on (None = silent)
+
+    def _emit(self, phase: str, round_index: int, **detail: Any) -> None:
+        """Publish a :class:`~webclient.models.LoopEvent` (a no-op without a bus)."""
+        if self.bus is None:
+            return
+        from .models import LoopEvent
+
+        self.bus.publish(LoopEvent(loop=self.name, phase=phase, round=round_index, detail=detail))  # type: ignore[arg-type]
 
     def run(self, state: S) -> LoopVerdict:
         """Drive ``state`` round by round until a terminal condition, returning the verdict.
@@ -93,17 +103,21 @@ class BoundedLoop(Generic[S, O, D]):
         prev: Any = _UNSET
         error = ""
         for i in range(self.max_rounds):
+            self._emit("round", i + 1, budget=self.max_rounds, error=error)
             decision = self._decide(self._observe(state, i, error))
             log.debug("%s round %d/%d: %r", self.name, i + 1, self.max_rounds, decision)
+            self._emit("decision", i + 1, decision=_brief(decision))
             result = self._done_result(decision)
             if result is not None:
                 log.info("%s done after %d round(s)", self.name, i)
+                self._emit("done", i, result=result)
                 return LoopVerdict(done=True, reason="done", rounds=i, result=result)
             try:
                 self._apply(state, decision)
                 error = ""
             except Exception as exc:  # noqa: BLE001 - surface it to the verdict, never crash
                 log.warning("%s stopped on error at round %d: %s", self.name, i + 1, exc)
+                self._emit("error", i + 1, error=str(exc))
                 return LoopVerdict(done=False, reason="error", rounds=i, error=str(exc))
             if self._progress is not None:
                 current = self._progress(state)
@@ -111,12 +125,25 @@ class BoundedLoop(Generic[S, O, D]):
                 prev = current
                 if stalls >= self.max_stalls:
                     log.info("%s stalled after %d round(s)", self.name, i + 1)
+                    self._emit("stalled", i + 1)
                     return LoopVerdict(done=False, reason="stalled", rounds=i + 1)
         log.info("%s hit its round budget (%d)", self.name, self.max_rounds)
+        self._emit("budget", self.max_rounds)
         return LoopVerdict(done=False, reason="budget", rounds=self.max_rounds)
 
 
 _UNSET: Any = object()  # a first-round sentinel that no progress signature can equal
+
+
+def _brief(decision: Any) -> Any:
+    """A JSON-friendly summary of a decision for the LoopEvent (a model's dump, else its repr)."""
+    dump = getattr(decision, "model_dump", None)
+    if dump is not None:
+        try:
+            return dump(mode="json")
+        except Exception:  # noqa: BLE001
+            pass
+    return repr(decision)[:200]
 
 
 __all__ = ["BoundedLoop", "LoopVerdict"]

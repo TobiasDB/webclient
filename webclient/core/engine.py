@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
+from pathlib import Path
 from typing import Any, cast
 
 from ..clients import BrowserFactory, ClientPool, HTTPXFactory, PageScript
@@ -25,7 +26,7 @@ class Engine:
     """The shared resources one ``WebClient`` owns and its sessions borrow: the engine
     loop, the transport pool, the event bus, per-host pacing state, and page scripts."""
 
-    def __init__(self, browser_config: Any, *, transport: bool = True) -> None:
+    def __init__(self, browser_config: Any, *, transport: bool = True, har: "str | None" = None) -> None:
         #: the dispatch mode -- how/where ops on THIS engine execute: ``"sync"`` blocks
         #: IO on the background loop, ``"async"`` is loop-native, ``"remote"`` turns every
         #: op into an API call. A property of the engine, so every session scoped on it
@@ -46,6 +47,11 @@ class Engine:
         #: sessions scoped on it, so a ``use()`` on the client or any session is seen
         #: by all of them (the extensibility hook).
         self._backings: list[Any] = []
+        #: the active trace directory while ``WebClient.trace()`` is open (None otherwise):
+        #: the client emits snapshots + captures bodies/headers only then, and the browser
+        #: factory records a HAR per context into ``<trace>/har``.
+        self.trace_dir: "str | None" = None
+        self._har = har
         if transport:  # a remote client executes over the wire -- no local pool, but keep bus/loop
             self._init_transport(browser_config)
 
@@ -56,12 +62,12 @@ class Engine:
 
         self._pool = ClientPool(
             {
-                "http": HTTPXFactory(proxy=bc.proxy),  # same client-wide proxy for httpx...
+                "http": HTTPXFactory(proxy=bc.proxy, har=self._har),  # same client-wide proxy for httpx...
                 "page": BrowserFactory(
                     headless=bc.headless, stealth=bc.stealth, fingerprint=bc.fingerprint,
                     channel=bc.channel, proxy=bc.proxy,  # ...and the browser
                     cdp_endpoint=bc.cdp_endpoint, ws_endpoint=bc.ws_endpoint,
-                    reuse_context=bc.reuse_context,
+                    reuse_context=bc.reuse_context, replay_har=bc.replay_har or self._har,
                 ),
             },
             limits={"http": bc.pool_http, "page": bc.pool_pages},
@@ -107,6 +113,26 @@ class Engine:
 
             self._loop = EngineLoop()
         return self._loop
+
+    @property
+    def tracing(self) -> bool:
+        """Whether a trace is being written on this engine (snapshots / bodies are captured)."""
+        return self.trace_dir is not None
+
+    def start_trace(self, path: str) -> None:
+        """Mark a trace as active: the browser factory records a HAR per context under it."""
+        self.trace_dir = path
+        if self._pool is not None:
+            factory = self._pool._factories.get("page")
+            if factory is not None:
+                factory.har_dir = str(Path(path) / "har")
+
+    def stop_trace(self) -> None:
+        self.trace_dir = None
+        if self._pool is not None:
+            factory = self._pool._factories.get("page")
+            if factory is not None:
+                factory.har_dir = None
 
     @property
     def pool(self) -> ClientPool:

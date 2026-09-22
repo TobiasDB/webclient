@@ -80,6 +80,9 @@ class IWebClient(BaseModel):
     #: is on by default; pass ``BrowserConfig(headless=False)`` to drive a visible
     #: browser or ``BrowserConfig.auto()`` for a randomised fingerprint per page.
     browser_config: BrowserConfig = BrowserConfig()
+    #: replay mode: a HAR file the STATIC tier answers every request from (no network); the
+    #: browser tier replays via ``BrowserConfig(replay_har=...)`` (set here too when given).
+    har: str | None = None
     #: identity DATA a client carries and injects into its requests (a WebClient IS a
     #: session -- ``wc.session()`` opens a child scope with its own identity). ``keep_cookies``
     #: makes it STATEFUL: it sends ``cookies`` on every request and absorbs each response's

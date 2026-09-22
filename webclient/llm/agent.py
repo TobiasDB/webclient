@@ -203,6 +203,7 @@ def drive(
         max_rounds=max_steps,
         max_stalls=max_stalls,
         name="interaction loop",
+        bus=getattr(getattr(doc, "_client", None), "bus", None),
     )
     v = loop.run(doc)
     return AgentRun(

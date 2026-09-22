@@ -153,6 +153,18 @@ is the same wire shape. `type` is the legacy short kind kept stable for callers 
 - **type** `LoopError` · **remedy** `none`
 - **hint**: A loop's apply step raised; the verdict carries the message and the loop stopped.
 
+### `replay.*`
+
+#### `replay.offline` -- No network in static replay
+
+- **type** `Offline` · **remedy** `none`
+- **hint**: This document was rebuilt from a trace; static replay never fetches -- use replay="har" (WebClient(har=...)) or a live client to re-resolve.
+
+#### `replay.har_miss` -- Request not in the HAR
+
+- **type** `HarMiss` · **remedy** `fix_plan` · status 599
+- **hint**: The replay's HAR has no entry for this request; the plan drifted from its recording -- re-record, or run it live.
+
 ### `crawl.*`
 
 #### `crawl.robots_disallowed` -- Disallowed by robots.txt

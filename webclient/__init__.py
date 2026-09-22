@@ -1,5 +1,7 @@
 """webclient -- declarative web client (ground-up rewrite in progress)."""
 
+__version__ = "0.1.0"
+
 from .clients import DEFAULT_WAIT, WaitConfig, WaitEvent
 from .query.collection import Collection, Field
 from .core.crawl import Crawl, Edge
@@ -19,6 +21,7 @@ from .core.web_core import Backing, WebCore
 from . import log as _log  # noqa: F401  (installs the package NullHandler)
 from .log import configure_logging, log_events
 from .settings import LlmSettings, Settings, current as current_settings, use as use_settings
+from .trace import Trace, TraceReader
 from .errors import (
     RAISE,
     RETURN,
@@ -123,6 +126,9 @@ __all__ = [
     "use_settings",
     "configure_logging",
     "log_events",
+    "Trace",
+    "TraceReader",
+    "__version__",
     "WebCore",
     "HtmlBacking",
     "JsonBacking",

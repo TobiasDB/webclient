@@ -138,6 +138,9 @@ class BrowserConfig(BaseModel, frozen=True):
     #: ``None`` = a direct connection. (A per-fetch anti-bot ``Resolve.proxy`` pool is separate;
     #: this is the always-on client-wide proxy.)
     proxy: str | None = None
+    #: replay mode: serve every browser request from this HAR (Playwright ``route_from_har``,
+    #: unmatched requests aborted) -- a recorded run re-executes with no network.
+    replay_har: str | None = None
 
     @classmethod
     def auto(cls) -> "BrowserConfig":

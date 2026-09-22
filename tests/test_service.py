@@ -474,3 +474,32 @@ def test_skeleton_endpoint(client_and_server):
     api, server = client_and_server
     r = api.post("/skeleton", headers=AUTH, json={"url": server.url_for("/cards")}).json()
     assert '<div class="card">' in r["result"] and '<span class="title">' in r["result"]
+
+
+def test_events_ws_resumes_from_a_cursor_and_replays_a_trace(httpserver, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from webclient import WebClient
+    from webclient.service import create_app
+
+    httpserver.expect_request("/p").respond_with_data("<html><title>p</title></html>",
+                                                      content_type="text/html")
+    wc = WebClient()
+    app = create_app(wc)
+    with TestClient(app) as tc:
+        wc.fetch(httpserver.url_for("/p"))
+        cursor = wc.bus.cursor
+        wc.fetch(httpserver.url_for("/p"))  # events past the cursor: the backlog
+        with tc.websocket_connect(f"/events?since={cursor}&topic=network") as ws:
+            first = ws.receive_json()
+            assert first["n"] > cursor and first["topic"].startswith("network")
+            assert "url" in first and "request" not in first
+    # a stored trace streams over the same wire
+    path = tmp_path / "t.trace"
+    with wc.trace(path):
+        wc.fetch(httpserver.url_for("/p"))
+    with TestClient(app) as tc, tc.websocket_connect(f"/events?trace={path}&topic=snapshot") as ws:
+        snap = ws.receive_json()
+        assert snap["topic"] == "snapshot" and "content" not in snap and snap["document_id"]
+        assert ws.receive_json()["topic"] == "trace.end"
+    wc.close()

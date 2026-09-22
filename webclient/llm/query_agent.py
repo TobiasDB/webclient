@@ -206,6 +206,7 @@ def build_query(
         max_rounds=max_rounds,
         max_stalls=2,
         name="query loop",
+        bus=getattr(getattr(doc, "_client", None), "bus", None),
     )
     verdict = loop.run(state)
     expr = state.expr()

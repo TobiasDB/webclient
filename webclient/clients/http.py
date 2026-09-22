@@ -30,10 +30,17 @@ class HTTPXClient(Client):
 
     kind = "http"
 
-    def __init__(self, *, verify: bool = True, proxy: str | None = None) -> None:
-        self._httpx = httpx.AsyncClient(
-            follow_redirects=True, verify=verify, proxy=proxy
-        )
+    def __init__(
+        self, *, verify: bool = True, proxy: str | None = None, har: str | None = None
+    ) -> None:
+        if har:  # replay mode: every request is answered from the HAR, never the network
+            from ..replay.har import HarTransport
+
+            self._httpx = httpx.AsyncClient(follow_redirects=True, transport=HarTransport(har))
+        else:
+            self._httpx = httpx.AsyncClient(
+                follow_redirects=True, verify=verify, proxy=proxy
+            )
 
     async def send(
         self,
@@ -128,7 +135,11 @@ class HTTPXClient(Client):
         for hop in (*resp.history, resp):
             set_cookies.update(dict(hop.cookies))
         doc._set_cookies = set_cookies
-        if not (200 <= resp.status_code < 300):
+        if resp.status_code == 599 and resp.headers.get("x-webclient-har") == "miss":
+            from ..errors import make
+
+            doc.error = make("replay.har_miss", f"no HAR entry for {ref.method.upper()} {doc.url}")
+        elif not (200 <= resp.status_code < 300):
             doc.error = error_for(resp.status_code)
         log.debug("%s %s -> %d %s %dB %.0fms", ref.method.upper(), doc.url, resp.status_code,
                   doc.kind, len(resp.content), (doc.elapsed or 0.0) * 1000)
@@ -147,13 +158,16 @@ class HTTPXClient(Client):
 class HTTPXFactory(ClientFactory):
     kind = "http"
 
-    def __init__(self, *, verify: bool = True, proxy: str | None = None) -> None:
+    def __init__(
+        self, *, verify: bool = True, proxy: str | None = None, har: str | None = None
+    ) -> None:
         self.verify = verify
         self.proxy = proxy
+        self.har = har  # replay: answer from this HAR instead of the network
 
     async def create(self) -> HTTPXClient:
         """Build a fresh httpx-backed client (its verify/proxy fixed by this factory)."""
-        return HTTPXClient(verify=self.verify, proxy=self.proxy)
+        return HTTPXClient(verify=self.verify, proxy=self.proxy, har=self.har)
 
 
 # -- response sniffing (used when a fetched response is turned into a document) --

@@ -574,20 +574,72 @@ def create_app(
         return out
 
     # -- live event stream ---------------------------------------------------
+    def _wire(event: Any) -> dict[str, Any]:
+        """An event as JSON for the socket: byte payloads are dropped (a snapshot's content
+        is not streamed; the trace holds it) and a reference is rendered as its url."""
+        data = event.model_dump(mode="python", exclude_none=True)
+        data.pop("content", None)
+        data.pop("body", None)
+        req = data.pop("request", None)
+        if req is not None:
+            try:
+                data["url"] = str(event.request.dispatch("url"))
+            except Exception:  # noqa: BLE001
+                pass
+        if "error" in data and hasattr(event, "error"):
+            data["error"] = event.error.model_dump(mode="json", exclude_none=True)
+        import json as _json
+
+        return cast("dict[str, Any]", _json.loads(_json.dumps(data, default=str)))
+
     @app.websocket("/events")
     async def events(ws: WebSocket) -> None:
+        """The live event stream. ``?topic=`` filters by dotted prefix; ``?since=<n>`` first
+        replays the bus's retained history past that global cursor (a reconnecting client
+        resumes without a gap, bounded by ``limits.event_history``); ``?trace=<path>`` streams
+        a STORED trace instead of the live bus (``?speed=`` scales its original timing, ``0``
+        = as fast as possible) -- so live and replay share one wire."""
         await ws.accept()
         topic = ws.query_params.get("topic", "")
+        trace_path = ws.query_params.get("trace")
+        if trace_path:
+            from .trace import read as _read_trace
+
+            speed = float(ws.query_params.get("speed", "0") or 0)
+            try:
+                prev_ts: float | None = None
+                for event in _read_trace(trace_path).events:
+                    if topic and not event.topic.startswith(topic):
+                        continue
+                    if speed > 0 and prev_ts is not None and event.ts is not None:
+                        await asyncio.sleep(max(0.0, (event.ts - prev_ts) / speed))
+                    prev_ts = event.ts
+                    await ws.send_json(_wire(event))
+                await ws.send_json({"topic": "trace.end"})
+            except WebSocketDisconnect:
+                pass
+            return
+        since = int(ws.query_params.get("since", "0") or 0)
         loop = asyncio.get_event_loop()
         queue: asyncio.Queue[Any] = asyncio.Queue()
 
         def handler(event: Any) -> None:  # engine thread -> server loop
-            loop.call_soon_threadsafe(queue.put_nowait, event.model_dump(mode="json"))
+            loop.call_soon_threadsafe(queue.put_nowait, _wire(event))
 
-        sub = app.state.wc.bus.subscribe(topic, handler)
+        bus = app.state.wc.bus
+        # subscribe FIRST, then replay history, so no event falls between the two
+        sub = bus.subscribe(topic, handler)
+        backlog = bus.since(since, topic=topic) if since else []
         try:
+            sent = 0
+            for event in backlog:
+                await ws.send_json(_wire(event))
+                sent = event.n or sent
             while True:
-                await ws.send_json(await queue.get())
+                item = await queue.get()
+                if sent and (item.get("n") or 0) <= sent:
+                    continue  # already delivered from the backlog
+                await ws.send_json(item)
         except WebSocketDisconnect:
             pass
         finally:

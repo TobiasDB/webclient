@@ -508,9 +508,13 @@ class BrowserFactory(ClientFactory):
         self, *, headless: bool = True, stealth: bool = True, fingerprint: bool = False,
         channel: "str | None" = None, proxy: "str | None" = None,
         cdp_endpoint: "str | None" = None, ws_endpoint: "str | None" = None,
-        reuse_context: "bool | None" = None,
+        reuse_context: "bool | None" = None, replay_har: "str | None" = None,
     ) -> None:
         self.headless = headless
+        #: while a trace is active: every NEW context records a HAR here (flushed on close)
+        self.har_dir: "str | None" = None
+        #: replay: every new context routes its requests from this HAR (no network)
+        self.replay_har = replay_har
         self.stealth = stealth
         self.fingerprint = fingerprint
         self.channel = channel  # None = bundled chromium; "chrome" = installed Google Chrome
@@ -596,7 +600,17 @@ class BrowserFactory(ClientFactory):
                 "locale": fp["locale"],
                 "timezone_id": fp["tz"],
             }
+        if self.har_dir:  # tracing: a full-content HAR per context, written when it closes
+            import uuid
+            from pathlib import Path as _P
+
+            _P(self.har_dir).mkdir(parents=True, exist_ok=True)
+            opts["record_har_path"] = str(_P(self.har_dir) / f"{uuid.uuid4().hex}.har")
+            opts["record_har_content"] = "embed"
+            opts["record_har_mode"] = "full"
         context = await browser.new_context(**opts)
+        if self.replay_har:  # replay: answer from the recording, abort anything unrecorded
+            await context.route_from_har(self.replay_har, not_found="abort")
         if self.stealth:
             await context.add_init_script(_STEALTH_BASE)      # identity-independent masks
             await context.add_init_script(_identity_js(fp))   # THIS identity's platform/GPU/cores

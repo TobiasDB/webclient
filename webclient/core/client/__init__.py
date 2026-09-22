@@ -13,6 +13,7 @@ differs.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import threading
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TypeVar, cast, overload
 
@@ -26,7 +27,7 @@ from ...clients import (
 from ...query.collection import Field
 from ...errors import WebError, WebException, error_for, make
 from ...events import EventBus
-from ...models import NavigationEvent, NetworkEvent, PlanEvent
+from ...models import NavigationEvent, NetworkEvent, PlanEvent, SnapshotEvent
 from ...query.executor import aevaluate, astream, evaluate
 from ..document import Document
 from ...policy import policy_headers
@@ -42,6 +43,7 @@ from .models import IWebClient
 from .sitemap import SiteBacking
 
 if TYPE_CHECKING:
+    from ...trace import Trace
     from ..crawl import Crawl, CrawlConfig, CrawlState, PageCard
     from ...interface import Lazy, LazyField, LazyWebClient
 
@@ -277,7 +279,7 @@ class WebClient(SessionCore, IWebClient):
         """Create this client's shared :class:`Engine` (transport pool + loop + bus +
         pacing). A CHILD session's engine is nulled in :meth:`bind` (it borrows the
         parent's), so its own engine here is discarded."""
-        self._engine = Engine(self.browser_config)
+        self._engine = Engine(self.browser_config, har=self.har)
 
     def bind(self, parent: "WebClient") -> "WebClient":
         """Make this a CHILD session of ``parent``: borrow its engine (loop / pool / bus /
@@ -523,6 +525,8 @@ class WebClient(SessionCore, IWebClient):
         ``BrowserPolicy.wait_for`` selector when given, else the default DOM settle."""
         import asyncio
 
+        if self._the_engine().pool is None:  # an offline (static replay) client never fetches
+            raise WebException(make("replay.offline", f"cannot fetch {ref.dispatch('url')} offline", op="fetch"))
         pol = resolve if resolve is not None else self.resolve
         max_retries = pol.retry.max if pol is not None else self.retries
         mode = _browser_mode(browser)
@@ -1198,6 +1202,41 @@ class WebClient(SessionCore, IWebClient):
 
         asyncio.ensure_future(_expire())
 
+    # -- tracing -------------------------------------------------------------
+    def trace(self, path: "str | Path", *, since: int = 0) -> "Trace":
+        """Write a TRACE of everything this engine does into the directory ``path``
+        (``with wc.trace("run.trace"): ...``): every bus event as JSONL, a document
+        snapshot after each fetch / load / interaction, the static tier's response bodies
+        (so a HAR can be rebuilt) and a Playwright HAR per browser context -- the offline,
+        replayable record (see :mod:`webclient.trace` / :mod:`webclient.replay`). ``since``
+        replays the bus's retained history past that cursor into the trace first."""
+        from ...trace import Trace
+
+        engine = self._the_engine()
+        trace = Trace(path)
+        engine.start_trace(str(trace.path))
+        trace.attach(self.bus, since=since)
+        original_close = trace.close
+
+        def _close() -> None:
+            engine.stop_trace()
+            original_close()
+
+        trace.close = _close  # type: ignore[method-assign]
+        return trace
+
+    def _snapshot(self, doc: Document, phase: str) -> None:
+        """Publish a :class:`~webclient.models.SnapshotEvent` of ``doc`` -- only while a trace
+        is active (the content is already captured; this just records it)."""
+        if not self._the_engine().tracing or doc.content is None:
+            return
+        self.bus.publish(SnapshotEvent(
+            phase=phase, url=doc.url, final_url=doc.final_url or doc.url, kind=doc.kind,  # type: ignore[arg-type]
+            status_code=doc.status_code, headers=dict(doc.response_headers or {}),
+            encoding=doc.encoding, content=doc.content, tiers=list(doc._tiers),
+            document_id=doc.name, session_id=doc.session_id or None, source="core-trace",
+        ))
+
     # -- the error ledger ----------------------------------------------------
     @property
     def errors(self) -> "list[Any]":
@@ -1230,6 +1269,7 @@ class WebClient(SessionCore, IWebClient):
         doc._ref = ref
         if doc.error is not None:  # a not-ok resolution enters the ledger as it is registered
             doc.error = doc._note_error(doc.error, "fetch")
+        self._snapshot(doc, "load" if doc._page is not None else "fetch")
 
     def document(self, name: str) -> Document | None:
         """Recover a materialised document by name from any live scope."""
@@ -1263,12 +1303,18 @@ class WebClient(SessionCore, IWebClient):
                     source="core-network",
                 )
             )
+        tracing = self._the_engine().tracing
         events.append(
             NavigationEvent(  # the landing is a navigation
                 request=ref,
                 status_code=resp.status_code,
                 document_id=doc.id,
                 source="core-network",
+                # under a trace the response is kept whole so a HAR can be rebuilt offline
+                headers=dict(doc.response_headers or {}) if tracing else None,
+                body=doc.content if tracing else None,
+                elapsed=doc.elapsed if tracing else None,
+                method=str(ref.method),
             )
         )
         for event in events:

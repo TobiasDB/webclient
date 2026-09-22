@@ -183,6 +183,12 @@ CATALOG: dict[str, ErrorSpec] = {s.code: s for s in (
           retriable=True),
     _spec("loop.failed", "LoopError", "Loop step failed", "none",
           "A loop's apply step raised; the verdict carries the message and the loop stopped."),
+    # -- replay ----------------------------------------------------------------
+    _spec("replay.offline", "Offline", "No network in static replay", "none",
+          "This document was rebuilt from a trace; static replay never fetches -- use replay=\"har\" (WebClient(har=...)) or a live client to re-resolve."),
+    _spec("replay.har_miss", "HarMiss", "Request not in the HAR", "fix_plan",
+          "The replay's HAR has no entry for this request; the plan drifted from its recording -- re-record, or run it live.",
+          status_code=599),
     # -- crawl -----------------------------------------------------------------
     _spec("crawl.robots_disallowed", "RobotsDisallowed", "Disallowed by robots.txt", "none",
           "The site's robots.txt disallows this URL for us; skip it (or crawl with obey_robots=False if you are entitled to)."),
