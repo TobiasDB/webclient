@@ -46,9 +46,9 @@ class UnsupportedOp(WebException, TypeError):
             f"{op!r} is not available here; this core has "
             f"{sorted(have) or 'no capabilities'}"
         )
-        WebException.__init__(
-            self, WebError(type="UnsupportedOp", message=msg, retriable=False)
-        )
+        from ..errors import make
+
+        WebException.__init__(self, make("op.unsupported", msg, op=op))
         self.op, self.have = op, have
 
 

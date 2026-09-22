@@ -189,12 +189,12 @@ def _miss(parent: "Document", message: str, error: Any) -> "Document":
     not-ok sub-document. ``SelectError`` is both a ``WebException`` (so one
     ``except WebException`` covers fetch failures and misses alike) and a
     ``LookupError`` (back-compat)."""
-    from ...errors import RAISE, WebError, current_policy, select_error
+    from ...errors import RAISE, current_policy, make, select_error
 
     if (error or current_policy()) is RAISE:
         raise select_error(message)
     sub = parent._sub(None)
-    sub.error = WebError(type="LookupError", message=message)
+    sub.error = make("select.no_match", message, op="select", subject=parent.name)
     return sub
 
 
@@ -485,7 +485,7 @@ class HtmlBacking(Backing):
             from ...errors import RAISE, current_policy, select_error
 
             if not optional and (error or current_policy()) is RAISE:
-                raise select_error(f"no attribute {name!r}")
+                raise select_error(f"no attribute {name!r}", code="select.no_attribute")
             return Field(None, ok=False)
         return _regex_field(value.strip() if isinstance(value, str) else value, pattern, group)
 

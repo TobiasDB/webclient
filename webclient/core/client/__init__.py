@@ -24,7 +24,7 @@ from ...clients import (
     WaitEvent,
 )
 from ...query.collection import Field
-from ...errors import WebError, WebException, error_for
+from ...errors import WebError, WebException, error_for, make
 from ...events import EventBus
 from ...models import NavigationEvent, NetworkEvent, PlanEvent
 from ...query.executor import aevaluate, astream, evaluate
@@ -532,9 +532,8 @@ class WebClient(SessionCore, IWebClient):
             doc = Document(
                 url=ref.dispatch("url"),
                 status_code=0,
-                error=WebError(
-                    type="BlockedHost",
-                    message=f"host {ref.hostname!r} is blocked by policy",
+                error=make(
+                    "fetch.blocked_host", f"host {ref.hostname!r} is blocked by policy", op="fetch",
                 ),
             )
             doc._client = self
@@ -552,7 +551,7 @@ class WebClient(SessionCore, IWebClient):
                     raise
                 doc = Document(
                     url=ref.dispatch("url"), status_code=0,
-                    error=WebError(type="BrowserError", message=str(exc)),
+                    error=make("fetch.browser_failed", str(exc), op="fetch"),
                 )
                 doc._client = self
                 self._register(doc, ref)
@@ -610,9 +609,10 @@ class WebClient(SessionCore, IWebClient):
         if mode == "auto" and doc.error is None and flags is not None:
             if flags["login_required"].present:  # a credential wall -- fail loudly
                 log.info("auto: %s is behind a login wall -- no transport remedy", doc.url)
-                doc.error = WebError(
-                    type="LoginRequired",
-                    message=_flag_reason(flags["login_required"], "a login wall blocks the content"),
+                doc.error = make(
+                    "fetch.login_required",
+                    _flag_reason(flags["login_required"], "a login wall blocks the content"),
+                    op="fetch", subject=doc.name,
                 )
             else:
                 tiers = ["static"]
