@@ -46,6 +46,9 @@ class Detector:
     stage: str
     fn: DetectorFn
     contra: bool = False  # CONTRA evidence: its Hit REDUCES the flag instead of raising it
+    #: the page scripts (by registry name) whose data this detector reads -- a rendered /
+    #: network detector needs the browser observer; a request / static one needs nothing.
+    needs: tuple[str, ...] = ()
 
 
 @dataclass
@@ -59,13 +62,20 @@ DETECTORS: list[Detector] = []
 FLAGS: dict[str, FlagSpec] = {}
 
 
-def detector(*, flag: str, name: str, stage: "Stage", contra: bool = False) -> Callable[[DetectorFn], DetectorFn]:
+def detector(
+    *, flag: str, name: str, stage: "Stage", contra: bool = False, needs: "tuple[str, ...] | None" = None
+) -> Callable[[DetectorFn], DetectorFn]:
     """Register ``fn`` as a detector feeding ``flag`` from ``stage``. ``fn(ctx)``
     returns a :class:`Hit` when the evidence is present, else ``None``. ``contra=True``
     makes it CONTRA evidence -- its Hit lowers the flag's confidence (e.g. "the dataset is
-    already in the served HTML" pulling ``spa`` down) rather than raising it."""
+    already in the served HTML" pulling ``spa`` down) rather than raising it. ``needs``
+    names the page scripts whose data it reads (defaults to the browser observer for a
+    rendered / network stage, nothing for request / static)."""
+    if needs is None:
+        needs = ("LiveBacking.init", "LiveBacking.drain") if stage in ("rendered", "network") else ()
+
     def wrap(fn: DetectorFn) -> DetectorFn:
-        DETECTORS.append(Detector(flag=flag, name=name, stage=stage, fn=fn, contra=contra))
+        DETECTORS.append(Detector(flag=flag, name=name, stage=stage, fn=fn, contra=contra, needs=needs))
         return fn
     return wrap
 

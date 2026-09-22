@@ -155,3 +155,17 @@ def test_a_new_detector_and_flag_extend_detection_without_dispatch_changes():
         FLAGS.pop("cookie_consent", None)
         DETECTORS[:] = [d for d in DETECTORS if d.name != "consent_banner"]
     assert len(DETECTORS) == n_det and len(FLAGS) == n_flag  # fully removed
+
+
+def test_detectors_declare_the_scripts_they_need_and_docs_are_generated():
+    import subprocess, sys, pathlib
+    import webclient.signals.dom  # noqa: F401
+    from webclient.signals.registry import DETECTORS
+
+    rendered = [d for d in DETECTORS if d.stage in ("rendered", "network")]
+    assert rendered and all("LiveBacking.init" in d.needs for d in rendered)
+    assert all(d.needs == () for d in DETECTORS if d.stage in ("request", "static"))
+    root = pathlib.Path(webclient.signals.__file__).parent.parent.parent
+    r = subprocess.run([sys.executable, str(root / "scripts/gen_docs.py"), "signals", "--check"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr

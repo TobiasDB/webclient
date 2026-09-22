@@ -31,6 +31,7 @@ from .flags import FlagsBacking
 from .regex import RegexBacking
 from .element_index import ElementIndexBacking
 from .paginate import PaginateBacking
+from .patterns import PatternsBacking
 
 if TYPE_CHECKING:
     from ...interface import LazyDocument
@@ -110,6 +111,7 @@ class Document(WebCore, IDocument):
         RegexBacking(),
         ElementIndexBacking(),
         PaginateBacking(),
+        PatternsBacking(),
     )
 
     @property
