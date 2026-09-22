@@ -77,6 +77,8 @@ class Crawl(SessionCore, ICrawl[T], Generic[T]):
     #: ``Callable[[Crawl], list[Edge]]`` that ``run``/``stream``/a bare ``step()`` consult.
     #: ``None`` = the built-in best-first heuristic (or nothing, when ``order="manual"``).
     _driver: Any = PrivateAttr(default=None)
+    _round: int = PrivateAttr(default=0)  # rounds run (for LoopEvents)
+    _pending: Any = PrivateAttr(default=None)  # an Ask the driver raised (waiting for picks)
 
     BACKINGS: ClassVar[tuple[Backing, ...]] = (CrawlBacking(),)
 
@@ -184,6 +186,32 @@ class Crawl(SessionCore, ICrawl[T], Generic[T]):
         backing = cast(CrawlBacking, self.BACKINGS[0])
         return self._client.loop().astream(backing._astream(self))
 
+    # -- the Loop protocol: pending / resume ------------------------------------
+    @property
+    def pending(self) -> Any:
+        """The :class:`~webclient.loop.Ask` the crawl's driver raised (``None`` unless the
+        crawl is waiting for a human to pick edges): see :meth:`resume`."""
+        return self._pending
+
+    def resume(self, picks: "list[Any] | None" = None, *, run: bool = True) -> "Crawl[Any]":
+        """Continue a WAITING crawl: fetch ``picks`` (frontier edges / URLs) for the round
+        the driver asked about, then keep driving (``run=True``) or stop after that one
+        round. Raises if the crawl is not waiting."""
+        if self._pending is None:
+            raise RuntimeError("the crawl is not waiting for a decision")
+        from ...models import LoopEvent
+
+        self._pending = None
+        bus = getattr(self._client, "bus", None)
+        if bus is not None:
+            bus.publish(LoopEvent(loop="crawl", phase="resumed", round=self._round,
+                                  detail={"picks": [str(p) for p in (picks or [])][:20]}))
+        if picks:
+            self.dispatch("step", list(picks))
+        if run:
+            self.dispatch("run")
+        return self
+
     @property
     def lazy(self) -> "_CrawlLazy":
         """The crawl's lazy views (currently ``lazy.frontier`` -> ``Collection[Edge]``)."""
@@ -191,8 +219,9 @@ class Crawl(SessionCore, ICrawl[T], Generic[T]):
 
 
 from .drivers import Driver, from_picks  # noqa: E402  (re-export; avoids an import cycle)
+from .locate import LocateResult, locate  # noqa: E402
 
 __all__ = [
     "Crawl", "Edge", "Failure", "PageCard", "CrawlConfig", "CrawlState", "ICrawl",
-    "Driver", "from_picks",
+    "Driver", "from_picks", "LocateResult", "locate",
 ]

@@ -1,24 +1,33 @@
-"""A generic bounded ``observe -> decide -> apply`` loop -- the shared base for the
-interaction loop (``llm.agent.drive``) and, later, the query loop.
+"""The bounded ``observe -> decide -> apply`` loop -- the ONE loop concept every "auto"
+mode in the package is built on (roadmap N9): the interaction loop, the query loop, the
+crawl drive, the resolve escalation ladder and the locate loop.
 
-The shape mirrors crawl ``step``/``run``: a round is a DECISION, not an atomic action, so a
-round's ``decide`` may return one action (interaction), a set of picks (crawl), or a whole
-query increment (query loop) -- the base does not care. The base owns only the mechanics
-every such loop shares: the round budget, no-progress (stall) detection, exception-to-verdict
-capture, and the terminal :class:`LoopVerdict`. Everything domain-specific -- what an
-observation is, how a decision is made, how it is applied, when it is "done", and how to
-measure progress -- is supplied as callables, so the base stays a minimal scaffold and never
-grows a framework.
+A round is a DECISION, not an atomic action: ``decide`` may return one action
+(interaction), a set of picks (crawl), a query increment (query loop) or a transport tier
+(resolve) -- the base does not care. The base owns only what every such loop shares:
 
-A specialisation wires the callables and calls :meth:`BoundedLoop.run`; recording is left to
-the domain (the interaction loop records through the document's ordinary ops; the query loop
-will build an ``Expr``), so the base carries no recording machinery.
+* the round budget and no-progress (stall) detection, and the terminal :class:`LoopVerdict`;
+* the **driver** seam -- ``decide`` is any callable, so the auto backend is swappable
+  (an LLM adapter, a heuristic, a test stub) and a loop can always be driven by hand;
+* **manual mode** -- :meth:`BoundedLoop.step` runs ONE round with a caller-supplied
+  decision (or the driver's), so a loop can be stepped, inspected and steered;
+* **interrupt / resume** -- a driver that returns an :class:`Ask` checkpoints the loop:
+  ``run`` stops with ``reason="waiting"`` (the question on ``verdict.ask``), and
+  :meth:`BoundedLoop.resume` continues from the same round with the answer -- the
+  human-in-the-loop primitive every framework converges on (LangGraph ``interrupt`` /
+  Stagehand ``askHuman``);
+* **traceability** -- given a ``bus`` it publishes a :class:`~webclient.models.LoopEvent`
+  per round / decision / checkpoint / verdict, so a trace or UI can draw it.
+
+Everything domain-specific -- what an observation is, how a decision is made, how it is
+applied, when it is "done", how to measure progress -- is supplied as callables, so the
+base stays a minimal scaffold and never grows a framework.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -32,27 +41,55 @@ O = TypeVar("O")  # an OBSERVATION handed to decide
 D = TypeVar("D")  # a DECISION returned by decide
 
 
+class Ask(BaseModel):
+    """A driver's request for a HUMAN decision -- returned from ``decide`` instead of a
+    decision. The loop checkpoints (``reason="waiting"``) and resumes with the answer.
+    ``options`` are the choices offered (free-form when empty); ``detail`` is context for
+    the UI (the observation summary, the candidate picks, ...)."""
+
+    reason: str
+    options: list[Any] = []
+    detail: dict[str, Any] = {}
+
+
 class LoopVerdict(BaseModel):
     """Why a :class:`BoundedLoop` stopped. ``reason``: ``done`` (the decision declared the loop
     finished), ``budget`` (hit ``max_rounds``), ``stalled`` (``max_stalls`` no-progress rounds in
-    a row), or ``error`` (``apply`` raised). ``rounds`` is how many rounds ran; ``result`` is the
-    done payload; ``error`` the failure message."""
+    a row), ``error`` (``apply`` raised), or ``waiting`` (the driver asked for a human decision --
+    see ``ask`` and :meth:`BoundedLoop.resume`). ``rounds`` is how many rounds ran; ``result`` is
+    the done payload; ``error`` the failure message."""
 
     done: bool
-    reason: Literal["done", "budget", "stalled", "error"]
+    reason: Literal["done", "budget", "stalled", "error", "waiting"]
     rounds: int
     result: str = ""
     error: str = ""
+    ask: Ask | None = None
+
+
+@runtime_checkable
+class Loop(Protocol):
+    """What every loop in the package offers: a name, ``run`` (auto), ``step`` (manual, one
+    round), ``resume`` (after an :class:`Ask`), the last ``verdict`` and the ``pending`` ask."""
+
+    name: str
+
+    @property
+    def verdict(self) -> "LoopVerdict | None": ...
+    @property
+    def pending(self) -> "Ask | None": ...
 
 
 class BoundedLoop(Generic[S, O, D]):
     """A reusable bounded loop over a mutating ``state``. Each round: ``observe`` the state,
     ``decide`` from the observation, and unless the decision is terminal, ``apply`` it -- until a
-    decision is done, ``apply`` raises, progress stalls, or the round budget is spent.
+    decision is done, ``apply`` raises, progress stalls, the round budget is spent, or the driver
+    asks for a human (``waiting``; continue with :meth:`resume`).
 
     Callables:
       * ``observe(state, round_index, last_error) -> O`` -- what the decider sees this round.
-      * ``decide(observation) -> D`` -- the "brain" (an LLM adapter, a policy fn, ...).
+      * ``decide(observation) -> D | Ask`` -- the "brain" / DRIVER (an LLM adapter, a policy
+        fn, ...); returning an :class:`Ask` checkpoints the loop for a human decision.
       * ``done_result(decision) -> str | None`` -- ``None`` keeps going; a string ends the loop
         ``done`` with that result.
       * ``apply(state, decision) -> None`` -- enact a non-terminal decision (mutating ``state``).
@@ -64,7 +101,7 @@ class BoundedLoop(Generic[S, O, D]):
         self,
         *,
         observe: "Callable[[S, int, str], O]",
-        decide: "Callable[[O], D]",
+        decide: "Callable[[O], D | Ask]",
         done_result: "Callable[[D], str | None]",
         apply: "Callable[[S, D], None]",
         progress: "Callable[[S], Any] | None" = None,
@@ -85,6 +122,14 @@ class BoundedLoop(Generic[S, O, D]):
         self.max_stalls = budgets.max_stalls if max_stalls is None else max_stalls
         self.name = name
         self.bus = bus  # an EventBus to publish LoopEvents on (None = silent)
+        # -- the checkpoint (set while waiting / between manual steps) ----------
+        self.state: Any = _UNSET  # the checkpointed state (``_UNSET`` before the first step)
+        self.round = 0  # rounds completed
+        self.verdict: "LoopVerdict | None" = None
+        self.pending: "Ask | None" = None
+        self._stalls = 0
+        self._prev: Any = _UNSET
+        self._error = ""
 
     def _emit(self, phase: str, round_index: int, **detail: Any) -> None:
         """Publish a :class:`~webclient.models.LoopEvent` (a no-op without a bus)."""
@@ -94,42 +139,89 @@ class BoundedLoop(Generic[S, O, D]):
 
         self.bus.publish(LoopEvent(loop=self.name, phase=phase, round=round_index, detail=detail))  # type: ignore[arg-type]
 
+    # -- one round (the manual primitive) --------------------------------------
+    def step(self, state: S, decision: "D | Ask | None" = None) -> "LoopVerdict | None":
+        """Run ONE round on ``state``: observe, then use ``decision`` (manual) or ask the driver
+        (auto), then apply. Returns a :class:`LoopVerdict` when the round was terminal (done /
+        error / stalled / budget / waiting), else ``None`` (keep stepping). The loop keeps its
+        own round counter and stall state between steps, so ``step`` and ``run`` compose."""
+        self.state = state
+        i = self.round
+        if i >= self.max_rounds:
+            return self._finish(LoopVerdict(done=False, reason="budget", rounds=self.max_rounds))
+        self._emit("round", i + 1, budget=self.max_rounds, error=self._error)
+        if decision is None:
+            decision = self._decide(self._observe(state, i, self._error))
+            log.debug("%s round %d/%d: %r", self.name, i + 1, self.max_rounds, decision)
+        if isinstance(decision, Ask):  # a checkpoint: hand the question up, keep the round
+            self.pending = decision
+            log.info("%s waiting at round %d: %s", self.name, i + 1, decision.reason)
+            self._emit("waiting", i + 1, ask=decision.model_dump(mode="json"))
+            return self._finish(LoopVerdict(done=False, reason="waiting", rounds=i, ask=decision), keep=True)
+        self.pending = None
+        self._emit("decision", i + 1, decision=_brief(decision))
+        result = self._done_result(decision)
+        if result is not None:
+            log.info("%s done after %d round(s)", self.name, i)
+            self._emit("done", i, result=result)
+            return self._finish(LoopVerdict(done=True, reason="done", rounds=i, result=result))
+        try:
+            self._apply(state, decision)
+            self._error = ""
+        except Exception as exc:  # noqa: BLE001 - surface it to the verdict, never crash
+            log.warning("%s stopped on error at round %d: %s", self.name, i + 1, exc)
+            self._emit("error", i + 1, error=str(exc))
+            return self._finish(LoopVerdict(done=False, reason="error", rounds=i, error=str(exc)))
+        self.round = i + 1
+        if self._progress is not None:
+            current = self._progress(state)
+            self._stalls = self._stalls + 1 if current == self._prev else 0
+            self._prev = current
+            if self._stalls >= self.max_stalls:
+                log.info("%s stalled after %d round(s)", self.name, i + 1)
+                self._emit("stalled", i + 1)
+                return self._finish(LoopVerdict(done=False, reason="stalled", rounds=i + 1))
+        if self.round >= self.max_rounds:
+            log.info("%s hit its round budget (%d)", self.name, self.max_rounds)
+            self._emit("budget", self.max_rounds)
+            return self._finish(LoopVerdict(done=False, reason="budget", rounds=self.max_rounds))
+        return None
+
+    def _finish(self, verdict: LoopVerdict, *, keep: bool = False) -> LoopVerdict:
+        self.verdict = verdict
+        if not keep:
+            self.pending = None
+        return verdict
+
+    # -- auto ----------------------------------------------------------------------
     def run(self, state: S) -> LoopVerdict:
         """Drive ``state`` round by round until a terminal condition, returning the verdict.
         Terminates on: a done decision (``done``), an ``apply`` exception (``error``, captured
-        never raised), ``max_stalls`` consecutive no-progress rounds (``stalled``), or
-        ``max_rounds`` (``budget``)."""
-        stalls = 0
-        prev: Any = _UNSET
-        error = ""
-        for i in range(self.max_rounds):
-            self._emit("round", i + 1, budget=self.max_rounds, error=error)
-            decision = self._decide(self._observe(state, i, error))
-            log.debug("%s round %d/%d: %r", self.name, i + 1, self.max_rounds, decision)
-            self._emit("decision", i + 1, decision=_brief(decision))
-            result = self._done_result(decision)
-            if result is not None:
-                log.info("%s done after %d round(s)", self.name, i)
-                self._emit("done", i, result=result)
-                return LoopVerdict(done=True, reason="done", rounds=i, result=result)
-            try:
-                self._apply(state, decision)
-                error = ""
-            except Exception as exc:  # noqa: BLE001 - surface it to the verdict, never crash
-                log.warning("%s stopped on error at round %d: %s", self.name, i + 1, exc)
-                self._emit("error", i + 1, error=str(exc))
-                return LoopVerdict(done=False, reason="error", rounds=i, error=str(exc))
-            if self._progress is not None:
-                current = self._progress(state)
-                stalls = stalls + 1 if current == prev else 0
-                prev = current
-                if stalls >= self.max_stalls:
-                    log.info("%s stalled after %d round(s)", self.name, i + 1)
-                    self._emit("stalled", i + 1)
-                    return LoopVerdict(done=False, reason="stalled", rounds=i + 1)
-        log.info("%s hit its round budget (%d)", self.name, self.max_rounds)
-        self._emit("budget", self.max_rounds)
-        return LoopVerdict(done=False, reason="budget", rounds=self.max_rounds)
+        never raised), ``max_stalls`` consecutive no-progress rounds (``stalled``),
+        ``max_rounds`` (``budget``), or the driver asking for a human (``waiting`` -- call
+        :meth:`resume` with the answer to continue)."""
+        self.state = state
+        self.round = 0
+        self._stalls = 0
+        self._prev = _UNSET
+        self._error = ""
+        self.pending = None
+        return self._drive(state)
+
+    def _drive(self, state: S, first: "D | Ask | None" = None) -> LoopVerdict:
+        verdict = self.step(state, first)
+        while verdict is None:
+            verdict = self.step(state)
+        return verdict
+
+    def resume(self, decision: "D | Ask") -> LoopVerdict:
+        """Continue a ``waiting`` loop from its checkpoint with the human's ``decision`` for
+        the round that asked (then keep driving). Raises if the loop is not waiting."""
+        if self.pending is None or self.state is _UNSET:
+            raise RuntimeError(f"{self.name} is not waiting for a decision")
+        self._emit("resumed", self.round + 1, decision=_brief(decision))
+        self.pending = None
+        return self._drive(cast("S", self.state), decision)
 
 
 _UNSET: Any = object()  # a first-round sentinel that no progress signature can equal
@@ -146,4 +238,4 @@ def _brief(decision: Any) -> Any:
     return repr(decision)[:200]
 
 
-__all__ = ["BoundedLoop", "LoopVerdict"]
+__all__ = ["Ask", "BoundedLoop", "Loop", "LoopVerdict"]

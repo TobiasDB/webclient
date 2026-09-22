@@ -65,6 +65,9 @@ _BOT_BLOCK_HINTS = (
 log = logging.getLogger(__name__)
 
 
+_GET: Any = object()  # the "read the driver" sentinel for ``WebClient.driver``
+
+
 def _looks_like_bot_block(error: Any) -> bool:
     """Whether a transport ``error`` looks like a protocol-level anti-bot block (an
     HTTP/2 protocol error, a reset/dropped connection) -- worth escalating rather than
@@ -588,87 +591,28 @@ class WebClient(SessionCore, IWebClient):
             doc, resp = await self._afetch_once(ref, headers)
         self._register(doc, ref)
         doc._tiers = ["static"]
-        # A protocol-level failure (e.g. ERR_HTTP2_PROTOCOL_ERROR / a reset connection)
-        # is a common anti-bot tell -- the server drops a client it dislikes before any
-        # response. Under ``auto`` treat it as an anti-bot trigger and escalate to a
-        # (stealth, and fingerprinted when configured) browser, whose real TLS/HTTP2
-        # stack often clears it. Its own failure then surfaces normally. (No _capture is
-        # skipped here: a transport failure returned resp=None with no response, so the
-        # static hop produced no navigation events to carry onto the browser doc.)
-        if mode == "auto" and _looks_like_bot_block(doc.error):
-            log.info("auto: %s looks bot-blocked at the transport (%s) -> browser", doc.url,
-                     doc.error.message if doc.error else "")
-            return await self._escalate_to_browser(
-                ref, list(doc._events), doc.content,
-                tiers=["static", "browser"], keep_alive=keep_alive, wait=wait,
-                reuse=doc.name,  # the browser doc reuses this fetch's slot
+        # browser="auto": the escalation ladder is a LOOP (``ResolveLoop``) with a swappable
+        # driver (``wc.driver("resolve", fn)``): each round observes the hop's request+static
+        # flags and the driver picks the next tier -- a bot-block at the transport -> browser;
+        # a login wall -> stop; an anti-bot challenge -> a proxy exit, then a stealth browser
+        # for a named vendor; a SPA -> browser. Bounded: static -> (proxy) -> (browser). Only
+        # auto MODE reads flags, so a plain fetch never pays for detection at all.
+        if mode == "auto":
+            from .resolve_loop import ResolveLoop, ResolveState
+
+            state = ResolveState(
+                ref=ref, doc=doc, resp=resp, headers=headers, keep_alive=keep_alive, wait=wait,
             )
-        # browser="auto": a FLAG-driven escalation ladder. Read the request+static
-        # flags; a login wall fails (no transport fixes credentials), an anti-bot
-        # challenge escalates to a fresh proxy exit (then a stealth browser for a
-        # named vendor), a SPA escalates to a browser render. Re-read after each hop.
-        # Bounded: static -> (proxy) -> browser. Only auto MODE reads flags, so a plain
-        # fetch never pays for detection (or its HTML parse) at all.
-        flags = self._observe(doc, resp) if mode == "auto" else None
-        if mode == "auto" and doc.error is None and flags is not None:
-            if flags["login_required"].present:  # a credential wall -- fail loudly
-                log.info("auto: %s is behind a login wall -- no transport remedy", doc.url)
-                doc.error = make(
-                    "fetch.login_required",
-                    _flag_reason(flags["login_required"], "a login wall blocks the content"),
-                    op="fetch", subject=doc.name,
-                )
-            else:
-                tiers = ["static"]
-                antibot = flags["anti_bot_triggered"]
-                if antibot.present and antibot.remedy in ("proxy", "stealth"):
-                    log.info("auto: %s anti-bot challenge (%s) -> proxy hop", doc.url, antibot.value)
-                    tiers.append("proxy")  # rotate an exit via the proxy service
-                    proxy_headers = {**policy_headers(Resolve(proxy=ProxyPolicy.auto())), **headers}
-                    fetch_name = doc.name  # the static hop's slot -- the proxy hop reuses it
-                    doc, resp = await self._afetch_once(ref, proxy_headers)
-                    self._register(doc, ref, reuse=fetch_name)
-                    doc._tiers = list(tiers)
-                    flags = self._observe(doc, resp)
-                want_browser = flags is not None and doc.error is None and (
-                    flags["spa"].present  # render the client-built content
-                    # a named-vendor challenge a proxy didn't clear -> a stealth browser
-                    or (flags["anti_bot_triggered"].present
-                        and flags["anti_bot_triggered"].remedy == "stealth")
-                )
-                if want_browser:
-                    log.info("auto: %s -> browser (%s)", doc.url,
-                             "spa" if flags is not None and flags["spa"].present else "stealth for anti-bot")
-                    if resp is not None:  # keep the static hop's navigation/network events
-                        self._capture(doc, ref, resp)
-                    static_doc = doc  # the usable static hop to fall back to
-                    try:
-                        rendered = await self._escalate_to_browser(
-                            ref, list(doc._events), doc.content,
-                            tiers=[*tiers, "browser"], keep_alive=keep_alive, wait=wait,
-                            reuse=doc.name,  # the browser doc reuses this fetch's slot
-                        )
-                    except Exception as exc:  # noqa: BLE001 - a blocked/failed render is not fatal
-                        log.warning("auto: browser hop for %s failed (%s: %s); falling back to the "
-                                    "static hop", doc.url, type(exc).__name__, exc)
-                        # never silently: the swallowed hop goes on the ledger, bound to the doc
-                        doc._note_error(
-                            make("fetch.browser_failed", f"{type(exc).__name__}: {exc}",
-                                 cause=getattr(exc, "error", None)),
-                            "fetch",
-                        )
-                        rendered = None
-                    if rendered is not None and rendered.ok:
-                        return rendered  # the richer, browser-rendered document
-                    # The render failed or was blocked (e.g. anti-bot dropped the browser).
-                    # ``auto`` is "cheapest that WORKS", so fall back to the ok static hop
-                    # rather than lose it -- a partial static list beats no document. If the
-                    # static hop also failed, honour ``optional`` on its error.
-                    if static_doc.error is None:
-                        return static_doc
-                    if not optional:
-                        raise WebException(static_doc.error, document=static_doc)
-                    return static_doc
+            loop = ResolveLoop(self, driver=self._the_engine().drivers.get("resolve"), mode=mode)
+            doc, verdict = await loop.run_async(state)
+            resp = state.resp
+            if doc is not state.static_doc and state.static_doc is not None and not doc.ok:
+                # the render failed and the static hop was usable: hand that back (auto is
+                # "cheapest that WORKS") -- honouring ``optional`` on its own error below.
+                doc = state.static_doc
+                resp = None
+            if getattr(doc, "_page", None) is not None:  # a rendered hop: events already captured
+                return cast(Document, doc)
         if resp is not None:  # emit navigation/network events for the final doc
             self._capture(doc, ref, resp)
         if doc.error is not None and not optional:  # loud by default
@@ -1272,6 +1216,60 @@ class WebClient(SessionCore, IWebClient):
                 pass
 
         asyncio.ensure_future(_expire())
+
+    # -- the locate loop ---------------------------------------------------------
+    def locate(self, seeds: Any, until: Any, *, max_rounds: "int | None" = None,
+               stop_on_first: bool = True, **crawl_kwargs: Any) -> Any:
+        """Crawl from ``seeds`` until a retained page satisfies ``until(page)`` (a predicate
+        over the crawl's page projection, a ``PageCard`` by default) -- the LOCATE loop
+        (:func:`webclient.core.crawl.locate`). ``crawl_kwargs`` are ``wc.crawl``'s
+        (``driver=`` swaps the edge picker; a driver's ``Ask`` checkpoints the search).
+        Returns a :class:`~webclient.core.crawl.LocateResult`; the crawl itself is
+        ``result.crawl``-free -- pass ``wc.crawl(...)`` to :func:`locate` to keep it."""
+        from ..crawl import locate as _locate
+
+        crawl = self.crawl(seeds, **crawl_kwargs)
+        with crawl:
+            return _locate(crawl, until, max_rounds=max_rounds, stop_on_first=stop_on_first)
+
+    # -- drivers (the swappable auto backends) --------------------------------
+    def driver(self, name: str, fn: Any = _GET) -> Any:
+        """Get or set the engine's DRIVER for a loop: ``wc.driver("resolve")`` returns the
+        current one (``None`` = the built-in), ``wc.driver("resolve", fn)`` installs ``fn``,
+        ``wc.driver("resolve", None)`` restores the default. Drivers: ``"resolve"`` (the
+        escalation ladder's tier chooser) and ``"crawl"`` (the default edge picker when a
+        crawl sets none)."""
+        drivers = self._the_engine().drivers
+        if fn is _GET:
+            return drivers.get(name)
+        if fn is None:
+            drivers.pop(name, None)
+            return None
+        drivers[name] = fn
+        return fn
+
+    def escalate(self, doc: Document, tier: str) -> Document:
+        """MANUAL escalation: perform ONE hop of the ladder for ``doc`` -- ``"proxy"`` (re-fetch
+        through a fresh proxy exit) or ``"browser"`` (render it) -- and return the resulting
+        document (which reuses ``doc``'s name/slot). The by-hand twin of ``browser="auto"``:
+        use it after a driver returned an :class:`~webclient.loop.Ask` (``doc.pending``), or
+        to steer a resolution step by step."""
+        from .resolve_loop import ResolveLoop, ResolveState
+
+        ref = doc._ref
+        if ref is None:
+            raise ValueError("cannot escalate a document with no source reference")
+        state = ResolveState(ref=ref, doc=doc, tiers=list(doc._tiers or ["static"]))
+        loop = ResolveLoop(self)
+
+        async def _hop() -> Document:
+            await loop.hop(state, tier)
+            if state.resp is not None and state.doc.error is None and state.doc._page is None:
+                self._capture(state.doc, ref, state.resp)
+            state.doc._pending = None
+            return cast(Document, state.doc)
+
+        return cast(Document, self.bridge(_hop()))
 
     # -- tracing -------------------------------------------------------------
     def trace(self, path: "str | Path", *, since: int = 0) -> "Trace":

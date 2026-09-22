@@ -114,7 +114,7 @@ class AgentRun(BaseModel):
     (``rec.plan``), not here -- this is just the loop verdict."""
 
     done: bool
-    reason: Literal["done", "budget", "stalled", "error"]
+    reason: Literal["done", "budget", "stalled", "error", "waiting"]
     steps: int
     result: str = ""
     error: str = ""

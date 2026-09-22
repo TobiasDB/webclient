@@ -49,6 +49,9 @@ class Engine:
         #: sessions scoped on it, so a ``use()`` on the client or any session is seen
         #: by all of them (the extensibility hook).
         self._backings: list[Any] = []
+        #: the swappable auto backends per loop (``"resolve"`` / ``"crawl"``): absent = the
+        #: built-in. Set through ``WebClient.driver(name, fn)``.
+        self.drivers: dict[str, Any] = {}
         #: the active trace directory while ``WebClient.trace()`` is open (None otherwise):
         #: the client emits snapshots + captures bodies/headers only then, and the browser
         #: factory records a HAR per context into ``<trace>/har``.

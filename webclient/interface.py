@@ -415,6 +415,7 @@ class LazyDocument(Lazy["Document"]):
     events: "list[Event]"
     message: "LazyField[str]"
     ok: "LazyField[bool]"
+    pending: "LazyField[Any]"
     region: "LazyField[str]"
     title: "LazyField[str]"
     def anti_bot_present(self) -> "Lazy[Flag]": ...

@@ -64,6 +64,7 @@ class Document(WebCore, IDocument):
     _missing: bool = PrivateAttr(default=False)  # a selection that missed
     _events: list[Any] = PrivateAttr(default_factory=list)  # events routed here
     _errors: list[Any] = PrivateAttr(default_factory=list)  # errors that occurred on this doc's ops
+    _pending: Any = PrivateAttr(default=None)  # an Ask a resolve driver raised (manual mode)
     _page: Any = PrivateAttr(default=None)  # playwright Page (live document)
     _lease: Any = PrivateAttr(default=None)  # the page's pool lease (live document)
     _keep_alive: bool = PrivateAttr(default=False)  # caller owns the page's lifecycle
@@ -113,6 +114,12 @@ class Document(WebCore, IDocument):
         PaginateBacking(),
         PatternsBacking(),
     )
+
+    @property
+    def pending(self) -> Any:
+        """The :class:`~webclient.loop.Ask` a resolve driver raised on this hop (``None`` when
+        nothing is waiting): answer it by hand with ``wc.escalate(doc, tier)``."""
+        return self._pending
 
     @property
     def ok(self) -> bool:

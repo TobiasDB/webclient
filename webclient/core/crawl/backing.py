@@ -119,7 +119,13 @@ class CrawlBacking(Backing):
         don't interleave them. Commits the retained pages + releases the reservation under the lock.
         Returns the pages produced this round (for the stream to yield)."""
         async with self._lock(core):
+            core._round += 1
+            self._emit(core, "round", budget=core.config.max_pages, pages=len(core.pages),
+                       frontier=len(core.frontier))
             chosen = choose()
+            if core._pending is not None:  # the driver asked for a human: nothing to fetch
+                return []
+            self._emit(core, "decision", picks=[e.url for e in chosen][:20], count=len(chosen))
             room = max(0, core.config.max_pages - len(core.pages) - core._inflight)
             to_fetch = chosen[:room]
             taken = {e.url for e in to_fetch}
@@ -134,7 +140,23 @@ class CrawlBacking(Backing):
                 log.info("crawl round: fetched %d/%d, %d pages, frontier %d, failures %d",
                          len(produced), len(to_fetch), len(core.pages), len(core.frontier),
                          len(core.failures))
+            if self.done(core):
+                self._emit(core, "done" if core.status != "closed" else "done",
+                           pages=len(core.pages), failures=len(core.failures))
         return produced
+
+    def _emit(self, core: "Crawl[Any]", phase: str, **detail: Any) -> None:
+        """Publish a :class:`~webclient.models.LoopEvent` for this crawl (loop ``"crawl"``)."""
+        from ...models import LoopEvent
+
+        client = getattr(core, "_client", None)
+        bus = getattr(client, "bus", None) if client is not None else None
+        if bus is None:
+            return
+        bus.publish(LoopEvent(
+            loop="crawl", phase=cast(Any, phase), round=core._round, detail=detail,
+            session_id=core.id or None,
+        ))
 
     async def _fetch_edge(self, core: "Crawl[Any]", edge: Edge) -> Any:
         """Fetch one edge, expand the frontier from its DOM, and return its retained
@@ -228,8 +250,19 @@ class CrawlBacking(Backing):
         driver if one is set (e.g. an LLM picking the edges most likely to reach a dataset),
         otherwise the built-in best-first heuristic (the top-``width`` frontier edges by
         score). Used by ``run``/``stream`` and a bare ``step()``."""
-        if core._driver is not None:
-            return cast("list[Edge]", core._driver(core))
+        from ...loop import Ask
+
+        driver = core._driver
+        if driver is None:  # the engine's default crawl driver, if one was installed
+            engine = getattr(core._client, "_the_engine", lambda: None)()
+            driver = getattr(engine, "drivers", {}).get("crawl") if engine is not None else None
+        if driver is not None:
+            picked = driver(core)
+            if isinstance(picked, Ask):  # a checkpoint: the caller resumes with picks
+                core._pending = picked
+                self._emit(core, "waiting", ask=picked.model_dump(mode="json"))
+                return []
+            return cast("list[Edge]", picked)
         ranked = sorted(core.frontier, key=lambda e: self._score(core, e), reverse=True)
         return ranked[: core.config.width]
 
