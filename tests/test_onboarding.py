@@ -225,7 +225,7 @@ def test_write_query_uses_a_swappable_author_seam(httpserver, monkeypatch):
                 ' price=wq.doc.select(".price").attr("text")).project()'
             )]
 
-    monkeypatch.setattr(onboarding, "_make_author", lambda *a, **k: FakeAuthor())
+    monkeypatch.setattr(onboarding.query, "_make_author", lambda *a, **k: FakeAuthor())  # the seam lives in the query stage module
 
     with WebClient() as wc:
         art = write_query(
