@@ -59,13 +59,8 @@ def wire_models() -> "dict[str, type[Any]]":
     global _WIRE_MODELS_CACHE
     if _WIRE_MODELS_CACHE is None:
         from ..models import (
-            ActionEvent,
-            ConsoleEvent,
-            DOMUpdateEvent,
+            CORE_EVENTS,
             Event,
-            NavigationEvent,
-            NetworkEvent,
-            PlanEvent,
         )
         from .client.models import Robots
         from .crawl.models import Edge
@@ -81,8 +76,7 @@ def wire_models() -> "dict[str, type[Any]]":
 
         models: list[type[Any]] = [
             Transport, Metadata, Structure, Signal, Flag, Element, PageCard,
-            Edge, Robots, Event, NavigationEvent, NetworkEvent, ConsoleEvent,
-            DOMUpdateEvent, ActionEvent, PlanEvent,
+            Edge, Robots, Event, *CORE_EVENTS,
         ]
         _WIRE_MODELS_CACHE = {m.__name__: m for m in models}
     return _WIRE_MODELS_CACHE

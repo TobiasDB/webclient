@@ -58,6 +58,8 @@ class LimitsSettings(BaseModel):
     pool_acquire_timeout: float = 60.0  # seconds to wait for a transport lease
     engine_stop_timeout: float = 5.0  # seconds to drain the engine loop on close
     host_schedule_max: int = 4096  # per-host politeness entries kept before pruning
+    event_history: int = 10_000  # events the bus retains for since()/resume
+    error_ledger: int = 1000  # ErrorEvents the engine keeps on wc.errors
 
 
 class DetectionSettings(BaseModel):

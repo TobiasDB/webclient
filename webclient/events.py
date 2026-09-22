@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -22,10 +23,16 @@ from .models import (
     DOMEvent,
     DOMUpdateEvent,
     E,
+    ErrorEvent,
     Event,
+    LoopEvent,
     NavigationEvent,
     NetworkEvent,
+    PipelineEvent,
     PlanEvent,
+    ResourceEvent,
+    ScriptEvent,
+    SnapshotEvent,
     Topic,
     topic_matches,
 )
@@ -53,25 +60,55 @@ class EventBus(BaseModel):
     """Shared pub/sub. Synchronous dispatch on the publisher's thread;
     handlers must not block and must not call sync facade methods.
 
-    The bus stamps ``seq`` (monotonic per document id; a shared stream for
-    events without one) and ``ts`` on every publish (ISSUES #15).
+    The bus stamps ``n`` (a global monotonic sequence), ``seq`` (monotonic per document
+    id; a shared stream for events without one) and ``ts`` on every publish, and keeps a
+    bounded HISTORY of recent events so a late subscriber (a websocket that reconnects, a
+    trace writer attached mid-run) can :meth:`since` a cursor and catch up.
     """
+
+    history: int = 10_000  # events kept for ``since`` (0 = keep none)
 
     _lock: "threading.RLock" = PrivateAttr(default_factory=threading.RLock)
     _subs: dict[str, tuple[Topic, dict[str, str | None], Callable[[Event], None]]] = (
         PrivateAttr(default_factory=dict)
     )
     _seq: dict[str | None, int] = PrivateAttr(default_factory=dict)
+    _n: int = PrivateAttr(default=0)
+    _recent: "deque[Event]" = PrivateAttr(default_factory=deque)
+
+    def model_post_init(self, __context: Any) -> None:
+        """Size the history ring to ``history``."""
+        self._recent = deque(maxlen=max(0, self.history))
+
+    @property
+    def cursor(self) -> int:
+        """The global sequence number of the last published event (0 before any)."""
+        return self._n
+
+    def since(self, n: int = 0, *, topic: Topic = "") -> list[Event]:
+        """The retained events with a global sequence GREATER than ``n`` (optionally by topic
+        prefix), oldest first -- the catch-up a resuming subscriber replays before going live.
+        Bounded by ``history``: an older cursor gets what is still retained."""
+        with self._lock:
+            return [
+                e for e in self._recent
+                if (e.n or 0) > n and topic_matches(topic, e.topic)
+            ]
 
     def publish(self, event: Event) -> None:
-        """Stamp the event with a monotonic ``seq`` (per document id) and a timestamp, then
-        dispatch it synchronously to every subscriber whose topic pattern and correlation filters
-        match. Runs handlers on the publisher's thread."""
+        """Stamp the event with a monotonic ``n`` (global) and ``seq`` (per document id) and a
+        timestamp, retain it in the history ring, then dispatch it synchronously to every
+        subscriber whose topic pattern and correlation filters match. Runs handlers on the
+        publisher's thread."""
         with self._lock:
             key = event.document_id
             self._seq[key] = self._seq.get(key, 0) + 1
             event.seq = self._seq[key]
+            self._n += 1
+            event.n = self._n
             event.ts = time.time()
+            if self._recent.maxlen:
+                self._recent.append(event)
             subs = list(self._subs.values())
         for pattern, filters, handler in subs:
             if not topic_matches(pattern, event.topic):
@@ -118,19 +155,54 @@ class EventBus(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
+Upcaster = Callable[[dict[str, Any]], dict[str, Any]]
+
+
 class EventRegistry(BaseModel):
-    """Topic -> event class, for typed round-tripping over the wire and for
+    """Topic -> event class, for typed round-tripping over the wire / a trace and for
     resolving event types referenced in plans. Core events pre-registered;
     unknown topics resolve to the nearest registered ancestor (trailing
     segments dropped first, then the leading namespace), falling back to
-    Event."""
+    Event.
+
+    Schema evolution is by UPCASTING on read (the event-sourcing discipline): an event
+    stored at version ``v`` is transformed by the registered ``upcaster(topic, v)`` chain
+    until it reaches the class's current ``version``, then validated -- so application code
+    only ever handles the latest shape and old traces stay readable."""
 
     _by_topic: dict[str, type[Event]] = PrivateAttr(default_factory=dict)
+    _upcasters: dict[tuple[str, int], Upcaster] = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
         """Pre-register the core event classes so their topics resolve out of the box."""
         for cls in CORE_EVENTS:
             self.register(cls)
+
+    def upcaster(self, topic: Topic, from_version: int) -> Callable[[Upcaster], Upcaster]:
+        """Register a function that lifts a ``topic`` event dict from ``from_version`` to
+        ``from_version + 1`` (chained by :meth:`load`)."""
+        def wrap(fn: Upcaster) -> Upcaster:
+            self._upcasters[(topic, from_version)] = fn
+            return fn
+        return wrap
+
+    def load(self, data: dict[str, Any]) -> Event:
+        """Rebuild a typed event from its wire / trace dict: resolve the class by topic, apply
+        the upcaster chain from the stored ``version`` up to the class's current version, then
+        validate. A version newer than known is loaded as-is (forward-compatible fields are
+        ignored by the model)."""
+        topic = str(data.get("topic", ""))
+        cls = self.resolve(topic)
+        current = int(cls.model_fields["version"].default)
+        version = int(data.get("version", 1))
+        while version < current:
+            fn = self._upcasters.get((topic, version))
+            if fn is None:  # no upcaster registered: the shape is assumed compatible
+                break
+            data = fn(dict(data))
+            version += 1
+            data["version"] = version
+        return cls.model_validate(data)
 
     def register(self, cls: type[Event]) -> None:
         """Register an event class under its default ``topic`` (so the wire can rebuild it)."""
@@ -163,10 +235,17 @@ __all__ = [
     "ActionEvent",
     "ConsoleEvent",
     "PlanEvent",
+    "ErrorEvent",
+    "LoopEvent",
+    "PipelineEvent",
+    "ScriptEvent",
+    "SnapshotEvent",
+    "ResourceEvent",
     "CORE_EVENTS",
     "topic_matches",
     # machinery (defined here)
     "EventBus",
     "EventRegistry",
     "Subscription",
+    "Upcaster",
 ]

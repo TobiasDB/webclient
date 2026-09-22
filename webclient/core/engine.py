@@ -12,6 +12,7 @@ bus / mode.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from typing import Any, cast
 
 from ..clients import BrowserFactory, ClientPool, HTTPXFactory, PageScript
@@ -37,6 +38,7 @@ class Engine:
         #: plan is POSTed through it (see :meth:`execute`). Set by ``WebClient.remote``.
         self._service: Any = None
         self._bus: Any = None  # EventBus (lazy)
+        self._errors: "deque[Any]" = deque()  # the error ledger (sized with the bus)
         self._host_next: dict[str, float] = {}  # host -> earliest next request time
         self._page_scripts: list[Any] = []  # scripts injected via inject_script
         #: backings registered via ``use(...)`` -- chosen (newest first) before the
@@ -117,8 +119,21 @@ class Engine:
         """The shared event bus every op/observation publishes to (created lazily, one per
         engine, so all sessions on it see one stream)."""
         if self._bus is None:
-            self._bus = EventBus()
+            from ..settings import current
+
+            limits = current().limits
+            self._bus = EventBus(history=limits.event_history)
+            self._errors = deque(maxlen=max(0, limits.error_ledger))
+            self._bus.subscribe("error", self._errors.append)  # the engine's error ledger
         return self._bus  # type: ignore[no-any-return]
+
+    @property
+    def errors(self) -> "list[Any]":
+        """The engine's ERROR LEDGER: every :class:`~webclient.models.ErrorEvent` published on
+        this engine (raised, returned or swallowed), oldest first, bounded by
+        ``limits.error_ledger``. Nothing that went wrong on this engine is missing from it."""
+        self.bus  # ensure the ledger subscription exists
+        return list(self._errors)
 
     def inject_script(self, source: str, phase: str = "init") -> None:
         """Register a page script (``phase="init"`` before every nav / ``"load"`` after)."""
