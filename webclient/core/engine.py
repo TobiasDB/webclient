@@ -16,7 +16,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, cast
 
-from ..clients import BrowserFactory, ClientPool, HTTPXFactory, PageScript
+from ..clients import BrowserFactory, ClientPool, HTTPXFactory
 from ..events import EventBus
 
 log = logging.getLogger(__name__)
@@ -41,7 +41,9 @@ class Engine:
         self._bus: Any = None  # EventBus (lazy)
         self._errors: "deque[Any]" = deque()  # the error ledger (sized with the bus)
         self._host_next: dict[str, float] = {}  # host -> earliest next request time
-        self._page_scripts: list[Any] = []  # scripts injected via inject_script
+        #: the named script table (roadmap N8): the backings' declared scripts, the client's
+        #: ``inject_script``s and any registered by hand, plus the policy. Built lazily.
+        self._scripts: Any = None
         #: backings registered via ``use(...)`` -- chosen (newest first) before the
         #: built-in BACKINGS by every core bound to this engine. Shared across the
         #: sessions scoped on it, so a ``use()`` on the client or any session is seen
@@ -161,9 +163,19 @@ class Engine:
         self.bus  # ensure the ledger subscription exists
         return list(self._errors)
 
+    @property
+    def scripts(self) -> Any:
+        """The engine's :class:`~webclient.scripts.ScriptRegistry` (created lazily; the
+        document backings' declared scripts are registered on first use)."""
+        if self._scripts is None:
+            from ..scripts import ScriptRegistry
+
+            self._scripts = ScriptRegistry(bus=self.bus)
+        return self._scripts
+
     def inject_script(self, source: str, phase: str = "init") -> None:
-        """Register a page script (``phase="init"`` before every nav / ``"load"`` after)."""
-        self._page_scripts.append(PageScript(source, phase))  # type: ignore[arg-type]
+        """Register a user page script (``phase="init"`` before every nav / ``"load"`` after)."""
+        self.scripts.inject(source, phase)
 
     async def pace(self, host: str, min_interval: float) -> None:
         """Politeness: keep at least ``min_interval`` seconds between requests to ``host``.

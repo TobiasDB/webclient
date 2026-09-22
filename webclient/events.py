@@ -174,9 +174,13 @@ class EventRegistry(BaseModel):
     _upcasters: dict[tuple[str, int], Upcaster] = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
-        """Pre-register the core event classes so their topics resolve out of the box."""
+        """Pre-register the core event classes (and the rrweb chunk) so their topics resolve
+        out of the box."""
         for cls in CORE_EVENTS:
             self.register(cls)
+        from .rrweb import RRWebEvent
+
+        self.register(RRWebEvent)
 
     def upcaster(self, topic: Topic, from_version: int) -> Callable[[Upcaster], Upcaster]:
         """Register a function that lifts a ``topic`` event dict from ``from_version`` to

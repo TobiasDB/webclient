@@ -1073,19 +1073,89 @@ class WebClient(SessionCore, IWebClient):
         """Install a script on this client's browser pages: ``phase="init"`` runs
         before every navigation (e.g. instrumentation), ``"load"`` once after. On
         top of the scripts the client's backings declare (``Backing.page_scripts``).
-        Returns ``self`` for chaining."""
+        Sugar for ``wc.scripts.inject(...)`` -- see :mod:`webclient.scripts` for names,
+        toggling and the policy. Returns ``self`` for chaining."""
         self._the_engine().inject_script(source, phase)
         return self
 
-    def _browser_scripts(self) -> list[Any]:
-        """The page scripts to install on a live page: this client's own
-        (``inject_script``) plus the ones its document backings + registered
-        backings declare. The backing owns the script; the client installs it."""
+    @property
+    def scripts(self) -> Any:
+        """The engine's script registry (:class:`~webclient.scripts.ScriptRegistry`): every
+        named page script -- the backings' observers, ``inject_script``s, ``wc.rrweb`` -- with
+        enable / disable / policy. Shared by every session on this engine."""
+        return self._script_registry()
+
+    def _script_registry(self) -> Any:
+        """The registry with the backings' declared scripts registered and the bus + the
+        topic-script trigger bound (idempotent)."""
         engine = self._the_engine()
-        scripts = list(engine._page_scripts)
-        for backing in (*Document.BACKINGS, *engine._backings):
-            scripts.extend(backing.page_scripts)
-        return scripts
+        reg = engine.scripts
+        if not getattr(reg, "_declared", False):
+            reg._declared = True
+            for backing in (*Document.BACKINGS, *engine._backings):
+                if backing.page_scripts:
+                    reg.declare(type(backing).__name__, backing.page_scripts)
+            from ...rrweb import DRAIN_SOURCE, SCRIPT_NAME, init_source
+            from ...scripts import Script
+
+            # the rrweb recorder: registered DISABLED; tracing turns it on (see _browser_scripts)
+            reg.register(Script(SCRIPT_NAME, init_source(), on="init", enabled=False, owner="rrweb",
+                                description="rrweb DOM recorder (on while a trace is active)"))
+            reg.register(Script(f"{SCRIPT_NAME}.drain", DRAIN_SOURCE, on="drain", enabled=False, owner="rrweb"))
+            reg.bind(self.bus, self._run_topic_scripts)
+        return reg
+
+    def _browser_scripts(self) -> list[Any]:
+        """The page scripts to install on a live page: the registry's active phase scripts
+        (the backings' declared ones, ``inject_script``s, hand-registered ones), with the
+        rrweb recorder switched on while a trace is active. The backing owns the script; the
+        client installs it."""
+        from ...rrweb import SCRIPT_NAME
+
+        reg = self._script_registry()
+        engine = self._the_engine()
+        for name in (SCRIPT_NAME, f"{SCRIPT_NAME}.drain"):
+            s = reg.get(name)
+            if s is not None and getattr(s, "_auto", True):
+                s.enabled = engine.tracing
+        for backing in engine._backings:  # a backing registered after the first gather
+            if backing.page_scripts:
+                reg.declare(type(backing).__name__, backing.page_scripts)
+        return cast("list[Any]", reg.gather())
+
+    def _script_observer(self, script: Any, phase: str, result: Any, error: "str | None") -> None:
+        """Report one script run as a ScriptEvent (the browser client's observer callback)."""
+        self._script_registry().report(script.name or script.source[:40], phase,
+                                       result=result, error=error)
+
+    def _run_topic_scripts(self, event: Any) -> None:
+        """Run the topic scripts matching ``event`` on the live page of its document -- on the
+        engine loop, never inside the bus handler (which must not block)."""
+        doc_name = getattr(event, "document_id", None)
+        doc = self.document(doc_name) if doc_name else None
+        if doc is None or getattr(doc, "_page", None) is None:
+            return
+        reg = self._script_registry()
+        scripts = reg.for_topic(event.topic)
+        if not scripts:
+            return
+
+        async def _run() -> None:
+            for s in scripts:
+                try:
+                    got = await doc._page.evaluate(s.source)
+                except Exception as exc:  # noqa: BLE001
+                    reg.report(s.name, event.topic, document_id=doc_name, error=f"{type(exc).__name__}: {exc}")
+                    continue
+                reg.report(s.name, event.topic, document_id=doc_name, result=got)
+
+        loop = self.loop()
+        if loop.on_loop_thread():
+            import asyncio
+
+            asyncio.ensure_future(_run())
+        else:
+            loop.submit(_run())
 
     async def _alive(
         self,
@@ -1112,6 +1182,7 @@ class WebClient(SessionCore, IWebClient):
                 scripts=self._browser_scripts(),
                 replay=replay or [],
                 wait=wait,
+                observer=self._script_observer,
             )
             # the REAL transport facts Playwright reported for the main navigation --
             # true status + response headers, not a fabricated 200/empty (so

@@ -110,6 +110,12 @@ class Trace:
                 data.setdefault("method", getattr(event.request, "method", None))
         elif isinstance(event, ErrorEvent):
             data["error"] = event.error.model_dump(mode="json", exclude_none=True)
+        elif event.topic == "rrweb" and data.get("events"):
+            rel = f"rrweb/{n}.json"
+            (self.path / "rrweb").mkdir(exist_ok=True)
+            (self.path / rel).write_text(json.dumps(data["events"], separators=(",", ":")))
+            data["asset"] = rel
+            data["events"] = []
         try:
             line = json.dumps(data, default=_json_default, separators=(",", ":"))
         except TypeError:
@@ -197,6 +203,8 @@ class TraceReader:
                     data["content"] = self.asset(asset)
                 elif asset and str(data.get("topic", "")).startswith("network"):
                     data["body"] = self.asset(asset)
+                elif asset and data.get("topic") == "rrweb":
+                    data["events"] = json.loads(self.asset(asset))
                 if str(data.get("topic", "")).startswith("network"):
                     data.pop("request", None)  # the reference is not rebuilt; ``url`` is kept
                 try:
@@ -215,6 +223,15 @@ class TraceReader:
     @property
     def snapshots(self) -> "list[SnapshotEvent]":
         return [e for e in self.events if isinstance(e, SnapshotEvent)]
+
+    def rrweb(self, document_id: "str | None" = None) -> "list[dict[str, Any]]":
+        """The rrweb events (flattened, in order) -- feed them to ``rrweb-player`` as-is.
+        ``document_id`` narrows to one document's recording."""
+        out: list[dict[str, Any]] = []
+        for e in self.events:
+            if e.topic == "rrweb" and (document_id is None or e.document_id == document_id):
+                out.extend(getattr(e, "events", []) or [])
+        return out
 
     @property
     def har_files(self) -> "list[Path]":

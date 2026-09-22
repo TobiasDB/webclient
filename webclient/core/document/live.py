@@ -275,6 +275,26 @@ async def drain(doc: "Document") -> None:
     snap = getattr(doc._client, "_snapshot", None)
     if snap is not None:  # under a trace: the post-interaction DOM is a snapshot
         snap(doc, "action")
+    await _drain_rrweb(doc)
+
+
+async def _drain_rrweb(doc: "Document") -> None:
+    """Pull the rrweb recorder's buffer (if it is on) into an RRWebEvent chunk."""
+    from ...rrweb import DRAIN_SOURCE, SCRIPT_NAME, chunk
+
+    reg = getattr(doc._client, "scripts", None)
+    if reg is None:
+        return
+    script = reg.get(SCRIPT_NAME)
+    if script is None or not reg.active(script):
+        return
+    try:
+        got = await doc._page.evaluate(DRAIN_SOURCE)
+    except Exception:  # noqa: BLE001 - a page without the recorder: nothing to drain
+        return
+    rr = chunk(got, document_id=doc.name)
+    if rr is not None:
+        doc._client.bus.publish(rr)
 
 
 def console_event(level: str, text: str, doc: "Document") -> ConsoleEvent:
@@ -394,6 +414,12 @@ class LiveBacking(Backing):
         core._events.extend(xhr_events(getattr(result, "xhr", []), core, core._xhr_bodies))
         core._stamps.extend(getattr(result, "stamps", []))
         core._render_stats = getattr(result, "dom_stats", {}) or {}
+        # the rrweb recorder's load-time chunk (only present while tracing)
+        from ...rrweb import SCRIPT_NAME, chunk
+
+        rr = chunk((getattr(result, "drained", {}) or {}).get(f"{SCRIPT_NAME}.drain"), document_id=core.name)
+        if rr is not None:
+            core._client.bus.publish(rr)
 
     def _loop(self, core: "Document") -> "EngineLoop":
         """The engine loop the live page runs on (where interaction ops are bridged)."""

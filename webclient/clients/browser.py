@@ -16,12 +16,12 @@ import json
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal
+from typing import Callable, Any, Literal
 
 from ..errors import RAISE, RETURN, _Policy, select_error
 from .base import Client, ClientFactory
 
-Phase = Literal["init", "load", "inline", "drain"]
+Phase = Literal["init", "load", "inline", "drain", "unload"]
 
 #: bounds on response-body capture (content-matching correlation) -- keep memory + time capped.
 _BODY_MAX_BYTES = 256 * 1024  # per body
@@ -121,6 +121,7 @@ class PageScript:
 
     source: str
     phase: Phase = "init"
+    name: str = ""  # the registry name (so each run can be reported as a ScriptEvent)
 
 
 @dataclass
@@ -153,6 +154,10 @@ class PageResult:
     #: text/JSON only), for the content-matching :class:`ContentCorrelator`. Populated by the
     #: ``response`` listener; the ordering correlator ignores it. Best-effort -- may be empty.
     bodies: dict[str, list[str]] = field(default_factory=dict)
+    #: every ``drain``-phase script's load-time result, keyed by script NAME -- a backing
+    #: reads its own (the mutation observer's dict feeds ``mutations``/``stamps``/``xhr``
+    #: above for back-compat; the rrweb recorder's list lands here as ``wc.rrweb``).
+    drained: dict[str, Any] = field(default_factory=dict)
     #: the settled page's totals (``text`` chars, ``nodes``) -- the denominators for
     #: "what fraction of the content was injected after load".
     dom_stats: dict[str, Any] = field(default_factory=dict)
@@ -164,6 +169,9 @@ class BrowserClient(Client):
     ``self.page`` directly."""
 
     kind = "page"
+
+    _scripts: "list[PageScript]" = []
+    _observer: "Callable[[PageScript, str, Any, str | None], None] | None" = None
 
     def __init__(self, page: Any, context: Any = None, *, owns_context: bool = True) -> None:
         self.page = page
@@ -248,6 +256,7 @@ class BrowserClient(Client):
         scripts: "tuple[PageScript, ...] | list[PageScript]" = (),
         replay: "list[dict[str, Any]]" = [],
         wait: "WaitConfig | None" = None,
+        observer: "Callable[[PageScript, str, Any, str | None], None] | None" = None,
     ) -> PageResult:
         """Navigate to ``url``, installing ``scripts`` by phase (``init`` before
         nav, ``load`` once after, ``drain`` after any replay), capturing the REAL
@@ -261,9 +270,12 @@ class BrowserClient(Client):
         a render that captured the shell before the page finished loading."""
         page = self.page
         wait = wait or DEFAULT_WAIT
+        self._scripts = list(scripts)  # kept for the ``unload`` phase at close
+        self._observer = observer
         for s in scripts:  # init scripts must be installed before navigation
             if s.phase == "init":
                 await page.add_init_script(s.source)
+                self._report(s, "init", None)
         # named handlers so we can REMOVE them at the end -- a page can be reused from the
         # pool, and re-adding anonymous listeners each open() would pile up and multiply the
         # console/network events (which feed SPA detection).
@@ -343,7 +355,7 @@ class BrowserClient(Client):
         inline_stats: dict[str, Any] = {}
         for s in scripts:
             if s.phase == "inline":
-                got = await page.evaluate(s.source)
+                got = await self._run(s, "inline")
                 if isinstance(got, dict):
                     inline_stats.update(got)
         status: int = 0
@@ -369,8 +381,9 @@ class BrowserClient(Client):
         log.debug("browser: %s -> %d, %d console, %d requests", page.url, status, len(console), len(network))
         for s in scripts:  # drain the load-time observer buffer -> result.mutations
             if s.phase == "drain":
-                drained = await page.evaluate(s.source)
-                if isinstance(drained, dict):  # {muts, stamps, xhr, text, nodes, dclText}
+                drained = await self._run(s, "drain")
+                result.drained[s.name or s.source[:40]] = drained
+                if isinstance(drained, dict) and "muts" in drained:  # the observer: {muts, stamps, xhr, ...}
                     result.mutations.extend(drained.get("muts", []))
                     result.stamps.extend(drained.get("stamps", []))
                     result.xhr = list(drained.get("xhr", []))  # cumulative timeline (replace)
@@ -379,12 +392,10 @@ class BrowserClient(Client):
                         "nodes": drained.get("nodes", 0),
                         "dclText": drained.get("dclText", 0),
                     }
-                elif isinstance(drained, list):  # back-compat
-                    result.mutations.extend(drained)
         result.dom_stats.update(inline_stats)  # carry shadow / frame counts to the flags
         for s in scripts:  # load scripts run once, after navigation
             if s.phase == "load":
-                await page.evaluate(s.source)
+                await self._run(s, "load")
         for step in replay:  # reproduce recorded interactions (click / write)
             args = step.get("args", {})
             loc = page.locator(args.get("selector") or "*").first
@@ -402,13 +413,34 @@ class BrowserClient(Client):
             result.content = (await page.content()).encode()
         for s in scripts:  # drain scripts clear buffers after replay (result ignored)
             if s.phase == "drain":
-                await page.evaluate(s.source)
+                await self._run(s, "drain")
         return result
+
+    async def _run(self, script: PageScript, phase: str) -> Any:
+        """Evaluate one script on the page, reporting the run (or its failure) to the observer."""
+        try:
+            got = await self.page.evaluate(script.source)
+        except Exception as exc:  # noqa: BLE001 - a failing script is reported, never fatal
+            self._report(script, phase, None, f"{type(exc).__name__}: {exc}")
+            return None
+        self._report(script, phase, got)
+        return got
+
+    def _report(self, script: PageScript, phase: str, result: Any, error: "str | None" = None) -> None:
+        if self._observer is not None:
+            try:
+                self._observer(script, phase, result, error)
+            except Exception:  # noqa: BLE001 - an observer never breaks the page
+                log.debug("script observer failed", exc_info=True)
 
     async def aclose(self) -> None:
         """Close this browser page (the leased unit) AND its context when this client owns it --
         so a released page frees its context immediately instead of contexts piling up until the
-        whole factory tears down. A reused (connected) context is left open (not ours to close)."""
+        whole factory tears down. A reused (connected) context is left open (not ours to close).
+        ``unload``-phase scripts run first (best-effort)."""
+        for s in getattr(self, "_scripts", ()):
+            if s.phase == "unload" and not self.page.is_closed():
+                await self._run(s, "unload")
         await self.page.close()
         if self._owns_context:
             try:

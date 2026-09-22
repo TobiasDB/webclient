@@ -21,6 +21,7 @@ from .core.web_core import Backing, WebCore
 from . import log as _log  # noqa: F401  (installs the package NullHandler)
 from .log import configure_logging, log_events
 from .settings import LlmSettings, Settings, current as current_settings, use as use_settings
+from .scripts import Script, ScriptPolicy, ScriptRegistry
 from .trace import Trace, TraceReader
 from .errors import (
     RAISE,
@@ -128,6 +129,9 @@ __all__ = [
     "log_events",
     "Trace",
     "TraceReader",
+    "Script",
+    "ScriptPolicy",
+    "ScriptRegistry",
     "__version__",
     "WebCore",
     "HtmlBacking",

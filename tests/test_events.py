@@ -61,7 +61,8 @@ def test_registry_resolves_exact_and_ancestors():
     registry = EventRegistry()
     assert registry.resolve("network.navigation") is NavigationEvent
     assert registry.resolve("network.navigation.slow") is NavigationEvent
-    assert registry.resolve("rrweb.dom.update") is DOMUpdateEvent  # leading drop
+    assert registry.resolve("plugin.dom.update") is DOMUpdateEvent  # leading drop
+    assert registry.resolve("rrweb.chunk").__name__ == "RRWebEvent"  # the rrweb namespace is registered
     assert registry.resolve("console") is ConsoleEvent
     assert registry.resolve("completely.unknown") is Event
 
