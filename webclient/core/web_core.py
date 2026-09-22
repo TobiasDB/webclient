@@ -201,15 +201,43 @@ class WebCore:
             is_prop = op in type(self).prop_ops()
             remote = self._remote_call(op, is_prop)
             return remote if is_prop else remote(*args, **kwargs)
-        result = getattr(self.backing(op), op)(self, *args, **kwargs)
-        if op in type(self).io_ops():
-            result = self._bridge_io(result)
-            if op in _RECORDABLE_OPS:
-                self._maybe_record(op, args, kwargs)
-            return result
+        try:
+            result = getattr(self.backing(op), op)(self, *args, **kwargs)
+            if op in type(self).io_ops():
+                result = self._bridge_io(result)
+                if op in _RECORDABLE_OPS:
+                    self._maybe_record(op, args, kwargs)
+                return result
+        except WebException as exc:  # the ledger: a raised error is published exactly once
+            self._note_error(exc.error, op, raised=True)
+            raise
         if op in _RECORDABLE_OPS:
             self._maybe_record(op, args, kwargs)
         return result
+
+    def _note_error(self, error: WebError, op: str = "", *, raised: bool = False) -> WebError:
+        """Record ``error`` on the ledger: bind it to this core (``op`` / ``subject``), keep it on
+        the core's own ``_errors`` list when it has one, and publish an ``ErrorEvent`` on the
+        bound engine's bus -- ONCE (a re-raise through several dispatch frames does not
+        duplicate it). Returns the bound error. The one place errors enter the ledger, so no
+        error -- raised, returned under RETURN, or swallowed by a fallback -- can disappear."""
+        if error._noted:
+            return error
+        bound = error.bound(op=op, subject=str(getattr(self, "name", "") or ""))
+        error._noted = True
+        bound._noted = True
+        own = getattr(self, "_errors", None)
+        if isinstance(own, list):
+            own.append(bound)
+        engine = self._bound_engine()
+        if engine is not None:
+            from ..models import ErrorEvent
+
+            engine.bus.publish(ErrorEvent(
+                error=bound, raised=raised, document_id=getattr(self, "name", None) or None,
+                session_id=getattr(self, "session_id", None) or None,
+            ))
+        return bound
 
     def _maybe_record(self, op: str, args: Any, kwargs: Any) -> None:
         """Mirror an eager action into the bound recording session's Plan, if any (see

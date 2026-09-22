@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from .clients import ClientPool, WaitConfig
     from .core.document.models import Flag, IndexedElement, Metadata, PageCard, Signal, Structure, Transport, XhrCall
     from .core.client.models import Robots
+    from .errors import WebError
 
 T = TypeVar("T")
 S = TypeVar("S")
@@ -68,6 +69,8 @@ if TYPE_CHECKING:
         def console(self) -> list[ConsoleEvent]: ...
         @property
         def dom_mutations(self) -> list[DOMUpdateEvent]: ...
+        @property
+        def errors(self) -> list[WebError]: ...
         @property
         def events(self) -> list[Event]: ...
         @property
@@ -177,6 +180,8 @@ if TYPE_CHECKING:
         def console(self) -> list[ConsoleEvent]: ...
         @property
         def dom_mutations(self) -> list[DOMUpdateEvent]: ...
+        @property
+        def errors(self) -> list[WebError]: ...
         @property
         def events(self) -> list[Event]: ...
         @property
@@ -403,6 +408,7 @@ class LazyDocument(Lazy["Document"]):
     action_events: "list[ActionEvent]"
     console: "list[ConsoleEvent]"
     dom_mutations: "list[DOMUpdateEvent]"
+    errors: "list[WebError]"
     events: "list[Event]"
     message: "LazyField[str]"
     ok: "LazyField[bool]"

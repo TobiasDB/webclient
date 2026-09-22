@@ -647,6 +647,12 @@ class WebClient(SessionCore, IWebClient):
                     except Exception as exc:  # noqa: BLE001 - a blocked/failed render is not fatal
                         log.warning("auto: browser hop for %s failed (%s: %s); falling back to the "
                                     "static hop", doc.url, type(exc).__name__, exc)
+                        # never silently: the swallowed hop goes on the ledger, bound to the doc
+                        doc._note_error(
+                            make("fetch.browser_failed", f"{type(exc).__name__}: {exc}",
+                                 cause=getattr(exc, "error", None)),
+                            "fetch",
+                        )
                         rendered = None
                     if rendered is not None and rendered.ok:
                         return rendered  # the richer, browser-rendered document
@@ -1192,6 +1198,15 @@ class WebClient(SessionCore, IWebClient):
 
         asyncio.ensure_future(_expire())
 
+    # -- the error ledger ----------------------------------------------------
+    @property
+    def errors(self) -> "list[Any]":
+        """Every :class:`~webclient.models.ErrorEvent` this engine has published -- raised,
+        returned as a not-ok document, or swallowed by a fallback -- oldest first (bounded by
+        ``Settings.limits.error_ledger``). Each carries the problem-details ``WebError`` bound
+        to its ``op`` / ``subject`` and whether it was ``raised`` to a caller."""
+        return self._the_engine().errors
+
     # -- naming / recovery ---------------------------------------------------
     def _register(self, doc: Document, ref: Reference, *, reuse: "str | None" = None) -> None:
         """Give the reference and document scoped names in the owning scope
@@ -1213,6 +1228,8 @@ class WebClient(SessionCore, IWebClient):
             doc.id = doc.name = scope.add("doc", doc)
         doc.created = doc.accessed = time.time()
         doc._ref = ref
+        if doc.error is not None:  # a not-ok resolution enters the ledger as it is registered
+            doc.error = doc._note_error(doc.error, "fetch")
 
     def document(self, name: str) -> Document | None:
         """Recover a materialised document by name from any live scope."""

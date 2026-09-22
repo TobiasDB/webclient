@@ -9,6 +9,7 @@ from ..web_core import Backing
 from .models import PageCard
 
 if TYPE_CHECKING:
+    from ...errors import WebError
     from ..reference import Reference
     from . import Document
 
@@ -19,7 +20,7 @@ class StatusBacking(Backing):
     self-descriptor -- the default crawl projection)."""
 
     provides = frozenset({"is_ok", "is_empty", "ref", "reload", "card"})
-    props = frozenset({"message"})
+    props = frozenset({"message", "errors"})
     io = frozenset({"reload"})  # re-resolves -> awaitable under async
     gate = "ok"
 
@@ -70,6 +71,14 @@ class StatusBacking(Backing):
     def message(self, core: "Document") -> str:
         """The error message if the document carries one, else the empty string."""
         return core.error.message if core.error is not None else ""
+
+    def errors(self, core: "Document") -> "list[WebError]":
+        """The document's ERROR LEDGER: its own resolution error (if any) followed by every
+        error that occurred on one of its ops -- raised, returned under RETURN, or swallowed --
+        each bound to the ``op`` it came from. Nothing that went wrong on this document is
+        missing from it (roadmap N5)."""
+        own = [core.error] if core.error is not None else []
+        return [*own, *[e for e in core._errors if e is not core.error]]
 
 
 __all__ = ["StatusBacking"]

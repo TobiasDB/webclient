@@ -194,7 +194,7 @@ def _miss(parent: "Document", message: str, error: Any) -> "Document":
     if (error or current_policy()) is RAISE:
         raise select_error(message)
     sub = parent._sub(None)
-    sub.error = make("select.no_match", message, op="select", subject=parent.name)
+    sub.error = parent._note_error(make("select.no_match", message), "select")
     return sub
 
 

@@ -62,6 +62,7 @@ class Document(WebCore, IDocument):
     _data: Any = PrivateAttr(default=None)  # cached json
     _missing: bool = PrivateAttr(default=False)  # a selection that missed
     _events: list[Any] = PrivateAttr(default_factory=list)  # events routed here
+    _errors: list[Any] = PrivateAttr(default_factory=list)  # errors that occurred on this doc's ops
     _page: Any = PrivateAttr(default=None)  # playwright Page (live document)
     _lease: Any = PrivateAttr(default=None)  # the page's pool lease (live document)
     _keep_alive: bool = PrivateAttr(default=False)  # caller owns the page's lifecycle

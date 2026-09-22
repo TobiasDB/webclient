@@ -152,3 +152,15 @@ is the same wire shape. `type` is the legacy short kind kept stable for callers 
 
 - **type** `LoopError` · **remedy** `none`
 - **hint**: A loop's apply step raised; the verdict carries the message and the loop stopped.
+
+### `crawl.*`
+
+#### `crawl.robots_disallowed` -- Disallowed by robots.txt
+
+- **type** `RobotsDisallowed` · **remedy** `none`
+- **hint**: The site's robots.txt disallows this URL for us; skip it (or crawl with obey_robots=False if you are entitled to).
+
+#### `crawl.edge_failed` -- Crawl edge failed
+
+- **type** `CrawlEdgeFailed` · **remedy** `retry` · retriable
+- **hint**: One frontier edge could not be fetched or expanded; the crawl continued -- see crawl.failures and the cause.

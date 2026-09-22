@@ -29,7 +29,7 @@ from collections.abc import Iterator as _Iterator
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, PrivateAttr
 
 
 class _Policy:
@@ -183,6 +183,12 @@ CATALOG: dict[str, ErrorSpec] = {s.code: s for s in (
           retriable=True),
     _spec("loop.failed", "LoopError", "Loop step failed", "none",
           "A loop's apply step raised; the verdict carries the message and the loop stopped."),
+    # -- crawl -----------------------------------------------------------------
+    _spec("crawl.robots_disallowed", "RobotsDisallowed", "Disallowed by robots.txt", "none",
+          "The site's robots.txt disallows this URL for us; skip it (or crawl with obey_robots=False if you are entitled to)."),
+    _spec("crawl.edge_failed", "CrawlEdgeFailed", "Crawl edge failed", "retry",
+          "One frontier edge could not be fetched or expanded; the crawl continued -- see crawl.failures and the cause.",
+          retriable=True),
 )}
 
 
@@ -211,6 +217,9 @@ class WebError(BaseModel):
     op: str = ""  # the op that produced it (fetch / select / attr / render / execute …)
     subject: str = ""  # the document / reference / crawl name it is bound to
     cause: "WebError | None" = None  # a nested underlying error
+    #: set once the error has been published on an engine's bus (the ledger), so a raise
+    #: that passes through several dispatch frames is recorded exactly once.
+    _noted: bool = PrivateAttr(default=False)
 
     def problem(self, *, instance: str | None = None) -> dict[str, Any]:
         """The RFC 9457 *Problem Details* dict: ``type`` (a ``urn:webclient:error:<code>``

@@ -16,6 +16,7 @@ import logging
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, cast
 from urllib.parse import urlparse, urlsplit
 
+from ...errors import make
 from ..web_core import Backing
 from .canon import (  # URL canon / scope / scoring vocabulary (pure helpers)
     _BOILER_PATH_RE,
@@ -144,6 +145,7 @@ class CrawlBacking(Backing):
             core.failures.append(
                 Failure(url=edge.url, reason="robots-disallowed", depth=edge.depth)
             )
+            core._note_error(make("crawl.robots_disallowed", f"robots disallows {edge.url}"), "crawl")
             return None
         # The WHOLE edge -- fetch, DOM expansion, and projection -- is guarded: a transport
         # error can surface not just from the fetch but while reading a live page (expanding
@@ -177,6 +179,11 @@ class CrawlBacking(Backing):
             log.warning("crawl: %s failed (%s: %s)", edge.url, type(exc).__name__, exc)
             core.failures.append(
                 Failure(url=edge.url, reason=type(exc).__name__, depth=edge.depth)
+            )
+            core._note_error(
+                make("crawl.edge_failed", f"{edge.url}: {type(exc).__name__}: {exc}",
+                     cause=getattr(exc, "error", None)),
+                "crawl",
             )
             return None
         finally:
