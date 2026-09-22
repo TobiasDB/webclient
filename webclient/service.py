@@ -20,7 +20,7 @@ from typing import Any, cast
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
-from .errors import WebException
+from .errors import WebError, WebException
 from .query.expr import from_plan
 from .interface import Document, Reference, WebClient
 from .settings import current as _settings
@@ -90,19 +90,36 @@ def _error(
     retriable: bool = False,
     hint: str | None = None,
     status_code: int | None = None,
+    error: "WebError | None" = None,
 ) -> JSONResponse:
     """A structured, agent-actionable error body: an autonomous caller branches on
-    ``type``/``retriable`` and follows ``hint`` instead of parsing a string. The
-    inner ``status_code`` defaults to the HTTP status but carries the *upstream*
-    status for a proxied fetch failure (a 502 wrapping an origin 500)."""
-    body: dict[str, Any] = {
-        "type": type_,
-        "message": message,
-        "status_code": http_status if status_code is None else status_code,
-        "retriable": retriable,
-    }
-    if hint is not None:
-        body["hint"] = hint
+    ``type`` / ``code`` / ``retriable`` / ``remedy`` and follows ``hint`` instead of
+    parsing a string. The body is the :class:`WebError` wire shape (so the remote client
+    rebuilds the same object), enriched from the error catalogue by ``type`` when no
+    ``error`` is given. The inner ``status_code`` defaults to the HTTP status but carries
+    the *upstream* status for a proxied fetch failure (a 502 wrapping an origin 500)."""
+    from .errors import CATALOG
+
+    if error is None:
+        spec = next((s for s in CATALOG.values() if s.type == type_), None)
+        error = WebError(
+            type=type_, message=message, retriable=retriable,
+            status_code=http_status if status_code is None else status_code,
+            code=spec.code if spec else "", title=spec.title if spec else "",
+            remedy=spec.remedy if spec else None,
+            hint=hint if hint is not None else (spec.hint if spec else ""),
+        )
+    else:
+        error = error.model_copy(update={
+            "message": message or error.message,
+            "hint": hint if hint is not None else error.hint,
+            "status_code": error.status_code or (http_status if status_code is None else status_code),
+        })
+    body = error.model_dump(exclude_defaults=True, exclude_none=True)
+    body.setdefault("type", error.type)
+    body.setdefault("message", error.message)
+    body.setdefault("status_code", error.status_code)
+    body.setdefault("retriable", error.retriable)
     return JSONResponse(status_code=http_status, content={"error": body})
 
 
@@ -161,6 +178,20 @@ def create_app(
             expired = s.expires_at is not None and now > s.expires_at
             if s.status != "running" or expired:
                 _drop_session(sid)
+
+    @app.get("/health", response_model=None)
+    def health() -> "dict[str, Any]":
+        """Liveness + a resource snapshot (no auth): the pool's lease counts, the document
+        and session store sizes -- what a load balancer / autoscaler polls."""
+        wc_: WebClient = app.state.wc
+        pool = wc_._the_engine().pool
+        stats = pool.stats().model_dump() if pool is not None else {}
+        return {
+            "ok": True,
+            "pool": stats,
+            "docs": len(app.state.docs),
+            "sessions": len(app.state.sessions),
+        }
 
     @app.post("/execute", response_model=None)
     def execute(
@@ -222,6 +253,7 @@ def create_app(
                 status_code=err.status_code,
                 hint="retry if retriable; otherwise the target is unavailable, "
                 "blocking, or refused by policy",
+                error=err,
             )
         return {"rows": _serialize(result, store)}
 
@@ -382,6 +414,7 @@ def create_app(
                 retriable=exc.error.retriable,
                 status_code=exc.error.status_code,
                 hint="retry if retriable; else the seed is unavailable or blocked",
+                error=exc.error,
             )
 
     # A remote crawl is not a stateful server-side object any more: the client runs the
@@ -407,6 +440,7 @@ def create_app(
                 502, exc.error.type, str(exc),
                 retriable=exc.error.retriable, status_code=exc.error.status_code,
                 hint="retry if retriable; else the target is unavailable or blocked",
+                error=exc.error,
             )
 
     @app.post("/markdown", response_model=None)
@@ -534,6 +568,7 @@ def create_app(
                     502, exc.error.type, str(exc), retriable=exc.error.retriable,
                     status_code=exc.error.status_code,
                     hint="retry if retriable; else the target is unavailable or blocked",
+                    error=exc.error,
                 )
             out["rows"] = _serialize(result, app.state.docs)
         return out
@@ -561,4 +596,32 @@ def create_app(
     return app
 
 
-__all__ = ["create_app"]
+def main(argv: "list[str] | None" = None) -> None:  # pragma: no cover - a process entry
+    """``python -m webclient.service``: serve :func:`create_app` with uvicorn. Reads
+    ``WEBCLIENT_SERVICE_TOKEN`` (bearer auth; unset = open), ``WEBCLIENT_SERVICE_HOST`` /
+    ``WEBCLIENT_SERVICE_PORT`` (default 0.0.0.0:8000) and ``WEBCLIENT_SERVICE_SSRF_GUARD``
+    (``1`` refuses private hosts), plus the ordinary ``WEBCLIENT_*`` settings."""
+    import os
+
+    import uvicorn
+
+    from .settings import current
+
+    current().configure_logging()
+    app = create_app(
+        token=os.environ.get("WEBCLIENT_SERVICE_TOKEN") or None,
+        block_private_hosts=os.environ.get("WEBCLIENT_SERVICE_SSRF_GUARD", "") in ("1", "true", "yes"),
+    )
+    uvicorn.run(
+        app,
+        host=os.environ.get("WEBCLIENT_SERVICE_HOST", "0.0.0.0"),
+        port=int(os.environ.get("WEBCLIENT_SERVICE_PORT", "8000")),
+        log_config=None,
+    )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
+
+
+__all__ = ["create_app", "main"]
