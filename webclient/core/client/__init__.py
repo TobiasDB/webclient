@@ -760,7 +760,22 @@ class WebClient(SessionCore, IWebClient):
         ``session`` route through the engine's transport uniformly."""
         rc = WebClient(timeout=self.timeout)
         rc._the_engine().go_remote(url, token, self.timeout)
+        rc._open_remote_session()  # a remote client IS a session: its own server-side scope
         return rc
+
+    def _open_remote_session(self) -> None:
+        """A remote client is implicitly a SESSION (a ``SessionCore`` on the server too): open
+        one server-side session for it, so every plan it sends resolves through that
+        identity / cookie jar and its handles live in that session's own bounded store,
+        disposed when the client closes. ``rc.session()`` nests inside it. Best-effort: an
+        older service without ``/sessions`` leaves the client on the shared scope."""
+        engine = self._the_engine()
+        if not engine.is_remote or self._server_sid:
+            return
+        try:
+            self._server_sid = engine.open_server_session(self.ttl)
+        except Exception as exc:  # noqa: BLE001 - a service without sessions: shared scope
+            log.debug("remote client: no server session (%s); using the shared scope", exc)
 
     # -- recorder ------------------------------------------------------------
     def record(self, *, secrets: "list[str] | None" = None) -> "WebClient":

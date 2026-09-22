@@ -184,7 +184,9 @@ def test_remote_evicted_handle_replays_the_plan(httpserver):
     httpserver.expect_request("/b").respond_with_data(
         "<html><title>Beta</title></html>", content_type="text/html"
     )
-    app = create_app(token="secret", max_docs=1)  # holds ONE handle -> forces eviction
+    # a remote client is implicitly a server SESSION, so its handles live in that session's own
+    # store: cap it (not just the shared store) to force the eviction
+    app = create_app(token="secret", max_docs=1, max_session_docs=1)
     with _Server(app) as base:
         rc = RemoteWebClient(base, token="secret")
         a = rc.fetch(httpserver.url_for("/a"))  # stored (handle A)

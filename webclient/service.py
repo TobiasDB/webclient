@@ -321,21 +321,12 @@ def create_app(
         log.info("session closed %s", sid)
         return {"id": sid, "status": "closed"}
 
-    # -- crawl / sitemap -----------------------------------------------------
-    def _resolve_of(value: Any) -> "Any":
-        """Rebuild a :class:`Resolve` policy bundle from a request body's ``resolve``
-        (a dict from the remote client's ``model_dump``); ``None`` when absent."""
-        if not value:
-            return None
-        from .policy import Resolve
+    # -- tools: the registry, mounted (never hand-written per verb) -------------
+    from .tools import TOOLS, ToolError
 
-        return Resolve.model_validate(value)
-
-    def _crawl_engine(body: dict[str, Any]) -> "Any":
-        """The engine a crawl runs on: a named ``session`` (so it fetches with that
-        session's identity / cookies -- e.g. crawling behind a login) or, by
-        default, the shared client. Returns the engine, or a JSONResponse error if
-        a ``session`` was named but is unknown."""
+    def _tool_client(body: dict[str, Any]) -> "Any":
+        """The client a tool runs on: a named server-side ``session`` (its identity /
+        cookies) or the shared client. A JSONResponse error if the session is unknown."""
         sid = body.get("session")
         if sid is None:
             return app.state.wc
@@ -343,184 +334,63 @@ def create_app(
             return _error(404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT)
         return app.state.sessions[sid]
 
-    def _run_crawl(engine: "Any", body: dict[str, Any]) -> "Any":
-        """Build and run a crawl on ``engine`` (a client or session); the caller
-        turns the finished crawl into a response. Raises WebException on a failure."""
-        url = body["url"]
-        resolve = _resolve_of(body.get("resolve"))
-        return engine.crawl(
-            url,
-            auto=True,  # the HTTP tier runs a bounded auto crawl (Firecrawl-shaped)
-            width=int(body.get("width", 10)),
-            depth=int(body.get("depth", 3)),
-            max_pages=int(body.get("max_pages", 20)),
-            max_frontier=int(body.get("max_frontier", 10000)),
-            same_origin=bool(body.get("same_origin", True)),
-            obey_robots=bool(body.get("obey_robots", True)),
-            browser=bool(body.get("browser", False)),
-            resolve=resolve,
-            keywords=body.get("keywords"),
-            include=body.get("include"),
-            exclude=body.get("exclude"),
-        ).run()
+    def _run_tool(name: str, body: dict[str, Any]) -> "Any":
+        """Validate + run one registered tool, mapping bad arguments to a 422 and a
+        fetch / resolve failure to a structured 502."""
+        from .tools import dispatch as _dispatch
 
-    def _crawl_response(crawl: Any) -> "dict[str, Any]":
-        """The crawl result over the wire: a lean per-page record (the crawl's default
-        :class:`PageCard` projection -- url / status / kind / title) plus the unresolved
-        frontier edges, capped to ``width`` (best-first) so a large crawl doesn't flood
-        the client (``frontier_total`` is the true count)."""
-        def page(card: Any) -> dict[str, Any]:
-            return {
-                "url": card.final_url or card.url,
-                "status": card.status_code,
-                "kind": card.kind,
-                "title": card.title,
-            }
-
-        return {
-            "pages": [page(p) for p in crawl.pages],
-            "urls": [p.final_url or p.url for p in crawl.pages],
-            "frontier": [e.model_dump() for e in crawl.frontier[: crawl.config.width]],
-            "frontier_total": len(crawl.frontier),
-            "done": crawl.done,
-        }
-
-    @app.post("/crawl", response_model=None)
-    def crawl(
-        body: dict[str, Any], authorization: str | None = Header(default=None)
-    ) -> "dict[str, Any] | JSONResponse":
-        """Bounded, same-origin crawl from ``url`` -> a lean handle per page plus
-        the unresolved frontier. Steer it with ``keywords`` (best-first),
-        ``include``/``exclude``, ``max_pages``/``depth``/``width``."""
-        _auth(authorization)
-        if not body.get("url"):
-            return _error(
-                422,
-                "InvalidRequest",
-                "crawl requires a 'url'",
-                hint='POST {"url": "https://...", "max_pages": 20, '
-                '"keywords": ["pricing"], "session": "sess-..."}',
-            )
-        engine = _crawl_engine(body)
-        if isinstance(engine, JSONResponse):
-            return engine
+        client = _tool_client(body)
+        if isinstance(client, JSONResponse):
+            return client
         try:
-            return _crawl_response(_run_crawl(engine, body))
+            return _dispatch(name, body, client)
+        except ToolError as exc:
+            return _error(
+                422, "InvalidRequest", str(exc),
+                hint=f"POST the tool's arguments as JSON; see GET /tools for {name!r}'s schema",
+            )
         except WebException as exc:
             return _error(
-                502,
-                exc.error.type,
-                str(exc),
-                retriable=exc.error.retriable,
-                status_code=exc.error.status_code,
-                hint="retry if retriable; else the seed is unavailable or blocked",
-                error=exc.error,
-            )
-
-    # A remote crawl is not a stateful server-side object any more: the client runs the
-    # whole crawl as ONE ``WebClient.crawl(seeds, ...).run().pages`` plan over /execute
-    # (see ``Crawl._remote_call``), so there is no /crawls create/step/run/delete surface.
-    # The one-shot /crawl task verb below stays (a ready-to-use value for an agent).
-
-    # -- task verbs: ready-to-use values for an agent (no plan machinery) -----
-    def _verb_url(body: dict[str, Any]) -> "str | JSONResponse":
-        if not body.get("url"):
-            return _error(
-                422, "InvalidRequest", "this verb requires a 'url'",
-                hint='POST {"url": "https://..."}',
-            )
-        return str(body["url"])
-
-    def _run_verb(fn: Any) -> "dict[str, Any] | JSONResponse":
-        """Run a task verb, mapping a fetch/resolve failure to a structured error."""
-        try:
-            return {"result": fn()}
-        except WebException as exc:
-            return _error(
-                502, exc.error.type, str(exc),
-                retriable=exc.error.retriable, status_code=exc.error.status_code,
+                502, exc.error.type, str(exc), retriable=exc.error.retriable,
+                status_code=exc.error.status_code, error=exc.error,
                 hint="retry if retriable; else the target is unavailable or blocked",
-                error=exc.error,
             )
 
-    @app.post("/markdown", response_model=None)
-    def markdown(
-        body: dict[str, Any], authorization: str | None = Header(default=None)
-    ) -> "dict[str, Any] | JSONResponse":
-        """Fetch ``url`` and return its content as markdown."""
+    @app.get("/tools", response_model=None)
+    def tools(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        """Every tool: name, description, input JSON Schema, what it returns, its story."""
         _auth(authorization)
-        url = _verb_url(body)
-        if isinstance(url, JSONResponse):
-            return url
-        wc_: WebClient = app.state.wc
-        return _run_verb(lambda: wc_.fetch(url).render("markdown"))
+        from .tools import schema as _schema
 
-    @app.post("/text", response_model=None)
-    def text(
-        body: dict[str, Any], authorization: str | None = Header(default=None)
-    ) -> "dict[str, Any] | JSONResponse":
-        """Fetch ``url`` and return its readable text (chrome stripped)."""
-        _auth(authorization)
-        url = _verb_url(body)
-        if isinstance(url, JSONResponse):
-            return url
-        wc_: WebClient = app.state.wc
-        return _run_verb(
-            lambda: wc_.fetch(url).render(
-                "text", main_content_only=body.get("main_content_only", True)
-            )
-        )
+        return _schema()
 
-    @app.post("/links", response_model=None)
-    def links(
-        body: dict[str, Any], authorization: str | None = Header(default=None)
+    @app.post("/tools/{name}", response_model=None)
+    def run_tool(
+        name: str, body: dict[str, Any], authorization: str | None = Header(default=None)
     ) -> "dict[str, Any] | JSONResponse":
-        """Fetch ``url`` and return its outbound link URLs (absolute)."""
+        """Run a registered tool; the result comes back as ``{"result": ...}``."""
         _auth(authorization)
-        url = _verb_url(body)
-        if isinstance(url, JSONResponse):
-            return url
-        wc_: WebClient = app.state.wc
-        return _run_verb(lambda: [r.url for r in wc_.fetch(url).render("links")])
+        if name not in TOOLS:
+            return _error(404, "InvalidRequest", f"no tool {name!r}", hint="GET /tools lists them")
+        out = _run_tool(name, body)
+        return out if isinstance(out, JSONResponse) else {"result": out}
 
-    @app.post("/skeleton", response_model=None)
-    def skeleton(
-        body: dict[str, Any], authorization: str | None = Header(default=None)
-    ) -> "dict[str, Any] | JSONResponse":
-        """Fetch ``url`` and return its token-lean DOM skeleton (for writing CSS
-        selectors). ``browser`` (e.g. ``"probe"``) renders a JS/SPA page and marks
-        client-injected nodes."""
-        _auth(authorization)
-        url = _verb_url(body)
-        if isinstance(url, JSONResponse):
-            return url
-        wc_: WebClient = app.state.wc
-        browser = body.get("browser", False)
-        return _run_verb(lambda: wc_.fetch(url, browser=browser).skeleton())
+    def _mount_alias(path: str, tool_name: str, *, bare: bool) -> None:
+        """A legacy verb path (``/markdown``, ``/crawl``, ...) as an alias of its tool; the
+        crawl alias returns the tool's dict bare (its historical shape), the rest ``{"result"}``."""
+        def handler(body: dict[str, Any], authorization: str | None = Header(default=None)) -> "Any":
+            _auth(authorization)
+            out = _run_tool(tool_name, body)
+            if isinstance(out, JSONResponse) or bare:
+                return out
+            return {"result": out}
 
-    @app.post("/sitemap", response_model=None)
-    def sitemap(
-        body: dict[str, Any], authorization: str | None = Header(default=None)
-    ) -> "dict[str, Any] | JSONResponse":
-        """Hunt a site's sitemap.xml page URLs from ``url`` (cheap -- not a crawl)."""
-        _auth(authorization)
-        url = _verb_url(body)
-        if isinstance(url, JSONResponse):
-            return url
-        wc_: WebClient = app.state.wc
-        return _run_verb(lambda: [r.url for r in wc_.sitemap(url)])
+        handler.__name__ = f"alias_{tool_name}"
+        app.post(path, response_model=None)(handler)
 
-    @app.post("/robots", response_model=None)
-    def robots(
-        body: dict[str, Any], authorization: str | None = Header(default=None)
-    ) -> "dict[str, Any] | JSONResponse":
-        """Hunt a site's robots.txt from ``url`` -- its Sitemap: URLs and raw rules."""
-        _auth(authorization)
-        url = _verb_url(body)
-        if isinstance(url, JSONResponse):
-            return url
-        wc_: WebClient = app.state.wc
-        return _run_verb(lambda: wc_.robots(url).model_dump())
+    for _t in TOOLS.values():
+        for _alias in _t.aliases:
+            _mount_alias(f"/{_alias}", _t.name, bare=_t.name == "crawl")
 
     # -- plan authoring: validate / pretty-print / (de)serialise a lazy expr --
     @app.post("/plan", response_model=None)

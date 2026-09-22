@@ -1,12 +1,11 @@
-"""An MCP adapter -- the WebClient's task verbs as Model Context Protocol tools.
+"""An MCP adapter -- the tool registry as Model Context Protocol tools.
 
 MCP is the way most agents consume a browsing/scraping capability, and this is an
-*adapter*, not new capability: each tool is a thin wrapper over an existing verb
-(``fetch``/``render``/``search``/``crawl``/``sitemap``/``robots``) or the plan machinery
-(write + validate + run a lazy expression from a blob). The tool registry
-(:func:`build_tools`) is plain data + handlers, so it is testable with no MCP SDK
-installed; :func:`serve` wires it onto an stdio MCP server, importing the ``mcp``
-SDK lazily (with a clear install hint if it is missing).
+*adapter*, not new capability: every tool comes from :mod:`webclient.tools` (the single
+registry the HTTP service and the Python verbs are generated from too), so the three
+transports cannot drift. :func:`build_tools` is plain data + handlers, testable with no
+MCP SDK installed; :func:`serve` wires it onto an stdio MCP server, importing the
+``mcp`` SDK lazily (with a clear install hint if it is missing).
 """
 
 from __future__ import annotations
@@ -14,11 +13,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from ..query.expr import from_plan
-from ..interface import WebClient, default_client
-
-#: a JSON-schema fragment shared by the url-taking verbs.
-_URL = {"type": "string", "description": "an absolute http(s) URL"}
+from ..interface import WebClient
+from ..tools import TOOLS
+from ..tools import dispatch as _dispatch
 
 
 @dataclass(frozen=True)
@@ -33,138 +30,22 @@ class Tool:
     handler: Callable[[dict[str, Any]], Any]
 
 
-def _schema(**props: Any) -> dict[str, Any]:
-    """Build a JSON-Schema object from keyword property definitions, pulling out those marked
-    ``_required=True`` into the schema's ``required`` list (a terse way to declare a tool's input)."""
-    required = [k for k, v in props.items() if v.pop("_required", False)]
-    return {
-        "type": "object",
-        "properties": props,
-        "required": required,
-        "additionalProperties": False,
-    }
-
-
-def _crawl_result(crawl: Any) -> dict[str, Any]:
-    """Shape a finished crawl into a lean JSON result for an MCP tool: per-page records, the URL
-    list, the top-``width`` frontier edges (+ total) and the done flag -- so a big crawl doesn't
-    flood the client."""
-    return {
-        # a lean per-page record (the crawl holds Documents; a tool returns JSON)
-        "pages": [
-            {"url": p.final_url or p.url, "status": p.status_code, "kind": p.kind,
-             "title": p.title if p.has_op("title") else None}
-            for p in crawl.pages
-        ],
-        "urls": [p.final_url or p.url for p in crawl.pages],
-        # the frontier is sorted best-first; return only the top `width` so a big
-        # (esp. browser) crawl doesn't flood the client with low-value edges.
-        "frontier": [e.model_dump() for e in crawl.frontier[: crawl.width]],
-        "frontier_total": len(crawl.frontier),
-        "done": crawl.done,
-    }
-
-
 def build_tools(client: WebClient | None = None) -> list[Tool]:
-    """The tool registry, bound to ``client`` (or the process-local default). Each
-    handler takes the tool's argument dict and returns a JSON-serialisable value."""
-
-    def wc() -> WebClient:
-        return client if client is not None else default_client()
-
-    def markdown(a: dict[str, Any]) -> str:
-        return str(wc().fetch(a["url"]).render("markdown"))
-
-    def text(a: dict[str, Any]) -> str:
-        return str(wc().fetch(a["url"]).render("text", main_content_only=True))
-
-    def links(a: dict[str, Any]) -> list[str]:
-        return [r.url for r in wc().fetch(a["url"]).render("links")]
-
-    def skeleton(a: dict[str, Any]) -> str:
-        return wc().fetch(a["url"], browser=a.get("browser", False)).skeleton()
-
-    def sitemap(a: dict[str, Any]) -> list[str]:
-        return [r.url for r in wc().sitemap(a["url"])]
-
-    def robots(a: dict[str, Any]) -> dict[str, Any]:
-        return wc().robots(a["url"]).model_dump()
-
-    def crawl(a: dict[str, Any]) -> dict[str, Any]:
-        c = wc().crawl(
-            a["url"], auto=True,
-            max_pages=int(a.get("max_pages", 20)),
-            browser=a.get("browser", True),
-            keywords=a.get("keywords"),
-            include=a.get("include"), exclude=a.get("exclude"),
-        ).run()
-        return _crawl_result(c)
-
-    def validate_plan(a: dict[str, Any]) -> dict[str, Any]:
-        expr = from_plan(a.get("blob") or a["plan"], wc())
-        return {"valid": True, "describe": expr._plan.describe(), "blob": expr.to_blob()}
-
-    def run_plan(a: dict[str, Any]) -> Any:
-        from ..service import _serialize
-
-        expr = from_plan(a.get("blob") or a["plan"], wc())
-        context = wc().ref(a["url"]) if a.get("url") else None
-        return _serialize(wc().execute(expr, context), {})
-
-    def lazy_query_guide(a: dict[str, Any]) -> str:
-        from .guides import lazy_query_guide as _guide
-
-        return _guide()
+    """The MCP tool list, bound to ``client`` (or the process-local default) -- one entry
+    per registered :class:`webclient.tools.Tool`, its input schema from the pydantic model."""
+    def bind(name: str) -> Callable[[dict[str, Any]], Any]:
+        return lambda args: _dispatch(name, args, client)
 
     return [
-        Tool("fetch_markdown", "Fetch a URL and return its content as markdown.",
-             _schema(url={**_URL, "_required": True}), markdown),
-        Tool("fetch_text", "Fetch a URL and return its readable text (chrome stripped).",
-             _schema(url={**_URL, "_required": True}), text),
-        Tool("links", "Fetch a URL and return its outbound link URLs.",
-             _schema(url={**_URL, "_required": True}), links),
-        Tool("skeleton", "Fetch a URL and return a token-lean DOM skeleton "
-             "(an HTML-tag outline) to write CSS selectors from. Set browser='auto' "
-             "for a JS/SPA page: injected nodes are marked [xhr]/[js] and data APIs listed.",
-             _schema(url={**_URL, "_required": True}, browser={"type": "string"}), skeleton),
-        Tool("sitemap", "Hunt a site's sitemap.xml page URLs (cheap -- not a crawl).",
-             _schema(url={**_URL, "_required": True}), sitemap),
-        Tool("robots", "Hunt a site's robots.txt: its Sitemap: URLs and raw rules.",
-             _schema(url={**_URL, "_required": True}), robots),
-        Tool("crawl", "Bounded, same-origin crawl from a seed URL; a lean record per "
-             "page (url/status/kind/title) plus the unresolved frontier. Renders each "
-             "page in a browser by default (browser=true) so JS/lazy links load -- set "
-             "browser=false for a faster static crawl of a server-rendered site. "
-             "Resource links (images/scripts/media) are dropped and each edge carries "
-             "an importance 'score' (nav/'read more'/article high, footer/legal/social "
-             "low); the frontier is sorted by it. Steer with 'keywords'/'include'/"
-             "'exclude'.",
-             _schema(url={**_URL, "_required": True},
-                     max_pages={"type": "integer"},
-                     browser={"type": "boolean"},
-                     keywords={"type": "array", "items": {"type": "string"}},
-                     include={"type": "string"}, exclude={"type": "string"}), crawl),
-        Tool("validate_plan", "Validate a lazy-expression plan (object) or blob (string) "
-             "and return its human-readable description + a compact blob -- author a "
-             "plan and check it before running.",
-             _schema(plan={"type": "object"}, blob={"type": "string"}), validate_plan),
-        Tool("run_plan", "Run a lazy-expression plan (object) or blob (string). Optional "
-             "'url' supplies the fetch context. Rebuilt + name-validated before it runs.",
-             _schema(plan={"type": "object"}, blob={"type": "string"}, url=_URL), run_plan),
-        Tool("lazy_query_guide", "Return the lazy-query syntax guide -- how to author a "
-             "lazy extraction plan (wq roots, select/extract/filter/project, operators, "
-             "blobs). Read it before writing a plan for validate_plan / run_plan.",
-             _schema(), lazy_query_guide),
+        Tool(t.name, t.description, t.schema(), bind(t.name))
+        for t in TOOLS.values()
     ]
 
 
 def dispatch(name: str, args: dict[str, Any], client: WebClient | None = None) -> Any:
     """Run one tool by name (the dispatch the MCP server performs) -- the testable
     seam. Raises ``KeyError`` for an unknown tool."""
-    for tool in build_tools(client):
-        if tool.name == name:
-            return tool.handler(args)
-    raise KeyError(name)
+    return _dispatch(name, args, client)
 
 
 def build_server(client: WebClient | None = None, *, name: str = "webclient") -> Any:
