@@ -6,9 +6,9 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Sequence
+from typing import Any, Callable, Literal, Sequence, cast
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, PrivateAttr, model_validator
 
 #: the pipeline's logger. Stages log progress here (seeds, crawl, candidates, the
 #: evaluation, the query, spend); a CLI or app sets the level / handler. Each line is
@@ -378,6 +378,17 @@ class OnboardingResult(BaseModel):
     steps: list[str] = []  # a human-readable trace of the run (also logged)
     reviews: list[Review] = []  # LLM meta-reviews grading the run's choices (opt-in)
     cost_usd: float = 0.0  # LLM spend for this company (when an LlmClient was used)
+    #: the checkpoint an ``interactive`` run is waiting at (an ``Ask``), else ``None``;
+    #: answer it with :meth:`resume`.
+    pending: Any = None
+    _resume: Any = PrivateAttr(default=None)  # the pipeline's resume hook (set by onboard_company)
+
+    def resume(self, answer: Any) -> "OnboardingResult":
+        """Continue a run that paused at a checkpoint (``pending``) with ``answer`` (``"yes"`` /
+        ``"no"`` at the confirm gate). Raises if nothing is pending."""
+        if self.pending is None or self._resume is None:
+            raise RuntimeError("this onboarding run is not waiting at a checkpoint")
+        return cast("OnboardingResult", self._resume(answer))
 
 
 @dataclass

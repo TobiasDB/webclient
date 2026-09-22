@@ -1985,3 +1985,58 @@ def test_test_query_cannot_hang_on_a_slow_per_record_resolve(httpserver):
         elapsed = _time.monotonic() - t0
     assert ok is False and rows == []  # cancelled -> a clean failed attempt
     assert elapsed < 3.5  # bounded near the 1.5s cap, not the 4s server sleep
+
+
+def test_onboard_company_is_a_pipeline_with_an_interactive_confirm_gate(site):
+    """The orchestrator is a Pipeline (roadmap N12): stage boundaries are PipelineEvents on
+    the client's bus, and ``interactive=True`` checkpoints after the evaluation with an Ask
+    the caller answers through ``result.resume``."""
+    from webclient import PipelineEvent
+
+    products_url = site.url_for("/products")
+    code = ('wq.doc.select_all(".product").extract(name=wq.doc.select(".name").attr("text"), '
+            'price=wq.doc.select(".price").attr("text")).project()')
+
+    def search(query, k):
+        return [SearchHit(url=site.url_for("/"), title="Acme", snippet="widgets")]
+
+    def llm(prompt: str) -> str:
+        if "frontier links" in prompt:
+            for line in prompt.splitlines():
+                s = line.strip()
+                if s[:1].isdigit() and "/products" in s:
+                    return f"[{s.split('.', 1)[0]}]"
+            return "[]"
+        if "crawled pages" in prompt:
+            return json.dumps([{"url": products_url, "kind": "page", "tier": "must", "note": "list"}])
+        if "Assess this page" in prompt:
+            return json.dumps({"dataset_present": True, "is_queryable": True, "completeness": "full",
+                               "has_pagination": False, "scrapability": 9, "verdict": "ok"})
+        if "query code" in prompt or "write a query" in prompt:
+            return f"here is the query:\n{code}"
+        return "{}"
+
+    with WebClient() as wc:
+        seen = []
+        wc.bus.subscribe("pipeline", seen.append)
+        result = onboard_company(
+            "Acme", Brief(description="the company's products", fields=["name", "price"], search="products"),
+            wc=wc, llm=llm, search=search, browser=False, interactive=True,
+        )
+        assert result.pending is not None and result.pending.reason == f"proceed with {products_url}?"
+        assert result.pending.options == ["yes", "no"] and not result.ok and result.query is None
+        stages = [e.stage for e in seen if isinstance(e, PipelineEvent) and e.phase == "exit"]
+        assert stages == ["search", "crawl", "select", "evaluate"]
+        result = result.resume("yes")
+        assert result.pending is None and result.ok, result.reason
+        assert result.query is not None and result.query.row_count == 3
+        exits = [e.stage for e in seen if isinstance(e, PipelineEvent) and e.phase == "exit"]
+        assert exits[-2:] == ["source", "query"]
+        with pytest.raises(RuntimeError):
+            result.resume("again")
+        # declining stops cleanly
+        declined = onboard_company(
+            "Acme", Brief(description="the company's products", fields=["name", "price"], search="products"),
+            wc=wc, llm=llm, search=search, browser=False, interactive=True,
+        ).resume("no")
+        assert declined.exited and declined.reason == "declined at the confirm gate" and not declined.ok

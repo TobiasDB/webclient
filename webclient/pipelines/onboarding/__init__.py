@@ -166,7 +166,8 @@ from .review import (  # noqa: F401
 )
 from .orchestrate import (  # noqa: F401
     onboard_company,
-    _onboard_company,
+    _build_pipeline,
+    _Ctx,
     onboard,
 )
 

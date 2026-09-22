@@ -66,10 +66,16 @@ class Pipeline:
     """An ordered set of stages over one context object (anything: a dataclass, a dict, a
     result model the stages fill in)."""
 
-    def __init__(self, name: str, stages: "list[Stage]", *, bus: Any = None) -> None:
+    def __init__(
+        self, name: str, stages: "list[Stage]", *, bus: Any = None,
+        propagate: "tuple[type[BaseException], ...]" = (),
+    ) -> None:
         self.name = name
         self.stages = list(stages)
         self.bus = bus
+        #: exception types a stage may raise THROUGH the pipeline (a budget cap, a cancel)
+        #: instead of being recorded as the run's reason.
+        self.propagate = propagate
         self.run_state: PipelineRun = PipelineRun(pipeline=name)
         self._ctx: Any = None
         self._index = 0  # the next stage to run
@@ -116,6 +122,9 @@ class Pipeline:
                 self._emit(stage.name, "enter")
             try:
                 out = stage.run(ctx)
+            except self.propagate:
+                self._emit(stage.name, "error", error="propagated")
+                raise
             except Exception as exc:  # noqa: BLE001 - a stage failure ends the run, recorded
                 run.stopped_at, run.reason = stage.name, f"{type(exc).__name__}: {exc}"
                 log.warning("pipeline %s: stage %s failed: %s", self.name, stage.name, exc)
