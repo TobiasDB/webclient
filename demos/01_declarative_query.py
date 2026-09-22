@@ -26,7 +26,7 @@ with sync_playwright() as p:
 
 
 def main() -> None:
-    base = serve()
+    base = serve() + "/lab/shop"
 
     h1("The whole extraction, declaratively")
     query = (

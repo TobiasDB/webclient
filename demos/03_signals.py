@@ -14,13 +14,13 @@ def main() -> None:
     base = serve()
     with WebClient() as wc:
         h1("A login wall (static response)")
-        login = wc.fetch(f"{base}/login", browser=False)
+        login = wc.fetch(f"{base}/lab/login", browser=False)
         kv("login_present", login.login_present().present)
         forms = login.forms()
         kv("forms", (forms.present, [f.field_names for f in (forms.value or [])]))
 
         h1("A JS-gated SPA -- detected from the empty shell, BEFORE rendering")
-        shell = wc.fetch(f"{base}/spa", browser=False)   # static only, on purpose
+        shell = wc.fetch(f"{base}/lab/spa", browser=False)   # static only, on purpose
         flag = shell.spa()
         kv("spa", flag.present)
         kv("confidence", round(flag.confidence, 2))

@@ -15,7 +15,7 @@ from _site import serve, h1, kv
 def main() -> None:
     base = serve()
     with WebClient() as wc:
-        page = wc.fetch(f"{base}/")
+        page = wc.fetch(f"{base}/lab/shop")
 
         h1("Raw HTML the model would otherwise wade through")
         raw = page.render("html")

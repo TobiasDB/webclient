@@ -17,13 +17,13 @@ def main() -> None:
     base = serve()
     with WebClient() as wc:
         h1("A static page: HTTP is enough, no browser is launched")
-        static = wc.fetch(f"{base}/", browser="auto")
+        static = wc.fetch(f"{base}/lab/shop", browser="auto")
         kv("tiers", static.transport().escalation)          # -> ['static']
         kv("cards", len(static.select_all(".card")))
         kv("spa flag", static.spa().present)
 
         h1("A JS-gated page: the same call auto-escalates to a browser")
-        spa = wc.fetch(f"{base}/spa", browser="auto")
+        spa = wc.fetch(f"{base}/lab/spa", browser="auto")
         kv("tiers", spa.transport().escalation)             # -> ['static', 'browser']: it escalated
         kv("records", len(spa.select_all("li.item")))       # content the static fetch couldn't see
         kv("why", "the static SPA flag fired first (demo 03) -> remedy 'browser' -> escalate")

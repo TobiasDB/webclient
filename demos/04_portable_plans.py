@@ -12,7 +12,7 @@ from _site import serve, h1, kv
 
 
 def main() -> None:
-    base = serve()
+    base = serve() + "/lab/shop"
 
     query = (
         wq.reference(base)

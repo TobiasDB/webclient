@@ -45,7 +45,7 @@ async def workload(base: str, n: int, concurrency: int, browser: bool) -> dict[s
                 t0 = time.perf_counter()
                 try:
                     rows = await (
-                        ac.lazy.fetch(f"{base}/", browser="always" if browser else False)
+                        ac.lazy.fetch(base, browser="always" if browser else False)
                         .select_all(".card")
                         .extract(title=doc.select(".title").attr("text"))
                         .project()
@@ -90,9 +90,9 @@ def main() -> int:
         print(f"flamegraph: {out}")
         return rc
 
-    from _site import serve  # the offline demo site
+    from webclient.lab import serve  # the offline lab site
 
-    base = serve()
+    base = serve() + "/lab/shop"
     tracemalloc.start()
     cpu0 = time.process_time()
     result = asyncio.run(workload(base, args.n, args.concurrency, args.browser))

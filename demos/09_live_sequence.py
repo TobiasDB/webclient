@@ -32,7 +32,7 @@ def main() -> None:
     print("  " + flow.describe())
 
     with WebClient() as wc:
-        result = wc.execute(flow, wc.ref(f"{base}/app"))
+        result = wc.execute(flow, wc.ref(f"{base}/lab/app"))
 
     h1("Result (both captures, from one held page)")
     kv("captured", result)

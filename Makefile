@@ -8,13 +8,14 @@
 #   make profile    py-spy + tracemalloc run of a workload against the lab site
 #   make image      build the container (podman or docker, whichever is present)
 #   make serve      run the HTTP service locally
+#   make lab        serve the lab site (fixtures + expected results)
 
 PY      ?= env/bin/python
 ENGINE  ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 IMAGE   ?= webclient:dev
 PORT    ?= 8000
 
-.PHONY: check test stubs stubs-check typecheck docs docs-check demo profile image serve clean
+.PHONY: check test stubs stubs-check typecheck docs docs-check demo profile image serve lab clean
 
 check: stubs-check typecheck docs-check test
 
@@ -33,6 +34,7 @@ typecheck:
 
 docs:
 	$(PY) scripts/gen_docs.py all
+	$(PY) -m mkdocs build -q
 
 docs-check:
 	$(PY) scripts/gen_docs.py all --check
@@ -45,6 +47,9 @@ profile:
 
 image:
 	$(ENGINE) build -t $(IMAGE) -f Containerfile .
+
+lab:
+	$(PY) -m webclient.lab $(PORT)
 
 serve:
 	$(PY) -m uvicorn --factory webclient.service:create_app --host 0.0.0.0 --port $(PORT)

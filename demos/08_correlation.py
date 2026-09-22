@@ -17,7 +17,7 @@ from _site import serve, h1, kv
 def main() -> None:
     base = serve()
     with WebClient() as wc:
-        feed = wc.fetch(f"{base}/feed", browser="always")
+        feed = wc.fetch(f"{base}/lab/feed", browser="always")
 
         h1("The request timeline + the record region, attributed")
         for line in feed.skeleton().splitlines():

@@ -124,3 +124,8 @@ docs/plans/
 # onboarding harness outputs (local runs)
 harness_runs/
 demos/query_wireframe.html
+
+# built docs site
+site/
+profile.svg
+*.trace/

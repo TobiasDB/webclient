@@ -51,7 +51,7 @@ def main() -> None:
     with WebClient() as wc:
         h1("Step 1 - author ONCE (LLM authors + the pipeline VALIDATES the query)")
         kv("authoring llm", f"real ({cheapest_model()})" if live else "scripted (offline demo)")
-        artifact = write_query(f"{base}/", brief, wc=wc, llm=llm, browser=False)
+        artifact = write_query(f"{base}/lab/shop", brief, wc=wc, llm=llm, browser=False)
         assert artifact is not None, "authoring failed"
         kv("query", artifact.describe)
         kv("tested", f"{artifact.tested}  (ran against the page: {artifact.row_count} rows)")

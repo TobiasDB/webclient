@@ -14,7 +14,7 @@ def main() -> None:
     base = serve()
     with WebClient() as wc:
         h1("Drive it one turn at a time, or let it self-drive")
-        with wc.crawl(f"{base}/", max_pages=5, browser=False) as crawl:
+        with wc.crawl(f"{base}/lab/shop", max_pages=5, browser=False) as crawl:
             crawl.step()  # one turn: fetch the seed, discover + score its links
             kv("frontier", [(round(e.score, 2), e.url.replace(base, "") or "/")
                             for e in crawl.frontier])

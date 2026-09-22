@@ -351,6 +351,70 @@ if not d.ok:
 - `examples/` -- runnable live case studies (news scraper, catalogue crawler,
   lazy-expression extractor, sitemap mapper, browser events, error handling).
 
+## Events, traces and replay
+
+Everything the engine does is an event on `wc.bus` (network, DOM, actions, console, plan,
+loop, pipeline, error, script). `with wc.trace("run.trace"):` writes the stream to disk with
+a document snapshot after every fetch / load / interaction, the response bodies, an rrweb
+DOM recording and a Playwright HAR per browser context. Replay it three ways:
+
+```python
+from webclient import WebClient, BrowserConfig
+from webclient.replay import Replay
+
+with Replay("run.trace") as rep:                 # static: offline projections, no network
+    doc = rep.documents()[0]
+    doc.select(".card"), doc.skeleton(), doc.flags(), rep.timeline(), rep.errors()
+
+WebClient(har=str(rep.har_path))                 # har: plans re-execute from the recording
+BrowserConfig(replay_har=str(rep.har_path))      # ...the browser tier too (route_from_har)
+rec.plan.collect()                               # live: re-execute the recorded Plan
+```
+
+The service streams the same events: `ws /events?since=<n>` resumes from a cursor,
+`?trace=<dir>` streams a stored trace.
+
+## Errors and the ledger
+
+Every `WebError` is catalogued (`docs/errors.md`): a `code`, a `remedy` from a closed
+vocabulary (`retry` / `browser` / `proxy` / `stealth` / `credentials` / `fix_selector` / ...),
+a `hint`, and the `op` / `subject` it is bound to. Nothing disappears: raised, returned
+under `RETURN`, or swallowed by a fallback, every error is an `ErrorEvent` on the bus and on
+`doc.errors` / `wc.errors`.
+
+## Loops, drivers and human-in-the-loop
+
+Every auto mode -- the crawl drive, `browser="auto"`'s escalation ladder, the interaction
+and query loops, `wc.locate(seeds, until=...)` -- is one `BoundedLoop` with a swappable
+driver (`wc.driver("resolve", fn)`, `wc.crawl(..., driver=fn)`), manual stepping, and a
+checkpoint: a driver returns an `Ask`, the loop reports `waiting`, and `resume(answer)` /
+`crawl.resume(picks)` / `wc.escalate(doc, "browser")` continues by hand. Pipelines
+(`webclient.pipeline`) are stage DAGs with gates, reviews and the same checkpoints; the
+onboarding pipeline runs `interactive=True` to confirm the chosen source.
+
+## Tools -- one registry, three transports
+
+`webclient.tools` declares every high-level tool once (typed input, documented output, a
+user story); the Python verbs, the MCP tools and the service's `POST /tools/{name}` (+
+`GET /tools`) are generated from it. `docs/tools.md` lists them; `@tool` adds one to all
+three.
+
+## Scripts
+
+Page scripts are named, phased (`init` / `inline` / `load` / `drain` / `unload`), togglable
+and governed: `wc.scripts.register(Script("probe", "() => document.title", on="load"))`,
+`wc.scripts.disable("wc.rrweb")`, `ScriptPolicy(deny=("wc.",))`. A topic script
+(`on="action"`) runs on the live page whenever such an event is published; every run is a
+`ScriptEvent`.
+
+## The lab
+
+`python -m webclient.lab` serves one fixture page per feature (a static shop, a JS-gated
+SPA, an XHR feed, pagination, tabs, shadow DOM, an iframe, a login wall, an anti-bot
+interstitial, redirects, JSON / RSS / PDF, a large page, sitemap + robots, a live app, ...),
+each publishing its expected result at `/lab/<name>.json`. Tests, demos and the docs assert
+against it; `scripts/profile.py` measures against it.
+
 ## Development
 
 ```bash
@@ -360,6 +424,8 @@ env/bin/python scripts/gen_stubs.py --check              # fail if stubs are sta
 env/bin/mypy --strict webclient && env/bin/pyright webclient   # full strictness
 env/bin/black webclient scripts tests demo.py            # format
 env/bin/python demo.py                                   # end-to-end showcase
+make check                                              # the whole gate (stubs, types, docs, tests)
+make docs                                               # generated reference + the mkdocs site
 ```
 
 If you change the typed surface (a Core field or a backing op signature),

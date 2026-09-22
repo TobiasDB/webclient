@@ -1,0 +1,49 @@
+site_name: webclient
+site_description: A declarative web client — fetch, select, extract, render, drive a browser, replay.
+docs_dir: docs
+site_dir: site
+theme:
+  name: material
+  features: [navigation.sections, navigation.top, content.code.copy, search.suggest]
+  palette:
+    - scheme: default
+      primary: black
+      toggle: { icon: material/brightness-7, name: dark }
+    - scheme: slate
+      primary: black
+      toggle: { icon: material/brightness-4, name: light }
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: sphinx
+            show_source: false
+            members_order: source
+            show_root_heading: true
+markdown_extensions:
+  - admonition
+  - toc: { permalink: true }
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - tables
+nav:
+  - Home: index.md
+  - Guide:
+      - Lazy queries: llm-lazy-queries.md
+      - User stories: user-stories.md
+      - Friction log: friction.md
+  - Reference (generated):
+      - Tools: tools.md
+      - Errors: errors.md
+      - Signals & flags: signals.md
+      - API: api.md
+  - Design:
+      - Resiliency: design/resiliency.md
+  - Research:
+      - Competitors: research/competitors.md
+      - Crawl: research/crawl.md
+      - DOM & events: research/dom-events.md
+      - Sitemap: research/sitemap.md
+      - Summary: research/summary.md
