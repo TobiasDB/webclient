@@ -129,3 +129,4 @@ demos/query_wireframe.html
 site/
 profile.svg
 *.trace/
+traces/

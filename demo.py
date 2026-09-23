@@ -1,9 +1,11 @@
 """demo.py -- one clean tour of every implemented webclient feature.
 
 Maintained with every milestone. Sections marked [M<n>]/[P<n>] appear as
-their milestone lands.
+their milestone lands; ``roadmap_tour`` at the end covers the 2026-09 roadmap
+(the ledger, traces + replay, tools, scripts + rrweb, loops, patterns, the UI)
+against the lab and leaves ``traces/demo`` for ``make serve`` -> /ui.
 
-Runs fully offline: it serves its own demo site on localhost.
+Runs fully offline: it serves its own demo site on localhost (needs chromium).
 
     env/bin/python demo.py
 """
@@ -779,6 +781,85 @@ def main() -> None:
         )
     server.should_exit = True
     app.state.wc.close()
+
+    roadmap_tour()
+
+
+def roadmap_tour() -> None:
+    """[R] The roadmap features (Phases 0-7, 2026-09): the error ledger, traces + the three
+    replay modes, the tool registry, named scripts + rrweb, loops with drivers / checkpoints,
+    pattern hints, and the UI -- all against the LAB (``webclient.lab``), the fixture site
+    that tests, demos and docs share. Writes ``traces/demo`` so ``make serve`` shows it at
+    http://localhost:8000/ui/ ."""
+    import shutil
+    from pathlib import Path
+
+    from webclient import Ask, Script
+    from webclient.lab import serve as serve_lab
+    from webclient.replay import Replay
+    from webclient.tools import TOOLS, dispatch
+    from webclient.trace import read
+
+    lab = serve_lab()
+    trace_dir = Path("traces") / "demo"
+    shutil.rmtree(trace_dir, ignore_errors=True)
+    print("\n== roadmap tour (lab at", lab + "/lab )")
+
+    with WebClient(timeout=15.0) as wc, wc.trace(trace_dir):
+        # [P0/P1] Errors are catalogued + bound, and NOTHING disappears: a RETURN-policy miss
+        # still lands on the ledger (doc.errors / wc.errors) as an ErrorEvent in the trace.
+        shop = wc.fetch(f"{lab}/lab/shop")
+        shop.select(".nope", error=RETURN)
+        err = shop.errors[0]
+        print("ledger:        ", err.code, "| remedy:", err.remedy, "| op:", err.op, "| raised:", wc.errors[-1].raised)
+
+        # [P2] Pattern hints: the repeating record list to select_all, without an LLM.
+        hint = shop.patterns(for_="extract")[0]
+        print("pattern:       ", hint.name, hint.subject, f"x{hint.count}", "conf", hint.confidence)
+
+        # [P4] The tool registry: one declaration -> Python / MCP / POST /tools/{name}.
+        card = dispatch("card", {"url": f"{lab}/lab/shop"}, wc)
+        print("tools:         ", len(TOOLS), "registered | card:", card["title"], card["flags"], card["final_tier"])
+
+        # [P3] Loops: locate = a crawl with a goal; a resolve driver may ASK a human.
+        found = wc.locate(f"{lab}/lab/shop", until=lambda c: (c.title or "").startswith("About"),
+                          browser=False, obey_robots=False, max_pages=6, width=2)
+        print("locate:        ", found.reason, [p.title for p in found.found], "after", found.rounds, "round(s)")
+        wc.driver("resolve", lambda obs: Ask(reason="render?", options=["browser"]) if "spa" in obs.present else None)
+        spa = wc.fetch(f"{lab}/lab/spa", browser="auto")
+        print("resolve ask:   ", spa.pending.reason if spa.pending else None, "| tier:", spa.transport().final_tier)
+        rendered = wc.escalate(spa, "browser")  # the human's answer: one hop, by hand
+        print("escalated:     ", rendered.transport().escalation, "| records:", len(rendered.select_all("li.item")))
+        wc.release(rendered)
+        wc.driver("resolve", None)
+
+        # [P2] Named, phased, togglable scripts (+ rrweb recording, on because we are tracing).
+        wc.scripts.register(Script("demo.title", "() => document.title", on="load"))
+        live = wc.ref(f"{lab}/lab/app").resolve(browser=True).collect()
+        live.write("#qty", "2").click("#add").wait_for("#cart li")
+        ran = [s.script for s in wc.bus.since(0, topic="script") if s.script == "demo.title"]
+        print("scripts:       ", [s.name for s in wc.scripts.list()][:4], "... | demo.title ran:", bool(ran))
+        wc.release(live)
+
+    # [P1] Replay, three ways -- offline projections, a HAR, or the live plan.
+    reader = read(trace_dir)
+    print("trace:         ", reader.manifest["events"], "events |", len(reader.snapshots), "snapshots |",
+          len(reader.rrweb()), "rrweb events |", [p.name for p in reader.har_files])
+    with Replay(trace_dir) as rep:
+        offline = rep.document(shop.name)
+        assert offline is not None
+        print("static replay: ", [c.select(".title").attr("text") for c in offline.select_all(hint.subject)],
+              "| same skeleton:", offline.skeleton() == shop.skeleton())
+        cart = rep.document(live.name)
+        assert cart is not None
+        print("last snapshot: ", [li.attr("text") for li in cart.select_all("#cart li")])
+        har = rep.har_path
+    with WebClient(har=str(har)) as offline_wc:
+        again = offline_wc.fetch(f"{lab}/lab/shop")
+        miss = offline_wc.fetch(f"{lab}/lab/never", optional=True)
+        print("har replay:    ", again.title, "| unrecorded ->", miss.error.code if miss.error else None)
+
+    print("\nUI: run `make serve` then open http://localhost:8000/ui/  (trace 'demo' is listed)")
 
 
 if __name__ == "__main__":
