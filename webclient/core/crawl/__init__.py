@@ -202,6 +202,9 @@ class Crawl(SessionCore, ICrawl[T], Generic[T]):
         from ...models import LoopEvent
 
         self._pending = None
+        engine = getattr(self._client, "_the_engine", lambda: None)()
+        if engine is not None:
+            engine.waiting.pop(self.id or f"crawl:{id(self)}", None)
         bus = getattr(self._client, "bus", None)
         if bus is not None:
             bus.publish(LoopEvent(loop="crawl", phase="resumed", round=self._round,

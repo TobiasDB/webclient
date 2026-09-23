@@ -1282,6 +1282,7 @@ class WebClient(SessionCore, IWebClient):
             if state.resp is not None and state.doc.error is None and state.doc._page is None:
                 self._capture(state.doc, ref, state.resp)
             state.doc._pending = None
+            self._the_engine().waiting.pop(doc.name, None)
             return cast(Document, state.doc)
 
         return cast(Document, self.bridge(_hop()))

@@ -253,13 +253,15 @@ class CrawlBacking(Backing):
         from ...loop import Ask
 
         driver = core._driver
+        engine = getattr(core._client, "_the_engine", lambda: None)()
         if driver is None:  # the engine's default crawl driver, if one was installed
-            engine = getattr(core._client, "_the_engine", lambda: None)()
             driver = getattr(engine, "drivers", {}).get("crawl") if engine is not None else None
         if driver is not None:
             picked = driver(core)
             if isinstance(picked, Ask):  # a checkpoint: the caller resumes with picks
                 core._pending = picked
+                if engine is not None:
+                    engine.waiting[core.id or f"crawl:{id(core)}"] = core
                 self._emit(core, "waiting", ask=picked.model_dump(mode="json"))
                 return []
             return cast("list[Edge]", picked)

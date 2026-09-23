@@ -198,4 +198,5 @@ class ResolveLoop:
             verdict = self.loop.step(state)
         if verdict.reason == "waiting":
             state.doc._pending = verdict.ask
+            self.client._the_engine().waiting[state.doc.name] = state.doc
         return state.doc, verdict

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from collections import OrderedDict
 from typing import Any, cast
 
@@ -130,6 +131,7 @@ def create_app(
     max_sessions: int | None = None,
     max_session_docs: int | None = None,
     block_private_hosts: bool = False,
+    traces_dir: "str | Path | None" = None,
 ) -> FastAPI:
     """A FastAPI app exposing a WebClient over ``/execute`` (Bearer-token
     authorised when ``token`` is set). An existing client may be supplied;
@@ -138,7 +140,8 @@ def create_app(
     ``max_session_docs`` caps EACH session's own document store (its per-session
     resource policy -- the handles a session may hold), and ``block_private_hosts``
     turns on the SSRF guard for a hosted server (refuses plans that resolve to
-    loopback/private hosts)."""
+    loopback/private hosts). ``traces_dir`` is where the UI (``/ui``) finds stored traces
+    (``/traces``); default ``./traces`` (or ``WEBCLIENT_TRACES_DIR``)."""
     caps = _settings().service
     max_docs = caps.max_docs if max_docs is None else max_docs
     max_sessions = caps.max_sessions if max_sessions is None else max_sessions
@@ -154,6 +157,9 @@ def create_app(
     #: each server-side session's OWN document store (2b: a session's held handles are
     #: bounded and disposed with it, not leaked into the shared LRU). Keyed by session id.
     app.state.session_docs = {}
+    import os
+
+    app.state.traces_dir = Path(traces_dir or os.environ.get("WEBCLIENT_TRACES_DIR") or "traces")
 
     def _auth(authorization: str | None) -> None:
         if token is not None and authorization != f"Bearer {token}":
@@ -424,6 +430,11 @@ def create_app(
             "plan": expr._plan.model_dump(mode="json"),
             "blob": expr.to_blob(),
         }
+        if body.get("wireframe"):  # the plan pictured (a self-contained HTML page)
+            from .query.viz import explain, wireframe
+
+            out["wireframe"] = wireframe(expr._plan)
+            out["explain"] = explain(expr._plan)
         if body.get("run"):
             if body.get("document_id") in app.state.docs:
                 context: Any = app.state.docs[body["document_id"]]
@@ -444,6 +455,123 @@ def create_app(
         return out
 
     # -- live event stream ---------------------------------------------------
+    # -- the UI (a static, no-build app) + its data endpoints ------------------------
+    ui_dir = Path(__file__).parent / "ui"
+    if ui_dir.exists():
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount("/ui", StaticFiles(directory=str(ui_dir), html=True), name="ui")
+
+    def _trace_dir(trace_id: str) -> "Path | JSONResponse":
+        """The directory of a stored trace by id (its directory name); 404 when unknown or
+        outside ``traces_dir`` (no path escapes)."""
+        base = Path(app.state.traces_dir).resolve()
+        target = (base / trace_id).resolve()
+        if not str(target).startswith(str(base)) or not (target / "manifest.json").exists():
+            return _error(404, "InvalidRequest", f"no trace {trace_id!r}", hint="GET /traces lists them")
+        return target
+
+    @app.get("/traces", response_model=None)
+    def traces(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        """The stored traces under ``traces_dir``: id, event count, started / finished."""
+        _auth(authorization)
+        import json as _json
+
+        base = Path(app.state.traces_dir)
+        out: list[dict[str, Any]] = []
+        if base.exists():
+            for d in sorted(base.iterdir()):
+                m = d / "manifest.json"
+                if m.exists():
+                    meta = _json.loads(m.read_text())
+                    out.append({"id": d.name, "events": meta.get("events"), "started": meta.get("started"),
+                                "finished": meta.get("finished"), "schema_version": meta.get("schema_version")})
+        return out
+
+    @app.get("/traces/{trace_id}", response_model=None)
+    def trace_manifest(trace_id: str, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        _auth(authorization)
+        d = _trace_dir(trace_id)
+        if isinstance(d, JSONResponse):
+            return d
+        from .trace import read as _read
+
+        r = _read(d)
+        return {**r.manifest, "id": trace_id, "snapshots": len(r.snapshots), "har": [p.name for p in r.har_files]}
+
+    @app.get("/traces/{trace_id}/events", response_model=None)
+    def trace_events(trace_id: str, topic: str = "", authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        """The trace's events as JSON (byte payloads dropped; ``asset`` points at them)."""
+        _auth(authorization)
+        d = _trace_dir(trace_id)
+        if isinstance(d, JSONResponse):
+            return d
+        from .trace import read as _read
+
+        return [_wire(e) for e in _read(d).events if not topic or e.topic.startswith(topic)]
+
+    @app.get("/traces/{trace_id}/rrweb", response_model=None)
+    def trace_rrweb(trace_id: str, document_id: str | None = None, authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        """The trace's rrweb events, flattened -- feed them to rrweb-player as-is."""
+        _auth(authorization)
+        d = _trace_dir(trace_id)
+        if isinstance(d, JSONResponse):
+            return d
+        from .trace import read as _read
+
+        return _read(d).rrweb(document_id)
+
+    @app.get("/traces/{trace_id}/asset/{rel:path}", response_model=None)
+    def trace_asset(trace_id: str, rel: str, authorization: str | None = Header(default=None)) -> Any:
+        """An offloaded asset (a snapshot's HTML, a body, an rrweb chunk, a HAR) by its
+        relative path inside the trace."""
+        _auth(authorization)
+        d = _trace_dir(trace_id)
+        if isinstance(d, JSONResponse):
+            return d
+        target = (d / rel).resolve()
+        if not str(target).startswith(str(d)) or not target.is_file():
+            return _error(404, "InvalidRequest", f"no asset {rel!r} in trace {trace_id!r}")
+        from fastapi.responses import FileResponse
+
+        media = "text/html; charset=utf-8" if target.suffix == ".html" else (
+            "application/json" if target.suffix in (".json", ".har") else "application/octet-stream")
+        return FileResponse(str(target), media_type=media)
+
+    @app.get("/loops", response_model=None)
+    def loops(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        """The loops on this engine waiting for a human decision (an ``Ask``): a crawl
+        waiting for picks, a document mid-ladder waiting for a tier."""
+        _auth(authorization)
+        out: list[dict[str, Any]] = []
+        for key, obj in app.state.wc._the_engine().waiting.items():
+            ask = getattr(obj, "pending", None)
+            if ask is None:
+                continue
+            kind = "crawl" if hasattr(obj, "frontier") else "resolve"
+            out.append({"id": key, "kind": kind, "ask": ask.model_dump(mode="json")})
+        return out
+
+    @app.post("/loops/{loop_id}/resume", response_model=None)
+    def resume_loop(loop_id: str, body: dict[str, Any], authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """Answer a waiting loop: ``{"answer": ...}`` -- for a crawl the picks (a URL or a list),
+        for a document mid-ladder the tier (``"browser"`` / ``"proxy"``)."""
+        _auth(authorization)
+        engine = app.state.wc._the_engine()
+        obj = engine.waiting.get(loop_id)
+        if obj is None or getattr(obj, "pending", None) is None:
+            return _error(404, "InvalidRequest", f"no waiting loop {loop_id!r}", hint="GET /loops lists them")
+        answer = body.get("answer")
+        try:
+            if hasattr(obj, "frontier"):  # a crawl
+                picks = answer if isinstance(answer, list) else ([answer] if answer else [])
+                obj.resume(picks, run=bool(body.get("run", True)))
+                return {"id": loop_id, "kind": "crawl", "pages": len(obj.pages), "waiting": obj.pending is not None}
+            doc = app.state.wc.escalate(obj, str(answer))
+            return {"id": loop_id, "kind": "resolve", "ok": doc.ok, "tiers": list(doc._tiers)}
+        except WebException as exc:
+            return _error(502, exc.error.type, str(exc), retriable=exc.error.retriable, error=exc.error)
+
     def _wire(event: Any) -> dict[str, Any]:
         """An event as JSON for the socket: byte payloads are dropped (a snapshot's content
         is not streamed; the trace holds it) and a reference is rendered as its url."""

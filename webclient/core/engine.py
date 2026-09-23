@@ -52,6 +52,10 @@ class Engine:
         #: the swappable auto backends per loop (``"resolve"`` / ``"crawl"``): absent = the
         #: built-in. Set through ``WebClient.driver(name, fn)``.
         self.drivers: dict[str, Any] = {}
+        #: loops checkpointed on an ``Ask`` and waiting for a human, by id -- a crawl
+        #: (``crawl.resume(picks)``), a document mid-ladder (``wc.escalate(doc, tier)``) --
+        #: so a UI / the service can list and answer them (``/loops``).
+        self.waiting: dict[str, Any] = {}
         #: the active trace directory while ``WebClient.trace()`` is open (None otherwise):
         #: the client emits snapshots + captures bodies/headers only then, and the browser
         #: factory records a HAR per context into ``<trace>/har``.

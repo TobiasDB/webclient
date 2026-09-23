@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webclient</title>
+<link rel="stylesheet" href="vendor/rrweb-player.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <strong>webclient</strong>
+  <nav>
+    <button data-mode="traces" class="active">Traces</button>
+    <button data-mode="live">Live</button>
+  </nav>
+  <span id="status" class="muted"></span>
+</header>
+<main>
+  <aside id="sidebar">
+    <section id="traces-panel">
+      <h2>Traces <button id="refresh" title="reload">↻</button></h2>
+      <ul id="traces"></ul>
+    </section>
+    <section id="filters">
+      <h2>Topics</h2>
+      <div id="topics"></div>
+    </section>
+    <section id="loops-panel">
+      <h2>Loops &amp; pipelines</h2>
+      <div id="loops"></div>
+    </section>
+  </aside>
+  <section id="timeline">
+    <div class="bar">
+      <input id="search" placeholder="filter events (topic, url, text)…">
+      <label><input type="checkbox" id="follow" checked> follow</label>
+      <span id="count" class="muted"></span>
+    </div>
+    <ol id="events"></ol>
+  </section>
+  <section id="detail">
+    <div class="tabs">
+      <button data-tab="event" class="active">Event</button>
+      <button data-tab="snapshot">Snapshot</button>
+      <button data-tab="replay">DOM replay</button>
+      <button data-tab="plan">Plan</button>
+      <button data-tab="errors">Errors</button>
+    </div>
+    <div class="tab" data-tab="event"><pre id="event-json" class="muted">Select an event.</pre></div>
+    <div class="tab hidden" data-tab="snapshot"><div id="snapshot-meta" class="muted"></div><iframe id="snapshot" sandbox=""></iframe></div>
+    <div class="tab hidden" data-tab="replay"><div id="player"></div><p id="replay-note" class="muted"></p></div>
+    <div class="tab hidden" data-tab="plan">
+      <textarea id="plan-blob" placeholder='paste a plan blob or JSON, e.g. {"root":"Reference","steps":[...]}'></textarea>
+      <button id="plan-render">Render wireframe</button>
+      <pre id="plan-describe" class="muted"></pre>
+      <iframe id="wireframe" sandbox=""></iframe>
+    </div>
+    <div class="tab hidden" data-tab="errors"><ul id="errors"></ul></div>
+  </section>
+</main>
+<script src="vendor/rrweb-player.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
