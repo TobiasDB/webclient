@@ -59,6 +59,8 @@ class LimitsSettings(BaseModel):
     engine_stop_timeout: float = 5.0  # seconds to drain the engine loop on close
     host_schedule_max: int = 4096  # per-host politeness entries kept before pruning
     event_history: int = 10_000  # events the bus retains for since()/resume
+    session_pages: int = 0  # max browser pages ONE session may hold at once (0 = no quota)
+    page_idle_ttl: float = 600.0  # seconds a keep_alive=True page may live before the safety-net release
     error_ledger: int = 1000  # ErrorEvents the engine keeps on wc.errors
 
 

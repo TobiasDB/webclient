@@ -81,6 +81,8 @@ class Engine:
             },
             limits={"http": bc.pool_http, "page": bc.pool_pages},
             acquire_timeout=current().limits.pool_acquire_timeout,
+            per_owner={"page": current().limits.session_pages} if current().limits.session_pages else None,
+            on_event=self._resource_event,
         )
         log.debug("engine transport: http=%d pages=%d headless=%s stealth=%s",
                   bc.pool_http, bc.pool_pages, bc.headless, bc.stealth)
@@ -91,14 +93,15 @@ class Engine:
         """Whether this engine dispatches over a remote :mod:`.service` transport."""
         return self._service is not None
 
-    def go_remote(self, url: str, token: str | None, timeout: float) -> None:
+    def go_remote(self, url: str, token: str | None, timeout: float, retry: Any = None) -> None:
         """Put this engine into ``"remote"`` mode over the service at ``url`` -- swap the
-        local pool for a :class:`~.service.ServiceTransport` the engine dispatches through."""
+        local pool for a :class:`~.service.ServiceTransport` the engine dispatches through
+        (``retry``: the connection's resiliency policy, default ``RetryPolicy()``)."""
         from .service import ServiceTransport
 
         self._mode = "remote"
         self._pool = None  # no local pool: execution is a remote round-trip
-        self._service = ServiceTransport(url, token, timeout)
+        self._service = ServiceTransport(url, token, timeout, retry=retry)
         log.info("engine in remote mode -> %s", url)
 
     def execute(self, client: Any, expr: Any, context: Any = None, *, stream: bool = False) -> Any:
@@ -122,6 +125,32 @@ class Engine:
 
             self._loop = EngineLoop()
         return self._loop
+
+    def _resource_event(self, what: str, detail: dict[str, Any]) -> None:
+        """The pool's observer: a lease waited / was created / the pool is exhausted / a
+        quota held -- published as a ``ResourceEvent`` (the scalability stream, N15)."""
+        from ..models import ResourceEvent
+
+        self.bus.publish(ResourceEvent(source="pool", detail={"what": what, **detail}))
+
+    def resources(self) -> dict[str, Any]:
+        """A snapshot of this engine's resource usage: pool occupancy + per-owner pages,
+        process RSS (MB), the error ledger size, loops waiting, scripts registered."""
+        import resource as _res
+        import sys
+
+        rss = _res.getrusage(_res.RUSAGE_SELF).ru_maxrss
+        rss_mb = rss / (1024 * 1024) if sys.platform == "darwin" else rss / 1024
+        pool = self._pool.stats().model_dump() if self._pool is not None else {}
+        return {
+            "pool": pool,
+            "rss_mb": round(rss_mb, 1),
+            "errors": len(self._errors),
+            "waiting": list(self.waiting),
+            "scripts": len(self._scripts.list()) if self._scripts is not None else 0,
+            "mode": self._mode,
+            "events": self._bus.cursor if self._bus is not None else 0,
+        }
 
     @property
     def tracing(self) -> bool:

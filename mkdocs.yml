@@ -41,6 +41,7 @@ nav:
       - API: api.md
   - Design:
       - Resiliency: design/resiliency.md
+      - Scaling: design/scaling.md
   - Research:
       - Competitors: research/competitors.md
       - Crawl: research/crawl.md

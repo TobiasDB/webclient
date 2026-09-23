@@ -287,7 +287,7 @@ else:  # at runtime a dispatch view IS the core (a dispatch mode, not a subtype)
         ``WebClient`` (with any ``**policy`` kwargs) and puts its engine into remote mode
         (``Engine.go_remote``); its verbs round-trip a one-step plan to the service."""
         rc = WebClient(**policy)
-        rc._the_engine().go_remote(url, token, rc.timeout)
+        rc._the_engine().go_remote(url, token, rc.timeout, retry=rc.resolve.retry if rc.resolve else None)
         rc._open_remote_session()  # a remote client IS a session: its own server-side scope
         return rc
 

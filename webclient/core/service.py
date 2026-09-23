@@ -141,10 +141,41 @@ class ServiceTransport:
     it -- so a session's server identity travels as the calling client's ``_server_sid``,
     not on the transport. The engine's ``execute`` routes here when it is set."""
 
-    def __init__(self, url: str, token: str | None, timeout: float) -> None:
+    def __init__(self, url: str, token: str | None, timeout: float, retry: Any = None) -> None:
+        from ..policy import RetryPolicy
+
         self.url = url.rstrip("/")
         self.token = token
         self.http = httpx.Client(timeout=timeout)
+        #: the RESILIENCY policy for the service connection itself (roadmap N17): a
+        #: transport error or a 429 / 5xx from the service is retried per ``retry``.
+        self.retry: Any = retry if retry is not None else RetryPolicy()
+
+    def _post(self, path: str, body: dict[str, Any]) -> Any:
+        """POST to the service with the retry policy: transport errors and retriable
+        statuses are re-sent with backoff (honouring Retry-After); the last response is
+        returned for the caller to interpret."""
+        import time as _time
+
+        attempt = 0
+        while True:
+            try:
+                resp = self.http.post(f"{self.url}{path}", json=body, headers=self._headers())
+            except httpx.TransportError:
+                if not self.retry.on_transport or attempt >= self.retry.max:
+                    raise
+                resp = None
+            if resp is not None and resp.status_code not in self.retry.on_statuses:
+                return resp
+            if attempt >= self.retry.max:
+                return resp if resp is not None else self.http.post(f"{self.url}{path}", json=body, headers=self._headers())
+            delay = self.retry.base * (2 ** attempt) if self.retry.backoff == "exp" else self.retry.base
+            if resp is not None and self.retry.respect_retry_after:
+                after = resp.headers.get("retry-after")
+                if after and after.isdigit():
+                    delay = min(float(after), 60.0)
+            _time.sleep(delay)
+            attempt += 1
 
     def _headers(self) -> dict[str, str]:
         """The bearer-auth header for a token-protected service (empty when no token)."""
@@ -174,7 +205,7 @@ class ServiceTransport:
             body["url"] = context.dispatch("url")
         elif isinstance(context, Expr):
             body["context_plan"] = context._plan.model_dump()
-        resp = self.http.post(f"{self.url}/execute", json=body, headers=self._headers())
+        resp = self._post("/execute", body)
         _raise_for_body(resp)
         from .client import _materialize
 
@@ -195,7 +226,7 @@ class ServiceTransport:
     def open_session(self, ttl: float | None) -> str:
         """Create a server-side session and return its id (stored on the child session as
         ``_server_sid`` and threaded into its plans by :meth:`execute`)."""
-        resp = self.http.post(f"{self.url}/sessions", json={"ttl": ttl}, headers=self._headers())
+        resp = self._post("/sessions", {"ttl": ttl})
         resp.raise_for_status()
         return cast(str, resp.json()["id"])
 

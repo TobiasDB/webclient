@@ -759,7 +759,7 @@ class WebClient(SessionCore, IWebClient):
         engine put into remote mode (``Engine.go_remote``), so ``execute`` / ``crawl`` /
         ``session`` route through the engine's transport uniformly."""
         rc = WebClient(timeout=self.timeout)
-        rc._the_engine().go_remote(url, token, self.timeout)
+        rc._the_engine().go_remote(url, token, self.timeout, retry=self.resolve.retry if self.resolve else None)
         rc._open_remote_session()  # a remote client IS a session: its own server-side scope
         return rc
 
@@ -1129,7 +1129,7 @@ class WebClient(SessionCore, IWebClient):
         (optionally replaying an interaction chain, and keeping the page alive for the caller) --
         the live-page path behind interaction/recording, as opposed to the settled-content fetch.
         ``reuse`` (an escalating fetch's doc name) makes the live doc take that slot."""
-        lease = await self.pool.lease("page")
+        lease = await self.pool.lease("page", owner=self.id or "root")  # charged to this session
         browser = cast(Any, lease.client)  # the leased BrowserClient (subclass)
         try:
             # the browser client drives the page and hands back the raw facts
@@ -1165,6 +1165,11 @@ class WebClient(SessionCore, IWebClient):
             doc._keep_alive = bool(keep_alive)  # caller owns the lifecycle if set
             if isinstance(keep_alive, (int, float)) and not isinstance(keep_alive, bool):
                 self._expire_page(doc, float(keep_alive))  # TTL safety-net release
+            elif keep_alive is True:  # a forgotten page still comes back: the idle safety net
+                from ...settings import current
+
+                if current().limits.page_idle_ttl > 0:
+                    self._expire_page(doc, current().limits.page_idle_ttl)
             doc._tiers = ["browser"]  # the tier trail for the transport facet
             self._register(doc, ref, reuse=reuse)
             # a browser render is a navigation too: emit the NavigationEvent the
@@ -1321,6 +1326,13 @@ class WebClient(SessionCore, IWebClient):
             encoding=doc.encoding, content=doc.content, tiers=list(doc._tiers),
             document_id=doc.name, session_id=doc.session_id or None, source="core-trace",
         ))
+
+    # -- resources -------------------------------------------------------------
+    def resources(self) -> "dict[str, Any]":
+        """A snapshot of the engine's resource usage (pool occupancy and per-session pages,
+        RSS, ledger size, loops waiting, event cursor) -- what ``/health`` reports and the
+        scalability work measures (roadmap N15)."""
+        return self._the_engine().resources()
 
     # -- the error ledger ----------------------------------------------------
     @property

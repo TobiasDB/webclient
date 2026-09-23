@@ -197,6 +197,7 @@ def create_app(
             "pool": stats,
             "docs": len(app.state.docs),
             "sessions": len(app.state.sessions),
+            "resources": wc_.resources(),
         }
 
     @app.post("/execute", response_model=None)
