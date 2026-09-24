@@ -796,6 +796,7 @@ class WebClient(SessionCore, IWebClient):
         core.bind(self)
         core._recording = True
         core._record_secrets = set(secrets or [])
+        self._the_engine().last_recorder = core  # so an open trace can take its plan at close
         return core
 
     @property
@@ -1217,6 +1218,9 @@ class WebClient(SessionCore, IWebClient):
         later ``select``/``text_content`` run in-memory on the captured content
         rather than routing to the (loop-bridging) live backing."""
         if doc._lease is not None:
+            from ..document.live import drain_network
+
+            await drain_network(doc)  # under a trace: the last responses, before the page goes
             await self.pool.release(doc._lease)
             doc._lease = None
             doc._page = None
@@ -1293,23 +1297,28 @@ class WebClient(SessionCore, IWebClient):
         return cast(Document, self.bridge(_hop()))
 
     # -- tracing -------------------------------------------------------------
-    def trace(self, path: "str | Path", *, since: int = 0) -> "Trace":
-        """Write a TRACE of everything this engine does into the directory ``path``
-        (``with wc.trace("run.trace"): ...``): every bus event as JSONL, a document
-        snapshot after each fetch / load / interaction, the static tier's response bodies
-        (so a HAR can be rebuilt) and a Playwright HAR per browser context -- the offline,
-        replayable record (see :mod:`webclient.trace` / :mod:`webclient.replay`). ``since``
-        replays the bus's retained history past that cursor into the trace first."""
+    def trace(self, path: "str | Path", *, since: int = 0, plan: Any = None) -> "Trace":
+        """Write a TRACE of everything this engine does into ONE file ``path``
+        (``with wc.trace("run.jsonl"): ...``): every bus event, one per line -- a document
+        snapshot after each fetch / load / interaction, every response body the static tier
+        and the browser saw, the rrweb DOM chunks -- plus the PLAN that produced the run in
+        the footer (``plan=``, or this client's recording session's plan when one is open).
+        Everything a replay needs is in that stream (see :mod:`webclient.trace` /
+        :mod:`webclient.replay`). ``since`` replays the bus's retained history past that
+        cursor into the trace first."""
         from ...trace import Trace
 
         engine = self._the_engine()
-        trace = Trace(path)
+        trace = Trace(path, plan=plan)
         engine.start_trace(str(trace.path))
         trace.attach(self.bus, since=since)
         original_close = trace.close
 
         def _close() -> None:
             engine.stop_trace()
+            if trace.plan is None:  # the plan of this client's (latest) recording session
+                rec = getattr(engine, "last_recorder", None) or self
+                trace.plan = getattr(rec, "_record_chain", None)
             original_close()
 
         trace.close = _close  # type: ignore[method-assign]

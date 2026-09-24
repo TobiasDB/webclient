@@ -34,6 +34,7 @@ from .models import (
     ScriptEvent,
     SnapshotEvent,
     Topic,
+    TraceEvent,
     topic_matches,
 )
 
@@ -245,6 +246,7 @@ __all__ = [
     "ScriptEvent",
     "SnapshotEvent",
     "ResourceEvent",
+    "TraceEvent",
     "CORE_EVENTS",
     "topic_matches",
     # machinery (defined here)

@@ -495,7 +495,7 @@ def test_events_ws_resumes_from_a_cursor_and_replays_a_trace(httpserver, tmp_pat
             assert first["n"] > cursor and first["topic"].startswith("network")
             assert "url" in first and "request" not in first
     # a stored trace streams over the same wire
-    path = tmp_path / "t.trace"
+    path = tmp_path / "t.jsonl"
     with wc.trace(path):
         wc.fetch(httpserver.url_for("/p"))
     with TestClient(app) as tc, tc.websocket_connect(f"/events?trace={path}&topic=snapshot") as ws:

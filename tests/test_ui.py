@@ -16,7 +16,7 @@ PAGE = '<html><head><title>T</title></head><body><main><p class="x">hi</p></main
 @pytest.fixture
 def traced(httpserver, tmp_path):
     httpserver.expect_request("/p").respond_with_data(PAGE, content_type="text/html")
-    with WebClient() as wc, wc.trace(tmp_path / "traces" / "run1"):
+    with WebClient() as wc, wc.trace(tmp_path / "traces" / "run1.jsonl"):
         doc = wc.fetch(httpserver.url_for("/p"))
         doc.select(".nope", error=RETURN)
     return tmp_path / "traces", httpserver.url_for("/p")
@@ -36,18 +36,23 @@ def test_trace_endpoints_feed_the_viewer(traced):
     with TestClient(create_app(wc, traces_dir=traces_dir)) as api:
         listed = api.get("/traces").json()
         assert [t["id"] for t in listed] == ["run1"] and listed[0]["events"] > 0
-        manifest = api.get("/traces/run1").json()
-        assert manifest["snapshots"] == 1 and manifest["schema_version"] == 1
+        summary = api.get("/traces/run1").json()
+        assert summary["snapshots"] == 1 and summary["schema_version"] == 2 and summary["plan"] is False
         events = api.get("/traces/run1/events").json()
         topics = {e["topic"] for e in events}
-        assert {"snapshot", "network.navigation", "error"} <= topics
+        assert {"trace", "snapshot", "network.navigation", "error"} <= topics
         snap = next(e for e in events if e["topic"] == "snapshot")
-        assert "content" not in snap and snap["asset"].startswith("snapshots/")
-        assert api.get(f"/traces/run1/asset/{snap['asset']}").text == PAGE
+        assert "content" not in snap  # the wire view; the event in full has it
+        assert api.get(f"/traces/run1/events/{snap['n']}").json()["content"] == PAGE
+        nav = next(e for e in events if e["topic"] == "network.navigation")
+        assert nav["url"] == url
         err = next(e for e in events if e["topic"] == "error")
         assert err["error"]["code"] == "select.no_match"
-        assert api.get("/traces/run1/rrweb").json() == []  # no browser -> no recording
-        assert api.get("/traces/run1/asset/../manifest.json").status_code == 404
+        rr = api.get("/traces/run1/rrweb").json()  # a static run still replays: a synthesised snapshot + custom events
+        assert [r["type"] for r in rr][:2] == [4, 2] and any(r["type"] == 5 for r in rr)
+        assert api.get("/traces/run1/har").json()["log"]["entries"][0]["request"]["url"] == url
+        assert api.get("/traces/run1/plan").status_code == 404
+        assert api.get("/traces/../run1").status_code == 404
         assert api.get("/traces/nope").status_code == 404
         assert api.get("/traces/run1/events?topic=error").json()[0]["topic"] == "error"
     wc.close()

@@ -2,8 +2,10 @@
 serialiser, the vendored rrweb ``record()`` runs in the page as a named script
 (``wc.rrweb``) and its events -- a full snapshot at load, then node-id-keyed incremental
 mutations, input, scroll and viewport events -- are drained into :class:`RRWebEvent`
-chunks on the bus. A trace offloads each chunk to ``rrweb/<n>.json``; the UI replays them
-with ``rrweb-player`` as-is (the format is rrweb's, untouched).
+chunks on the bus -- ordinary events in the one trace stream. :mod:`webclient.replay.rrweb`
+is the translation layer: the whole stream (recorded chunks, snapshots synthesised for static
+runs, and every other event as an rrweb *custom* event) becomes one rrweb event list that
+``rrweb-player`` drives, and an rrweb recording maps back into our events.
 
 OFF by default (the bundle is ~140 KB injected per page): it is enabled only while a trace
 is active (``with wc.trace(...)``), unless a caller registers/enables ``wc.rrweb`` itself.
@@ -31,7 +33,6 @@ class RRWebEvent(Event):
     topic: str = "rrweb"
     events: list[dict[str, Any]] = []
     count: int = 0
-    asset: str = ""  # a trace's offloaded chunk path
 
 
 @lru_cache(maxsize=1)

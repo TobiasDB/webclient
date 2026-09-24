@@ -1,7 +1,9 @@
-"""HAR (HTTP Archive) support for the ``"har"`` replay mode: build a HAR from a trace's
-network events, load one from disk, and serve it back as an httpx transport so a
-recorded plan re-executes with ZERO network calls (the static tier's twin of Playwright's
-``route_from_har``, which the browser tier uses directly).
+"""HAR (HTTP Archive) support for the ``"har"`` replay mode: a HAR is a TRANSLATION of the
+trace's network events (every ``network.*`` event that carried a body -- the static tier's
+navigations and, under a trace, every response the browser saw), served back as an httpx
+transport so a recorded plan re-executes with ZERO network calls (the static tier's twin
+of Playwright's ``route_from_har``, which the browser tier uses directly). Nothing is
+stored: ``HarTransport("run.jsonl")`` builds it from the stream on the fly.
 
 A HAR entry is matched by ``(method, url)``; a POST also matches on its body. A request
 with no entry gets a ``599`` response carrying ``x-webclient-har: miss`` -- a not-ok
@@ -65,9 +67,9 @@ def har_from_events(events: "list[Any]") -> dict[str, Any]:
         if body is None:
             continue
         req = getattr(e, "request", None)
-        url = ""
+        url = str(getattr(e, "url", "") or "")
         method = getattr(e, "method", None) or "GET"
-        if req is not None:
+        if req is not None and not url:
             try:
                 url = str(req.dispatch("url"))
                 method = str(getattr(req, "method", method) or method)
@@ -103,7 +105,12 @@ class HarTransport(httpx.AsyncBaseTransport):
     a fallback. A miss returns :data:`HAR_MISS` with ``x-webclient-har: miss``."""
 
     def __init__(self, har: "dict[str, Any] | str | Path", *, strict: bool = True) -> None:
-        log = load_har(har) if isinstance(har, (str, Path)) else (har.get("log", har))
+        if isinstance(har, (str, Path)) and str(har).endswith(".jsonl"):  # a TRACE: build the HAR from its stream
+            from ..trace import read
+
+            log = read(har).har()["log"]
+        else:
+            log = load_har(har) if isinstance(har, (str, Path)) else (har.get("log", har))
         self.entries: list[dict[str, Any]] = list(log.get("entries", []))
         self.strict = strict
         self.hits = 0

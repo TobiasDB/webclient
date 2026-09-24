@@ -97,7 +97,7 @@ def test_rrweb_records_under_a_trace(httpserver, wc, tmp_path):
     from webclient.trace import read
 
     httpserver.expect_request("/r").respond_with_data(APP, content_type="text/html")
-    path = tmp_path / "rr.trace"
+    path = tmp_path / "rr.jsonl"
     with wc.trace(path):
         live = wc.ref(httpserver.url_for("/r")).resolve(browser=True).collect()
         assert wc.scripts.get("wc.rrweb").enabled
@@ -106,8 +106,8 @@ def test_rrweb_records_under_a_trace(httpserver, wc, tmp_path):
         wc.release(live)
     assert not wc.scripts.get("wc.rrweb").enabled or not wc._the_engine().tracing
     reader = read(path)
-    events = reader.rrweb()
+    events = reader.rrweb(custom=False)
     types = [e["type"] for e in events]
     assert 2 in types and 3 in types  # a FullSnapshot then IncrementalSnapshots
-    assert (path / "rrweb").exists() and any((path / "rrweb").glob("*.json"))
-    assert reader.rrweb(live.name) == events
+    assert reader.of("rrweb") and all(e.events for e in reader.of("rrweb"))  # chunks inline in the one stream
+    assert reader.rrweb(live.name, custom=False) == events

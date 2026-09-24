@@ -504,81 +504,109 @@ def create_app(
     ]
     app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
 
-    def _trace_dir(trace_id: str) -> "Path | JSONResponse":
-        """The directory of a stored trace by id (its directory name); 404 when unknown or
+    def _trace_file(trace_id: str) -> "Path | JSONResponse":
+        """The file of a stored trace by id (``<traces_dir>/<id>.jsonl``); 404 when unknown or
         outside ``traces_dir`` (no path escapes)."""
         base = Path(app.state.traces_dir).resolve()
-        target = (base / trace_id).resolve()
-        if not str(target).startswith(str(base)) or not (target / "manifest.json").exists():
+        target = (base / f"{trace_id}.jsonl").resolve()
+        if not str(target).startswith(str(base)) or not target.is_file():
             return _error(404, "InvalidRequest", f"no trace {trace_id!r}", hint="GET /traces lists them")
         return target
 
     @app.get("/traces", response_model=None)
     def traces(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
-        """The stored traces under ``traces_dir``: id, event count, started / finished."""
+        """The stored traces under ``traces_dir`` (one ``.jsonl`` each): id, event count,
+        started / finished."""
         _auth(authorization)
-        import json as _json
+        from .trace import read as _read
 
         base = Path(app.state.traces_dir)
         out: list[dict[str, Any]] = []
         if base.exists():
-            for d in sorted(base.iterdir()):
-                m = d / "manifest.json"
-                if m.exists():
-                    meta = _json.loads(m.read_text())
-                    out.append({"id": d.name, "events": meta.get("events"), "started": meta.get("started"),
-                                "finished": meta.get("finished"), "schema_version": meta.get("schema_version")})
+            for f in sorted(base.glob("*.jsonl")):
+                r = _read(f)
+                out.append({"id": f.stem, "events": r.count, "started": r.header.get("started"),
+                            "finished": r.footer.get("finished"), "schema_version": r.schema_version})
         return out
 
     @app.get("/traces/{trace_id}", response_model=None)
-    def trace_manifest(trace_id: str, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+    def trace_summary(trace_id: str, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """The trace's header + footer facts: schema, package version, started / finished,
+        events, snapshots, documents, whether a plan was recorded."""
         _auth(authorization)
-        d = _trace_dir(trace_id)
-        if isinstance(d, JSONResponse):
-            return d
+        f = _trace_file(trace_id)
+        if isinstance(f, JSONResponse):
+            return f
         from .trace import read as _read
 
-        r = _read(d)
-        return {**r.manifest, "id": trace_id, "snapshots": len(r.snapshots), "har": [p.name for p in r.har_files]}
+        return {"id": trace_id, **_read(f).summary()}
 
     @app.get("/traces/{trace_id}/events", response_model=None)
     def trace_events(trace_id: str, topic: str = "", authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
-        """The trace's events as JSON (byte payloads dropped; ``asset`` points at them)."""
+        """The stream as JSON (the wire view: byte payloads and rrweb chunk bodies dropped;
+        ``/traces/{id}/events/{n}`` has one event in full)."""
         _auth(authorization)
-        d = _trace_dir(trace_id)
-        if isinstance(d, JSONResponse):
-            return d
+        f = _trace_file(trace_id)
+        if isinstance(f, JSONResponse):
+            return f
         from .trace import read as _read
 
-        return [_wire(e) for e in _read(d).events if not topic or e.topic.startswith(topic)]
+        return [_wire(e) for e in _read(f).events if not topic or e.topic.startswith(topic)]
+
+    @app.get("/traces/{trace_id}/events/{n}", response_model=None)
+    def trace_event(trace_id: str, n: int, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """One event in full -- a snapshot's content, a response body (text), an rrweb chunk."""
+        _auth(authorization)
+        f = _trace_file(trace_id)
+        if isinstance(f, JSONResponse):
+            return f
+        from .trace import encode as _encode
+        from .trace import read as _read
+
+        for e in _read(f).events:
+            if e.n == n:
+                return _encode(e)
+        return _error(404, "InvalidRequest", f"no event #{n} in trace {trace_id!r}")
 
     @app.get("/traces/{trace_id}/rrweb", response_model=None)
-    def trace_rrweb(trace_id: str, document_id: str | None = None, authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
-        """The trace's rrweb events, flattened -- feed them to rrweb-player as-is."""
+    def trace_rrweb(trace_id: str, document_id: str | None = None, custom: bool = True,
+                    authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        """The whole stream as rrweb events for one player: the DOM (recorded, or synthesised
+        from the snapshots of a static run) plus every other event as an rrweb custom event
+        tagged with its topic (``custom=false`` for the DOM alone)."""
         _auth(authorization)
-        d = _trace_dir(trace_id)
-        if isinstance(d, JSONResponse):
-            return d
+        f = _trace_file(trace_id)
+        if isinstance(f, JSONResponse):
+            return f
         from .trace import read as _read
 
-        return _read(d).rrweb(document_id)
+        return _read(f).rrweb(document_id, custom=custom)
 
-    @app.get("/traces/{trace_id}/asset/{rel:path}", response_model=None)
-    def trace_asset(trace_id: str, rel: str, authorization: str | None = Header(default=None)) -> Any:
-        """An offloaded asset (a snapshot's HTML, a body, an rrweb chunk, a HAR) by its
-        relative path inside the trace."""
+    @app.get("/traces/{trace_id}/har", response_model=None)
+    def trace_har(trace_id: str, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """The trace's network as a HAR (derived from the stream)."""
         _auth(authorization)
-        d = _trace_dir(trace_id)
-        if isinstance(d, JSONResponse):
-            return d
-        target = (d / rel).resolve()
-        if not str(target).startswith(str(d)) or not target.is_file():
-            return _error(404, "InvalidRequest", f"no asset {rel!r} in trace {trace_id!r}")
-        from fastapi.responses import FileResponse
+        f = _trace_file(trace_id)
+        if isinstance(f, JSONResponse):
+            return f
+        from .trace import read as _read
 
-        media = "text/html; charset=utf-8" if target.suffix == ".html" else (
-            "application/json" if target.suffix in (".json", ".har") else "application/octet-stream")
-        return FileResponse(str(target), media_type=media)
+        return _read(f).har()
+
+    @app.get("/traces/{trace_id}/plan", response_model=None)
+    def trace_plan(trace_id: str, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """The Plan that produced the run: its blob and description (404 when none was recorded)."""
+        _auth(authorization)
+        f = _trace_file(trace_id)
+        if isinstance(f, JSONResponse):
+            return f
+        from .query.expr import from_blob
+        from .trace import read as _read
+
+        blob = _read(f).plan_blob
+        if blob is None:
+            return _error(404, "InvalidRequest", f"trace {trace_id!r} recorded no plan")
+        return {"blob": blob, "describe": from_blob(blob, None).describe()}
 
     @app.get("/loops", response_model=None)
     def loops(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
@@ -615,22 +643,10 @@ def create_app(
             return _error(502, exc.error.type, str(exc), retriable=exc.error.retriable, error=exc.error)
 
     def _wire(event: Any) -> dict[str, Any]:
-        """An event as JSON for the socket: byte payloads are dropped (a snapshot's content
-        is not streamed; the trace holds it) and a reference is rendered as its url."""
-        data = event.model_dump(mode="python", exclude_none=True)
-        data.pop("content", None)
-        data.pop("body", None)
-        req = data.pop("request", None)
-        if req is not None:
-            try:
-                data["url"] = str(event.request.dispatch("url"))
-            except Exception:  # noqa: BLE001
-                pass
-        if "error" in data and hasattr(event, "error"):
-            data["error"] = event.error.model_dump(mode="json", exclude_none=True)
-        import json as _json
+        """An event as JSON for the socket -- the trace's own wire view (payloads dropped)."""
+        from .trace import wire
 
-        return cast("dict[str, Any]", _json.loads(_json.dumps(data, default=str)))
+        return wire(event)
 
     @app.websocket("/events")
     async def events(ws: WebSocket) -> None:
@@ -645,6 +661,9 @@ def create_app(
         if trace_path:
             from .trace import read as _read_trace
 
+            stored = Path(app.state.traces_dir) / f"{trace_path}.jsonl"  # an id from /traces, or a path
+            if "/" not in trace_path and stored.is_file():
+                trace_path = str(stored)
             speed = float(ws.query_params.get("speed", "0") or 0)
             try:
                 prev_ts: float | None = None

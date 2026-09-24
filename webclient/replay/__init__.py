@@ -1,5 +1,15 @@
-"""The STATIC replay engine (roadmap N3): rebuild what a run saw from its trace, with no
-network and no browser -- ``replay="static"`` in the roadmap's three modes:
+"""The replay interface over ONE stream (roadmap N3, revised 2026-09-24): every replay is a
+projection or a translation of the trace's events, never a second record.
+
+* :meth:`Replay.state` -- the unified cursor: everything the run knew at event ``n`` (the
+  documents at their latest snapshot, the network, console, actions, loops, pipelines,
+  errors so far) -- what a UI pane shows when the scrubber sits at ``n``.
+* :meth:`Replay.rrweb` -- the same stream as one rrweb event list (DOM + every other event as
+  a custom event) for the DOM player; :mod:`.rrweb` translates both ways.
+* :meth:`Replay.har` / :attr:`Replay.har_path` -- the network as a HAR, derived on demand.
+* :meth:`Replay.plan` -- the Plan that produced the run, to re-execute live or over the HAR.
+
+``replay="static"`` in the roadmap's three modes:
 
 * **static** (this module) -- documents and the event timeline are PROJECTIONS of the
   trace's events (every :class:`~webclient.models.SnapshotEvent` becomes an offline
@@ -12,7 +22,7 @@ network and no browser -- ``replay="static"`` in the roadmap's three modes:
   ``WebClient(har=trace.har_path)`` for the static tier (see :mod:`.har`),
   ``BrowserConfig(replay_har=...)`` for the browser tier (Playwright's ``route_from_har``).
 
-    rep = Replay("run.trace")
+    rep = Replay("run.jsonl")
     for doc in rep.documents():           # offline Documents, in capture order
         print(doc.url, doc.title, doc.flags())
     rep.timeline()                        # every event, typed and ordered
@@ -20,6 +30,7 @@ network and no browser -- ``replay="static"`` in the roadmap's three modes:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -29,7 +40,26 @@ from ..trace import TraceReader, read
 if TYPE_CHECKING:
     from ..core.document import Document
 
-__all__ = ["Replay", "offline_client", "document_from_snapshot"]
+__all__ = ["Replay", "ReplayState", "offline_client", "document_from_snapshot"]
+
+
+@dataclass
+class ReplayState:
+    """Everything the run knew at a cursor: one object every replay pane reads from."""
+
+    n: "int | None"
+    events: "list[Event]"
+    documents: "list[Document]"
+    network: "list[Event]"
+    console: "list[Event]"
+    actions: "list[Event]"
+    loops: "list[Event]"
+    pipelines: "list[Event]"
+    errors: "list[Event]"
+    scripts: "list[Event]"
+
+    def document(self, name: str) -> "Document | None":
+        return next((d for d in self.documents if d.name == name), None)
 
 
 def offline_client() -> Any:
@@ -104,18 +134,63 @@ class Replay:
         """The trace's ErrorEvents -- the ledger as recorded."""
         return self.reader.of("error")
 
+    def har(self) -> dict[str, Any]:
+        """The trace's network as a HAR ``log`` (derived from the stream)."""
+        return self.reader.har()
+
     @property
     def har_path(self) -> "Path | None":
-        """The merged HAR for ``"har"`` replay, written next to the trace on first use."""
-        merged = self.reader.har()
+        """A HAR FILE for the replayers that need one (``WebClient(har=)``,
+        ``BrowserConfig(replay_har=)``) -- derived from the stream into a cache next to the
+        system temp dir (never stored in the trace), refreshed when the trace is newer."""
+        import hashlib
+        import tempfile
+
+        merged = self.har()
         if not merged["log"]["entries"]:
             return None
         from .har import save_har
 
-        target = self.path / "replay.har"
-        if not target.exists():
+        key = hashlib.sha1(str(self.path.resolve()).encode()).hexdigest()[:16]
+        target = Path(tempfile.gettempdir()) / "webclient-har" / f"{key}.har"
+        if not target.exists() or target.stat().st_mtime < self.path.stat().st_mtime:
             save_har(merged, target)
         return target
+
+    def rrweb(self, document_id: "str | None" = None, *, custom: bool = True) -> "list[dict[str, Any]]":
+        """The stream as rrweb events for the DOM player (see :mod:`.rrweb`)."""
+        return self.reader.rrweb(document_id, custom=custom)
+
+    def plan(self, client: Any = None) -> Any:
+        """The Plan that produced the run (``None`` when none was recorded), bound to
+        ``client`` so ``.collect()`` re-executes it -- live, or over the HAR with
+        ``WebClient(har=rep.har_path)``."""
+        blob = self.reader.plan_blob
+        if blob is None:
+            return None
+        from ..query.expr import from_blob
+
+        return from_blob(blob, client)
+
+    def state(self, n: "int | None" = None) -> "ReplayState":
+        """The unified cursor: what the run knew after event ``n`` (default: everything)."""
+        events = [e for e in self.reader.events if n is None or (e.n or 0) <= n]
+        latest: dict[str, SnapshotEvent] = {}
+        for e in events:
+            if isinstance(e, SnapshotEvent) and e.document_id:
+                latest[e.document_id] = e
+        docs = [document_from_snapshot(s, events, client=self.client) for s in latest.values()]
+        def by(t: str) -> "list[Event]":
+            return [e for e in events if e.topic == t or e.topic.startswith(t + ".")]
+
+        return ReplayState(n=n, events=events, documents=docs, network=by("network"), console=by("console"),
+                           actions=by("action"), loops=by("loop"), pipelines=by("pipeline"),
+                           errors=by("error"), scripts=by("script"))
+
+    def at(self, ts: float) -> "ReplayState":
+        """The state at an absolute timestamp (seconds)."""
+        n = max((e.n or 0) for e in self.reader.events if (e.ts or 0) <= ts) if self.reader.events else None
+        return self.state(n)
 
     def close(self) -> None:
         self.client.close()

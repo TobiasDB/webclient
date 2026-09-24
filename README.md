@@ -354,21 +354,24 @@ if not d.ok:
 ## Events, traces and replay
 
 Everything the engine does is an event on `wc.bus` (network, DOM, actions, console, plan,
-loop, pipeline, error, script). `with wc.trace("run.trace"):` writes the stream to disk with
-a document snapshot after every fetch / load / interaction, the response bodies, an rrweb
-DOM recording and a Playwright HAR per browser context. Replay it three ways:
+loop, pipeline, error, script). `with wc.trace("run.jsonl"):` writes that stream to ONE file:
+a document snapshot after every fetch / load / interaction, every response body the static
+tier and the browser saw, the rrweb DOM chunks, and the plan that produced the run in the
+footer. Every replay is a translation of that one stream -- there are no sidecar artefacts:
 
 ```python
 from webclient import WebClient, BrowserConfig
 from webclient.replay import Replay
 
-with Replay("run.trace") as rep:                 # static: offline projections, no network
+with Replay("run.jsonl") as rep:                 # static: offline projections, no network
     doc = rep.documents()[0]
     doc.select(".card"), doc.skeleton(), doc.flags(), rep.timeline(), rep.errors()
+    rep.state(n)                                 # the unified cursor: everything known at event n
+    rep.rrweb()                                  # the stream as rrweb events (DOM + custom) for one player
 
-WebClient(har=str(rep.har_path))                 # har: plans re-execute from the recording
-BrowserConfig(replay_har=str(rep.har_path))      # ...the browser tier too (route_from_har)
-rec.plan.collect()                               # live: re-execute the recorded Plan
+WebClient(har="run.jsonl")                       # har: the network served from the trace itself
+BrowserConfig(replay_har=str(rep.har_path))      # ...the browser tier too (a derived HAR file)
+rep.plan(wc).collect()                           # live: re-execute the recorded Plan
 ```
 
 The service streams the same events: `ws /events?since=<n>` resumes from a cursor,

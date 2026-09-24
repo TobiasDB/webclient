@@ -56,10 +56,12 @@ class Engine:
         #: (``crawl.resume(picks)``), a document mid-ladder (``wc.escalate(doc, tier)``) --
         #: so a UI / the service can list and answer them (``/loops``).
         self.waiting: dict[str, Any] = {}
-        #: the active trace directory while ``WebClient.trace()`` is open (None otherwise):
-        #: the client emits snapshots + captures bodies/headers only then, and the browser
-        #: factory records a HAR per context into ``<trace>/har``.
-        self.trace_dir: "str | None" = None
+        #: the active trace path while ``WebClient.trace()`` is open (None otherwise): the
+        #: client emits snapshots + captures bodies/headers only then, and the browser factory
+        #: captures every response it sees onto the bus (``network.resource`` events).
+        self.trace_path: "str | None" = None
+        #: the latest recording session opened on this engine (its plan lands in a trace's footer)
+        self.last_recorder: Any = None
         self._har = har
         if transport:  # a remote client executes over the wire -- no local pool, but keep bus/loop
             self._init_transport(browser_config)
@@ -155,22 +157,23 @@ class Engine:
     @property
     def tracing(self) -> bool:
         """Whether a trace is being written on this engine (snapshots / bodies are captured)."""
-        return self.trace_dir is not None
+        return self.trace_path is not None
 
     def start_trace(self, path: str) -> None:
-        """Mark a trace as active: the browser factory records a HAR per context under it."""
-        self.trace_dir = path
-        if self._pool is not None:
-            factory = self._pool._factories.get("page")
-            if factory is not None:
-                factory.har_dir = str(Path(path) / "har")
+        """Mark a trace as active: the browser factory captures every response (headers +
+        body) so the stream can be replayed as a HAR."""
+        self.trace_path = path
+        self._set_capture(True)
 
     def stop_trace(self) -> None:
-        self.trace_dir = None
+        self.trace_path = None
+        self._set_capture(False)
+
+    def _set_capture(self, on: bool) -> None:
         if self._pool is not None:
             factory = self._pool._factories.get("page")
             if factory is not None:
-                factory.har_dir = None
+                factory.capture = on
 
     @property
     def pool(self) -> ClientPool:

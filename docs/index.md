@@ -8,7 +8,7 @@ against a remote service. Everything the engine does is an **event** you can sub
 ```python
 from webclient import WebClient
 
-with WebClient() as wc, wc.trace("run.trace"):
+with WebClient() as wc, wc.trace("run.jsonl"):
     page = wc.fetch("https://example.com", browser="auto")   # cheapest tier that works
     print(page.card().title, [f.name for f in page.flags()])
     rows = page.select_all(page.patterns(for_="extract")[0].subject).extract(

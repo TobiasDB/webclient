@@ -67,6 +67,8 @@ class NetworkEvent(Event):
     body: bytes | None = None
     resource_type: str | None = None  # browser sub-request kind: xhr/fetch/document/...
     method: str | None = None  # the HTTP method (GET/POST/...), for the correlation request list
+    url: str | None = None  # the request URL as a plain string (what a trace / the wire carries;
+    # ``request`` is the live Reference and is not persisted)
     headers: dict[str, str] | None = None  # the RESPONSE headers when captured (a trace/HAR needs them)
     elapsed: float | None = None  # seconds the request took, when known
     index: int | None = None  # 1-based COMPLETION order among xhr/fetch (the phase counter the
@@ -176,7 +178,6 @@ class SnapshotEvent(Event):
     headers: dict[str, str] = {}
     encoding: str | None = None
     content: bytes | None = None
-    asset: str = ""  # the relative asset path when the content was offloaded (a trace)
     tiers: list[str] = []
 
 
@@ -184,6 +185,16 @@ class ResourceEvent(Event):
     """A resource observation (pool leases, memory, store sizes) for the scalability work."""
 
     topic: Topic = "resource"
+    detail: dict[str, Any] = {}
+
+
+class TraceEvent(Event):
+    """The trace's own header / footer: ``phase="start"`` opens a stream (schema version,
+    package version, started) and ``phase="end"`` closes it (finished, the event count, and
+    the PLAN that produced the run when one was recorded, as a blob in ``detail["plan"]``)."""
+
+    topic: Topic = "trace"
+    phase: Literal["start", "end"] = "start"
     detail: dict[str, Any] = {}
 
 
@@ -202,6 +213,7 @@ CORE_EVENTS: tuple[type[Event], ...] = (
     ScriptEvent,
     SnapshotEvent,
     ResourceEvent,
+    TraceEvent,
 )
 
 
@@ -235,6 +247,7 @@ __all__ = [
     "ScriptEvent",
     "SnapshotEvent",
     "ResourceEvent",
+    "TraceEvent",
     "CORE_EVENTS",
     "topic_matches",
 ]

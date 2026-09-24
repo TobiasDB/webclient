@@ -1,6 +1,6 @@
-"""Traces + the static replay engine + HAR replay (roadmap N3 / Phase 1 exit criterion):
-record a run -> trace dir -> replay offline -> identical read-only answers; re-execute
-with the network served from the HAR."""
+"""Traces = ONE event stream + the replay interface over it (roadmap N3, revised): record a
+run -> one JSONL file -> replay offline -> identical read-only answers; the HAR and the rrweb
+list are TRANSLATIONS of that stream, never stored artefacts; the plan rides in the footer."""
 
 import json
 
@@ -9,6 +9,7 @@ import pytest
 from webclient import RETURN, SnapshotEvent, WebClient, WebException
 from webclient.replay import Replay
 from webclient.replay.har import HarTransport, har_from_events, load_har
+from webclient.replay.rrweb import from_rrweb, to_rrweb
 from webclient.trace import read
 
 PAGE = """<html><head><title>Shop</title></head><body>
@@ -38,12 +39,13 @@ def _record(site, path):
         return wc, doc, api, titles, trace
 
 
-def test_trace_writes_events_snapshots_and_a_static_har(site, tmp_path):
-    path = tmp_path / "run.trace"
+def test_trace_is_one_stream_with_payloads_inline(site, tmp_path):
+    path = tmp_path / "run.jsonl"
     wc, doc, api, titles, trace = _record(site, path)
-    assert (path / "events.jsonl").exists() and (path / "static.har").exists()
-    manifest = json.loads((path / "manifest.json").read_text())
-    assert manifest["schema_version"] == 1 and manifest["finished"] and manifest["events"] == trace.count
+    assert path.is_file() and not any(p for p in tmp_path.iterdir() if p != path)  # ONE file, no sidecars
+    lines = [json.loads(l) for l in path.read_text().splitlines()]
+    assert lines[0]["topic"] == "trace" and lines[0]["phase"] == "start" and lines[0]["detail"]["schema_version"] == 2
+    assert lines[-1]["topic"] == "trace" and lines[-1]["phase"] == "end" and lines[-1]["detail"]["events"] == trace.count
     reader = read(path)
     topics = [e.topic for e in reader.events]
     assert "snapshot" in topics and "error" in topics and "network.navigation" in topics
@@ -51,17 +53,65 @@ def test_trace_writes_events_snapshots_and_a_static_har(site, tmp_path):
     assert [s.document_id for s in snaps] == [doc.name, api.name, snaps[2].document_id]
     assert snaps[0].content == PAGE.encode() and snaps[0].phase == "fetch" and snaps[0].kind == "html"
     assert snaps[1].kind == "json"
-    # offloaded assets are re-inflated transparently
-    assert (path / "snapshots").glob("*.html")
     errs = reader.of("error")
     assert {e.error.code for e in errs} == {"select.no_match", "fetch.http_status"}
-    # the static HAR carries every navigation with its body
-    har = load_har(path / "static.har")
-    assert {e["request"]["url"] for e in har["entries"]} == {site("/"), site("/api"), site("/missing")}
+    # the network events carry their url as data (the live reference is not persisted)
+    assert {e.url for e in reader.of("network")} == {site("/"), site("/api"), site("/missing")}
+    # the HAR is a translation of the stream: every navigation with its body
+    har = reader.har()
+    assert {e["request"]["url"] for e in har["log"]["entries"]} == {site("/"), site("/api"), site("/missing")}
+    assert reader.summary()["snapshots"] == 3 and reader.summary()["plan"] is False
+
+
+def test_trace_keeps_binary_payloads_and_the_plan(httpserver, tmp_path):
+    httpserver.expect_request("/bin").respond_with_data(b"\x89PNG\r\n\x1a\n\x00\xff", content_type="image/png")
+    path = tmp_path / "bin.jsonl"
+    with WebClient() as wc, wc.trace(path), wc.record() as rec:  # a recording session: its plan lands in the footer
+        rec.fetch(httpserver.url_for("/bin"))
+        blob = rec.plan.to_blob()
+    reader = read(path)
+    snap = reader.snapshots[0]
+    assert snap.content is not None and snap.content.startswith(b"\x89PNG") and snap.kind != "html"
+    assert reader.plan_blob == blob and reader.summary()["plan"] is True
+    with Replay(path) as rep:
+        assert rep.plan(WebClient()).describe().startswith("reference(")
+
+
+def test_replay_state_is_the_unified_cursor(site, tmp_path):
+    path = tmp_path / "run.jsonl"
+    wc, doc, api, titles, _ = _record(site, path)
+    with Replay(path) as rep:
+        full = rep.state()
+        assert {d.name for d in full.documents} == {doc.name, api.name, full.documents[2].name}
+        assert len(full.network) == 3 and [e.error.code for e in full.errors] == ["select.no_match", "fetch.http_status"]
+        first_snap = rep.reader.snapshots[0]
+        early = rep.state(first_snap.n)
+        assert [d.name for d in early.documents] == [doc.name] and early.errors == []
+        assert rep.at(first_snap.ts).documents[0].name == doc.name
+
+
+def test_rrweb_translation_both_ways(site, tmp_path):
+    path = tmp_path / "run.jsonl"
+    wc, doc, api, titles, _ = _record(site, path)
+    reader = read(path)
+    rr = reader.rrweb(doc.name)
+    types = [r["type"] for r in rr]
+    assert types[:2] == [4, 2]  # a static run: Meta + a FullSnapshot synthesised from the snapshot
+    assert 5 in types  # ...and the other events as custom events, tagged with their topic
+    tags = {r["data"]["tag"] for r in rr if r["type"] == 5}
+    assert "network.navigation" in tags and "snapshot" in tags
+    node = rr[1]["data"]["node"]
+    assert node["type"] == 0 and any(c.get("tagName") == "html" for c in node["childNodes"])
+    # back: the rrweb list becomes our events again (the snapshot re-serialised, the custom payloads typed)
+    back = from_rrweb(rr, document_id=doc.name)
+    snap = next(e for e in back if isinstance(e, SnapshotEvent) and e.source == "rrweb")
+    assert b'<h2 class="title">Aeropress</h2>' in snap.content
+    assert any(e.topic == "network.navigation" and e.url == site("/") for e in back)
+    assert to_rrweb(reader.events, custom=False)[0]["type"] == 4
 
 
 def test_static_replay_answers_like_the_live_run(site, tmp_path):
-    path = tmp_path / "run.trace"
+    path = tmp_path / "run.jsonl"
     wc, live_doc, _api, live_titles, _ = _record(site, path)
     live_skeleton = live_doc.skeleton()
     live_flags = [f.name for f in live_doc.flags()]
@@ -82,15 +132,13 @@ def test_static_replay_answers_like_the_live_run(site, tmp_path):
         with pytest.raises(WebException) as info:
             rep.client.fetch(site("/"))
         assert info.value.error.code == "replay.offline"
-        assert rep.har_path is not None and rep.har_path.exists()
+        assert rep.har_path is not None and rep.har_path.exists() and rep.har_path.parent != path.parent
 
 
 def test_har_replay_serves_the_static_tier_without_the_network(site, tmp_path):
-    path = tmp_path / "run.trace"
+    path = tmp_path / "run.jsonl"
     _record(site, path)
-    har = Replay(path).har_path
-    assert har is not None
-    with WebClient(har=str(har)) as wc:
+    with WebClient(har=str(path)) as wc:  # the trace itself: the HAR is built from its stream
         doc = wc.fetch(site("/"))
         assert doc.ok and doc.title == "Shop" and [c.select(".price").attr("text") for c in doc.select_all(".card")][0] == "$39"
         api = wc.fetch(site("/api"))
@@ -157,19 +205,24 @@ APP = """<html><head><title>App</title></head><body>
 def test_browser_trace_records_action_snapshots_and_a_har(httpserver, bwc, tmp_path):
     httpserver.expect_request("/app").respond_with_data(APP, content_type="text/html")
     httpserver.expect_request("/api/items").respond_with_data('{"items":["a","b"]}', content_type="application/json")
-    path = tmp_path / "browser.trace"
+    path = tmp_path / "browser.jsonl"
     with bwc.trace(path):
         live = bwc.ref(httpserver.url_for("/app")).resolve(browser=True).collect()
         live.click("#add")
         live.wait_for("#cart li")
         assert len(live.select_all("#cart li")) == 2
-        bwc.release(live)  # closes the context -> Playwright flushes the HAR
+        bwc.release(live)  # drains the last captured responses before the page goes
     reader = read(path)
     phases = [s.phase for s in reader.snapshots]
     assert phases[0] == "load" and "action" in phases
     last = reader.snapshots[-1]
     assert b">a</li>" in last.content  # (nodes carry data-wc-node stamps in the raw capture)
-    assert reader.har_files and any(f.parent.name == "har" for f in reader.har_files)
+    # every response the browser saw is a network.resource event WITH its body -> the HAR
+    res = reader.of("network.resource")
+    assert {e.url for e in res} >= {httpserver.url_for("/app"), httpserver.url_for("/api/items")}
+    assert next(e for e in res if e.url.endswith("/api/items")).body == b'{"items":["a","b"]}'
+    assert {e["request"]["url"] for e in reader.har()["log"]["entries"]} >= {httpserver.url_for("/app"), httpserver.url_for("/api/items")}
+    assert reader.rrweb(live.name)[0]["type"] in (0, 1, 4) and any(r["type"] == 3 for r in reader.rrweb(live.name))
     with Replay(path) as rep:
         doc = rep.document(live.name)  # the LAST state: after the click
         assert doc is not None and [li.attr("text") for li in doc.select_all("#cart li")] == ["a", "b"]
@@ -182,7 +235,7 @@ def test_browser_har_replay_serves_the_page_offline(httpserver, tmp_path):
 
     httpserver.expect_request("/app").respond_with_data(APP, content_type="text/html")
     httpserver.expect_request("/api/items").respond_with_data('{"items":["a","b"]}', content_type="application/json")
-    path = tmp_path / "rec.trace"
+    path = tmp_path / "rec.jsonl"
     with WebClient(timeout=10.0) as wc, wc.trace(path):
         live = wc.ref(httpserver.url_for("/app")).resolve(browser=True).collect()
         live.click("#add")

@@ -26,6 +26,7 @@ Phase = Literal["init", "load", "inline", "drain", "unload"]
 #: bounds on response-body capture (content-matching correlation) -- keep memory + time capped.
 _BODY_MAX_BYTES = 256 * 1024  # per body
 _BODY_MAX_COUNT = 100  # total bodies kept
+_CAPTURE_MAX_BYTES = 4 * 1024 * 1024  # a traced response body larger than this is recorded without its bytes
 
 
 log = logging.getLogger(__name__)
@@ -145,6 +146,9 @@ class PageResult:
     #: DOM-mutation records the page accumulated during the initial load+settle (the
     #: drained observer buffer) -- how the page rewrote its own DOM after navigation.
     mutations: list[dict[str, Any]] = field(default_factory=list)
+    #: under a trace: every response the context saw during the load (see
+    #: ``BrowserClient.drain_network``) -- the backing publishes them as network events
+    captured: list[dict[str, Any]] = field(default_factory=list)
     #: the correlation substrate (see core/document/correlate.py): the append-only XHR
     #: timeline ({index, method, url, t}) and the SEPARATE per-node phase stamp stream
     #: ({node, xhr, t}). Emitted apart from ``mutations`` so nothing overwrites a phase.
@@ -179,6 +183,45 @@ class BrowserClient(Client):
         #: whether THIS client owns its context and should close it on release. False for a
         #: reused (connected "my browser") context -- closing it would drop the user's session.
         self._owns_context = owns_context and context is not None
+        #: under a trace: every Response the context saw, drained by :meth:`drain_network`
+        self._captured: "list[Any] | None" = None
+
+    # -- trace capture: every response, headers + body ------------------------
+    def start_capture(self) -> None:
+        """Record every response this page's context sees (the trace's network stream --
+        what a HAR replay serves back). Bodies are read lazily by :meth:`drain_network`."""
+        if self._captured is not None:
+            return
+        captured: list[Any] = []
+        self._captured = captured
+        (self._context or self.page).on("response", lambda r: captured.append(r))
+
+    @property
+    def capturing(self) -> bool:
+        return self._captured is not None
+
+    async def drain_network(self) -> "list[dict[str, Any]]":
+        """The responses captured since the last drain, as plain facts (url, method, status,
+        headers, resource_type, body -- bodies over ``_CAPTURE_MAX_BYTES`` or unreadable
+        are ``None``), in completion order."""
+        if not self._captured:
+            return []
+        pending = list(self._captured)
+        self._captured.clear()  # in place: the context listener holds this very list
+        out: list[dict[str, Any]] = []
+        for r in pending:
+            fact: dict[str, Any] = {"url": r.url, "status": r.status, "method": "GET", "resource_type": None,
+                                    "headers": {}, "body": None}
+            try:
+                fact["method"] = r.request.method
+                fact["resource_type"] = r.request.resource_type
+                fact["headers"] = dict(await r.all_headers())
+                body = await r.body()
+                fact["body"] = bytes(body) if len(body) <= _CAPTURE_MAX_BYTES else None
+            except Exception:  # noqa: BLE001 - a redirect / torn-down response: keep the facts we have
+                pass
+            out.append(fact)
+        return out
 
     async def _wait_stable(
         self, page: Any, *, timeout: float = 8.0, quiet: float = 0.4, poll: float = 0.2
@@ -305,9 +348,12 @@ class BrowserClient(Client):
         page.on("request", _on_request)
         page.on("response", _on_response)
         try:
-            return await self._open_body(
+            result = await self._open_body(
                 page, url, wait, scripts, replay, console, network, responses
             )
+            if self.capturing:
+                result.captured = await self.drain_network()
+            return result
         finally:  # ALWAYS remove the listeners -- a mid-open failure must not leave them on a
             # reused page (they would survive and double-count console/network into SPA detection).
             page.remove_listener("console", _on_console)
@@ -543,8 +589,9 @@ class BrowserFactory(ClientFactory):
         reuse_context: "bool | None" = None, replay_har: "str | None" = None,
     ) -> None:
         self.headless = headless
-        #: while a trace is active: every NEW context records a HAR here (flushed on close)
-        self.har_dir: "str | None" = None
+        #: while a trace is active: every new context captures its responses (headers + body)
+        #: for the trace's ``network.resource`` events (the HAR is derived from those)
+        self.capture: bool = False
         #: replay: every new context routes its requests from this HAR (no network)
         self.replay_har = replay_har
         self.stealth = stealth
@@ -632,14 +679,6 @@ class BrowserFactory(ClientFactory):
                 "locale": fp["locale"],
                 "timezone_id": fp["tz"],
             }
-        if self.har_dir:  # tracing: a full-content HAR per context, written when it closes
-            import uuid
-            from pathlib import Path as _P
-
-            _P(self.har_dir).mkdir(parents=True, exist_ok=True)
-            opts["record_har_path"] = str(_P(self.har_dir) / f"{uuid.uuid4().hex}.har")
-            opts["record_har_content"] = "embed"
-            opts["record_har_mode"] = "full"
         context = await browser.new_context(**opts)
         if self.replay_har:  # replay: answer from the recording, abort anything unrecorded
             await context.route_from_har(self.replay_har, not_found="abort")
@@ -650,7 +689,10 @@ class BrowserFactory(ClientFactory):
         # _contexts is a teardown backstop for a CONNECTED browser whose pages are still leased
         # at aclose (a launched browser's own close() sweeps any that remain).
         self._contexts.append(context)
-        return BrowserClient(await context.new_page(), context, owns_context=True)
+        client = BrowserClient(await context.new_page(), context, owns_context=True)
+        if self.capture:
+            client.start_capture()
+        return client
 
     async def aclose(self) -> None:
         """Tear down the factory. For a browser WE launched, close it (killing the process). For

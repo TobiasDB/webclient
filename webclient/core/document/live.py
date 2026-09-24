@@ -276,6 +276,32 @@ async def drain(doc: "Document") -> None:
     if snap is not None:  # under a trace: the post-interaction DOM is a snapshot
         snap(doc, "action")
     await _drain_rrweb(doc)
+    await drain_network(doc)
+
+
+async def drain_network(doc: "Document") -> None:
+    """Under a trace: publish the responses the page's context saw since the last drain as
+    ``network.resource`` events (url, method, status, headers, body) -- the facts a HAR
+    replay is built from. A no-op when the page is not capturing."""
+    lease = getattr(doc, "_lease", None)
+    client = getattr(lease, "client", None)
+    if client is None or not getattr(client, "capturing", False):
+        return
+    try:
+        facts = await client.drain_network()
+    except Exception:  # noqa: BLE001 - a page mid-teardown: nothing to drain
+        return
+    for f in facts:
+        doc._client.bus.publish(captured_event(f, doc))
+
+
+def captured_event(fact: "dict[str, Any]", doc: "Document") -> NetworkEvent:
+    """One captured browser response as a ``network.resource`` event on the document."""
+    return NetworkEvent(
+        topic="network.resource", url=str(fact.get("url") or ""), method=str(fact.get("method") or "GET"),
+        status_code=fact.get("status"), headers=dict(fact.get("headers") or {}), body=fact.get("body"),
+        resource_type=fact.get("resource_type"), document_id=doc.name, source="browser",
+    )
 
 
 async def _drain_rrweb(doc: "Document") -> None:
@@ -420,6 +446,8 @@ class LiveBacking(Backing):
         rr = chunk((getattr(result, "drained", {}) or {}).get(f"{SCRIPT_NAME}.drain"), document_id=core.name)
         if rr is not None:
             core._client.bus.publish(rr)
+        for fact in getattr(result, "captured", []) or []:  # under a trace: every response, for the HAR
+            core._client.bus.publish(captured_event(fact, core))
 
     def _loop(self, core: "Document") -> "EngineLoop":
         """The engine loop the live page runs on (where interaction ops are bridged)."""

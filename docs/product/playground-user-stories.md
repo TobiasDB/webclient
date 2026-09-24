@@ -275,7 +275,7 @@ Deliverables per screen: user flow, low-fi wireframe, hi-fi mock (light/dark), s
 | **pipelines** run server-side | Onboard with the confirm gate | `POST /pipelines/onboard`, `/pipelines/{id}/resume`, events on the stream |
 | **runs store** + schedules | Runs, monitoring | `/runs`, `/schedules` (M4) |
 | **replay** endpoints | 7.3 | `POST /traces/{id}/replay?mode=static|har|live` |
-| rrweb **per document** | 7.1 | `/traces/{id}/rrweb?document_id=` (exists) + chunk boundaries |
+| the trace as ONE stream | 7.1 | `/traces/{id}/rrweb` = DOM (recorded or synthesised) + every event as a tagged custom event: one player is the clock (done 2026-09-24); `/traces/{id}/events/{n}` for a payload; `/har`, `/plan` |
 | **scripts / drivers / policies** admin | Settings | `/scripts`, `/drivers`, `/policies` |
 | **llm settings** | 9.4 | `/settings/llm` (key stored server-side, stub default) |
 | **shareable state** | 10.5 | URL-encoded state; server-side saved views |

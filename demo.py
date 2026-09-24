@@ -3,7 +3,7 @@
 Maintained with every milestone. Sections marked [M<n>]/[P<n>] appear as
 their milestone lands; ``roadmap_tour`` at the end covers the 2026-09 roadmap
 (the ledger, traces + replay, tools, scripts + rrweb, loops, patterns, the UI)
-against the lab and leaves ``traces/demo`` for ``make serve`` + the separate UI.
+against the lab and leaves ``traces/demo.jsonl`` for ``make serve`` + the separate UI.
 
 Runs fully offline: it serves its own demo site on localhost (needs chromium).
 
@@ -789,7 +789,7 @@ def roadmap_tour() -> None:
     """[R] The roadmap features (Phases 0-7, 2026-09): the error ledger, traces + the three
     replay modes, the tool registry, named scripts + rrweb, loops with drivers / checkpoints,
     pattern hints, and the UI -- all against the LAB (``webclient.lab``), the fixture site
-    that tests, demos and docs share. Writes ``traces/demo`` so ``make serve`` shows it at
+    that tests, demos and docs share. Writes ``traces/demo.jsonl`` so ``make serve`` shows it at
     http://localhost:8000/ui/ ."""
     import shutil
     from pathlib import Path
@@ -801,8 +801,8 @@ def roadmap_tour() -> None:
     from webclient.trace import read
 
     lab = serve_lab()
-    trace_dir = Path("traces") / "demo"
-    shutil.rmtree(trace_dir, ignore_errors=True)
+    trace_dir = Path("traces") / "demo.jsonl"  # ONE file: the whole run, replayable every way
+    trace_dir.unlink(missing_ok=True)
     print("\n== roadmap tour (lab at", lab + "/lab )")
 
     with WebClient(timeout=15.0) as wc, wc.trace(trace_dir):
@@ -837,14 +837,14 @@ def roadmap_tour() -> None:
         wc.scripts.register(Script("demo.title", "() => document.title", on="load"))
         live = wc.ref(f"{lab}/lab/app").resolve(browser=True).collect()
         live.write("#qty", "2").click("#add").wait_for("#cart li")
-        ran = [s.script for s in wc.bus.since(0, topic="script") if s.script == "demo.title"]
+        ran = [s for s in wc.bus.since(0, topic="script") if getattr(s, "script", None) == "demo.title"]
         print("scripts:       ", [s.name for s in wc.scripts.list()][:4], "... | demo.title ran:", bool(ran))
         wc.release(live)
 
     # [P1] Replay, three ways -- offline projections, a HAR, or the live plan.
     reader = read(trace_dir)
-    print("trace:         ", reader.manifest["events"], "events |", len(reader.snapshots), "snapshots |",
-          len(reader.rrweb()), "rrweb events |", [p.name for p in reader.har_files])
+    print("trace:         ", reader.count, "events |", len(reader.snapshots), "snapshots |",
+          len(reader.rrweb()), "rrweb events (DOM + custom) |", len(reader.har()["log"]["entries"]), "HAR entries")
     with Replay(trace_dir) as rep:
         offline = rep.document(shop.name)
         assert offline is not None
@@ -853,8 +853,7 @@ def roadmap_tour() -> None:
         cart = rep.document(live.name)
         assert cart is not None
         print("last snapshot: ", [li.attr("text") for li in cart.select_all("#cart li")])
-        har = rep.har_path
-    with WebClient(har=str(har)) as offline_wc:
+    with WebClient(har=str(trace_dir)) as offline_wc:  # the HAR is the trace's network, translated
         again = offline_wc.fetch(f"{lab}/lab/shop")
         miss = offline_wc.fetch(f"{lab}/lab/never", optional=True)
         print("har replay:    ", again.title, "| unrecorded ->", miss.error.code if miss.error else None)
