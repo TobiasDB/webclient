@@ -105,6 +105,28 @@ def test_pagination_hint_link_header_marks_an_api_listing():
     assert f["pagination"].present and f["pagination"].value.kind == "link"
 
 
+def test_ordered_flag_reads_sort_direction_and_relevance():
+    from webclient.core.document.models import Ordering
+
+    # newest-first <time> dates + a sort control -> date / desc / controllable (a recency stop is sound)
+    dated = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {},
+        b'<html><body><select name="sort"><option>New</option></select><main>'
+        b'<article><time datetime="2026-03-01">a</time></article>'
+        b'<article><time datetime="2026-02-01">b</time></article>'
+        b'<article><time datetime="2026-01-01">c</time></article></main></body></html>',
+    ))["ordered"].value
+    assert isinstance(dated, Ordering)
+    assert dated.key == "date" and dated.direction == "desc" and dated.controllable
+
+    # a search-results URL -> relevance order (no early pagination stop is sound)
+    rel = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {}, b"<html><body>x</body></html>",
+        url="http://x/search?q=coffee",
+    ))["ordered"].value
+    assert rel.key == "relevance"
+
+
 def test_caas_content_service_marker_fires_spa_so_auto_renders():
     # a page whose records are fetched by a content-service widget (e.g. Adobe Milo /
     # a CaaS block) leaves only a shell in the served HTML; the static marker fires spa

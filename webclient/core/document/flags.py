@@ -32,8 +32,8 @@ class FlagsBacking(Backing):
 
     provides = frozenset(
         {"flags", "spa", "anti_bot_present", "anti_bot_triggered", "login_present",
-         "login_required", "pagination", "tabbed", "forms", "buttons", "shadow_dom", "iframe",
-         "large_document", "framework", "xhr_endpoints"}
+         "login_required", "pagination", "ordered", "tabbed", "forms", "buttons", "shadow_dom",
+         "iframe", "large_document", "framework", "xhr_endpoints"}
     )
     gate = "ok"
 
@@ -95,6 +95,13 @@ class FlagsBacking(Backing):
     def pagination(self, core: "Document") -> Flag:
         """The dataset spans multiple pages. ``value`` notes the next-page pattern."""
         return self._flags(core)["pagination"]
+
+    def ordered(self, core: "Document") -> Flag:
+        """How the listing is SORTED (an :class:`~webclient.core.document.models.Ordering` value):
+        the sort key / direction, whether it is controllable, and the sort param. Decides whether
+        an early pagination stop is sound -- newest-first dates make a recency ``until`` stop safe;
+        relevance / unknown order means the walk must exhaust."""
+        return self._flags(core)["ordered"]
 
     def tabbed(self, core: "Document") -> Flag:
         """The page splits content across TABS on the SAME page (Upcoming vs Past, year tabs,

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qsl, urlparse
 
 from .context import Context
 from .registry import Hit, detector, flag
@@ -276,3 +277,33 @@ def _link_header_next(ctx: Context) -> Hit | None:
     ``doc.next_link()``, since ``Context`` lowercases header values."""
     raw = ctx.headers.get("link")
     return Hit(0.95, "an HTTP Link rel=next header") if raw and _LINK_REL_NEXT.search(raw) else None
+
+
+# -- ordering (request): sort + relevance query params -----------------------------------------
+_SORT_PARAMS = frozenset({"sort", "order", "orderby", "sort_by", "sortby", "order_by", "sortorder"})
+_SEARCH_PARAMS = frozenset({"q", "query", "s", "search", "keyword", "keywords", "term"})
+
+
+def _query_keys(ctx: Context) -> "list[str]":
+    """The listing URL's query-param names, lowercased."""
+    return [k.lower() for k, _ in parse_qsl(urlparse(ctx.final_url or ctx.url).query)]
+
+
+@detector(flag="ordered", name="sort_param", stage="request")
+def _sort_param(ctx: Context) -> Hit | None:
+    """ordered evidence: a sort/order query param -> the listing's order is CONTROLLABLE. The param
+    name is the signal value, so a caller can flip it (e.g. to oldest-first, to jump to the end)."""
+    for k in _query_keys(ctx):
+        if k in _SORT_PARAMS:
+            return Hit(0.7, f"a ?{k}= sort param", k)
+    return None
+
+
+@detector(flag="ordered", name="relevance_query", stage="request")
+def _relevance_query(ctx: Context) -> Hit | None:
+    """ordered evidence: a search query param (``?q=`` / ``?search=`` / …) -> RELEVANCE order, so
+    no early pagination stop is sound (the walk must exhaust)."""
+    for k in _query_keys(ctx):
+        if k in _SEARCH_PARAMS:
+            return Hit(0.6, f"a ?{k}= search query (relevance order)")
+    return None

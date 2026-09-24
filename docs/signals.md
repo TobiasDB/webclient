@@ -9,7 +9,7 @@ noisy-OR, contra signals scale it down, and it is *present* at confidence >= 0.5
 (`Settings.detection.present_threshold`). A present flag may carry a `remedy` (the transport
 escalation it calls for) and a `value` (the actionable payload).
 
-12 flags, 33 detectors.
+13 flags, 38 detectors.
 
 ## `spa`
 
@@ -100,6 +100,18 @@ escalation it calls for) and a `value` (the actionable payload).
 | `pagination_ui` | static |  | — | pagination evidence: a pagination/pager widget (by class or aria-label). |
 | `page_param_links` | static |  | — | pagination evidence: a link whose query carries a pagination param (``?page=``, ``?offset=``, …) or whose path is ``/page/N``; its resolved URL is the next-page value. Reads the SAME param table crawl uses to collapse a series (``crawl.canon``), so detection and dedup never drift -- notably ``p`` is excluded (too often a post id, e.g. WordPress ``?p=123``, not a page number). |
 | `numbered_sequence` | static |  | — | pagination evidence: three or more purely-numeric links -- a ``1 2 3`` page-number strip. |
+
+## `ordered`
+
+- **remedy**: `none` · **value**: An :class:`Ordering` (key / direction / controllable / param) built from the ordered signals,
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `sort_param` | request |  | — | ordered evidence: a sort/order query param -> the listing's order is CONTROLLABLE. The param name is the signal value, so a caller can flip it (e.g. to oldest-first, to jump to the end). |
+| `relevance_query` | request |  | — | ordered evidence: a search query param (``?q=`` / ``?search=`` / …) -> RELEVANCE order, so no early pagination stop is sound (the walk must exhaust). |
+| `sort_control` | static |  | — | ordered evidence: a sort control on the page (a ``select[name*=sort]`` / ``[aria-sort]`` / an order dropdown) -> the listing's order is CONTROLLABLE. |
+| `relevance_searchbox` | static |  | — | ordered evidence: a search box (``input[type=search]`` / ``[role=search]``) -> the listing is likely relevance-ordered, so no early pagination stop is sound. |
+| `monotone_dates` | static |  | — | ordered evidence (strong): the page's record dates run MONOTONICALLY -- so the listing is date-sorted, and the direction says whether a recency ``until`` stop is sound. The direction (``"desc"``/``"asc"``) is the signal value. |
 
 ## `tabbed`
 

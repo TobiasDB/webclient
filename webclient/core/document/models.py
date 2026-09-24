@@ -209,6 +209,21 @@ class PaginationHint(BaseModel):
     endpoint: str = ""  # a demoted XHR data endpoint (reserved)
 
 
+class Ordering(BaseModel):
+    """The ``ordered`` flag's value: HOW a listing is sorted -- which decides whether an early
+    pagination stop is sound. ``key`` is the sort dimension (``date`` when record dates run
+    monotonically, ``relevance`` for a search-results page, else ``unknown``); ``direction`` is
+    ``desc`` (newest/highest first) / ``asc`` / ``unknown``; ``controllable`` is whether the page
+    exposes a sort control, with ``param`` the query param that sets it when known. Newest-first
+    dates (``key="date"``, ``direction="desc"``) make a recency ``until`` stop SOUND; a
+    ``relevance`` or ``unknown`` order means the walk must EXHAUST (no early stop is safe)."""
+
+    key: Literal["date", "alpha", "price", "relevance", "unknown"] = "unknown"
+    direction: Literal["asc", "desc", "unknown"] = "unknown"
+    controllable: bool = False
+    param: str = ""
+
+
 class IDocument(BaseModel):
     """A resolved resource's data (the Core Fields), plus (for the checker) the
     eager ops ``Document`` implements -- ``select`` / ``attr`` (incl. ``attr("text")``)
@@ -285,6 +300,7 @@ class IDocument(BaseModel):
         def markdown(self, *, main_content_only: bool = ...) -> "str": ...
         def metadata(self) -> "Metadata": ...
         def next_link(self) -> "Reference": ...
+        def ordered(self) -> "Flag": ...
         def pagination(self) -> "Flag": ...
         def patterns(self, *, for_: 'str | None' = ...) -> "list[PatternHint]": ...
         def ref(self) -> "Reference": ...
@@ -330,4 +346,5 @@ __all__ = [
     "Signal",
     "Flag",
     "PaginationHint",
+    "Ordering",
 ]
