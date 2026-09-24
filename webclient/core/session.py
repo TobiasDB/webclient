@@ -10,7 +10,7 @@ kept as an alias for the cores/tests/surfaces that still refer to it.
 
 from __future__ import annotations
 
-from ..client import WebClient
+from .client import WebClient
 
 Session = WebClient
 

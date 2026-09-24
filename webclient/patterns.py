@@ -10,7 +10,7 @@ The pattern detectors live in :mod:`webclient.signals.patterns` (``@detector``s 
 
 from __future__ import annotations
 
-from ..core.document.models import PatternHint
-from ..signals.patterns import template_signature
+from .core.document.models import PatternHint
+from .signals.patterns import template_signature
 
 __all__ = ["PatternHint", "template_signature"]
