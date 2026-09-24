@@ -21,13 +21,13 @@ dependencies = [
 # RemoteWebClient, which parses server-side.
 local = ["lxml>=4.9", "cssselect>=1.2", "charset-normalizer>=3.0"]
 browser = ["playwright>=1.30"]                 # M4 LiveDocument
-service = ["fastapi>=0.100", "uvicorn>=0.23"]  # M7 browser-as-a-service
+service = ["fastapi>=0.100", "uvicorn[standard]>=0.23"]  # M7 browser-as-a-service (ws needs the standard extra)
 # `remote` needs nothing beyond the base deps (httpx + pydantic).
 remote = []
 dev = ["pytest>=7.4", "pytest-httpserver>=1.0", "mypy>=1.10", "pyright>=1.1.380",
        "lxml-stubs", "types-PyYAML",
        "lxml>=4.9", "cssselect>=1.2", "charset-normalizer>=3.0",
-       "playwright>=1.30", "fastapi>=0.100", "uvicorn>=0.23",
+       "playwright>=1.30", "fastapi>=0.100", "uvicorn[standard]>=0.23",
        "mkdocs>=1.6", "mkdocs-material>=9", "mkdocstrings[python]>=0.26"]
 
 [tool.setuptools.packages.find]
