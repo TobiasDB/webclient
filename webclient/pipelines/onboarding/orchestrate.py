@@ -280,7 +280,8 @@ def _build_pipeline(
         # write_query doesn't re-fetch (a browser/proxy re-fetch is real budget + latency).
         q = write_query(
             src["url"], brief, wc=wc, llm=llm, browser=_mode(browser),
-            paginated=evaluation.has_pagination, resolve=result.resolve,
+            paginated=evaluation.has_pagination, pagination_hint=evaluation.pagination_hint,
+            resolve=result.resolve,
             doc=doc if doc.ok else None,
             recency=_recency_guidance(evaluation),  # sort order + where the most recent records are
             author_engine=author_engine,  # "text" (write query code) | "index" (pick indexes -> build_query)

@@ -331,6 +331,35 @@ def test_write_query_paginates_a_paginated_source(httpserver):
     assert [r["n"] for r in rows] == ["A", "B", "C"]
 
 
+def test_write_query_bakes_param_advance_from_the_hint(httpserver):
+    # a computed (?page=N) source with NO rel=next link -- only a pagination widget. The detected
+    # PaginationHint(kind="param", name="page") makes write_query bake .paginate(by="param",
+    # name="page"), so run_query walks ?page=1,2. (A by="link" default could not reach page 2 here.)
+    from webclient.pipelines.onboarding import run_query, write_query
+    from webclient.core.document.models import PaginationHint
+
+    def _page(rows):
+        arts = "".join(f'<article class="r"><span class="n">{n}</span></article>' for n in rows)
+        return f'<main>{arts}</main><nav class="pagination">pages</nav>'  # widget, but no rel=next
+
+    httpserver.expect_request("/list", query_string="page=1").respond_with_data(_page(["A", "B"]), content_type="text/html")
+    httpserver.expect_request("/list", query_string="page=2").respond_with_data(_page(["C"]), content_type="text/html")
+    httpserver.expect_request("/list", query_string="page=3").respond_with_data("", status=404)
+
+    def llm(prompt: str) -> str:
+        return 'wq.doc.select_all("article.r").extract(n=wq.doc.select(".n").attr("text")).project()'
+
+    with WebClient() as wc:
+        art = write_query(
+            httpserver.url_for("/list") + "?page=1", Brief(description="items", fields=["n"]),
+            wc=wc, llm=llm, browser="never", retries=0, paginated=True,
+            pagination_hint=PaginationHint(kind="param", name="page"),
+        )
+        assert art is not None and "param" in art.describe  # the param advance was baked, not by=link
+        rows = run_query(art, wc=wc)
+    assert [r["n"] for r in rows] == ["A", "B", "C"]  # walked ?page=1,2 then stopped at the 404
+
+
 def test_sample_table_collapses_newlines_so_columns_dont_shift():
     # an output-summary bug: a value with a newline (an RSS description) broke the aligned
     # sample table so LATER columns rendered shifted/empty. Cells now collapse whitespace.
