@@ -1,6 +1,6 @@
 # The Author workspace — Explore + Query + Interact as one flow
 
-*Status: built. Proposed 2026-09-25 with modes (look / pick / drive), reworked the same day
+*Status: built as the GRAPH BUILDER (§10). Proposed 2026-09-25 with modes (look / pick / drive), reworked the same day
 into the plan-centric, scope-based workspace of §8 -- no modes, one menu generated from the
 object's surface. Sections 1-7 are the original proposal and its review; §8 is what stands.
 Wireframes are in Storybook (`Wireframes/Author`).*
@@ -243,3 +243,49 @@ page nests rows); a form filled then submitted before the records exist (`write`
 definition list or a table of properties (`alias` + `merge`).
 
 Offline, the same plan is `tests/test_books_story.py` in the package.
+
+
+## 10. The graph builder (2026-09-25): the package's objects as nodes
+
+§8-§9 kept the plan's linear chain as the model and fought it: a second data op on a page
+chained after the first instead of beside it, and a clicked cell became the record. The user's
+direction: *"our builder plan is just nodes representing the underlying objects -- reference,
+document, collection -- selecting one opens the static / live view of the page; from a reference
+the paths are to resolve or read an attribute; from a document we interact or select (it is just
+the surface exposed); from the whole chain we have a graph and then project our fields out."*
+
+**The model** (`webclient-ui/packages/ui/src/lib/graph.ts`, tested in `graph.test.ts`): a tree
+rooted at the Reference of the start URL. Each node is an object -- Reference, Document (a page,
+static or live), Element (a `select`), Collection (a `select_all` / `links`: its children run
+on EACH element), Value (text, a count) -- and carries the op that made it from its parent. Its
+type comes from the package: `GET /ops` gives every op's `returns` and a Collection surface.
+Pages carry their pager and collections their limit as modifiers. A node marked as an OUTPUT
+(a name, or a name read off the page = `.alias(expr)`) is a column.
+
+**Compile** (graph → the plan the service runs): the spine is the chain down to where the
+outputs branch (open → actions → pages → the records); an Element's outputs flatten into its
+parent's columns (a select is cheap to repeat); a crossed page (a `resolve`) or a Collection
+becomes ONE nested column (a dict / a list of rows, `merge` when every column is named from the
+page) so the page is fetched once. **Decompile** (plan → graph) makes an imported, saved or
+traced plan editable in the builder; the two round-trip.
+
+**The screen**: the graph on the left (typed nodes, samples on the page, the op's argument
+editable in place, + output, ×); the selected node's view in the centre (a Reference: its URL
+and "open it" static / auto / browser / live; anything under a page: that page with the node's
+matches and the outputs outlined); on the right the ELEMENT INSPECTOR when you click the page --
+its parents with class toggles (↑ re-targets a parent), candidates per group (`li.col-xs-6
+×20`, `↑1 table tr ×7`) and unique forms (`#product_description ~ p`), every match outlined,
+every readable attribute (text, own text, count, its label, href, src, data-*, aria-*, class)
+to tick and name or name from the page, the fields a group shares, and the ops (select_all,
+select, click, type, scroll, wait for, open the link, pages) -- which add nodes with the ticked
+reads as their children. Otherwise the node's own card (a page's ops and pager; a collection's
+shared fields and limit; an element's attributes; a value's samples). Below: Rows (local
+preview, detail pages included once opened) · Server run · Plan · Page (card, signals, pattern
+groups) · Skeleton · Markdown · Elements · As code.
+
+**Verified**: the books story through the UI against books.toscrape.com (headless) compiles to
+`resolve().paginate(next="li.next a", max_pages=2).select_all("li.col-xs-6").extract(rating,
+title, price, detail=select("h3 a").attr("href").resolve().extract(description,
+info=select_all("table tr").extract(td.alias(th)).merge()).project()).project()` and the server
+returns 40 rows with their details; offline, the same plan is the package's
+`tests/test_books_story.py`.
