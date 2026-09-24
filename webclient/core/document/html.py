@@ -300,7 +300,7 @@ class HtmlBacking(Backing):
         region (``← RECORD LIST · N · select_all(...)``); ``mark_interactive`` flags
         NON-obvious controls (a div/span made clickable via role/onclick/tabindex)
         ``← clickable``. (A human-readable label for any element is available as the reusable
-        :func:`webclient.core.document.naming.name` primitive -- not repeated here, since the
+        :func:`webclient.dom.naming.name` primitive -- not repeated here, since the
         tag signature already surfaces aria-label / alt / title / placeholder.)"""
         from ...dom.records import region_marks as _region_marks
 

@@ -2,7 +2,7 @@
 
 from lxml import html as _lh
 
-from webclient.core.document.record_regions import RecordRegion, find_record_regions
+from webclient.dom.records import RecordRegion, find_record_regions
 
 
 def _tree(markup: str):

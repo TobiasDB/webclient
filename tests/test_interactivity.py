@@ -6,7 +6,7 @@ static detector and the merge seam on parsed elements, no browser.
 
 from lxml import html as _lh
 
-from webclient.core.document.interactivity import (
+from webclient.dom.interactivity import (
     DomInteractive,
     interactive,
     merge,

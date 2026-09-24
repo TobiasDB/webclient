@@ -29,10 +29,9 @@ if TYPE_CHECKING:
     from .events import EventBus
     from .models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
     from .clients import ClientPool, WaitConfig
-    from .core.document.models import Flag, IndexedElement, Metadata, PageCard, Signal, Structure, Transport, XhrCall
+    from .core.document.models import Flag, IndexedElement, Metadata, PageCard, PatternHint, Signal, Structure, Transport, XhrCall
     from .core.client.models import Robots
     from .errors import WebError
-    from .patterns import PatternHint
 
 T = TypeVar("T")
 S = TypeVar("S")

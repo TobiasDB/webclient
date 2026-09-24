@@ -2,7 +2,7 @@
 
 from lxml import html as _lh
 
-from webclient.core.document.naming import DomName, name
+from webclient.dom.naming import DomName, name
 
 
 def _el(markup: str):
