@@ -8,7 +8,7 @@ the verbs in `webclient.llm.tools`), MCP (`webclient.llm.mcp.build_tools`) and H
 Arguments are validated by each tool's pydantic input model; a mismatch is a
 `request.invalid` error. See `docs/user-stories.md` for the stories.
 
-14 tools.
+17 tools.
 
 ## `fetch_markdown`
 
@@ -99,6 +99,43 @@ Fetch a URL and return its recurring-structure hints: the repeating record list 
 |---|---|---|---|
 | `url` | string | required | an absolute http(s) URL |
 | `for` | string/null | None | only the hints meant for one consumer |
+
+## `elements`
+
+The page's numbered, class-free element table -- what a model (and the Playground) picks from by index: interactive controls, content leaves, or the repeated-record regions.
+
+- **returns**: a list of IndexedElement objects · **story**: agent-developer
+
+| argument | type | default | description |
+|---|---|---|---|
+| `url` | string | required | an absolute http(s) URL |
+| `kind` | string | 'interactive' | interactive = the controls; content = text-bearing leaves (repeats marked); records = the repeated-record regions to select_all |
+| `browser` | any | False | transport tier: false | 'auto' | 'always' |
+| `limit` | integer | 200 |  |
+
+## `fields`
+
+The extractable field leaves inside the FIRST instance of a record selector, numbered, each with a per-row selector -- what a query is built from by pointing.
+
+- **returns**: a list of IndexedElement objects (selector scoped to the record) · **story**: data-engineer
+
+| argument | type | default | description |
+|---|---|---|---|
+| `url` | string | required | an absolute http(s) URL |
+| `record` | string | required | the record selector (a select_all target, e.g. from elements(kind='records')) |
+| `browser` | any | False | transport tier: false | 'auto' | 'always' |
+| `limit` | integer | 40 |  |
+
+## `snapshot`
+
+Fetch a URL and return its captured content (HTML/JSON/text) with the card -- the page the Playground renders in its preview.
+
+- **returns**: {card, content, kind, encoding} · **story**: agent-developer
+
+| argument | type | default | description |
+|---|---|---|---|
+| `url` | string | required | an absolute http(s) URL |
+| `browser` | any | False | transport tier: false | 'auto' | 'always' |
 
 ## `sitemap`
 

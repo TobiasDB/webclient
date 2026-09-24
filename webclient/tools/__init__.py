@@ -284,6 +284,57 @@ def patterns(args: PatternsArgs, wc: "WebClient") -> "list[dict[str, Any]]":
     return _jsonable(wc.fetch(args.url).patterns(for_=args.for_))  # type: ignore[no-any-return]
 
 
+class ElementsArgs(UrlArgs):
+    kind: "Literal['interactive', 'content', 'records']" = Field("interactive", description="interactive = the controls; content = text-bearing leaves (repeats marked); records = the repeated-record regions to select_all")
+    browser: Any = Field(False, description="transport tier: false | 'auto' | 'always'")
+    limit: int = Field(200, ge=1, le=2000)
+
+
+@tool("elements", "The page's numbered, class-free element table -- what a model (and the Playground) "
+      "picks from by index: interactive controls, content leaves, or the repeated-record regions.",
+      returns="a list of IndexedElement objects", story="agent-developer")
+def elements(args: ElementsArgs, wc: "WebClient") -> "list[dict[str, Any]]":
+    from ..dom.index import record_options
+    from ..core.document.html import tree
+
+    doc = wc.fetch(args.url, browser=args.browser)
+    if args.kind == "records":
+        return _jsonable(record_options(tree(doc), top_k=min(args.limit, 20)))  # type: ignore[no-any-return]
+    if args.kind == "content":
+        return _jsonable(doc.content_elements()[: args.limit])  # type: ignore[no-any-return]
+    return _jsonable(doc.controls()[: args.limit])  # type: ignore[no-any-return]
+
+
+class FieldsArgs(UrlArgs):
+    record: str = Field(description="the record selector (a select_all target, e.g. from elements(kind='records'))")
+    browser: Any = Field(False, description="transport tier: false | 'auto' | 'always'")
+    limit: int = Field(40, ge=1, le=400)
+
+
+@tool("fields", "The extractable field leaves inside the FIRST instance of a record selector, numbered, "
+      "each with a per-row selector -- what a query is built from by pointing.",
+      returns="a list of IndexedElement objects (selector scoped to the record)", story="data-engineer")
+def fields(args: FieldsArgs, wc: "WebClient") -> "list[dict[str, Any]]":
+    from ..dom.index import field_options
+    from ..core.document.html import tree
+
+    doc = wc.fetch(args.url, browser=args.browser)
+    return _jsonable(field_options(tree(doc), args.record, limit=args.limit))  # type: ignore[no-any-return]
+
+
+class SnapshotArgs(UrlArgs):
+    browser: Any = Field(False, description="transport tier: false | 'auto' | 'always'")
+
+
+@tool("snapshot", "Fetch a URL and return its captured content (HTML/JSON/text) with the card -- the page the "
+      "Playground renders in its preview.",
+      returns="{card, content, kind, encoding}", story="agent-developer")
+def snapshot(args: SnapshotArgs, wc: "WebClient") -> "dict[str, Any]":
+    doc = wc.fetch(args.url, browser=args.browser)
+    return {"card": _jsonable(doc.card()), "kind": doc.kind, "encoding": doc.encoding,
+            "content": (doc.content or b"").decode(doc.encoding or "utf-8", "replace")}
+
+
 @tool("sitemap", "Hunt a site's sitemap.xml page URLs (cheap -- not a crawl).",
       returns="a list of URL strings", story="data-engineer", aliases=("sitemap",))
 def sitemap(args: UrlArgs, wc: "WebClient") -> "list[str]":
