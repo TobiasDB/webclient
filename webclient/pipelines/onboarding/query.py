@@ -689,6 +689,21 @@ def _short_fail_reason(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> 
     return f"{len(good)} row(s) but incomplete"
 
 
+def _pager_confirmed(doc: Any, hint: "PaginationHint | None") -> bool:
+    """Probe that the source REALLY paginates before baking a pager into the shipped blob: walk two
+    pages with the hint's advance (``by="param"`` + the param name when known, else ``by="link"``)
+    and confirm a genuine, DISTINCT second page exists. ``paginate``'s own clamp guard drops a
+    page-2 that merely re-serves page one (an out-of-range clamp) and it stops on an empty/404, so a
+    length ``>= 2`` means a working pager. A single page -- mislabelled paginated, a clamp, or an
+    unreachable page two -- returns False, so the blob is shipped page-one-only rather than paging
+    into nothing or duplicates. One extra fetch; a probe failure never breaks authoring."""
+    by, name = ("param", hint.name) if (hint is not None and hint.kind == "param" and hint.name) else ("link", "page")
+    try:
+        return len(list(doc.paginate(by=by, name=name, max_pages=2))) >= 2
+    except Exception:  # noqa: BLE001 - a probe must never break authoring
+        return False
+
+
 def _artifact_from(
     expr: Any, doc: Any, brief: Brief, candidate_url: str,
     resolve: "Resolve | None", bases: "list[str]", *, paginate: bool = False,
@@ -698,11 +713,16 @@ def _artifact_from(
     self-contained, runnable blob + validation verdict + timeliness flag). Shared by the
     one-shot and staged authors. The extraction is TESTED on the fetched page one only (fast);
     ``paginate`` bakes a ``.paginate(...)`` into the SHIPPED blob (its advance chosen from
-    ``hint``) so ``run_query`` pulls every page. Returns ``(artifact, extracted_rows)``."""
+    ``hint``) -- but only after :func:`_pager_confirmed` verifies a real second page, so a
+    mislabelled or clamped source ships page one instead of paging into nothing. Returns
+    ``(artifact, extracted_rows)``."""
     tested, rows = _test_query(expr, doc) if doc.ok else (False, [])
     good = _populated_rows(rows)
     missing = _empty_required_fields(good, brief)  # required leaves empty on every row
     tnote, stale = _timeliness(good, brief)  # over ALL rows; a FLAG, never a ship blocker
+    if paginate and doc.ok and not _pager_confirmed(doc, hint):
+        log.info("    pagination probe: no distinct second page -> shipping page one only")
+        paginate = False  # don't bake a pager that pages into nothing / a clamp
     exe = _executable_query(expr, candidate_url, resolve, paginate=paginate, hint=hint)  # self-contained + runnable
     try:  # the visual step tree, from the VALID parsed plan (before/independent of testing)
         explain = exe.explain()
