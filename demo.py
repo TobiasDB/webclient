@@ -3,7 +3,7 @@
 Maintained with every milestone. Sections marked [M<n>]/[P<n>] appear as
 their milestone lands; ``roadmap_tour`` at the end covers the 2026-09 roadmap
 (the ledger, traces + replay, tools, scripts + rrweb, loops, patterns, the UI)
-against the lab and leaves ``traces/demo`` for ``make serve`` -> /ui.
+against the lab and leaves ``traces/demo`` for ``make serve`` + the separate UI.
 
 Runs fully offline: it serves its own demo site on localhost (needs chromium).
 
@@ -859,7 +859,7 @@ def roadmap_tour() -> None:
         miss = offline_wc.fetch(f"{lab}/lab/never", optional=True)
         print("har replay:    ", again.title, "| unrecorded ->", miss.error.code if miss.error else None)
 
-    print("\nUI: run `make serve` then open http://localhost:8000/ui/  (trace 'demo' is listed)")
+    print("\nUI: run `make serve` here, then the Playground from the webclient-ui repo (it reads /traces, /events, /loops)")
 
 
 if __name__ == "__main__":

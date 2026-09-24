@@ -132,6 +132,7 @@ def create_app(
     max_session_docs: int | None = None,
     block_private_hosts: bool = False,
     traces_dir: "str | Path | None" = None,
+    cors_origins: "list[str] | None" = None,
 ) -> FastAPI:
     """A FastAPI app exposing a WebClient over ``/execute`` (Bearer-token
     authorised when ``token`` is set). An existing client may be supplied;
@@ -140,8 +141,9 @@ def create_app(
     ``max_session_docs`` caps EACH session's own document store (its per-session
     resource policy -- the handles a session may hold), and ``block_private_hosts``
     turns on the SSRF guard for a hosted server (refuses plans that resolve to
-    loopback/private hosts). ``traces_dir`` is where the UI (``/ui``) finds stored traces
-    (``/traces``); default ``./traces`` (or ``WEBCLIENT_TRACES_DIR``)."""
+    loopback/private hosts). ``traces_dir`` is where stored traces are read from (``/traces``); default
+    ``./traces`` (or ``WEBCLIENT_TRACES_DIR``). ``cors_origins`` lets browser front ends
+    (the separate webclient-ui repository) call this API; default: the local dev servers."""
     caps = _settings().service
     max_docs = caps.max_docs if max_docs is None else max_docs
     max_sessions = caps.max_sessions if max_sessions is None else max_sessions
@@ -456,12 +458,19 @@ def create_app(
         return out
 
     # -- live event stream ---------------------------------------------------
-    # -- the UI (a static, no-build app) + its data endpoints ------------------------
-    ui_dir = Path(__file__).parent / "ui"
-    if ui_dir.exists():
-        from fastapi.staticfiles import StaticFiles
+    # -- the UI lives in its own repository (webclient-ui) and talks to this API over
+    # HTTP: allow it (and any other browser client) via CORS. ``cors_origins`` defaults to the
+    # local dev servers; ``["*"]`` opens it up (WEBCLIENT_CORS_ORIGINS, comma-separated).
+    from fastapi.middleware.cors import CORSMiddleware
 
-        app.mount("/ui", StaticFiles(directory=str(ui_dir), html=True), name="ui")
+    origins = cors_origins if cors_origins is not None else [
+        o.strip() for o in os.environ.get(
+            "WEBCLIENT_CORS_ORIGINS",
+            "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4321,http://127.0.0.1:4321,"
+            "http://localhost:6006,http://127.0.0.1:6006",
+        ).split(",") if o.strip()
+    ]
+    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
 
     def _trace_dir(trace_id: str) -> "Path | JSONResponse":
         """The directory of a stored trace by id (its directory name); 404 when unknown or

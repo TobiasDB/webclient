@@ -1,5 +1,5 @@
-"""The UI (roadmap N4): served by the service, fed by the trace / loop endpoints -- a trace
-viewer over stored traces, the live stream, and checkpoint resume."""
+"""The API the separate UI (webclient-ui) consumes: CORS, the trace / loop endpoints, the plan
+wireframe -- a trace viewer over stored traces, the live stream, and checkpoint resume."""
 
 import json
 
@@ -22,14 +22,11 @@ def traced(httpserver, tmp_path):
     return tmp_path / "traces", httpserver.url_for("/p")
 
 
-def test_ui_is_served_with_its_vendored_player():
+def test_api_allows_the_separate_ui_over_cors():
     wc = WebClient()
-    with TestClient(create_app(wc)) as api:
-        page = api.get("/ui/")
-        assert page.status_code == 200 and "<title>webclient</title>" in page.text
-        assert api.get("/ui/app.js").status_code == 200
-        assert api.get("/ui/vendor/rrweb-player.js").text.startswith("var rrwebPlayer")
-        assert api.get("/ui/vendor/rrweb-player.css").status_code == 200
+    with TestClient(create_app(wc, cors_origins=["http://localhost:5173"])) as api:
+        r = api.options("/tools", headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "GET"})
+        assert r.headers.get("access-control-allow-origin") == "http://localhost:5173"
     wc.close()
 
 
