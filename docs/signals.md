@@ -9,7 +9,7 @@ noisy-OR, contra signals scale it down, and it is *present* at confidence >= 0.5
 (`Settings.detection.present_threshold`). A present flag may carry a `remedy` (the transport
 escalation it calls for) and a `value` (the actionable payload).
 
-12 flags, 32 detectors.
+12 flags, 33 detectors.
 
 ## `spa`
 
@@ -91,10 +91,11 @@ escalation it calls for) and a `value` (the actionable payload).
 
 ## `pagination`
 
-- **remedy**: `none` · **value**: The next-page hint carried by the pagination signals (a rel=next / page-param URL), if any.
+- **remedy**: `none` · **value**: A structured :class:`PaginationHint` (kind / next / name / totals) built from the pagination
 
 | detector | stage | contra | needs | evidence |
 |---|---|---|---|---|
+| `link_header_next` | request |  | — | pagination evidence (strong): an HTTP ``Link: <url>; rel="next"`` header (RFC 8288, as GitHub and many JSON APIs paginate) -- so a listing with NO HTML pager is still detected. Presence only: the actual next URL is re-read (with correct case) at run time by ``doc.next_link()``, since ``Context`` lowercases header values. |
 | `rel_next_link` | static |  | — | pagination evidence (strong): a ``rel="next"`` link/anchor -- the canonical next-page marker. |
 | `pagination_ui` | static |  | — | pagination evidence: a pagination/pager widget (by class or aria-label). |
 | `page_param_links` | static |  | — | pagination evidence: a link whose query carries a pagination param (``?page=``, ``?offset=``, …) or whose path is ``/page/N``; its resolved URL is the next-page value. Reads the SAME param table crawl uses to collapse a series (``crawl.canon``), so detection and dedup never drift -- notably ``p`` is excluded (too often a post id, e.g. WordPress ``?p=123``, not a page number). |

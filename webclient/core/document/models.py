@@ -189,6 +189,26 @@ class Flag(BaseModel):
         return self.present
 
 
+class PaginationHint(BaseModel):
+    """The ``pagination`` flag's ``value``: a structured read of HOW a listing paginates, so a
+    caller (onboarding, or a no-arg ``paginate()``) can pick the right advance without guessing.
+    ``kind`` is how the next page is reached -- ``"link"`` (a discovered ``rel=next`` / HTTP
+    ``Link`` header -> ``paginate(by="link")``), ``"param"`` (a ``?page=``/``?offset=`` query
+    param -> ``paginate(by="param", name=...)``), ``"numbered"`` (only a ``1 2 3`` strip seen),
+    or ``"unknown"``. ``next`` is the resolved next-page URL when one was found; ``name`` the
+    pagination param for the computed case. ``total_pages`` / ``total_items`` / ``page_size`` come
+    from a "Page 1 of 18" / "Showing 1-20 of 348" caption or an ``X-Total-Count`` header when
+    present (0 = unknown). ``endpoint`` is a demoted XHR data endpoint (reserved; empty for now)."""
+
+    kind: Literal["link", "param", "numbered", "unknown"] = "unknown"
+    next: str = ""  # resolved next-page URL (discovered case)
+    name: str = ""  # pagination param name (computed case)
+    page_size: int = 0  # records per page, if a caption reveals it
+    total_pages: int = 0  # from "Page X of Y"
+    total_items: int = 0  # from "Showing 1-N of M" / X-Total-Count
+    endpoint: str = ""  # a demoted XHR data endpoint (reserved)
+
+
 class IDocument(BaseModel):
     """A resolved resource's data (the Core Fields), plus (for the checker) the
     eager ops ``Document`` implements -- ``select`` / ``attr`` (incl. ``attr("text")``)
@@ -309,4 +329,5 @@ __all__ = [
     "Structure",
     "Signal",
     "Flag",
+    "PaginationHint",
 ]

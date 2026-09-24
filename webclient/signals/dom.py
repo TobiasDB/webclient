@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qsl, urljoin, urlparse
 
 from ..dom import norm
@@ -204,9 +204,80 @@ def _iframe_element(ctx: Context) -> Hit | None:
 # -- pagination (tree) --------------------------------------------------------
 
 
+_PAGE_OF = re.compile(r"\bpage\s+\d+\s+of\s+([\d,]+)", re.I)  # "Page 1 of 18"
+_SHOWING = re.compile(r"\b([\d,]+)\s*(?:[-–—]|to)\s*([\d,]+)\s+of\s+([\d,]+)", re.I)  # "1-20 of 348"
+
+
+def _int(s: str) -> int:
+    """A comma-grouped integer string as an int (``"1,234" -> 1234``); 0 on garbage."""
+    try:
+        return int(s.replace(",", ""))
+    except ValueError:
+        return 0
+
+
+def _param_name(url: str) -> str:
+    """The pagination param carried by ``url`` (``?page=`` / ``?offset=`` …, canon's table), else ""."""
+    if not url:
+        return ""
+    from ..core.crawl.canon import _PAGINATION_PARAMS
+
+    from urllib.parse import parse_qsl
+
+    for k, _ in parse_qsl(urlparse(url).query):
+        if k.lower() in _PAGINATION_PARAMS:
+            return k
+    return ""
+
+
+def _totals(ctx: Context) -> "tuple[int, int, int]":
+    """``(total_pages, total_items, page_size)`` read from an ``X-Total-Count`` header and a
+    "Page 1 of 18" / "Showing 1-20 of 348" caption -- each 0 when not found."""
+    total_pages = total_items = page_size = 0
+    xtc = ctx.headers.get("x-total-count", "")
+    if xtc.isdigit():
+        total_items = int(xtc)
+    text = (ctx.visible or (norm(" ".join(ctx.tree.itertext())) if ctx.tree is not None else ""))[:5000]
+    if text:
+        if m := _PAGE_OF.search(text):
+            total_pages = _int(m.group(1))
+        if m := _SHOWING.search(text):
+            lo, hi, tot = _int(m.group(1)), _int(m.group(2)), _int(m.group(3))
+            total_items = total_items or tot
+            if 0 < lo <= hi:
+                page_size = hi - lo + 1
+    return total_pages, total_items, page_size
+
+
 def _pagination_value(signals: "list[Signal]", ctx: Context) -> Any:
-    """The next-page hint carried by the pagination signals (a rel=next / page-param URL), if any."""
-    return next((s.value for s in signals if s.value), None)
+    """A structured :class:`PaginationHint` (kind / next / name / totals) built from the pagination
+    signals + the page, so a caller can pick the advance without guessing. ``None`` when nothing fired."""
+    from ..core.document.models import PaginationHint
+
+    if not signals:
+        return None
+    fired = {s.name for s in signals}
+    # a next URL a signal already resolved (page_param_links) -- tree-derived, so correct-case
+    next_url = next((s.value for s in signals if isinstance(s.value, str) and s.value), "")
+    kind: Literal["link", "param", "numbered", "unknown"]
+    if "rel_next_link" in fired or "link_header_next" in fired:
+        kind = "link"
+        if not next_url and ctx.tree is not None:  # fill next from the tree rel=next (correct case)
+            nodes = ctx.tree.cssselect('a[rel="next"], link[rel="next"]')
+            href = nodes[0].get("href") if nodes else None
+            if href:
+                next_url = urljoin(ctx.final_url or ctx.url, href)
+    elif "page_param_links" in fired:
+        kind = "param"
+    elif "numbered_sequence" in fired:
+        kind = "numbered"
+    else:
+        kind = "unknown"
+    total_pages, total_items, page_size = _totals(ctx)
+    return PaginationHint(
+        kind=kind, next=next_url, name=_param_name(next_url) if kind == "param" else "",
+        total_pages=total_pages, total_items=total_items, page_size=page_size,
+    )
 
 
 flag("pagination", value=_pagination_value)

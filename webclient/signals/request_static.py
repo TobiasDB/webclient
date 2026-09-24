@@ -262,3 +262,17 @@ def _redirect_to_login(ctx: Context) -> Hit | None:
     ):
         return Hit(0.8, "redirected to a login URL")
     return None
+
+
+# -- pagination (request): the HTTP Link header, so a JSON/API listing paginates too ----------
+_LINK_REL_NEXT = re.compile(r';\s*[^,]*\brel\s*=\s*"?next"?', re.I)
+
+
+@detector(flag="pagination", name="link_header_next", stage="request")
+def _link_header_next(ctx: Context) -> Hit | None:
+    """pagination evidence (strong): an HTTP ``Link: <url>; rel="next"`` header (RFC 8288, as
+    GitHub and many JSON APIs paginate) -- so a listing with NO HTML pager is still detected.
+    Presence only: the actual next URL is re-read (with correct case) at run time by
+    ``doc.next_link()``, since ``Context`` lowercases header values."""
+    raw = ctx.headers.get("link")
+    return Hit(0.95, "an HTTP Link rel=next header") if raw and _LINK_REL_NEXT.search(raw) else None

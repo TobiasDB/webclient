@@ -82,6 +82,29 @@ def test_page_param_link_detection_shares_the_canon_param_table():
     assert not any(s.name == "page_param_links" for s in post["pagination"].signals)  # ?p= is an id
 
 
+def test_pagination_hint_reads_kind_name_and_totals():
+    from webclient.core.document.models import PaginationHint
+
+    f = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {},
+        b'<html><body><main><article>x</article><p>Showing 1-20 of 348</p>'
+        b'<a href="/list?page=2">next</a></main></body></html>',
+    ))
+    h = f["pagination"].value
+    assert isinstance(h, PaginationHint)
+    assert h.kind == "param" and h.name == "page"  # a page-param advance
+    assert h.total_items == 348 and h.page_size == 20  # from the "1-20 of 348" caption
+
+
+def test_pagination_hint_link_header_marks_an_api_listing():
+    # a JSON API paginated only via the HTTP Link header (no HTML pager) still detects, kind=link
+    f = flags(Context.from_response(
+        200, {"content-type": "application/json", "Link": '<https://api.x/items?page=2>; rel="next"'},
+        {}, b"[]",
+    ))
+    assert f["pagination"].present and f["pagination"].value.kind == "link"
+
+
 def test_caas_content_service_marker_fires_spa_so_auto_renders():
     # a page whose records are fetched by a content-service widget (e.g. Adobe Milo /
     # a CaaS block) leaves only a shell in the served HTML; the static marker fires spa
