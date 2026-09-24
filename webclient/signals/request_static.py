@@ -307,3 +307,18 @@ def _relevance_query(ctx: Context) -> Hit | None:
         if k in _SEARCH_PARAMS:
             return Hit(0.6, f"a ?{k}= search query (relevance order)")
     return None
+
+
+@detector(flag="filtered", name="active_query_filters", stage="request")
+def _active_query_filters(ctx: Context) -> Hit | None:
+    """filtered evidence: query params that are NOT pagination / tracking / locale / sort / search
+    -> active filters narrowing the listing (so it is a subset, and paging must preserve them). The
+    active ``{param: value}`` map is the signal value."""
+    from ..core.crawl.canon import _LOCALE_PARAMS, _PAGINATION_PARAMS, _TRACKING
+
+    ignore = _PAGINATION_PARAMS | _TRACKING | _LOCALE_PARAMS | _SORT_PARAMS | _SEARCH_PARAMS
+    active = {
+        k: v for k, v in parse_qsl(urlparse(ctx.final_url or ctx.url).query)
+        if k.lower() not in ignore and v
+    }
+    return Hit(0.7, f"{len(active)} active filter param(s)", active) if active else None

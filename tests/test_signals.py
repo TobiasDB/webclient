@@ -127,6 +127,28 @@ def test_ordered_flag_reads_sort_direction_and_relevance():
     assert rel.key == "relevance"
 
 
+def test_filtered_and_live_flags():
+    from datetime import date, timedelta
+
+    from webclient.core.document.models import Filtering, Liveness
+
+    recent = (date.today() - timedelta(days=3)).isoformat()
+    html = (
+        f'<html><body><aside class="facet"><select name="filter_cat"></select></aside><main>'
+        f'<article><time datetime="{recent}">x</time></article>'
+        f'<article><time datetime="2025-01-01">y</time></article>'
+        f'<article><time datetime="2024-01-01">z</time></article></main></body></html>'
+    ).encode()
+    f = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {}, html, url="http://x/list?category=news&page=2",
+    ))
+    filt = f["filtered"].value
+    assert isinstance(filt, Filtering) and filt.active == {"category": "news"}  # page= is NOT a filter
+    assert "filter_cat" in filt.controls
+    live = f["live"].value
+    assert isinstance(live, Liveness) and live.recent and live.drift_risk  # recent + newest-first -> drift
+
+
 def test_caas_content_service_marker_fires_spa_so_auto_renders():
     # a page whose records are fetched by a content-service widget (e.g. Adobe Milo /
     # a CaaS block) leaves only a shell in the served HTML; the static marker fires spa

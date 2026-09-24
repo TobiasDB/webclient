@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qsl, urljoin, urlparse
 
@@ -416,6 +417,70 @@ def _ordering_value(signals: "list[Signal]", ctx: Context) -> Any:
 
 
 flag("ordered", value=_ordering_value)
+
+
+# -- filtered (tree + request params): the listing is NARROWED -----------------
+
+@detector(flag="filtered", name="facet_controls", stage="static")
+def _facet_controls(ctx: Context) -> Hit | None:
+    """filtered evidence: filter / facet controls on the page (a ``[class*=facet]`` / ``[class*=filter]``
+    block, a checkbox filter form, a ``select[name*=filter]``) -> facets to narrow / partition by. The
+    control names (best-effort) are the signal value."""
+    if ctx.tree is None:
+        return None
+    names: list[str] = []
+    for el in ctx.tree.cssselect('[class*="facet"], [class*="filter"], select[name*="filter"], form input[type="checkbox"]'):
+        label = (el.get("name") or el.get("aria-label") or el.get("id") or "").strip()
+        if label and label not in names:
+            names.append(label)
+    hits = ctx.tree.cssselect('[class*="facet"], [class*="filter"], select[name*="filter"]')
+    return Hit(0.5, "filter / facet controls", names[:8]) if hits else None
+
+
+def _filtering_value(signals: "list[Signal]", ctx: Context) -> Any:
+    """A :class:`Filtering` (active filter params + the filter controls) from the filtered signals."""
+    from ..core.document.models import Filtering
+
+    if not signals:
+        return None
+    active = next((s.value for s in signals if s.name == "active_query_filters" and isinstance(s.value, dict)), {})
+    controls = next((s.value for s in signals if s.name == "facet_controls" and isinstance(s.value, list)), [])
+    return Filtering(active=active, controls=controls)
+
+
+flag("filtered", value=_filtering_value)
+
+
+# -- live (tree): the listing CHANGES over time (a feed / newest-first list) ----
+
+@detector(flag="live", name="recent_records", stage="static")
+def _recent_records(ctx: Context) -> Hit | None:
+    """live evidence: the newest record date on the page is within the last month -> a live/timely
+    listing (a feed), which shifts while you page. The newest date is the signal value."""
+    dates = _page_dates(ctx)
+    if len(dates) < 3:
+        return None
+    newest = max(dates)
+    try:
+        age = (datetime.now(timezone.utc).date() - date.fromisoformat(newest[:10])).days
+    except ValueError:
+        return None
+    return Hit(0.7, f"recent records (newest {newest})", newest) if 0 <= age <= 31 else None
+
+
+def _liveness_value(signals: "list[Signal]", ctx: Context) -> Any:
+    """A :class:`Liveness` (newest date, recent, drift risk) from the live signals. ``drift_risk`` is
+    set when the recent list is also newest-first -- paging it may duplicate/skip at boundaries."""
+    from ..core.document.models import Liveness
+
+    if not signals:
+        return None
+    newest = next((s.value for s in signals if isinstance(s.value, str) and s.value), "")
+    desc = _monotone_direction(_page_dates(ctx)) == "desc"
+    return Liveness(newest=newest, recent=True, drift_risk=bool(newest and desc))
+
+
+flag("live", value=_liveness_value)
 
 
 # -- tabbed (tree) -- same page, content split behind TAB controls ------------

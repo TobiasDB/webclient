@@ -224,6 +224,27 @@ class Ordering(BaseModel):
     param: str = ""
 
 
+class Filtering(BaseModel):
+    """The ``filtered`` flag's value: the listing is NARROWED by filters. ``active`` are the filter
+    query params currently applied (so pagination must PRESERVE them, and a server-side filter can
+    beat paging to a watermark); ``controls`` are the filter/facet controls on the page (the axes to
+    partition by, the tool for beating a result cap). A subset, not the whole dataset."""
+
+    active: dict[str, str] = {}
+    controls: list[str] = []
+
+
+class Liveness(BaseModel):
+    """The ``live`` flag's value: the listing CHANGES over time (a feed / newest-first list).
+    ``newest`` is the most recent record date seen; ``recent`` whether it is within the last month;
+    ``drift_risk`` whether paging it risks duplicates/skips (a newest-first live list shifts while
+    you page) -- so a cross-page ``key=`` dedup, a cursor, or bigger/faster pages are wanted."""
+
+    newest: str = ""
+    recent: bool = False
+    drift_risk: bool = False
+
+
 class IDocument(BaseModel):
     """A resolved resource's data (the Core Fields), plus (for the checker) the
     eager ops ``Document`` implements -- ``select`` / ``attr`` (incl. ``attr("text")``)
@@ -285,6 +306,7 @@ class IDocument(BaseModel):
         def events_of(self, event_type: type[E]) -> "list[E]": ...
         @overload
         def events_of(self, event_type: str) -> "list[Event]": ...
+        def filtered(self) -> "Flag": ...
         def flags(self) -> "list[Flag]": ...
         def forms(self) -> "Flag": ...
         def framework(self) -> "str | None": ...
@@ -295,6 +317,7 @@ class IDocument(BaseModel):
         def is_ok(self) -> "bool | None": ...
         def large_document(self) -> "Flag": ...
         def links(self) -> "Collection[Reference]": ...
+        def live(self) -> "Flag": ...
         def login_present(self) -> "Flag": ...
         def login_required(self) -> "Flag": ...
         def markdown(self, *, main_content_only: bool = ...) -> "str": ...
@@ -347,4 +370,6 @@ __all__ = [
     "Flag",
     "PaginationHint",
     "Ordering",
+    "Filtering",
+    "Liveness",
 ]

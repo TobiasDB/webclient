@@ -9,7 +9,7 @@ noisy-OR, contra signals scale it down, and it is *present* at confidence >= 0.5
 (`Settings.detection.present_threshold`). A present flag may carry a `remedy` (the transport
 escalation it calls for) and a `value` (the actionable payload).
 
-13 flags, 38 detectors.
+15 flags, 41 detectors.
 
 ## `spa`
 
@@ -112,6 +112,23 @@ escalation it calls for) and a `value` (the actionable payload).
 | `sort_control` | static |  | — | ordered evidence: a sort control on the page (a ``select[name*=sort]`` / ``[aria-sort]`` / an order dropdown) -> the listing's order is CONTROLLABLE. |
 | `relevance_searchbox` | static |  | — | ordered evidence: a search box (``input[type=search]`` / ``[role=search]``) -> the listing is likely relevance-ordered, so no early pagination stop is sound. |
 | `monotone_dates` | static |  | — | ordered evidence (strong): the page's record dates run MONOTONICALLY -- so the listing is date-sorted, and the direction says whether a recency ``until`` stop is sound. The direction (``"desc"``/``"asc"``) is the signal value. |
+
+## `filtered`
+
+- **remedy**: `none` · **value**: A :class:`Filtering` (active filter params + the filter controls) from the filtered signals.
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `active_query_filters` | request |  | — | filtered evidence: query params that are NOT pagination / tracking / locale / sort / search -> active filters narrowing the listing (so it is a subset, and paging must preserve them). The active ``{param: value}`` map is the signal value. |
+| `facet_controls` | static |  | — | filtered evidence: filter / facet controls on the page (a ``[class*=facet]`` / ``[class*=filter]`` block, a checkbox filter form, a ``select[name*=filter]``) -> facets to narrow / partition by. The control names (best-effort) are the signal value. |
+
+## `live`
+
+- **remedy**: `none` · **value**: A :class:`Liveness` (newest date, recent, drift risk) from the live signals. ``drift_risk`` is
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `recent_records` | static |  | — | live evidence: the newest record date on the page is within the last month -> a live/timely listing (a feed), which shifts while you page. The newest date is the signal value. |
 
 ## `tabbed`
 

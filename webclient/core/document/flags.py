@@ -32,8 +32,8 @@ class FlagsBacking(Backing):
 
     provides = frozenset(
         {"flags", "spa", "anti_bot_present", "anti_bot_triggered", "login_present",
-         "login_required", "pagination", "ordered", "tabbed", "forms", "buttons", "shadow_dom",
-         "iframe", "large_document", "framework", "xhr_endpoints"}
+         "login_required", "pagination", "ordered", "filtered", "live", "tabbed", "forms",
+         "buttons", "shadow_dom", "iframe", "large_document", "framework", "xhr_endpoints"}
     )
     gate = "ok"
 
@@ -102,6 +102,18 @@ class FlagsBacking(Backing):
         an early pagination stop is sound -- newest-first dates make a recency ``until`` stop safe;
         relevance / unknown order means the walk must exhaust."""
         return self._flags(core)["ordered"]
+
+    def filtered(self, core: "Document") -> Flag:
+        """The listing is NARROWED by filters (a :class:`~webclient.core.document.models.Filtering`
+        value: the active filter params + the facet controls). So it is a subset -- pagination must
+        preserve the active filters, and the facets are the tool to partition past a result cap."""
+        return self._flags(core)["filtered"]
+
+    def live(self, core: "Document") -> Flag:
+        """The listing CHANGES over time (a :class:`~webclient.core.document.models.Liveness` value:
+        the newest record date, whether it is recent, and the drift risk). A newest-first live list
+        shifts while you page, so a cross-page ``key=`` dedup or a cursor is wanted."""
+        return self._flags(core)["live"]
 
     def tabbed(self, core: "Document") -> Flag:
         """The page splits content across TABS on the SAME page (Upcoming vs Past, year tabs,
