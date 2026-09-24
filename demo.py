@@ -794,7 +794,7 @@ def roadmap_tour() -> None:
     import shutil
     from pathlib import Path
 
-    from webclient import Ask, Script
+    from webclient import Ask, Script, ScriptEvent
     from webclient.lab import serve as serve_lab
     from webclient.replay import Replay
     from webclient.tools import TOOLS, dispatch
@@ -837,7 +837,8 @@ def roadmap_tour() -> None:
         wc.scripts.register(Script("demo.title", "() => document.title", on="load"))
         live = wc.ref(f"{lab}/lab/app").resolve(browser=True).collect()
         live.write("#qty", "2").click("#add").wait_for("#cart li")
-        ran = [s.script for s in wc.bus.since(0, topic="script") if s.script == "demo.title"]
+        ran = [s.script for s in wc.bus.since(0, topic="script")
+               if isinstance(s, ScriptEvent) and s.script == "demo.title"]
         print("scripts:       ", [s.name for s in wc.scripts.list()][:4], "... | demo.title ran:", bool(ran))
         wc.release(live)
 
