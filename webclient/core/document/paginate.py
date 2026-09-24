@@ -247,6 +247,37 @@ async def _parallel_pages(
     return pages
 
 
+async def _interact_pages(
+    doc: "Document", *, action: Any, records: str, max_pages: int, client: Any
+) -> "list[Document]":
+    """Interacted (append / exhaust-then-extract) pagination for a JS pager: drive the ``action``
+    -- a click on a "load more" button, or a scroll -- against the HELD live page until the record
+    count stops growing (exhausted), then emit the ONE fully-loaded page. Each interaction refreshes
+    the page's captured content, so the final ``select_all`` over that page sees every loaded record.
+    ``records`` (the record selector) measures progress; without it, the content length does."""
+    from ...query.executor import aevaluate
+
+    bound = max(1, min(max_pages, _MAX_PAGES_CAP))
+    # each action runs in its own plan scope, which would RELEASE the held live page (a click
+    # returns the page); keep it alive across the whole interaction so the caller keeps their page.
+    prev_keep = getattr(doc, "_keep_alive", False)
+    doc._keep_alive = True
+    try:
+        prev = _row_count(doc, records) if records else len(doc.content or b"")
+        for _ in range(bound):
+            try:
+                await aevaluate(action, doc, client=client)  # load more / scroll -> refreshes doc.content
+            except Exception:  # noqa: BLE001 - a gone "load more" button / failed action = exhausted
+                break
+            count = _row_count(doc, records) if records else len(doc.content or b"")
+            if count <= prev:
+                break  # nothing new loaded -> the list is exhausted
+            prev = count
+    finally:
+        doc._keep_alive = prev_keep
+    return [doc]
+
+
 async def walk(
     doc: "Document",
     *,
@@ -263,6 +294,7 @@ async def walk(
     until: str = "",
     until_before: str = "",
     total_pages: int = 0,
+    action: Any = None,
     stop: Any = None,
     key: Any = None,
     client: Any = None,
@@ -279,6 +311,8 @@ async def walk(
     every page reference is a pure function of its index, so the pages are fetched CONCURRENTLY
     (bounded) instead of one-at-a-time."""
     client = client if client is not None else doc._client
+    if by == "action":  # a JS pager -- drive the action on the held live page (append/exhaust)
+        return await _interact_pages(doc, action=action, records=records, max_pages=max_pages, client=client) if action is not None else [doc]
     if by == "auto":
         by, name = _auto_advance(doc, name)  # pick the advance from the detected pagination hint
         if not total_pages:  # ... and its known total, for the parallel fast-path (hint is cached)
