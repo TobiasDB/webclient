@@ -194,3 +194,40 @@ def test_session_crawls_manual_auto_and_a_goal(httpserver):
         assert api.get(f"/sessions/{sid}/crawls").json()[0]["id"] == cid
         api.delete(f"/sessions/{sid}")
     wc.close()
+
+
+def test_session_documents_static_and_live_with_reload(httpserver):
+    """The documents a session holds -- what the UI lists at the top: a static capture and a
+    LIVE page, their views without a refetch, a reload under the same id, and close."""
+    hits = {"n": 0}
+
+    def page(_req):
+        from werkzeug.wrappers import Response
+        hits["n"] += 1
+        return Response(f'<html><head><title>V{hits["n"]}</title></head><body><div class="card"><h2 class="title">A</h2></div><button id="b">go</button></body></html>', content_type="text/html")
+
+    httpserver.expect_request("/d").respond_with_handler(page)
+    wc = WebClient(timeout=15.0)
+    with TestClient(create_app(wc)) as api:
+        sid = api.post("/sessions", json={"record": True}).json()["id"]
+        url = httpserver.url_for("/d")
+        st = api.post(f"/sessions/{sid}/documents", json={"url": url}).json()
+        assert st["live"] is False and st["tier"] == "static" and st["title"] == "V1"
+        live = api.post(f"/sessions/{sid}/documents", json={"url": url, "browser": "always"}).json()
+        assert live["live"] is True and live["tier"] == "browser"
+        listed = api.get(f"/sessions/{sid}/documents").json()
+        assert [d["id"] for d in listed] == [st["id"], live["id"]]
+        v = api.get(f"/sessions/{sid}/documents/{st['id']}/views?include=card,rrweb,records,controls,skeleton").json()
+        assert v["card"]["title"] == "V1" and [r["type"] for r in v["rrweb"]] == [4, 2]
+        assert v["controls"][0]["role"] == "button" and v["controls"][0]["name"] == "go"
+        assert "card" in v["skeleton"] and isinstance(v["records"], list)
+        re = api.post(f"/sessions/{sid}/documents/{st['id']}/reload").json()
+        assert re["id"] == st["id"] and re["title"] != "V1"  # fetched again, same handle id
+        assert api.get(f"/sessions/{sid}/documents/{st['id']}/views?include=card").json()["card"]["title"] == re["title"]
+        re2 = api.post(f"/sessions/{sid}/documents/{live['id']}/reload").json()
+        assert re2["live"] is True
+        assert api.delete(f"/sessions/{sid}/documents/{live['id']}").json()["status"] == "closed"
+        assert [d["id"] for d in api.get(f"/sessions/{sid}/documents").json()] == [st["id"]]
+        assert api.get(f"/sessions/{sid}/documents/nope/views").status_code == 404
+        api.delete(f"/sessions/{sid}")
+    wc.close()

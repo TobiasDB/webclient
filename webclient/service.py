@@ -638,6 +638,101 @@ def create_app(
                 break
         return out
 
+    # -- the documents a session holds: what the UI shows at the top (static or live), reloadable --
+    def _handle(doc: Any, doc_id: "str | None" = None) -> dict[str, Any]:
+        tiers = list(getattr(doc, "_tiers", []) or [])
+        return {"id": doc_id or doc.name, "url": doc.final_url or doc.url, "title": doc.title, "kind": doc.kind,
+                "status_code": doc.status_code, "ok": doc.ok, "live": getattr(doc, "_page", None) is not None,
+                "tier": tiers[-1] if tiers else "static", "tiers": tiers}
+
+    def _session_doc(sid: str, doc_id: str) -> "tuple[Any, Any] | JSONResponse":
+        if sid not in app.state.sessions:
+            return _error(404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT)
+        store = _store_for(sid)
+        if doc_id not in store:
+            return _error(404, "NoSuchDocument", f"no document {doc_id!r} in session {sid!r}", retriable=True,
+                          hint="the handle expired or was closed; open the page again")
+        return app.state.sessions[sid], store[doc_id]
+
+    @app.get("/sessions/{sid}/documents", response_model=None)
+    def list_documents(sid: str, authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        """The documents this session holds, newest last: url, title, kind, whether the page is
+        LIVE (a browser page held open) or a static capture, and the tier that fetched it."""
+        _auth(authorization)
+        if sid not in app.state.sessions:
+            return _error(404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT)
+        return [_handle(d, k) for k, d in _store_for(sid).items()]
+
+    @app.post("/sessions/{sid}/documents", response_model=None)
+    def open_document(sid: str, body: dict[str, Any], authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """Open ``url`` in the session: ``browser`` false / "auto" / "always"; a browser render
+        is kept LIVE (its page held) so it can be driven; a static fetch is a capture. The
+        document lands in the session's store and its handle comes back."""
+        _auth(authorization)
+        if sid not in app.state.sessions:
+            return _error(404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT)
+        url = body.get("url")
+        if not url:
+            return _error(422, "InvalidRequest", "provide 'url'")
+        browser = body.get("browser", False)
+        session = app.state.sessions[sid]
+        try:
+            doc = session.fetch(url, browser=browser, keep_alive=bool(browser))
+        except WebException as exc:
+            return _error(502, exc.error.type, str(exc), retriable=exc.error.retriable, status_code=exc.error.status_code,
+                          error=exc.error, hint="retry if retriable; else the target is unavailable or blocked")
+        _store_for(sid)[doc.name] = doc
+        return _handle(doc)
+
+    @app.get("/sessions/{sid}/documents/{doc_id}/views", response_model=None)
+    def document_views(sid: str, doc_id: str, include: str = "card", authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """The views of a held document, no refetch: ``include`` is a comma list of card,
+        content, rrweb, patterns, records, flags, skeleton, markdown, controls, elements, transport."""
+        _auth(authorization)
+        got = _session_doc(sid, doc_id)
+        if isinstance(got, JSONResponse):
+            return got
+        from .tools import views as _views
+
+        return _views(got[1], [v.strip() for v in include.split(",") if v.strip()])
+
+    @app.post("/sessions/{sid}/documents/{doc_id}/reload", response_model=None)
+    def reload_document(sid: str, doc_id: str, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """Reload a held document: a live page navigates to its url again; a static capture is
+        fetched again with the same tier -- under the SAME id, so a UI keeps its place."""
+        _auth(authorization)
+        got = _session_doc(sid, doc_id)
+        if isinstance(got, JSONResponse):
+            return got
+        session, doc = got
+        try:
+            if getattr(doc, "_page", None) is not None:
+                doc.goto(doc.final_url or doc.url)
+                fresh = doc
+            else:
+                tiers = list(getattr(doc, "_tiers", []) or [])
+                fresh = session.fetch(doc.url, browser=(tiers[-1] if tiers and tiers[-1] != "static" else False))
+        except WebException as exc:
+            return _error(502, exc.error.type, str(exc), retriable=exc.error.retriable, status_code=exc.error.status_code, error=exc.error)
+        _store_for(sid)[doc_id] = fresh
+        return _handle(fresh, doc_id)
+
+    @app.delete("/sessions/{sid}/documents/{doc_id}", response_model=None)
+    def close_document(sid: str, doc_id: str, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """Drop a held document (a live page is released)."""
+        _auth(authorization)
+        got = _session_doc(sid, doc_id)
+        if isinstance(got, JSONResponse):
+            return got
+        session, doc = got
+        if getattr(doc, "_page", None) is not None:
+            try:
+                session.release(doc)
+            except Exception:  # noqa: BLE001 - already gone
+                pass
+        _store_for(sid).pop(doc_id, None)
+        return {"id": doc_id, "status": "closed"}
+
     # -- crawls held by a session: start (auto, manual or with a goal), watch, step, resume --
     app.state.crawls = {}
 

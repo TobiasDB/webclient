@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field, ValidationError
 if TYPE_CHECKING:
     from ..interface import WebClient
 
-__all__ = [
+__all__ = ["views", "VIEWS", 
     "Tool", "tool", "TOOLS", "get", "dispatch", "schema", "UrlArgs", "TextArgs", "SkeletonArgs",
     "ExtractArgs", "CrawlArgs", "PlanArgs", "NoArgs", "FlagsArgs", "PatternsArgs", "ToolError",
 ]
@@ -334,26 +334,54 @@ class SnapshotArgs(UrlArgs):
       "the record options and the flags, in ONE round trip.",
       returns="{card, content, kind, encoding, rrweb?, patterns?, records?, flags?}", story="agent-developer")
 def snapshot(args: SnapshotArgs, wc: "WebClient") -> "dict[str, Any]":
-    doc = wc.fetch(args.url, browser=args.browser)
-    out: dict[str, Any] = {"card": _jsonable(doc.card()), "kind": doc.kind, "encoding": doc.encoding,
-                           "content": (doc.content or b"").decode(doc.encoding or "utf-8", "replace")}
-    if "rrweb" in args.include and doc.kind == "html":
+    return views(wc.fetch(args.url, browser=args.browser), ["card", "content", *args.include])
+
+
+#: every view a document can be asked for -- what a UI needs to show a page
+VIEWS = ("card", "content", "rrweb", "patterns", "records", "flags", "skeleton", "markdown", "controls",
+         "elements", "transport")
+
+
+def views(doc: Any, include: "list[str]") -> "dict[str, Any]":
+    """The requested views of an already-fetched document, in one dict: ``card``,
+    ``content``, ``rrweb`` (Meta + FullSnapshot for the player), ``patterns``, ``records``
+    (the repeating-region options), ``flags``, ``skeleton``, ``markdown``, ``controls``,
+    ``elements`` (the content elements), ``transport``. Always carries ``document_id``,
+    ``kind``, ``url``, ``title`` and ``live``."""
+    out: dict[str, Any] = {"document_id": doc.name, "kind": doc.kind, "encoding": doc.encoding,
+                           "url": doc.final_url or doc.url, "title": doc.title, "live": getattr(doc, "_page", None) is not None,
+                           "tiers": list(getattr(doc, "_tiers", []) or [])}
+    want = set(include)
+    if "card" in want:
+        out["card"] = _jsonable(doc.card())
+    if "content" in want:
+        out["content"] = (doc.content or b"").decode(doc.encoding or "utf-8", "replace")
+    if "rrweb" in want and doc.kind == "html":
         from ..models import SnapshotEvent
         from ..replay.rrweb import to_rrweb
 
         snap = SnapshotEvent(url=doc.url, final_url=doc.final_url or doc.url, kind="html", content=doc.content,
                              status_code=doc.status_code, document_id=doc.name, ts=0.0)
         out["rrweb"] = to_rrweb([snap], custom=False)
-    if "patterns" in args.include:
+    if "patterns" in want:
         out["patterns"] = _jsonable(doc.patterns())
-    if "records" in args.include:
+    if "records" in want:
         from ..dom.index import record_options
         from ..core.document.html import tree
 
-        out["records"] = _jsonable(record_options(tree(doc), top_k=20))
-    if "flags" in args.include:
+        out["records"] = _jsonable(record_options(tree(doc), top_k=20)) if doc.kind == "html" else []
+    if "flags" in want:
         out["flags"] = _jsonable(doc.flags())
-    out["document_id"] = doc.name
+    if "skeleton" in want:
+        out["skeleton"] = doc.skeleton(collapse=True) if doc.kind == "html" else ""
+    if "markdown" in want:
+        out["markdown"] = doc.markdown() if doc.kind == "html" else out.get("content", "")
+    if "controls" in want:
+        out["controls"] = _jsonable(doc.controls()) if doc.kind == "html" else []
+    if "elements" in want:
+        out["elements"] = _jsonable(doc.content_elements()) if doc.kind == "html" else []
+    if "transport" in want:
+        out["transport"] = _jsonable(doc.transport())
     return out
 
 
