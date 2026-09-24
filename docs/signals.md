@@ -97,7 +97,7 @@ escalation it calls for) and a `value` (the actionable payload).
 |---|---|---|---|---|
 | `rel_next_link` | static |  | — | pagination evidence (strong): a ``rel="next"`` link/anchor -- the canonical next-page marker. |
 | `pagination_ui` | static |  | — | pagination evidence: a pagination/pager widget (by class or aria-label). |
-| `page_param_links` | static |  | — | pagination evidence: a link carrying a page parameter (``?page=`` / ``/page/`` etc.); its resolved URL is the next-page value. |
+| `page_param_links` | static |  | — | pagination evidence: a link whose query carries a pagination param (``?page=``, ``?offset=``, …) or whose path is ``/page/N``; its resolved URL is the next-page value. Reads the SAME param table crawl uses to collapse a series (``crawl.canon``), so detection and dedup never drift -- notably ``p`` is excluded (too often a post id, e.g. WordPress ``?p=123``, not a page number). |
 | `numbered_sequence` | static |  | — | pagination evidence: three or more purely-numeric links -- a ``1 2 3`` page-number strip. |
 
 ## `tabbed`

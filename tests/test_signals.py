@@ -64,6 +64,24 @@ def test_tabbed_flag_fires_on_tabs_but_not_on_a_plain_table():
     assert not plain["tabbed"].present
 
 
+def test_page_param_link_detection_shares_the_canon_param_table():
+    # a link whose query carries a pagination param (offset/page/…) trips page_param_links; a
+    # ?p=<id> post link must NOT (the WordPress guard). The table is crawl.canon's, so detection
+    # and crawl's series-dedup never drift.
+    paged = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {},
+        b'<html><body><main><article>x</article>'
+        b'<a href="/list?offset=20">next</a></main></body></html>',
+    ))
+    assert any(s.name == "page_param_links" for s in paged["pagination"].signals)  # ?offset= counts
+
+    post = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {},
+        b'<html><body><main><a href="/read?p=123">a post</a></main></body></html>',
+    ))
+    assert not any(s.name == "page_param_links" for s in post["pagination"].signals)  # ?p= is an id
+
+
 def test_caas_content_service_marker_fires_spa_so_auto_renders():
     # a page whose records are fetched by a content-service widget (e.g. Adobe Milo /
     # a CaaS block) leaves only a shell in the served HTML; the static marker fires spa

@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urljoin, urlparse
 
 from ..dom import norm
 from .context import Context
@@ -232,14 +232,21 @@ def _pagination_ui(ctx: Context) -> Hit | None:
 
 @detector(flag="pagination", name="page_param_links", stage="static")
 def _page_param_links(ctx: Context) -> Hit | None:
-    """pagination evidence: a link carrying a page parameter (``?page=`` / ``/page/`` etc.);
-    its resolved URL is the next-page value."""
+    """pagination evidence: a link whose query carries a pagination param (``?page=``, ``?offset=``,
+    …) or whose path is ``/page/N``; its resolved URL is the next-page value. Reads the SAME param
+    table crawl uses to collapse a series (``crawl.canon``), so detection and dedup never drift --
+    notably ``p`` is excluded (too often a post id, e.g. WordPress ``?p=123``, not a page number)."""
     if ctx.tree is None:
         return None
+    from ..core.crawl.canon import _PAGE_PATH_RE, _PAGINATION_PARAMS
+
     base = ctx.final_url or ctx.url
     for el in ctx.tree.cssselect("a[href]"):
         h = el.get("href")
-        if h and any(p in h for p in ("?page=", "&page=", "?p=", "&p=", "/page/")):
+        if not h:
+            continue
+        parts = urlparse(h)
+        if any(k.lower() in _PAGINATION_PARAMS for k, _ in parse_qsl(parts.query)) or _PAGE_PATH_RE.search(parts.path):
             return Hit(0.5, "links with a page parameter", urljoin(base, h))
     return None
 
