@@ -26,6 +26,7 @@ base stays a minimal scaffold and never grows a framework.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Generic, Literal, Protocol, TypeVar, cast, runtime_checkable
 
@@ -222,6 +223,73 @@ class BoundedLoop(Generic[S, O, D]):
         self._emit("resumed", self.round + 1, decision=_brief(decision))
         self.pending = None
         return self._drive(cast("S", self.state), decision)
+
+    # -- async twins (for loops whose apply/observe/decide are async, e.g. a fetch) --------------
+    async def astep(self, state: S, decision: "D | Ask | None" = None) -> "LoopVerdict | None":
+        """The async twin of :meth:`step`: one round where ``observe`` / ``decide`` / ``apply`` /
+        ``progress`` may be async (a coroutine result is awaited; a plain value is used as is). Same
+        rounds, stall detection and verdicts as :meth:`step`, so a fetch-driven loop (crawl,
+        pagination) is a BoundedLoop like every other -- it just runs on the caller's event loop."""
+        self.state = state
+        i = self.round
+        if i >= self.max_rounds:
+            return self._finish(LoopVerdict(done=False, reason="budget", rounds=self.max_rounds))
+        self._emit("round", i + 1, budget=self.max_rounds, error=self._error)
+        if decision is None:
+            obs = await _aw(self._observe(state, i, self._error))
+            decision = cast("D | Ask", await _aw(self._decide(obs)))
+            log.debug("%s round %d/%d: %r", self.name, i + 1, self.max_rounds, decision)
+        if isinstance(decision, Ask):  # a checkpoint: hand the question up, keep the round
+            self.pending = decision
+            self._emit("waiting", i + 1, ask=decision.model_dump(mode="json"))
+            return self._finish(LoopVerdict(done=False, reason="waiting", rounds=i, ask=decision), keep=True)
+        self.pending = None
+        self._emit("decision", i + 1, decision=_brief(decision))
+        result = self._done_result(decision)
+        if result is not None:
+            self._emit("done", i, result=result)
+            return self._finish(LoopVerdict(done=True, reason="done", rounds=i, result=result))
+        try:
+            await _aw(self._apply(state, decision))
+            self._error = ""
+        except Exception as exc:  # noqa: BLE001 - surface it to the verdict, never crash
+            log.warning("%s stopped on error at round %d: %s", self.name, i + 1, exc)
+            self._emit("error", i + 1, error=str(exc))
+            return self._finish(LoopVerdict(done=False, reason="error", rounds=i, error=str(exc)))
+        self.round = i + 1
+        if self._progress is not None:
+            current = await _aw(self._progress(state))
+            self._stalls = self._stalls + 1 if current == self._prev else 0
+            self._prev = current
+            if self._stalls >= self.max_stalls:
+                self._emit("stalled", i + 1)
+                return self._finish(LoopVerdict(done=False, reason="stalled", rounds=i + 1))
+        if self.round >= self.max_rounds:
+            self._emit("budget", self.max_rounds)
+            return self._finish(LoopVerdict(done=False, reason="budget", rounds=self.max_rounds))
+        return None
+
+    async def arun(self, state: S) -> LoopVerdict:
+        """The async twin of :meth:`run`: drive ``state`` round by round on the caller's loop until a
+        terminal condition, returning the verdict (same taxonomy as :meth:`run`)."""
+        self.state = state
+        self.round = 0
+        self._stalls = 0
+        self._prev = _UNSET
+        self._error = ""
+        self.pending = None
+        verdict = await self.astep(state)
+        while verdict is None:
+            verdict = await self.astep(state)
+        return verdict
+
+
+async def _aw(value: Any) -> Any:
+    """Await ``value`` when it is awaitable (an async callable's result), else return it as is --
+    so :meth:`BoundedLoop.astep` accepts async OR sync ``observe``/``decide``/``apply``/``progress``."""
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 _UNSET: Any = object()  # a first-round sentinel that no progress signature can equal

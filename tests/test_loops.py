@@ -41,6 +41,47 @@ def test_bounded_loop_step_run_and_ask_resume():
     assert m.step(None, "stop").reason == "done" and m.round == 2
 
 
+def test_bounded_loop_arun_drives_async_callables():
+    # the async twin: observe/decide/apply may be coroutines (a fetch-driven loop -- crawl,
+    # pagination -- is a BoundedLoop like any other, it just runs on the event loop).
+    import asyncio
+
+    applied: list[str] = []
+
+    async def decide(obs):  # async decide
+        return f"go-{obs}" if obs < 3 else "STOP"
+
+    async def apply(state, d):  # async apply (the fetch analogue)
+        await asyncio.sleep(0)
+        applied.append(d)
+
+    loop = BoundedLoop(
+        observe=lambda s, i, e: i, decide=decide,
+        done_result=lambda d: "done" if d == "STOP" else None,
+        apply=apply, max_rounds=10, name="a",
+    )
+    v = asyncio.run(loop.arun(None))
+    assert v.done and v.reason == "done" and v.rounds == 3
+    assert applied == ["go-0", "go-1", "go-2"]  # rounds 0..2 applied, then STOP was terminal
+
+
+def test_bounded_loop_arun_detects_stall_and_budget():
+    import asyncio
+
+    stalled = BoundedLoop(  # constant progress -> a stall
+        observe=lambda s, i, e: i, decide=lambda o: "x", done_result=lambda d: None,
+        apply=lambda s, d: None, progress=lambda s: 0, max_rounds=10, max_stalls=1, name="s",
+    )
+    assert asyncio.run(stalled.arun(None)).reason == "stalled"
+
+    budget = BoundedLoop(  # never done, no stall check -> hits the round budget
+        observe=lambda s, i, e: i, decide=lambda o: "x", done_result=lambda d: None,
+        apply=lambda s, d: None, max_rounds=3, name="b",
+    )
+    v = asyncio.run(budget.arun(None))
+    assert v.reason == "budget" and v.rounds == 3
+
+
 def test_resolve_ladder_is_a_loop_with_a_swappable_driver(httpserver):
     from webclient.core.client.resolve_loop import ResolveObservation, default_resolve_driver
 
