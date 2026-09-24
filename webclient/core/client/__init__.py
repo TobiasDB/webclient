@@ -45,6 +45,7 @@ from .sitemap import SiteBacking
 if TYPE_CHECKING:
     from ...trace import Trace
     from ..crawl import Crawl, CrawlConfig, CrawlState, PageCard
+    from ..paginate import Pagination, PaginationConfig
     from ...interface import Lazy, LazyField, LazyWebClient
 
 
@@ -1022,6 +1023,47 @@ class WebClient(SessionCore, IWebClient):
         ).bind(self)
         crawl._driver = driver
         return crawl
+
+    def paginate(
+        self,
+        source: Any,
+        *,
+        config: "PaginationConfig | None" = None,
+        by: str = "auto",
+        max_pages: int = 20,
+        max_rows: int = 0,
+        name: str = "page",
+        start: int = 1,
+        step: int = 1,
+        size: int = 0,
+        cursor: str = "",
+        cursor_attr: str = "text",
+        records: str = "",
+        until: str = "",
+        until_before: str = "",
+    ) -> "Pagination":
+        """A stateful walk over a paginated series sharing this engine (a :class:`Pagination`
+        core -- crawl's twin). Drive it with ``pg.run()`` (batch → read ``.pages``) or ``pg.step()``
+        (fetch one more page; inspect ``.pages`` / ``.verdict`` between rounds), or stream it
+        (``for page in pg.stream()``). Where ``doc.paginate(...)`` walks a series inside a query
+        plan, this is the MANUAL/agent surface an LLM driver can step page by page.
+
+        ``source`` is the first page: a URL / :class:`Reference` (page one is fetched on the first
+        step) or an already-fetched :class:`Document` (used directly, no re-fetch). ``by="auto"``
+        (default) reads the advance off page one's detected pagination hint (a ``?page=`` source
+        walks by that param, else the next link is followed); pass ``by="param"`` / ``"link"`` /
+        ``"cursor"`` to force it. The stop knobs (``max_pages`` / ``max_rows`` with ``records`` /
+        ``until`` + ``until_before``) mirror ``doc.paginate``; or pass a whole
+        :class:`PaginationConfig` (``config=`` then wins). Remotely the walk runs as one plan and
+        the pages ride back; interactive ``step`` stays local (like ``Crawl.step``)."""
+        from ..paginate import Pagination, PaginationConfig
+
+        cfg = config or PaginationConfig(
+            by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start, step=step,
+            size=size, cursor=cursor, cursor_attr=cursor_attr, records=records, until=until,
+            until_before=until_before,
+        )
+        return Pagination(config=cfg).bind(self, source)
 
     # ``sitemap`` (hunt the sitemap.xml) and ``robots`` (hunt the robots.txt) are
     # dispatched IO ops on ``SiteBacking`` -- reached via ``__getattr__``, so remote is

@@ -403,6 +403,16 @@ def main() -> None:
         ).collect()
         print("dataset:    ", [r["v"] for r in dataset])
 
+        # [paginate session] The manual/agent twin (crawl's): wc.paginate(source) is a
+        #      stateful walk driven by a BoundedLoop -- step() a page at a time or run()
+        #      to the end, then read .verdict (the precise stop cause). by="auto" reads
+        #      the advance off page one's pagination hint.
+        with wc.paginate(f"{base}/releases?p=1", max_pages=5) as pg:
+            pg.step()                                    # fetch page one
+            v = pg.run().verdict                         # walk the rest -> the terminal verdict
+            assert v is not None
+            print("paginate pg:", v.pages, "pages,", "stop:", v.stop)
+
         # [flags] browser="auto" escalates a JS-gated page to a browser render on the
         #      response's flags. The /spa page injects its content via JS, so the spa
         #      flag fires (a browser remedy, built from static + rendered signals) and

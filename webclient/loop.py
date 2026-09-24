@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, Generic, Literal, Protocol, TypeVar, cast, runtime_checkable
+from typing import Any, Awaitable, Generic, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -104,7 +104,7 @@ class BoundedLoop(Generic[S, O, D]):
         observe: "Callable[[S, int, str], O]",
         decide: "Callable[[O], D | Ask]",
         done_result: "Callable[[D], str | None]",
-        apply: "Callable[[S, D], None]",
+        apply: "Callable[[S, D], None | Awaitable[None]]",  # sync, or async for a fetch-driven loop (astep/arun)
         progress: "Callable[[S], Any] | None" = None,
         max_rounds: "int | None" = None,
         max_stalls: "int | None" = None,
