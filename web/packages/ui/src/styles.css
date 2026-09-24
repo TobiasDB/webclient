@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+/* ---- WebClient design tokens ------------------------------------------------
+   One palette, light-first, with a dark override on [data-theme="dark"]. Semantic
+   names only (surface / ink / line / accent / ok / warn / bad / muted); components never
+   reach for raw colours. Every topic on the event bus has a colour so the timeline, the
+   chips and the run bar agree. */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  --color-surface: #ffffff;
+  --color-surface-2: #f6f7f9;
+  --color-surface-3: #eceef2;
+  --color-ink: #16181d;
+  --color-ink-2: #3d4250;
+  --color-muted: #6b7280;
+  --color-line: #e3e6eb;
+  --color-line-2: #cdd2da;
+  --color-accent: #2457e6;
+  --color-accent-ink: #ffffff;
+  --color-accent-soft: #e6edff;
+  --color-ok: #15803d;
+  --color-ok-soft: #e4f5ea;
+  --color-warn: #b45309;
+  --color-warn-soft: #fdf1df;
+  --color-bad: #b91c1c;
+  --color-bad-soft: #fde8e8;
+
+  /* event topics */
+  --color-topic-network: #2457e6;
+  --color-topic-dom: #7c3aed;
+  --color-topic-action: #0f766e;
+  --color-topic-console: #6b7280;
+  --color-topic-plan: #1d4ed8;
+  --color-topic-loop: #b45309;
+  --color-topic-pipeline: #9a3412;
+  --color-topic-error: #b91c1c;
+  --color-topic-snapshot: #15803d;
+  --color-topic-script: #4338ca;
+  --color-topic-resource: #475569;
+  --color-topic-rrweb: #be185d;
+
+  /* transport tiers */
+  --color-tier-static: #15803d;
+  --color-tier-proxy: #b45309;
+  --color-tier-browser: #7c3aed;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-pop: 0 8px 24px rgba(16, 24, 40, 0.12);
+}
+
+[data-theme="dark"] {
+  --color-surface: #0f1115;
+  --color-surface-2: #161a21;
+  --color-surface-3: #1f2430;
+  --color-ink: #e8eaf0;
+  --color-ink-2: #b6bcc9;
+  --color-muted: #8b93a3;
+  --color-line: #262c38;
+  --color-line-2: #343c4b;
+  --color-accent: #6b8cff;
+  --color-accent-ink: #0b1020;
+  --color-accent-soft: #1b2440;
+  --color-ok: #4ade80;
+  --color-ok-soft: #12301d;
+  --color-warn: #fbbf24;
+  --color-warn-soft: #3a2a0c;
+  --color-bad: #f87171;
+  --color-bad-soft: #3b1414;
+}
+
+html, body { background: var(--color-surface); color: var(--color-ink); font-family: var(--font-sans); font-size: 14px; }
+* { box-sizing: border-box; }
+::selection { background: var(--color-accent-soft); }
