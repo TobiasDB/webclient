@@ -9,7 +9,7 @@ noisy-OR, contra signals scale it down, and it is *present* at confidence >= 0.5
 (`Settings.detection.present_threshold`). A present flag may carry a `remedy` (the transport
 escalation it calls for) and a `value` (the actionable payload).
 
-15 flags, 41 detectors.
+18 flags, 44 detectors.
 
 ## `spa`
 
@@ -156,3 +156,27 @@ escalation it calls for) and a `value` (the actionable payload).
 | `button_element` | static |  | — | buttons evidence: ``<button>`` / submit / button inputs on the page. |
 | `role_button` | static |  | — | buttons evidence: ``role="button"`` elements (buttons that aren't ``<button>`` tags). |
 | `onclick_attr` | static |  | — | buttons evidence (weak): elements carrying an inline ``onclick`` handler. |
+
+## `record_regions`
+
+- **remedy**: `none` · **value**: A pattern flag's value: the :class:`PatternHint` list carried by the detector that fired
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `record_list` | static |  | — | The repeating dataset regions (MDR-style dominant sibling groups): each is a ``select_all`` target for extraction. Confidence grows with group size + content richness vs the best region. The flag value is the list of :class:`PatternHint` (most confident first). |
+
+## `repeated_controls`
+
+- **remedy**: `none` · **value**: A pattern flag's value: the :class:`PatternHint` list carried by the detector that fired
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `repeated_control` | static |  | — | Interactive controls that repeat with the same structure + label shape (an "add to cart" per card, a "load more" per section): one action per item. Each hint's ``subject`` is a durable selector for the first instance; ``count`` how many share it. |
+
+## `page_template`
+
+- **remedy**: `none` · **value**: A pattern flag's value: the :class:`PatternHint` list carried by the detector that fired
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `page_template` | static |  | — | The page's template signature (for crawl dedup / clustering: same signature = same kind of page -- a listing, a detail page, a login wall). One hint, ``subject`` the signature digest. |

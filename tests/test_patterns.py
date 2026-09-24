@@ -1,9 +1,12 @@
-"""Web patterns PoC (roadmap N11): DOM recon hints for extract / interact / crawl, registered
-like signals, surfaced as the ``patterns`` facet."""
+"""Web patterns: recurring-STRUCTURE signals -- the record list(s) to extract, the repeated controls
+to act on per item, and the page template. They are Signals/Flags now (the ``record_regions`` /
+``repeated_controls`` / ``page_template`` flags), read via ``doc.patterns(for_=...)`` or the per-flag
+accessors -- NOT a parallel registry."""
 
 from webclient import WebClient
 from webclient.dom import parse_html
-from webclient.patterns import PATTERNS, PatternContext, PatternHint, detect, pattern, template_signature
+from webclient.signals import Context, flags
+from webclient.signals.patterns import template_signature
 
 SHOP = """<html><body><nav><a href="/a">a</a><a href="/b">b</a><a href="/c">c</a></nav>
 <main><h1>Shop</h1>
@@ -15,19 +18,20 @@ SHOP = """<html><body><nav><a href="/a">a</a><a href="/b">b</a><a href="/c">c</a
 </ul></main><footer>f</footer></body></html>"""
 
 
-def test_record_list_and_repeated_control_hints():
-    hints = detect(PatternContext(tree=parse_html(SHOP)))
-    by = {}
-    for h in hints:  # the FIRST (most confident) hint per pattern
-        by.setdefault(h.name, h)
-    rec = by["record_list"]
+def _flags_of(html: str):
+    # patterns are the "pattern" flag group (structural), kept out of the conclusion set
+    return flags(Context.from_response(200, {"content-type": "text/html"}, {}, html.encode()), group="pattern")
+
+
+def test_pattern_flags_detect_record_list_control_and_template():
+    fl = _flags_of(SHOP)
+    rec = fl["record_regions"].value[0]  # the most confident record region
     assert rec.subject == "li.card" and rec.count == 4 and rec.for_ == ("extract",) and rec.confidence == 1.0
-    ctl = by["repeated_control"]
+    ctl = fl["repeated_controls"].value[0]
     assert ctl.count == 4 and ctl.for_ == ("interact",) and ctl.value == {"label": "add to cart"}
     assert ctl.subject.startswith("button")
-    tpl = by["page_template"]
+    tpl = fl["page_template"].value[0]
     assert tpl.for_ == ("crawl",) and len(tpl.subject) == 16 and "<main>" in tpl.value["signature"]
-    assert [h.name for h in detect(PatternContext(tree=parse_html(SHOP)), for_="crawl")] == ["page_template"]
 
 
 def test_template_signature_ignores_data_but_not_structure():
@@ -37,30 +41,16 @@ def test_template_signature_ignores_data_but_not_structure():
     assert a == b and a != c
 
 
-def test_patterns_are_extensible_and_advisory():
-    @pattern("boom", for_=("crawl",))
-    def _boom(ctx):
-        raise RuntimeError("never fatal")
-
-    @pattern("has_nav", for_=("crawl",))
-    def _nav(ctx):
-        if ctx.tree is not None and ctx.tree.cssselect("nav"):
-            yield PatternHint(name="", subject="nav", count=1, confidence=0.9)
-
-    try:
-        hints = detect(PatternContext(tree=parse_html(SHOP)), for_="crawl")
-        assert [h.name for h in hints][:2] == ["page_template", "has_nav"]
-        assert hints[1].for_ == ("crawl",)
-    finally:
-        PATTERNS[:] = [p for p in PATTERNS if p.name not in ("boom", "has_nav")]
-
-
-def test_patterns_facet_on_a_document(httpserver):
+def test_patterns_read_via_the_document(httpserver):
     httpserver.expect_request("/shop").respond_with_data(SHOP, content_type="text/html")
     with WebClient() as wc:
         doc = wc.fetch(httpserver.url_for("/shop"))
-        hints = doc.patterns()
-        assert hints[0].name in ("record_list", "page_template") and any(h.subject == "li.card" for h in hints)
-        assert [h.name for h in doc.patterns(for_="interact")] == ["repeated_control"]
-        assert doc.patterns()[0].confidence <= 1.0
-        rows = doc.select_all(doc.patterns(for_="extract")[0].subject).extract(t=None).project() if False else None
+        hints = doc.patterns()  # every kind, most confident first
+        assert any(h.subject == "li.card" for h in hints) and hints[0].confidence <= 1.0
+        extract = doc.patterns(for_="extract")
+        assert extract and all(h.name == "record_list" for h in extract) and any(h.subject == "li.card" for h in extract)
+        interact = doc.patterns(for_="interact")
+        assert interact and all(h.name == "repeated_control" for h in interact)
+        # the per-flag accessor carries the same hints (patterns ARE flags)
+        assert doc.record_regions().value[0].subject == "li.card"
+        assert doc.page_template().value[0].name == "page_template"

@@ -16,9 +16,10 @@ from typing import TYPE_CHECKING, cast
 
 from ...signals import Context, flags as detect_flags, framework as detect_framework
 from ...signals import dom as _dom  # noqa: F401  (registers the rendered/tree detectors)
+from ...signals import patterns as _patterns  # noqa: F401  (registers the pattern detectors)
 from ..web_core import Backing
 from .html import tree
-from .models import Flag, XhrCall
+from .models import Flag, PatternHint, XhrCall
 
 if TYPE_CHECKING:
     from . import Document
@@ -33,7 +34,8 @@ class FlagsBacking(Backing):
     provides = frozenset(
         {"flags", "spa", "anti_bot_present", "anti_bot_triggered", "login_present",
          "login_required", "pagination", "ordered", "filtered", "live", "tabbed", "forms",
-         "buttons", "shadow_dom", "iframe", "large_document", "framework", "xhr_endpoints"}
+         "buttons", "shadow_dom", "iframe", "large_document", "framework", "xhr_endpoints",
+         "record_regions", "repeated_controls", "page_template", "patterns"}
     )
     gate = "ok"
 
@@ -114,6 +116,47 @@ class FlagsBacking(Backing):
         the newest record date, whether it is recent, and the drift risk). A newest-first live list
         shifts while you page, so a cross-page ``key=`` dedup or a cursor is wanted."""
         return self._flags(core)["live"]
+
+    def _pattern_flags(self, core: "Document") -> "dict[str, Flag]":
+        """The STRUCTURAL ``"pattern"`` group of flags (record_regions / repeated_controls /
+        page_template), memoised on the document -- kept out of the conclusion set (they are
+        always-present detail), so a fresh ``group="pattern"`` build feeds the pattern reads."""
+        cached = core._pattern_flag_cache
+        if cached is None:
+            cached = core._pattern_flag_cache = detect_flags(self._context(core), group="pattern")
+        return cast("dict[str, Flag]", cached)
+
+    def record_regions(self, core: "Document") -> Flag:
+        """The repeating dataset regions to extract (value: a list of
+        :class:`~webclient.core.document.models.PatternHint`, each a ``select_all`` target)."""
+        return self._pattern_flags(core)["record_regions"]
+
+    def repeated_controls(self, core: "Document") -> Flag:
+        """Interactive controls that repeat per record -- an "add to cart" per card, a "load more"
+        per section (value: a list of :class:`PatternHint`, one durable selector + count each)."""
+        return self._pattern_flags(core)["repeated_controls"]
+
+    def page_template(self, core: "Document") -> Flag:
+        """The page's template signature (value: a :class:`PatternHint` whose ``subject`` is the
+        signature digest) -- same signature = same KIND of page, for crawl dedup / clustering."""
+        return self._pattern_flags(core)["page_template"]
+
+    def patterns(self, core: "Document", *, for_: "str | None" = None) -> "list[PatternHint]":
+        """The page's recurring-structure hints, most confident first: the record list(s) to
+        ``select_all`` (``for_="extract"``), the repeated controls to act on per item
+        (``"interact"``), and the page-template signature (``"crawl"``). A for_-filtered read over
+        the pattern flags -- patterns are Signals/Flags, not a parallel registry."""
+        got = self._pattern_flags(core)
+        kinds = (("record_regions", "extract"), ("repeated_controls", "interact"), ("page_template", "crawl"))
+        out: list[PatternHint] = []
+        for flagname, consumer in kinds:
+            if for_ is not None and for_ != consumer:
+                continue
+            value = got[flagname].value
+            if value:
+                out.extend(value)
+        out.sort(key=lambda h: h.confidence, reverse=True)
+        return out
 
     def tabbed(self, core: "Document") -> Flag:
         """The page splits content across TABS on the SAME page (Upcoming vs Past, year tabs,

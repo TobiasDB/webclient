@@ -272,6 +272,7 @@ async def drain(doc: "Document") -> None:
     doc.content = (await doc._page.content()).encode()  # keep content current
     doc._tree = None  # invalidate the cached lxml parse of the old content
     doc._flag_cache = None  # ...and the memoised flag set (the DOM just changed)
+    doc._pattern_flag_cache = None  # ...and the structural pattern flags
     snap = getattr(doc._client, "_snapshot", None)
     if snap is not None:  # under a trace: the post-interaction DOM is a snapshot
         snap(doc, "action")

@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     # are defined below in this module).
     from ...query.collection import Collection, Field  # noqa: F401
     from ...models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event  # noqa: F401
-    from ...patterns import PatternHint  # noqa: F401
     from ...interface import LazyDocument  # noqa: F401
     from ..reference import Reference  # noqa: F401
     from . import Document  # noqa: F401
@@ -234,6 +233,23 @@ class Filtering(BaseModel):
     controls: list[str] = []
 
 
+class PatternHint(BaseModel):
+    """One detected recurring-structure pattern -- the value carried by the pattern flags
+    (``record_regions`` / ``repeated_controls`` / ``page_template``). ``name`` is the pattern kind;
+    ``subject`` is a selector (extract / interact) or a template signature (crawl); ``count`` how
+    many repeats; ``for_`` the consumers it serves. A structural signal, expressed through the one
+    Signals/Flags registry (not a parallel one)."""
+
+    name: str
+    kind: Literal["dom", "visual", "behavior", "fingerprint"] = "dom"
+    subject: str = ""  # a selector (extract / interact) or a signature (crawl)
+    count: int = 0  # how many repeats
+    confidence: float = 0.0  # 0-1
+    for_: tuple[Literal["extract", "interact", "crawl"], ...] = ()  # the consumers this hint serves
+    evidence: str = ""  # a human-readable reason
+    value: Any = None  # a consumer-specific payload (e.g. sample labels)
+
+
 class Liveness(BaseModel):
     """The ``live`` flag's value: the listing CHANGES over time (a feed / newest-first list).
     ``newest`` is the most recent record date seen; ``recent`` whether it is within the last month;
@@ -324,8 +340,10 @@ class IDocument(BaseModel):
         def metadata(self) -> "Metadata": ...
         def next_link(self) -> "Reference": ...
         def ordered(self) -> "Flag": ...
+        def page_template(self) -> "Flag": ...
         def pagination(self) -> "Flag": ...
         def patterns(self, *, for_: 'str | None' = ...) -> "list[PatternHint]": ...
+        def record_regions(self) -> "Flag": ...
         def ref(self) -> "Reference": ...
         def regex(self, pattern: str, *, group: int | str = ..., flags: str = ...) -> "str | None": ...
         def regex_all(self, pattern: str, *, group: int | str = ..., flags: str = ...) -> "list[str]": ...
@@ -336,6 +354,7 @@ class IDocument(BaseModel):
         def render(self, format: Literal['links']) -> "Collection[Reference]": ...
         @overload
         def render(self, format: str, **options: Any) -> "str": ...
+        def repeated_controls(self) -> "Flag": ...
         def screenshot(self, selector: str | None = ...) -> "Document": ...
         def scroll(self, selector: str | None = ..., *, timeout: float | None = ...) -> "Document": ...
         def select(self, selector: str, *, index: int = ..., optional: bool = ..., error: Any = ...) -> "Document": ...
@@ -372,4 +391,5 @@ __all__ = [
     "Ordering",
     "Filtering",
     "Liveness",
+    "PatternHint",
 ]

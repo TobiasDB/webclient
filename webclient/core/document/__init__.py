@@ -31,7 +31,6 @@ from .flags import FlagsBacking
 from .regex import RegexBacking
 from .element_index import ElementIndexBacking
 from .paginate import PaginateBacking
-from .patterns import PatternsBacking
 
 if TYPE_CHECKING:
     from ...interface import LazyDocument
@@ -79,6 +78,7 @@ class Document(WebCore, IDocument):
         default_factory=dict  # for the content-matching ContentCorrelator (populated by the browser)
     )
     _flag_cache: Any = PrivateAttr(default=None)  # memoised flag set (one detection pass/doc)
+    _pattern_flag_cache: Any = PrivateAttr(default=None)  # memoised STRUCTURAL pattern flags
     _row: Any = PrivateAttr(default=None)  # extracted columns (extract/field)
     _surface: Any = PrivateAttr(default=None)  # the core's single eager surface
     _set_cookies: dict[str, str] = PrivateAttr(  # transport-parsed Set-Cookie
@@ -112,7 +112,6 @@ class Document(WebCore, IDocument):
         RegexBacking(),
         ElementIndexBacking(),
         PaginateBacking(),
-        PatternsBacking(),
     )
 
     @property
