@@ -69,6 +69,21 @@ def test_paginate_stops_on_a_clamped_repeat(httpserver):
     assert len(pages) == 2
 
 
+def test_paginate_partitions_by_a_filter(httpserver):
+    # Phase 7: beat a result cap by PARTITIONING -- walk once per filter value and union. Each
+    # partition (?category=a / ?category=b) is fetched fresh + paginated; the base is not a partition.
+    httpserver.expect_request("/list", query_string="").respond_with_data(_page([]), content_type="text/html")
+    httpserver.expect_request("/list", query_string="category=a").respond_with_data(_page(["A1", "A2"], "/list?category=a&page=2"), content_type="text/html")
+    httpserver.expect_request("/list", query_string="category=a&page=2").respond_with_data(_page(["A3"]), content_type="text/html")  # a's page 2
+    httpserver.expect_request("/list", query_string="category=b").respond_with_data(_page(["B1"]), content_type="text/html")  # b, one page
+    plan = (
+        wq.reference(httpserver.url_for("/list")).resolve()
+        .paginate(by="link", partition_param="category", partition_values=["a", "b"], max_pages=10)
+        .select_all("article.r").extract(n=wq.doc.select(".n").attr("text")).project()
+    )
+    assert [r["n"] for r in plan.collect()] == ["A1", "A2", "A3", "B1"]  # a's 2 pages then b's, unioned
+
+
 def test_paginate_parallel_computed_with_known_total(httpserver):
     # by="param" + a known total_pages: pages are a pure function of the index, so they are fetched
     # CONCURRENTLY (bounded). Result is correct + in order; an over-estimated total stops at the end.

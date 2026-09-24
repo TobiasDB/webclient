@@ -278,6 +278,22 @@ async def _interact_pages(
     return [doc]
 
 
+async def _partition_pages(
+    doc: "Document", *, param: str, values: "list[str]", walk_kwargs: "dict[str, Any]", client: Any
+) -> "list[Document]":
+    """Beat a result cap by PARTITIONING: run the walk once per filter value (``?{param}={value}``)
+    and concatenate the pages. Each partition is under the cap, so together they recover the whole
+    dataset. The unfiltered base ``doc`` is not itself a partition (it is the capped listing); each
+    partition is fetched fresh from ``doc``'s URL with the filter applied."""
+    out: list[Document] = []
+    for value in values:
+        ref = cast("Reference", _ref_of(doc).dispatch("with_params", **{param: value}))
+        page1 = cast("Document", await client.afetch(ref, optional=True))
+        if page1.ok and page1.content:
+            out.extend(await walk(page1, client=client, **walk_kwargs))
+    return out
+
+
 async def walk(
     doc: "Document",
     *,
@@ -295,6 +311,8 @@ async def walk(
     until_before: str = "",
     total_pages: int = 0,
     action: Any = None,
+    partition_param: str = "",
+    partition_values: "list[str] | tuple[str, ...]" = (),
     stop: Any = None,
     key: Any = None,
     client: Any = None,
@@ -311,6 +329,15 @@ async def walk(
     every page reference is a pure function of its index, so the pages are fetched CONCURRENTLY
     (bounded) instead of one-at-a-time."""
     client = client if client is not None else doc._client
+    if partition_param and partition_values:  # beat a result cap: walk once per filter value, concat
+        return await _partition_pages(
+            doc, param=partition_param, values=list(partition_values), client=client,
+            walk_kwargs=dict(
+                by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start, step=step,
+                size=size, cursor=cursor, cursor_attr=cursor_attr, records=records, until=until,
+                until_before=until_before, total_pages=total_pages, action=action, stop=stop, key=key,
+            ),
+        )
     if by == "action":  # a JS pager -- drive the action on the held live page (append/exhaust)
         return await _interact_pages(doc, action=action, records=records, max_pages=max_pages, client=client) if action is not None else [doc]
     if by == "auto":
