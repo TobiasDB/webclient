@@ -1134,6 +1134,11 @@ class WebClient(SessionCore, IWebClient):
             lease = await self.pool.lease("page", owner=self.id or "root")  # charged to this session
         except WebException:
             raise
+        except TimeoutError as exc:  # every page is held: say so, and by whom
+            held = getattr(self.pool.stats(), "owners", {}) if hasattr(self.pool, "stats") else {}
+            raise WebException(self._note_error(
+                make("pool.exhausted", f"{exc}; pages held by: {held or 'other work'}", op="resolve"), "resolve", raised=True,
+            )) from exc
         except Exception as exc:  # the browser could not be had (dead process, launch failure)
             raise WebException(self._note_error(
                 make("fetch.browser_failed", f"{type(exc).__name__}: {exc}", op="resolve"), "resolve", raised=True,

@@ -176,8 +176,34 @@ def create_app(
         return cast(_DocStore, store) if store is not None else app.state.docs
 
     app.state.recording = set()  # the sessions opened with record=True (the DOM recorder's holders)
+    app.state.crawls = {}  # the crawls sessions hold (see /sessions/{sid}/crawls)
+
+    def _release_pages(sid: str) -> int:
+        """Release every live browser page the session's documents hold (the captures stay)."""
+        session = app.state.sessions.get(sid)
+        store = app.state.session_docs.get(sid)
+        n = 0
+        if session is None or store is None:
+            return 0
+        for doc in list(store.values()):
+            if getattr(doc, "_page", None) is not None:
+                try:
+                    session.release(doc)
+                    n += 1
+                except Exception:  # noqa: BLE001 - already gone
+                    pass
+        return n
 
     def _drop_session(sid: str) -> None:
+        """Reclaim a session: release its pages, close its crawls, drop its stores."""
+        _release_pages(sid)
+        for cid, held in list(getattr(app.state, "crawls", {}).items()):
+            if held.get("session") == sid:
+                try:
+                    held["crawl"].close()
+                except Exception:  # noqa: BLE001
+                    pass
+                app.state.crawls.pop(cid, None)
         if sid in app.state.recording:
             app.state.recording.discard(sid)
             app.state.wc._the_engine().dom_recorders = max(0, app.state.wc._the_engine().dom_recorders - 1)
@@ -315,6 +341,28 @@ def create_app(
         app.state.session_docs[session.id] = _DocStore(max_session_docs)  # its own bounded store
         return {"id": session.id, "status": session.status}
 
+    def _touch(sid: str) -> None:
+        """A read of the session is activity: push its expiry out by its ttl again."""
+        s = app.state.sessions.get(sid)
+        if s is not None and s.ttl is not None:
+            s.expires_at = time.time() + s.ttl
+
+    def _session_info(sid: str) -> dict[str, Any]:
+        s = app.state.sessions[sid]
+        store = app.state.session_docs.get(sid) or {}
+        return {"id": sid, "status": s.status, "ttl": s.ttl, "expires_at": s.expires_at,
+                "documents": len(store), "live_pages": sum(1 for d in store.values() if getattr(d, "_page", None) is not None),
+                "crawls": sum(1 for h in app.state.crawls.values() if h.get("session") == sid),
+                "recording": sid in app.state.recording}
+
+    @app.get("/sessions", response_model=None)
+    def list_sessions(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        """Every live session on this service with what it holds -- the view that lets a UI
+        find who is holding the browser pages, and close or release them."""
+        _auth(authorization)
+        _sweep_sessions()
+        return [_session_info(sid) for sid in app.state.sessions]
+
     @app.get("/sessions/{sid}", response_model=None)
     def get_session(
         sid: str, authorization: str | None = Header(default=None)
@@ -324,7 +372,17 @@ def create_app(
             return _error(
                 404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT
             )
-        return {"id": sid, "status": app.state.sessions[sid].status}
+        _touch(sid)
+        return _session_info(sid)
+
+    @app.post("/sessions/{sid}/release", response_model=None)
+    def release_session_pages(sid: str, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """Release every live page the session holds (its captures stay usable) -- the way out
+        when the page pool is exhausted."""
+        _auth(authorization)
+        if sid not in app.state.sessions:
+            return _error(404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT)
+        return {"id": sid, "released": _release_pages(sid)}
 
     @app.delete("/sessions/{sid}", response_model=None)
     def close_session(
@@ -661,13 +719,14 @@ def create_app(
         _auth(authorization)
         if sid not in app.state.sessions:
             return _error(404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT)
+        _touch(sid)
         return [_handle(d, k) for k, d in _store_for(sid).items()]
 
     @app.post("/sessions/{sid}/documents", response_model=None)
     def open_document(sid: str, body: dict[str, Any], authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
-        """Open ``url`` in the session: ``browser`` false / "auto" / "always"; a browser render
-        is kept LIVE (its page held) so it can be driven; a static fetch is a capture. The
-        document lands in the session's store and its handle comes back."""
+        """Open ``url`` in the session: ``browser`` false / "auto" / "always". The document is a
+        CAPTURE unless ``live`` is true, in which case the browser page stays held (a pool
+        page) so it can be driven -- release it when done. The handle comes back."""
         _auth(authorization)
         if sid not in app.state.sessions:
             return _error(404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT)
@@ -675,12 +734,15 @@ def create_app(
         if not url:
             return _error(422, "InvalidRequest", "provide 'url'")
         browser = body.get("browser", False)
+        live = bool(body.get("live", False)) and bool(browser)
         session = app.state.sessions[sid]
         try:
-            doc = session.fetch(url, browser=browser, keep_alive=bool(browser))
+            doc = session.fetch(url, browser=browser or (True if live else False), keep_alive=live)
         except WebException as exc:
             return _error(502, exc.error.type, str(exc), retriable=exc.error.retriable, status_code=exc.error.status_code,
                           error=exc.error, hint="retry if retriable; else the target is unavailable or blocked")
+        if not live and getattr(doc, "_page", None) is not None:
+            session.release(doc)  # a CAPTURE: the content is kept, the browser page goes back to the pool
         _store_for(sid)[doc.name] = doc
         return _handle(doc)
 
@@ -711,7 +773,9 @@ def create_app(
                 fresh = doc
             else:
                 tiers = list(getattr(doc, "_tiers", []) or [])
-                fresh = session.fetch(doc.url, browser=(tiers[-1] if tiers and tiers[-1] != "static" else False))
+                fresh = session.fetch(doc.url, browser=("always" if tiers and tiers[-1] == "browser" else False))
+                if getattr(fresh, "_page", None) is not None:
+                    session.release(fresh)  # still a capture
         except WebException as exc:
             return _error(502, exc.error.type, str(exc), retriable=exc.error.retriable, status_code=exc.error.status_code, error=exc.error)
         _store_for(sid)[doc_id] = fresh
@@ -734,7 +798,6 @@ def create_app(
         return {"id": doc_id, "status": "closed"}
 
     # -- crawls held by a session: start (auto, manual or with a goal), watch, step, resume --
-    app.state.crawls = {}
 
     def _crawl_state(cid: str) -> dict[str, Any]:
         held = app.state.crawls[cid]

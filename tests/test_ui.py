@@ -213,7 +213,7 @@ def test_session_documents_static_and_live_with_reload(httpserver):
         url = httpserver.url_for("/d")
         st = api.post(f"/sessions/{sid}/documents", json={"url": url}).json()
         assert st["live"] is False and st["tier"] == "static" and st["title"] == "V1"
-        live = api.post(f"/sessions/{sid}/documents", json={"url": url, "browser": "always"}).json()
+        live = api.post(f"/sessions/{sid}/documents", json={"url": url, "browser": "always", "live": True}).json()
         assert live["live"] is True and live["tier"] == "browser"
         listed = api.get(f"/sessions/{sid}/documents").json()
         assert [d["id"] for d in listed] == [st["id"], live["id"]]
@@ -230,4 +230,39 @@ def test_session_documents_static_and_live_with_reload(httpserver):
         assert [d["id"] for d in api.get(f"/sessions/{sid}/documents").json()] == [st["id"]]
         assert api.get(f"/sessions/{sid}/documents/nope/views").status_code == 404
         api.delete(f"/sessions/{sid}")
+    wc.close()
+
+
+def test_sessions_release_their_pages_and_can_be_listed_and_reclaimed(httpserver):
+    """The deadlock guard: a capture never holds a page; a live page is released by
+    /release, by closing the session, or by its ttl; /sessions shows who holds what; a
+    session read pushes its expiry out."""
+    import time
+
+    httpserver.expect_request("/p").respond_with_data("<html><head><title>P</title></head><body><p>x</p></body></html>", content_type="text/html")
+    wc = WebClient(timeout=15.0)
+    with TestClient(create_app(wc)) as api:
+        sid = api.post("/sessions", json={"ttl": 60}).json()["id"]
+        url = httpserver.url_for("/p")
+        cap = api.post(f"/sessions/{sid}/documents", json={"url": url, "browser": "always"}).json()
+        assert cap["live"] is False and cap["tier"] == "browser"  # rendered, captured, page released
+        free_before = api.get("/health").json()["pool"]["pages_free"]
+        live = api.post(f"/sessions/{sid}/documents", json={"url": url, "browser": "always", "live": True}).json()
+        assert live["live"] is True
+        assert api.get("/health").json()["pool"]["pages_free"] == free_before - 1
+        info = api.get("/sessions").json()
+        me = next(s for s in info if s["id"] == sid)
+        assert me["live_pages"] == 1 and me["documents"] == 2 and me["ttl"] == 60
+        exp1 = me["expires_at"]
+        time.sleep(0.05)
+        assert api.get(f"/sessions/{sid}").json()["expires_at"] > exp1  # a read is activity
+        assert api.post(f"/sessions/{sid}/release").json()["released"] == 1
+        assert api.get("/health").json()["pool"]["pages_free"] == free_before
+        assert api.get(f"/sessions/{sid}/documents/{live['id']}/views?include=card").json()["card"]["title"] == "P"  # the capture stays
+        # a live page again, then the session closes: the page comes back
+        api.post(f"/sessions/{sid}/documents", json={"url": url, "browser": "always", "live": True})
+        assert api.get("/health").json()["pool"]["pages_free"] == free_before - 1
+        api.delete(f"/sessions/{sid}")
+        assert api.get("/health").json()["pool"]["pages_free"] == free_before
+        assert all(s["id"] != sid for s in api.get("/sessions").json())
     wc.close()
