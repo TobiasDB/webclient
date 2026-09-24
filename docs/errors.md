@@ -93,6 +93,14 @@ is the same wire shape. `type` is the legacy short kind kept stable for callers 
 - **type** `RenderError` · **remedy** `fix_plan`
 - **hint**: No such render format for this document kind; use markdown / text / html / links / elements / skeleton.
 
+### `paginate.*`
+
+#### `paginate.not_live` -- Interacted pager needs a live page
+
+- **type** `NotLive` · **remedy** `browser`
+- **hint**: paginate(by='click') drives a load-more / infinite-scroll pager on a HELD browser page; re-resolve with browser=True.
+- Raised by ``paginate(by='click')`` on a static document (no browser page is held).
+
 ### `op.*`
 
 #### `op.unsupported` -- Op not available here

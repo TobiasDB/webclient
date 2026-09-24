@@ -203,3 +203,67 @@ def test_paginate_follows_the_link_header_for_api_pagination(httpserver):
         .select_all("article.r").extract(n=wq.doc.select(".n").attr("text")).project()
     )
     assert [r["n"] for r in plan.collect()] == ["A", "B", "C"]  # walked via the Link header
+
+
+def test_paginate_next_selector_without_rel_next(httpserver):
+    # a site whose "next" control has no rel=next: ``next=`` names it and its href is followed.
+    def page(records, nxt=None):
+        items = "".join(f'<article class="r"><span class="n">{n}</span></article>' for n in records)
+        link = f'<ul class="pager"><li class="next"><a href="{nxt}">next »</a></li></ul>' if nxt else '<ul class="pager"></ul>'
+        return f"<html><body><main>{items}</main>{link}</body></html>"
+    httpserver.expect_request("/a").respond_with_data(page(["A"], "/b"), content_type="text/html")
+    httpserver.expect_request("/b").respond_with_data(page(["B"], "/c"), content_type="text/html")
+    httpserver.expect_request("/c").respond_with_data(page(["C"]), content_type="text/html")
+    plan = (
+        wq.reference(httpserver.url_for("/a")).resolve()
+        .paginate(next="li.next a", max_pages=10)
+        .select_all("article.r").extract(n=wq.doc.select(".n").attr("text")).project()
+    )
+    assert [r["n"] for r in plan.collect()] == ["A", "B", "C"]
+
+
+def test_paginate_by_click_needs_a_live_page(httpserver):
+    from webclient.errors import WebException
+
+    httpserver.expect_request("/s").respond_with_data(_page(["A"]), content_type="text/html")
+    with WebClient() as wc:
+        doc = wc.fetch(httpserver.url_for("/s"))
+        try:
+            doc.paginate(by="click", next="button.more", max_pages=3)
+        except WebException as exc:
+            assert exc.error.code == "paginate.not_live"
+            assert exc.error.remedy == "browser"
+        else:
+            raise AssertionError("expected paginate.not_live")
+
+
+LOAD_MORE = """<html><body><main id="list"><article class="r"><span class="n">A</span></article></main>
+<button id="more">load more</button>
+<script>
+let n = 0;
+document.getElementById('more').addEventListener('click', () => {
+  n += 1;
+  setTimeout(() => {
+    const el = document.createElement('article'); el.className = 'r';
+    el.innerHTML = '<span class="n">' + ['B', 'C', 'D'][n - 1] + '</span>';
+    document.getElementById('list').appendChild(el);
+    if (n >= 3) document.getElementById('more').remove();
+  }, 60);
+});
+</script></body></html>"""
+
+
+def test_paginate_by_click_loads_more_on_a_live_page(httpserver):
+    # the interacted pager: click "load more" until it disappears; the ONE page has every record.
+    import pytest
+
+    pytest.importorskip("playwright")
+    httpserver.expect_request("/more").respond_with_data(LOAD_MORE, content_type="text/html")
+    plan = (
+        wq.reference(httpserver.url_for("/more")).resolve(browser=True)
+        .paginate(by="click", next="#more", records="article.r", max_pages=10, timeout=5)
+        .select_all("article.r").extract(n=wq.doc.select(".n").attr("text")).project()
+    )
+    with WebClient() as wc:
+        rows = wc.execute(plan)
+    assert [r["n"] for r in rows] == ["A", "B", "C", "D"]

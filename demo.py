@@ -805,7 +805,11 @@ def roadmap_tour() -> None:
     trace_dir.unlink(missing_ok=True)
     print("\n== roadmap tour (against", lab, ")")
 
-    with WebClient(timeout=15.0) as wc, wc.trace(trace_dir):
+    with WebClient(timeout=15.0) as wc, wc.trace(trace_dir) as tr:
+        # the Plan the trace carries (the Traces workspace / the site render it as the plan tree)
+        tr.plan = (wq.reference(f"{lab}{P['shop']}").resolve().select_all("div.card")
+                   .extract(title=wq.doc.select(".title").attr("text"), price=wq.doc.select(".price").attr("text"),
+                            link=wq.doc.select("a").attr("href")).project())
         # [P0/P1] Errors are catalogued + bound, and NOTHING disappears: a RETURN-policy miss
         # still lands on the ledger (doc.errors / wc.errors) as an ErrorEvent in the trace.
         shop = wc.fetch(f"{lab}{P['shop']}")

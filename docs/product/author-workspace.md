@@ -1,8 +1,9 @@
 # The Author workspace — Explore + Query + Interact as one flow
 
-*Status: proposed 2026-09-25, for review before building. Replaces the three separate
-Playground workspaces with ONE that carries a person from a URL to a tested, runnable scrape
-without changing screens. Wireframes are in Storybook (`Wireframes/Author`).*
+*Status: built. Proposed 2026-09-25 with modes (look / pick / drive), reworked the same day
+into the plan-centric, scope-based workspace of §8 -- no modes, one menu generated from the
+object's surface. Sections 1-7 are the original proposal and its review; §8 is what stands.
+Wireframes are in Storybook (`Wireframes/Author`).*
 
 ## 1. Why merge
 
@@ -129,3 +130,61 @@ Three regions, fixed; only their contents change.
 3. Is a stage list enough, or do you want the stage graph drawn (listing → detail → …)?
 4. Live pages per stage cost a pool page each; proposed: only the active drive stage is
    live, the others are captures.
+
+
+## 8. What was built (2026-09-24): the plan is the model, the scope is the last object
+
+The review of the first build asked for three things: no modes ("I just want to hover over
+an element and click it"), a menu that is *the object's interface* rather than a hand-picked
+list, and a better way to choose the classes that make a selector. The workspace now works
+like this.
+
+**The plan is the state.** `Author.tsx` holds `{url, tier, plan}` where `plan` is the plan
+IR exactly as `/plan` and `/execute` take it (`packages/ui/src/lib/plan.ts` addresses calls by
+a PATH into nested sub-plans: `[callIdx, "kw:<field>", callIdx, …]`). The URL carries it
+(`?p=`); Save / Export / Import keep it; Run executes it through the session. The plan tree
+(`PlanView`) renders live and is edited in place: selectors, attr regexes, typed text,
+optional toggles, reorder, remove, rename / remove fields, the pagination node's mode and
+bounds. The same component renders a trace's plan and the website's plan demo (the Python
+HTML wireframe is no longer used by the UI).
+
+**Click an element → the selector, then the ops.** `ElementMenu` opens at the click. Its top
+is the SELECTOR BUILDER: the clicked element's tag, id and classes as toggles, its ancestors
+(up to the scope) likewise, a free-text override, and the live match count *inside the
+scope* (`×4 in each article.row · 24 on the page`). `li` becomes `li.card` with one click;
+a selector that stops matching the clicked element says so. Below it are the object's ops,
+GENERATED from `GET /ops` -- the op catalogue the service builds from the cores' backing
+tables (the same source as the typed surface; `service.op_catalogue`). Ops that take a
+selector (`select_all`, `select`, `click`, `write`, `scroll`, `wait_for`) are buttons, with
+inputs for their other required params; the browser actions run on the live page and are
+recorded into the plan unless unticked. `attr` is offered as reads (text · href · src ·
+count · a named attribute) that become a FIELD; a link offers "open the link ▸" (a new
+document joined under the same plan: `select(sel).attr("href").resolve()`); a pager-looking
+element offers `paginate` with the right kwargs; every other op of the surface sits behind
+"more".
+
+**The scope is the last object.** Every op you take makes its result the scope: after
+`select_all("article.row")` the scope is *each article.row* -- the next click builds a
+selector relative to the record and an op on it becomes a field of the record's `extract`
+(`select(sel).attr(text)`; a nested `select_all` is a list field; an opened link is a
+per-row detail page). After a `select` the scope is *that element*; after a link's resolve
+it is *that page* (opened into the session, its chain continues there). Esc, the scope
+chip, or clicking the plan's root sets the scope back to the page; clicking any plan node
+makes it the scope, so you can go back to the record, or to a followed page, at will. A
+page-level op (an action, the pager) always goes into the page's chain after its resolve
+and the actions there, before the data ops.
+
+**Pages.** Each `resolve` in the plan owns a page in the session, keyed by its path; the
+root's is the URL, a followed one's is the href its chain reads off the page before it
+(evaluated locally on the rebuilt DOM). Only one page is held live at a time.
+
+**The page panel** shows what the client found: the card (kind · status · tiers · title ·
+timing), the signal flags with evidence, and the detected pattern groups (each its own
+colour, outlined on the page on request). Tabs: Rows (local preview) · Server run · Skeleton
+· Markdown · Elements · As code. The event feed at the bottom of the Playground is off by
+default (an `events` chip in the header turns it on for debugging).
+
+**Pagination** (`paginate`): `by="link"` follows `rel=next` (or `next=<selector>` for a site
+without it), `by="param"` walks `?page=`, `by="cursor"` carries a token, and `by="click"`
+drives an interacted pager on the live page (click a load-more control, or scroll to the
+bottom, until `records` stops growing); the plan node edits all of it.

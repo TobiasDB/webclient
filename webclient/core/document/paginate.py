@@ -24,8 +24,12 @@ looping. It can stop EARLY on ``max_rows`` (enough records collected), a recency
 (``until``/``until_before`` -- literal selector + value), or a general ``stop=<Expr>`` predicate
 (truthy against a page -> that page is the last), so a long dataset isn't walked whole for a few rows.
 
-Interacted (load-more / infinite scroll) pagers and the semantics flags (ordered/filtered/live) are
-later phases.
+``next=<selector>`` names the next link when the site has no ``rel=next`` (``next="a.next"`` -- its
+``href`` is the next page); and ``by="click"`` drives an INTERACTED pager on a live browser page: it
+clicks ``next`` (a "load more" button) or, without one, scrolls to the bottom (infinite scroll),
+waits for ``records`` to grow, and repeats up to ``max_pages`` times -- the one live page, now
+holding every loaded record, is the whole dataset (a single "page" in the Collection, so rows never
+repeat). The semantics flags (ordered/filtered/live) are a later phase.
 """
 
 from __future__ import annotations
@@ -143,13 +147,20 @@ class PaginateBacking(Backing):
 
 def _next_ref(
     current: "Document", *, by: str, name: str, size: int, start: int, step: int,
-    index: int, cursor: str, cursor_attr: str,
+    index: int, cursor: str, cursor_attr: str, next: str = "",
 ) -> "Reference | None":
     """The reference for the page AFTER ``current`` (the ``index``-th already collected), or
     ``None`` to stop. ``by="link"`` reads the next link off ``current`` (Link header / rel=next);
     ``by="param"`` computes the next ``?name=`` value (a page number, or an offset when ``size`` is
     set); ``by="cursor"`` reads a keyset token off ``current`` (the ``cursor`` selector's
-    ``cursor_attr``) and carries it in ``?name=`` -- no token means no next page."""
+    ``cursor_attr``) and carries it in ``?name=`` -- no token means no next page. A ``next``
+    selector (any ``by``) overrides the discovery: the first match's ``href`` is the next page."""
+    if next:
+        el = current.select(next, optional=True)
+        ref = el.attr("href", optional=True) if el.ok else None  # a Reference (href resolves)
+        if ref is None or not getattr(ref, "ok", False):
+            return None  # the next control is gone (or unlinked) -> the last page
+        return cast("Reference", ref)
     if by == "cursor":
         token = _read_one(current, cursor, cursor_attr)
         if not token:
@@ -191,6 +202,61 @@ async def _stop_here(stop: Any, doc: "Document", client: Any) -> bool:
     return truthy(await aevaluate(stop, doc, client=client))
 
 
+def _static_count(doc: "Document", records: str) -> int:
+    """How many records the document's CAPTURED content holds (the live page's DOM as of the last
+    drain) -- read statically so the walk never re-enters the engine loop."""
+    if not records:
+        return 0
+    root = tree(doc)
+    if root is None:
+        return 0
+    try:
+        return len(root.cssselect(records))
+    except Exception:  # noqa: BLE001 - a bad selector counts nothing
+        return 0
+
+
+async def _walk_click(
+    doc: "Document", *, next: str, records: str, bound: int, timeout: float, max_rows: int,
+) -> "list[Document]":
+    """The interacted pager: on the live page, click ``next`` (a "load more" / "next" control)
+    or -- without one -- scroll to the bottom (infinite scroll); wait up to ``timeout`` seconds
+    for the page to change (``records`` grows, else the content changes); repeat until nothing
+    changes, the control disappears, ``max_rows`` is reached, or ``bound`` pages were loaded.
+    The one live document -- refreshed, holding everything loaded -- is the whole dataset."""
+    page = doc._page
+    if page is None:
+        from ...errors import WebException, make
+
+        raise WebException(make("paginate.not_live", "paginate(by='click') needs a live browser page", op="paginate"))
+    from .live import LiveBacking, drain
+
+    live = LiveBacking()
+    loaded = 1
+    while loaded < bound:
+        before_n = _static_count(doc, records)
+        if max_rows and before_n >= max_rows:
+            break
+        before_fp = _page_fingerprint(doc)
+        if next:
+            if await page.locator(next).count() == 0:
+                break  # the control is gone -> the last page
+            await live.click(doc, next, timeout=timeout, optional=True)
+        else:
+            await live.scroll(doc, timeout=timeout)
+        grew = False
+        for _ in range(max(1, int(timeout * 10))):  # poll for the page to change
+            await drain(doc)
+            if _static_count(doc, records) > before_n or (not records and _page_fingerprint(doc) != before_fp):
+                grew = True
+                break
+            await page.wait_for_timeout(100)
+        if not grew:
+            break  # nothing more loaded -> the end of the dataset
+        loaded += 1
+    return [doc]
+
+
 async def walk(
     doc: "Document",
     *,
@@ -208,6 +274,8 @@ async def walk(
     until_before: str = "",
     stop: Any = None,
     key: Any = None,
+    next: str = "",
+    timeout: float = 10.0,
     client: Any = None,
 ) -> "list[Document]":
     """Walk ``doc``'s dataset into a flat list of pages (page one first). Fetches each next page
@@ -215,9 +283,19 @@ async def walk(
     REPEATS an earlier one (by ``key``, else a content fingerprint -- an out-of-range clamp), or a
     stop fires: ``max_pages``, ``max_rows`` (with ``records``), the ``until``/``until_before``
     recency cutoff, or the ``stop`` predicate. ``stop``/``key`` are Exprs (or ``None``) evaluated
-    per page -- the bound-op capability. The engine ``client`` fetches subsequent pages."""
+    per page -- the bound-op capability. The engine ``client`` fetches subsequent pages.
+    ``next`` names the next link's selector (when there is no ``rel=next``); ``by="click"`` is the
+    interacted walk (see :func:`_walk_click`) and needs a live browser page."""
     client = client if client is not None else doc._client
     bound = max(1, min(max_pages, _MAX_PAGES_CAP))
+    if by == "click":  # the held page lives on ITS client's loop: drive it there
+        coro = _walk_click(doc, next=next, records=records, bound=bound, timeout=timeout, max_rows=max_rows)
+        page_loop = getattr(doc._client, "loop", None)
+        if page_loop is None or page_loop().on_loop_thread():
+            return await coro
+        import asyncio
+
+        return await asyncio.wrap_future(page_loop().submit(coro))
     pages: list[Document] = [doc]
     seen = {await _page_key(doc, key, client)}
     rows = _row_count(doc, records)
@@ -231,7 +309,7 @@ async def walk(
             break  # the predicate says this page is the last
         nxt = _next_ref(
             current, by=by, name=name, size=size, start=start, step=step,
-            index=len(pages), cursor=cursor, cursor_attr=cursor_attr,
+            index=len(pages), cursor=cursor, cursor_attr=cursor_attr, next=next,
         )
         if nxt is None:
             break

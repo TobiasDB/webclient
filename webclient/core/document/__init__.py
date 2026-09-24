@@ -220,6 +220,8 @@ class Document(WebCore, IDocument):
         until_before: str = "",
         stop: Any = None,
         key: Any = None,
+        next: str = "",
+        timeout: float = 10.0,
     ) -> "Collection[Document]":
         """The pages of this dataset as a ``Collection[Document]``, page one first -- chain
         ``select_all(...).extract(...).project()`` to extract the WHOLE dataset (the body runs
@@ -229,7 +231,12 @@ class Document(WebCore, IDocument):
         HTTP ``Link:`` header, so an API paginates); ``"param"`` walks ``?{name}=`` from ``start`` by
         ``step`` (or by ``size`` as an offset); ``"cursor"`` reads a keyset token off each page (the
         ``cursor`` selector's ``cursor_attr`` -- ``cursor="a.next"`` + ``cursor_attr="data-after"``, or
-        a JSON path ``cursor="pageInfo.endCursor"``) and carries it in ``?{name}=``.
+        a JSON path ``cursor="pageInfo.endCursor"``) and carries it in ``?{name}=``; ``"click"`` drives
+        an interacted pager on a LIVE browser page -- it clicks ``next`` (a "load more" / "next"
+        control) or, without one, scrolls to the bottom (infinite scroll), waits up to ``timeout``
+        seconds for ``records`` to grow, and repeats; the one page then holds every loaded record.
+        ``next`` (any ``by``) names the next link's selector when the site has no ``rel=next``
+        (``next="li.next a"`` -- its ``href`` is the next page).
 
         WHERE TO STOP (all optional, so a long dataset isn't walked whole for a few rows): ``max_pages``
         caps the page count; ``max_rows`` with ``records`` (the record selector) stops once that many
@@ -245,7 +252,8 @@ class Document(WebCore, IDocument):
         pages = await walk(
             self, by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start,
             step=step, size=size, cursor=cursor, cursor_attr=cursor_attr, records=records,
-            until=until, until_before=until_before, stop=stop, key=key, client=self._client,
+            until=until, until_before=until_before, stop=stop, key=key, next=next, timeout=timeout,
+            client=self._client,
         )
         return Collection(pages, client=self._client, root=self.name or self.root)
 
@@ -266,12 +274,14 @@ class Document(WebCore, IDocument):
         until_before: str = "",
         stop: Any = None,
         key: Any = None,
+        next: str = "",
+        timeout: float = 10.0,
     ) -> "Collection[Document]":
         """Eager form of :meth:`apaginate` (bridged onto the engine loop)."""
         return self._client.loop().run(self.apaginate(
             by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start, step=step,
             size=size, cursor=cursor, cursor_attr=cursor_attr, records=records, until=until,
-            until_before=until_before, stop=stop, key=key,
+            until_before=until_before, stop=stop, key=key, next=next, timeout=timeout,
         ))
 
 

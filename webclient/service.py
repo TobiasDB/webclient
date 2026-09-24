@@ -84,6 +84,67 @@ def _serialize(value: Any, store: dict[str, Any]) -> Any:
 _SESSION_HINT = "the session expired or was closed; create a new one (POST /sessions)"
 
 
+def op_catalogue() -> "dict[str, Any]":
+    """Build the op catalogue (see ``GET /ops``) from the cores' backing tables."""
+    import inspect
+
+    from .core.document import Document as _Doc
+    from .core.reference import Reference as _Ref
+
+    def params_of(fn: Any) -> "list[dict[str, Any]]":
+        out: list[dict[str, Any]] = []
+        try:
+            sig = inspect.signature(fn)
+        except (TypeError, ValueError):
+            return out
+        for name, p in sig.parameters.items():
+            if name in ("self", "core") or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+                if p.kind is p.VAR_KEYWORD:
+                    out.append({"name": f"**{name}", "required": False, "kind": "keyword"})
+                continue
+            required = p.default is inspect.Parameter.empty
+            out.append({
+                "name": name, "required": required,
+                "kind": "keyword" if p.kind is p.KEYWORD_ONLY else "positional",
+                "default": None if required else (p.default if isinstance(p.default, (str, int, float, bool)) or p.default is None else repr(p.default)),
+                "type": p.annotation if isinstance(p.annotation, str) else (getattr(p.annotation, "__name__", None) if p.annotation is not inspect.Parameter.empty else None),
+            })
+        return out
+
+    def doc_of(fn: Any) -> str:
+        d = inspect.getdoc(fn) or ""
+        return d.split("\n\n")[0].replace("\n", " ").strip()
+
+    def core_ops(core: Any) -> "list[dict[str, Any]]":
+        rows: list[dict[str, Any]] = []
+        coll = core.collection_ops()
+        io = core.io_ops()
+        for op, backing in sorted(core.ops().items()):
+            cands = [b for b in core.BACKINGS if op in getattr(b, "provides", ())] or [backing]
+            best = max(cands, key=lambda b: len(params_of(getattr(type(b), op, None) or (lambda: None))))
+            fn = getattr(type(best), op, None)
+            rows.append({"name": op, "kind": "call", "io": op in io, "collection": op in coll,
+                         "params": params_of(fn) if fn else [], "doc": doc_of(fn) if fn else ""})
+        for op, backing in sorted(core.prop_ops().items()):
+            fn = getattr(type(backing), op, None)
+            rows.append({"name": op, "kind": "prop", "io": False, "collection": False, "params": [], "doc": doc_of(fn) if fn else ""})
+        return rows
+
+    doc_rows = core_ops(_Doc)
+    # the hand-written chain ops (bound / lifted): not backing ops, but part of the surface
+    doc_rows += [
+        {"name": "extract", "kind": "call", "io": False, "collection": False, "bound": True,
+         "params": [{"name": "**fields", "required": False, "kind": "keyword"}],
+         "doc": "Capture named fields: each keyword is a sub-plan rooted at this element (a row per element under select_all)."},
+        {"name": "project", "kind": "call", "io": False, "collection": False, "params": [], "doc": "The captured rows as plain dicts."},
+        {"name": "paginate", "kind": "call", "io": True, "collection": True, "bound": True,
+         "params": params_of(_Doc.apaginate), "doc": doc_of(_Doc.apaginate)},
+        {"name": "limit", "kind": "call", "io": False, "collection": True, "params": [{"name": "n", "required": True, "kind": "positional", "type": "int"}], "doc": "The first n of a collection."},
+        {"name": "count", "kind": "prop", "io": False, "collection": False, "params": [], "doc": "How many items a collection holds."},
+    ]
+    return {"Document": doc_rows, "Reference": core_ops(_Ref)}
+
+
 def _error(
     http_status: int,
     type_: str,
@@ -440,6 +501,16 @@ def create_app(
         from .tools import schema as _schema
 
         return _schema()
+
+    @app.get("/ops", response_model=None)
+    def ops(authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """The op catalogue: every op each core exposes (the same tables the typed surface is
+        generated from), with its parameters, so a UI builds an object's menu from the surface
+        itself instead of a hand-written list. Per core: ``ops`` (name, kind call/prop, io,
+        collection, params [name, required, default, kind], doc). ``Document`` also lists the
+        hand-written chain ops (``extract`` / ``project`` / ``paginate`` / ``limit`` / ``count``)."""
+        _auth(authorization)
+        return op_catalogue()
 
     @app.get("/signals", response_model=None)
     def signals(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
