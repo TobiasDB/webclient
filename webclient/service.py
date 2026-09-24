@@ -63,7 +63,8 @@ def _serialize(value: Any, store: dict[str, Any]) -> Any:
         return [_serialize(v, store) for v in value]
     if isinstance(value, Document):
         store[value.name] = value
-        handle = {"id": value.name, "kind": value.kind, "ok": value.ok}
+        handle = {"id": value.name, "kind": value.kind, "ok": value.ok, "url": value.final_url or value.url,
+                  "title": value.title, "live": value._page is not None}
         return {"__doc__": handle}
     if isinstance(value, Reference):  # rebuilt client-side as a real Reference
         return {"__ref__": value.model_dump(mode="json")}
@@ -174,7 +175,12 @@ def create_app(
         store = app.state.session_docs.get(sid) if sid else None
         return cast(_DocStore, store) if store is not None else app.state.docs
 
+    app.state.recording = set()  # the sessions opened with record=True (the DOM recorder's holders)
+
     def _drop_session(sid: str) -> None:
+        if sid in app.state.recording:
+            app.state.recording.discard(sid)
+            app.state.wc._the_engine().dom_recorders = max(0, app.state.wc._the_engine().dom_recorders - 1)
         """Reclaim a session and its per-session document store."""
         app.state.sessions.pop(sid, None)
         app.state.session_docs.pop(sid, None)
@@ -300,6 +306,10 @@ def create_app(
                 "after in-flight sessions expire",
             )
         session = app.state.wc.session(ttl=body.get("ttl"))
+        if body.get("record"):  # a LIVE session: the rrweb recorder rides every browser page
+            # opened while it is open, so a UI can replay the page as it changes
+            app.state.wc._the_engine().dom_recorders += 1
+            app.state.recording.add(session.id)
         app.state.sessions[session.id] = session
         log.info("session opened %s ttl=%s (%d live)", session.id, body.get("ttl"), len(app.state.sessions))
         app.state.session_docs[session.id] = _DocStore(max_session_docs)  # its own bounded store
@@ -607,6 +617,26 @@ def create_app(
         if blob is None:
             return _error(404, "InvalidRequest", f"trace {trace_id!r} recorded no plan")
         return {"blob": blob, "describe": from_blob(blob, None).describe()}
+
+    @app.get("/events", response_model=None)
+    def events_history(since: int = 0, topic: str = "", document_id: str | None = None, payload: bool = False,
+                       limit: int = 500, authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        """The bus's retained history over plain HTTP (the socket's catch-up, pollable):
+        events past the ``since`` cursor, by topic prefix and document; ``payload=true``
+        includes the byte payloads and the rrweb chunk bodies (what a live DOM replay
+        appends to its player)."""
+        _auth(authorization)
+        from .trace import encode as _encode
+
+        bus = app.state.wc.bus
+        out = []
+        for e in bus.since(since, topic=topic):
+            if document_id and e.document_id != document_id:
+                continue
+            out.append(_encode(e, payload=payload))
+            if len(out) >= limit:
+                break
+        return out
 
     @app.get("/loops", response_model=None)
     def loops(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":

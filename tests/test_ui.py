@@ -112,3 +112,45 @@ def test_catalogues_come_from_the_registries():
         errs = client.get("/errors").json()
         assert {e["code"] for e in errs} == set(CATALOG)
         assert all(e["remedy"] and e["hint"] for e in errs)
+
+
+def test_recording_session_live_page_and_event_history(httpserver):
+    """A LIVE page held by a server-side session (a plan: resolve(browser=True, keep_alive=True)),
+    driven by further plans on that document, with the rrweb recorder on for the session --
+    the chunks reach the UI through the bus history over HTTP (payload=true)."""
+    httpserver.expect_request("/live").respond_with_data(
+        "<html><head><title>Live</title></head><body><button id='b' onclick=\"document.body.insertAdjacentHTML('beforeend','<p class=added>hi</p>')\">go</button></body></html>",
+        content_type="text/html")
+    wc = WebClient(timeout=15.0)
+    with TestClient(create_app(wc)) as api:
+        sid = api.post("/sessions", json={"record": True}).json()["id"]
+        assert wc._the_engine().dom_recorders == 1
+        plan = {"root": "Reference", "session_id": sid, "steps": [
+            {"kind": "get", "name": "resolve"},
+            {"kind": "call", "name": "resolve", "args": [], "kwargs": {"browser": {"value": True}, "keep_alive": {"value": True}}}]}
+        out = api.post("/execute", json={"plan": plan, "url": httpserver.url_for("/live")}).json()
+        doc = out["rows"]["__doc__"]
+        assert doc["live"] is True and doc["title"] == "Live"
+        act = {"root": "Document", "session_id": sid, "steps": [
+            {"kind": "get", "name": "click"}, {"kind": "call", "name": "click", "args": [{"value": "#b"}], "kwargs": {}},
+            {"kind": "get", "name": "wait_for"}, {"kind": "call", "name": "wait_for", "args": [{"value": ".added"}], "kwargs": {}}]}
+        out2 = api.post("/execute", json={"plan": act, "document_id": doc["id"]}).json()
+        assert out2["rows"]["__doc__"]["id"] == doc["id"]
+        chunks = api.get(f"/events?topic=rrweb&document_id={doc['id']}&payload=true").json()
+        assert chunks and all(c["events"] for c in chunks)  # the DOM stream, with bodies
+        types = {e["type"] for c in chunks for e in c["events"]}
+        assert 2 in types and 3 in types  # a full snapshot, then the click's mutations
+        assert "events" not in api.get(f"/events?topic=rrweb&document_id={doc['id']}").json()[0] or \
+            api.get(f"/events?topic=rrweb&document_id={doc['id']}").json()[0]["events"] == []
+        api.delete(f"/sessions/{sid}")
+        assert wc._the_engine().dom_recorders == 0
+    wc.close()
+
+
+def test_snapshot_tool_includes_the_player_views(httpserver):
+    httpserver.expect_request("/s").respond_with_data(PAGE, content_type="text/html")
+    with WebClient() as wc, TestClient(create_app(wc)) as api:
+        out = api.post("/tools/snapshot", json={"url": httpserver.url_for("/s"), "include": ["rrweb", "patterns", "records", "flags"]}).json()["result"]
+        assert [r["type"] for r in out["rrweb"]] == [4, 2] and out["rrweb"][0]["data"]["width"] == 1280
+        assert isinstance(out["records"], list) and isinstance(out["patterns"], list) and isinstance(out["flags"], list)
+        assert out["document_id"].startswith("doc:")

@@ -520,7 +520,7 @@ _FINGERPRINTS: tuple[dict[str, Any], ...] = (
 )
 #: the DEFAULT identity for plain stealth (no random fingerprint): the Linux one, coherent
 #: with this host and the bundled engine -- and it never leaks ``HeadlessChrome`` in the UA.
-_DEFAULT_FP = _FINGERPRINTS[2]
+_DEFAULT_FP = {**_FINGERPRINTS[2], "vw": 1280, "vh": 800}  # = webclient.rrweb.VIEWPORT: one replay size
 
 #: static automation-tell masks (identity-independent) -- injected on every stealth context.
 _STEALTH_BASE = """(() => {

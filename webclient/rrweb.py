@@ -20,10 +20,14 @@ from typing import Any
 
 from .models import Event
 
-__all__ = ["RRWebEvent", "RRWEB_VERSION", "init_source", "DRAIN_SOURCE", "SCRIPT_NAME"]
+__all__ = ["RRWebEvent", "RRWEB_VERSION", "VIEWPORT", "init_source", "DRAIN_SOURCE", "SCRIPT_NAME"]
 
 RRWEB_VERSION = "2.0.0-alpha.4"
 SCRIPT_NAME = "wc.rrweb"
+#: ONE viewport for every replay: the browser tier renders at it (the default identity's
+#: viewport), a static run's synthesised snapshot declares it, so the player never resizes
+#: between documents.
+VIEWPORT = (1280, 800)
 
 
 class RRWebEvent(Event):
@@ -54,7 +58,7 @@ def init_source() -> str:
     rrweb.record({
       emit(e) { if (window.__wc_rrweb.length < 20000) window.__wc_rrweb.push(e); },
       recordCanvas: false, collectFonts: false, inlineStylesheet: true,
-      sampling: { mousemove: false, scroll: 150, input: 'last' },
+      sampling: { mousemove: 50, mouseInteraction: true, scroll: 100, input: 'last' },
     });
   } catch (e) { window.__wc_rrweb_error = String(e); }
 })();"""

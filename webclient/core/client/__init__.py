@@ -1077,7 +1077,7 @@ class WebClient(SessionCore, IWebClient):
         for name in (SCRIPT_NAME, f"{SCRIPT_NAME}.drain"):
             s = reg.get(name)
             if s is not None and getattr(s, "_auto", True):
-                s.enabled = engine.tracing
+                s.enabled = engine.tracing or engine.dom_recorders > 0
         for backing in engine._backings:  # a backing registered after the first gather
             if backing.page_scripts:
                 reg.declare(type(backing).__name__, backing.page_scripts)

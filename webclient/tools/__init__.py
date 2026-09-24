@@ -324,15 +324,37 @@ def fields(args: FieldsArgs, wc: "WebClient") -> "list[dict[str, Any]]":
 
 class SnapshotArgs(UrlArgs):
     browser: Any = Field(False, description="transport tier: false | 'auto' | 'always'")
+    include: list[str] = Field(default_factory=list, description=(
+        "extra views in the same response: 'rrweb' (the page as rrweb Meta + FullSnapshot, for the "
+        "player), 'patterns' (the pattern hints), 'records' (the repeating-region options), 'flags'"))
 
 
 @tool("snapshot", "Fetch a URL and return its captured content (HTML/JSON/text) with the card -- the page the "
-      "Playground renders in its preview.",
-      returns="{card, content, kind, encoding}", story="agent-developer")
+      "Playground renders in its preview -- plus, on request, the rrweb snapshot, the pattern hints, "
+      "the record options and the flags, in ONE round trip.",
+      returns="{card, content, kind, encoding, rrweb?, patterns?, records?, flags?}", story="agent-developer")
 def snapshot(args: SnapshotArgs, wc: "WebClient") -> "dict[str, Any]":
     doc = wc.fetch(args.url, browser=args.browser)
-    return {"card": _jsonable(doc.card()), "kind": doc.kind, "encoding": doc.encoding,
-            "content": (doc.content or b"").decode(doc.encoding or "utf-8", "replace")}
+    out: dict[str, Any] = {"card": _jsonable(doc.card()), "kind": doc.kind, "encoding": doc.encoding,
+                           "content": (doc.content or b"").decode(doc.encoding or "utf-8", "replace")}
+    if "rrweb" in args.include and doc.kind == "html":
+        from ..models import SnapshotEvent
+        from ..replay.rrweb import to_rrweb
+
+        snap = SnapshotEvent(url=doc.url, final_url=doc.final_url or doc.url, kind="html", content=doc.content,
+                             status_code=doc.status_code, document_id=doc.name, ts=0.0)
+        out["rrweb"] = to_rrweb([snap], custom=False)
+    if "patterns" in args.include:
+        out["patterns"] = _jsonable(doc.patterns())
+    if "records" in args.include:
+        from ..dom.index import record_options
+        from ..core.document.html import tree
+
+        out["records"] = _jsonable(record_options(tree(doc), top_k=20))
+    if "flags" in args.include:
+        out["flags"] = _jsonable(doc.flags())
+    out["document_id"] = doc.name
+    return out
 
 
 @tool("sitemap", "Hunt a site's sitemap.xml page URLs (cheap -- not a crawl).",

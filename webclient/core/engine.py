@@ -62,6 +62,9 @@ class Engine:
         self.trace_path: "str | None" = None
         #: the latest recording session opened on this engine (its plan lands in a trace's footer)
         self.last_recorder: Any = None
+        #: how many LIVE consumers want the rrweb DOM recorder on regardless of a trace (a
+        #: service session opened with ``record=True``): the recorder runs while > 0
+        self.dom_recorders: int = 0
         self._har = har
         if transport:  # a remote client executes over the wire -- no local pool, but keep bus/loop
             self._init_transport(browser_config)

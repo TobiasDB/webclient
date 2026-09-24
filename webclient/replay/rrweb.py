@@ -43,12 +43,14 @@ _URL_ATTRS = {"src", "href", "poster", "action"}
 # --------------------------------------------------------------------------- #
 
 def to_rrweb(events: "list[Event]", *, document_id: "str | None" = None, custom: bool = True,
-             width: int = 1280, height: int = 800) -> "list[dict[str, Any]]":
+             width: "int | None" = None, height: "int | None" = None) -> "list[dict[str, Any]]":
     """See the module doc. ``document_id`` narrows to one document; ``custom=False`` gives
     the DOM alone. Sorted by timestamp (stable), so recorded chunks and synthesised
     snapshots interleave with the custom events in run order."""
+    from ..rrweb import VIEWPORT
     from ..trace import wire
 
+    width, height = width or VIEWPORT[0], height or VIEWPORT[1]
     recorded = {e.document_id for e in events if e.topic == "rrweb"}
     out: list[dict[str, Any]] = []
     for e in events:
