@@ -14,6 +14,15 @@ def test_op_catalogue_lists_document_ops_with_params():
     # the hand-written chain ops ride along, with paginate's real signature
     assert doc["extract"]["bound"] and {p["name"] for p in doc["paginate"]["params"]} >= {"by", "max_pages", "next", "records"}
     assert {o["name"] for o in cat["Reference"]} >= {"resolve", "with_params"}
+    ref = {o["name"]: o for o in cat["Reference"]}
+    assert ref["resolve"]["returns"] == "Document" and ref["with_params"]["returns"] == "Reference"
+    # the builder types its nodes from these
+    assert doc["select"]["returns"] == "Document" and doc["select_all"]["returns"] == "Collection"
+    assert doc["attr"]["returns"] == "Value|Reference" and doc["click"]["returns"] == "Document"
+    coll = {o["name"]: o for o in cat["Collection"]}
+    assert coll["attr"]["lifted"] and coll["attr"]["returns"] == "Collection"
+    assert {"extract", "filter", "limit", "project", "merge"} <= set(coll)
+    assert "click" not in coll  # IO ops are not lifted
 
 
 def test_ops_endpoint():
@@ -26,3 +35,21 @@ def test_ops_endpoint():
         assert r.status_code == 200
         names = {o["name"] for o in r.json()["Document"]}
         assert {"select", "select_all", "attr", "click", "paginate", "markdown"} <= names
+
+
+def test_open_document_reuses_a_held_capture():
+    from fastapi.testclient import TestClient
+    from pytest_httpserver import HTTPServer
+
+    from webclient.service import create_app
+
+    with HTTPServer() as srv:
+        srv.expect_request("/p").respond_with_data("<html><body><h1>p</h1></body></html>", content_type="text/html")
+        with TestClient(create_app()) as client:
+            sid = client.post("/sessions", json={}).json()["id"]
+            a = client.post(f"/sessions/{sid}/documents", json={"url": srv.url_for("/p")}).json()
+            b = client.post(f"/sessions/{sid}/documents", json={"url": srv.url_for("/p")}).json()
+            c = client.post(f"/sessions/{sid}/documents", json={"url": srv.url_for("/p"), "reuse": False}).json()
+            assert b["id"] == a["id"] and b.get("reused") is True
+            assert c["id"] != a["id"]
+            assert len(srv.log) == 2  # two fetches, not three

@@ -459,12 +459,15 @@ _LAZY_FIELD = """class LazyField(Lazy["Field[S]"], Generic[S]):
     def __and__(self, o: Any) -> "LazyField[bool]": ...
     def __or__(self, o: Any) -> "LazyField[bool]": ...
     def __invert__(self) -> "LazyField[bool]": ...
+    def alias(self, name: Any) -> "LazyField[S]": ...
     def collect(self, context: Any = ...) -> "Field[S]": ..."""
 
 #: LazyCollection's row-shaping ops (the lazy mirror of Collection's own methods);
 #: the element-op lift (select/attr/text_content/...) is generated alongside.
 _LAZY_COLLECTION_SHAPING = [
-    'def extract(self, **exprs: Any) -> "LazyCollection[T]": ...',
+    'def extract(self, *aliased: Any, **exprs: Any) -> "LazyCollection[T]": ...',
+    'def merge(self) -> "Lazy[dict[str, Any]]": ...',
+    'def alias(self, name: Any) -> "LazyCollection[T]": ...',
     'def filter(self, *predicates: Any) -> "LazyCollection[T]": ...',
     'def limit(self, n: int) -> "LazyCollection[T]": ...',
     'def documents(self, column: str) -> "LazyCollection[LazyDocument]": ...',
@@ -489,7 +492,7 @@ def _lazy_class(core: type) -> str:
         extras += [
             # row-shaping on a lone document (the single-element form of the
             # Collection ops); hand-written like the eager Document.extract/project.
-            'def extract(self, **exprs: Any) -> "LazyDocument": ...',
+            'def extract(self, *aliased: Any, **exprs: Any) -> "LazyDocument": ...',
             'def project(self) -> "Lazy[dict[str, Any]]": ...',
             # pagination: a hand-written BOUND op on Document (not a backing), so its
             # stop/key sub-plans are recorded and evaluated per page. Yields the pages.
@@ -504,6 +507,9 @@ def _lazy_class(core: type) -> str:
             # interleave with .extract(...) (the capture) and end with .project().
             'def step(self, action: Any) -> "LazyDocument": ...',
         ]
+    # .alias(name): name the value this chain yields when it is an extract column (a literal,
+    # or an expression read off the element) -- recorded on any lazy chain, a pass-through when run.
+    extras.append(f'def alias(self, name: Any) -> "{LAZY[core]}": ...')
     extras.append(f'def collect(self, context: Any = ...) -> "{SURFACE[core]}": ...')
     body = members(core, "lazy") + extras
     head = f'class {LAZY[core]}(Lazy["{SURFACE[core]}"]):'

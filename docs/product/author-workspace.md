@@ -188,3 +188,58 @@ default (an `events` chip in the header turns it on for debugging).
 without it), `by="param"` walks `?page=`, `by="cursor"` carries a token, and `by="click"`
 drives an interacted pager on the live page (click a load-more control, or scroll to the
 bottom, until `records` stops growing); the plan node edits all of it.
+
+
+## 9. The second review (2026-09-24, late): a card, per-op tabs, groups, names from the page
+
+What the user asked for after using §8, and what was built.
+
+- **Every match of the selector under construction is outlined** on the page as you toggle
+  it (a dashed "each" / "match" outline), so `li` versus `li.card` is visible before you commit.
+- **Candidates by the group they enumerate.** The card offers ONE selector per enumerable
+  group the clicked element sits in -- `ol.row li ×20`, `li ×75` -- the best-reading form for
+  each (a semantic class on the element, an id, a class-bearing ancestor, else the tag), the
+  detected record group first, then smallest first. For `select` the unique forms come
+  first (`#product_description ~ p`, `div > p:nth-of-type(2)`), then the groups.
+  Utility classes stay available as toggles but never make the default.
+- **The selection is a card, not a tooltip** (`SelectionCard`, top of the right column):
+  what was clicked, the candidates, the selector text and its count, then one TAB PER OP
+  from `GET /ops`. `select_all` shows the count and the fields the group shares (the
+  descendants present in most of the first records, wrappers like `h3 > a` unwrapped,
+  with the attribute worth reading -- href, title, text, src, alt, datetime, or a class that
+  codes a value -- a sample and the coverage), tick to extract. `select` lists everything
+  readable off the element (text, child count, every attribute), tick and name the column,
+  or NAME IT FROM THE PAGE: a selector whose text is the column's name. The browser actions
+  take their params; a link opens as a new document; the pager offers the modes; `more` has
+  the rest of the surface.
+- **Column names as expressions** (a package change): `.alias(name)` names the value a chain
+  yields when it is a positional `extract` column -- a literal, or an expression read off
+  the element -- and `merge()` folds a collection's rows into one dict. A key/value table is
+  `select_all("tr").extract(doc.select("td").attr("text").alias(doc.select("th").attr("text"))).merge()`.
+  The plan tree renders such a column as "name from the page" with the chain under it.
+- **Esc** clears the selection first, then returns the scope to the page you are on (a
+  followed page stays), then to the root page.
+- **Fetches are cached**: opening a page a session already holds at the same tier hands the
+  same document back (`reused` in the handle); ⟳ reloads it. The wheel over the page scrolls
+  only the page inside (the workspace no longer scrolls with it).
+
+### The user stories this makes possible (the books story)
+
+`books.toscrape.com`: open the catalogue; click a book's `li`; the card offers `li.col-xs-6
+×20` (the record) and `li ×75`; tick the suggested fields (the title from `h3 > a`'s
+`title`, the price, the rating's class, the cover's `src`); `select_all` -- 20 rows appear.
+Click a title link, "open the link": the first book's page opens, joined under the plan as
+a per-record field. On it, click the description paragraph, `select` + text named
+`description`; click a table row, `select_all` (`table tr ×7`); click a `td`, `select` +
+text, name from the page: `th` -- the table is a dict per book. Back on the catalogue
+(click the record node, Esc), click "next", `pages` -- the next link is followed. Set
+`max_pages`, Run: every book on every page with its description and details. Then edit the
+plan in place: add a `filter`, make a field optional, reorder, change a selector.
+
+The same moves cover: a listing whose records nest a list (a `select_all` inside a record
+is a list column); a detail page that itself has records (a `select_all` on the followed
+page nests rows); a form filled then submitted before the records exist (`write`, `click`,
+`wait_for`, recorded at the page level); a load-more pager (`paginate(by="click")`); a
+definition list or a table of properties (`alias` + `merge`).
+
+Offline, the same plan is `tests/test_books_story.py` in the package.

@@ -128,7 +128,38 @@ def _row_of(element: Any, *, create: bool = True) -> dict[str, Any] | None:
     return cast("dict[str, Any] | None", core._row)
 
 
-async def apply_extract(element: Any, columns: dict[str, Any], client: "WebClient | None") -> None:
+def split_alias(expr: Any) -> "tuple[Any, Any]":
+    """An extract column given POSITIONALLY must end in ``.alias(name)``: split it into
+    (the value expression, the name -- a literal or an Expr evaluated per element)."""
+    from .expr import Expr
+
+    plan = getattr(expr, "_plan", None)
+    steps = list(getattr(plan, "steps", []) or []) if plan is not None else []
+    for i in range(len(steps) - 1, 0, -1):
+        if steps[i].kind == "call" and steps[i - 1].kind == "get" and steps[i - 1].name == "alias":
+            arg = steps[i].args[0] if steps[i].args else None
+            name = Expr(arg.plan, expr._client) if arg is not None and arg.plan is not None else (arg.value if arg is not None else None)
+            assert plan is not None
+            value = Expr(plan.model_copy(update={"steps": steps[: i - 1]}), expr._client)
+            return value, name
+    from ..errors import WebException, make
+
+    raise WebException(make("plan.invalid", "a positional extract column needs .alias(name): extract(expr.alias('key')) or extract(expr.alias(<expr>))"))
+
+
+def columns_of(args: "Iterable[Any]", named: dict[str, Any]) -> "list[tuple[Any, Any]]":
+    """The (name, value expr) columns of an extract: the named ones as given, the positional
+    ones split at their ``.alias(...)`` -- so a column's NAME can itself be read off the page
+    (``select_all("tr").extract(doc.select("td").attr("text").alias(doc.select("th").attr("text")))``)."""
+    out: list[tuple[Any, Any]] = []
+    for expr in args:
+        value, name = split_alias(expr)
+        out.append((name, value))
+    out.extend(named.items())
+    return out
+
+
+async def apply_extract(element: Any, columns: "dict[str, Any] | list[tuple[Any, Any]]", client: "WebClient | None") -> None:
     """Annotate ``element``'s row with the evaluated columns (unwrapped, stored in
     order so a later column can reference an earlier one). Loud by default: a column
     whose ``select``/``attr`` misses raises (naming the selector) -- mark a genuinely
@@ -141,7 +172,10 @@ async def apply_extract(element: Any, columns: dict[str, Any], client: "WebClien
     row = _row_of(element)
     if row is None:
         return
-    for key, expr in columns.items():
+    pairs = list(columns.items()) if isinstance(columns, dict) else columns
+    for key, expr in pairs:
+        if not isinstance(key, str):  # an aliased column: the name is read off the element
+            key = str(_raw(await aevaluate(key, element, client=client)) or "").strip() or "field"
         row[key] = _raw(await aevaluate(expr, element, client=client))
 
 
@@ -256,15 +290,19 @@ class Collection(Generic[T]):
 
         return (self._client or default_client()).loop()
 
-    async def aextract(self, **exprs: Any) -> "Collection[T]":
+    async def aextract(self, *aliased: Any, **exprs: Any) -> "Collection[T]":
         """Annotate each element with extracted columns (its ``_row``): columns
         are evaluated in order against the element (a later column can reference
         an earlier one via ``field``; chained extracts accumulate); elements are
-        evaluated concurrently, bounded by the pool. Fields store unwrapped."""
+        evaluated concurrently, bounded by the pool. Fields store unwrapped. A
+        positional column ends in ``.alias(name)`` -- ``name`` a literal or an
+        expression read off the element, so a key/value table becomes a dict."""
         from .executor import fan_out
 
+        columns = columns_of(aliased, exprs)
+
         async def one(el: Any) -> None:
-            await apply_extract(el, exprs, self._client)
+            await apply_extract(el, columns, self._client)
 
         await fan_out(list(self._items), one, limit=self._limit())
         return self._derive(self._items)
@@ -287,9 +325,19 @@ class Collection(Generic[T]):
 
         return _fanout_limit(self._client)
 
-    def extract(self, **exprs: Any) -> "Collection[T]":
+    def extract(self, *aliased: Any, **exprs: Any) -> "Collection[T]":
         """Eager form of :meth:`aextract` (bridged onto the engine loop)."""
-        return self._loop().run(self.aextract(**exprs))
+        return self._loop().run(self.aextract(*aliased, **exprs))
+
+    def merge(self) -> dict[str, Any]:
+        """Fold the elements' extracted rows into ONE dict (later rows win on a repeated key):
+        the shape of a key/value table -- ``select_all("tr").extract(td.alias(th)).merge()``."""
+        out: dict[str, Any] = {}
+        for el in self._items:
+            row = _row_of(el, create=False)
+            if row:
+                out.update(_project_row(row))
+        return out
 
     def filter(self, *predicates: Any) -> "Collection[T]":
         """Eager form of :meth:`afilter` (bridged onto the engine loop)."""

@@ -111,6 +111,21 @@ def op_catalogue() -> "dict[str, Any]":
             })
         return out
 
+    def returns_of(fn: Any, op: str, coll: "frozenset[str]") -> str:
+        """The object an op yields, in the builder's vocabulary: Reference / Document /
+        Collection / Value (an Element is a Document the select produced)."""
+        if op in coll:
+            return "Collection"
+        ann = inspect.signature(fn).return_annotation if fn is not None else None
+        text = ann if isinstance(ann, str) else getattr(ann, "__name__", "") or ""
+        if "list[" in text or "Collection" in text:
+            return "Collection"
+        if "Document" in text:
+            return "Document"
+        if "Reference" in text:
+            return "Reference"
+        return "Value"
+
     def doc_of(fn: Any) -> str:
         d = inspect.getdoc(fn) or ""
         return d.split("\n\n")[0].replace("\n", " ").strip()
@@ -124,13 +139,18 @@ def op_catalogue() -> "dict[str, Any]":
             best = max(cands, key=lambda b: len(params_of(getattr(type(b), op, None) or (lambda: None))))
             fn = getattr(type(best), op, None)
             rows.append({"name": op, "kind": "call", "io": op in io, "collection": op in coll,
+                         "returns": returns_of(fn, op, coll) if fn else "Value",
                          "params": params_of(fn) if fn else [], "doc": doc_of(fn) if fn else ""})
         for op, backing in sorted(core.prop_ops().items()):
             fn = getattr(type(backing), op, None)
-            rows.append({"name": op, "kind": "prop", "io": False, "collection": False, "params": [], "doc": doc_of(fn) if fn else ""})
+            rows.append({"name": op, "kind": "prop", "io": False, "collection": False, "returns": "Value", "params": [], "doc": doc_of(fn) if fn else ""})
         return rows
 
     doc_rows = core_ops(_Doc)
+    # an attr("href"/"src"/"action") yields a Reference (resolvable); the surface says so
+    for r in doc_rows:
+        if r["name"] == "attr":
+            r["returns"] = "Value|Reference"
     # the hand-written chain ops (bound / lifted): not backing ops, but part of the surface
     doc_rows += [
         {"name": "extract", "kind": "call", "io": False, "collection": False, "bound": True,
@@ -142,7 +162,34 @@ def op_catalogue() -> "dict[str, Any]":
         {"name": "limit", "kind": "call", "io": False, "collection": True, "params": [{"name": "n", "required": True, "kind": "positional", "type": "int"}], "doc": "The first n of a collection."},
         {"name": "count", "kind": "prop", "io": False, "collection": False, "params": [], "doc": "How many items a collection holds."},
     ]
-    return {"Document": doc_rows, "Reference": core_ops(_Ref)}
+    shaped = {"extract": "Document", "project": "Value", "paginate": "Collection", "limit": "Collection", "count": "Value"}
+    for r in doc_rows:
+        if r["name"] in shaped and "returns" not in r:
+            r["returns"] = shaped[r["name"]]
+    # a Collection: every element op of the Document LIFTED (fans out; yields a list of its
+    # result), plus the row-shaping ops of a collection
+    lifted = [{**r, "lifted": True, "returns": "Collection"} for r in doc_rows
+              if r["kind"] == "call" and not r["io"] and r["name"] not in ("extract", "project", "paginate", "limit", "count")]
+    coll_rows = lifted + [
+        {"name": "extract", "kind": "call", "io": False, "collection": True, "bound": True, "returns": "Collection",
+         "params": [{"name": "*aliased", "required": False, "kind": "positional"}, {"name": "**fields", "required": False, "kind": "keyword"}],
+         "doc": "Capture named fields per element: each keyword (or positional .alias(name) column) is a sub-plan rooted at the element."},
+        {"name": "filter", "kind": "call", "io": False, "collection": True, "bound": True, "returns": "Collection",
+         "params": [{"name": "*predicates", "required": True, "kind": "positional"}], "doc": "Keep the elements for which every predicate is truthy."},
+        {"name": "limit", "kind": "call", "io": False, "collection": True, "returns": "Collection",
+         "params": [{"name": "n", "required": True, "kind": "positional", "type": "int"}], "doc": "The first n."},
+        {"name": "project", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [], "doc": "The extracted rows as plain dicts."},
+        {"name": "merge", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [],
+         "doc": "Fold the rows into ONE dict (a key/value table)."},
+        {"name": "count", "kind": "prop", "io": False, "collection": False, "returns": "Value", "params": [], "doc": "How many."},
+    ]
+    ref_rows = core_ops(_Ref)
+    for r in ref_rows:
+        if r["name"] == "resolve":
+            r["returns"] = "Document"
+        elif r["name"] in ("join", "replace", "with_params"):
+            r["returns"] = "Reference"
+    return {"Document": doc_rows, "Reference": ref_rows, "Collection": coll_rows}
 
 
 def _error(
@@ -797,7 +844,9 @@ def create_app(
     def open_document(sid: str, body: dict[str, Any], authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
         """Open ``url`` in the session: ``browser`` false / "auto" / "always". The document is a
         CAPTURE unless ``live`` is true, in which case the browser page stays held (a pool
-        page) so it can be driven -- release it when done. The handle comes back."""
+        page) so it can be driven -- release it when done. The handle comes back. A capture
+        of the same url at the same tier already held by the session is REUSED (``reused``
+        true in the handle) unless ``reuse`` is false; ``POST …/{doc}/reload`` refreshes it."""
         _auth(authorization)
         if sid not in app.state.sessions:
             return _error(404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT)
@@ -807,6 +856,13 @@ def create_app(
         browser = body.get("browser", False)
         live = bool(body.get("live", False)) and bool(browser)
         session = app.state.sessions[sid]
+        if body.get("reuse", True) and not live:  # the same page, same tier, already held: hand it back
+            want_tier = "browser" if browser else "static"
+            for held in reversed(list(_store_for(sid).values())):
+                if getattr(held, "url", None) == url and getattr(held, "_page", None) is None:
+                    h = _handle(held)
+                    if h.get("tier") == want_tier or (browser == "auto" and h.get("ok")):
+                        return {**h, "reused": True}
         try:
             doc = session.fetch(url, browser=browser or (True if live else False), keep_alive=live)
         except WebException as exc:

@@ -81,7 +81,7 @@ _OPS = {
 #: ``paginate`` is bound so its ``stop``/``key`` predicates evaluate per page.
 _BINDS = {"extract", "filter", "paginate"}
 #: ops acting on a Collection as a whole (everything else fans out per element)
-_COLL_OPS = {"extract", "filter", "project", "limit", "documents"}
+_COLL_OPS = {"extract", "filter", "project", "limit", "documents", "merge"}
 
 
 def _iscoro(value: Any) -> bool:
@@ -335,6 +335,8 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
 
                 return column if isinstance(column, Field) else Field(column)
             return column
+    if name == "alias":  # the column's NAME rides on the chain; extract reads it (see columns_of)
+        return value
     if name in _BINDS:  # sub-plans passed unevaluated to the async bound op
         args = [_as_expr(a, client) for a in call.args]
         kwargs = {k: _as_expr(v, client) for k, v in call.kwargs.items()}
@@ -531,8 +533,11 @@ def _parse_shaping(steps: list[Step], client: Any) -> list[tuple[str, Any]]:
     while i + 1 < len(steps):
         get_step, call = steps[i], steps[i + 1]
         if get_step.name == "extract":
+            from .collection import columns_of
+
             ops.append(
-                ("extract", {k: _as_expr(v, client) for k, v in call.kwargs.items()})
+                ("extract", columns_of([_as_expr(a, client) for a in call.args],
+                                       {k: _as_expr(v, client) for k, v in call.kwargs.items()}))
             )
         else:  # filter
             ops.append(("filter", [_as_expr(a, client) for a in call.args]))

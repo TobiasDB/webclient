@@ -160,21 +160,21 @@ class Document(WebCore, IDocument):
     # (which are just this primitive fanned out) so a lone Document is usable the
     # same way -- ``doc.extract(spa=doc.spa()).project()``. Hand-written (like
     # Collection/Field), not backings, so they are not lifted or fanned out.
-    async def aextract(self, **exprs: Any) -> "Document":
+    async def aextract(self, *aliased: Any, **exprs: Any) -> "Document":
         """Evaluate each named expression against this document and stage the
         results as its ``_row`` (in order, so a later column can read an earlier
         one via ``field``; chained extracts accumulate). Loud by default -- a
         column whose select/attr misses raises; mark it ``error=RETURN`` for a
         ``None``. THE single-element extraction (``Collection.aextract`` fans it
         out); returns the document so extracts chain."""
-        from ...query.collection import apply_extract
+        from ...query.collection import apply_extract, columns_of
 
-        await apply_extract(self, exprs, self._client)
+        await apply_extract(self, columns_of(aliased, exprs), self._client)
         return self
 
-    def extract(self, **exprs: Any) -> "Document":
+    def extract(self, *aliased: Any, **exprs: Any) -> "Document":
         """Eager form of :meth:`aextract` (bridged onto the engine loop)."""
-        return self._client.loop().run(self.aextract(**exprs))
+        return self._client.loop().run(self.aextract(*aliased, **exprs))
 
     @overload
     def project(self) -> dict[str, Any]:
