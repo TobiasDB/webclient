@@ -373,6 +373,38 @@ def create_app(
 
         return _schema()
 
+    @app.get("/signals", response_model=None)
+    def signals(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        """The signals catalogue, from the registry: every flag with its remedy (fixed or
+        derived) and the detectors feeding it (name, stage, contra, what they need, the
+        docstring). What the docs and the website render; never hand-copied."""
+        _auth(authorization)
+        from .signals.registry import DETECTORS, FLAGS
+
+        out: list[dict[str, Any]] = []
+        for name, spec in FLAGS.items():
+            dets = [
+                {"name": d.name, "stage": d.stage, "contra": d.contra, "needs": list(d.needs),
+                 "description": (d.fn.__doc__ or "").strip().split("\n\n")[0]}
+                for d in DETECTORS if d.flag == name
+            ]
+            remedy = spec.remedy if isinstance(spec.remedy, str) else ("derived" if spec.remedy else None)
+            out.append({"name": name, "remedy": remedy, "has_value": spec.value is not None, "detectors": dets})
+        return out
+
+    @app.get("/errors", response_model=None)
+    def errors_catalogue(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        """The error catalogue: every code with its type, title, remedy, hint, retriable
+        default, status and the longer doc."""
+        _auth(authorization)
+        from .errors import CATALOG
+
+        return [
+            {"code": s.code, "type": s.type, "title": s.title, "remedy": s.remedy, "hint": s.hint,
+             "retriable": s.retriable, "status_code": s.status_code, "doc": s.doc}
+            for s in CATALOG.values()
+        ]
+
     @app.post("/tools/{name}", response_model=None)
     def run_tool(
         name: str, body: dict[str, Any], authorization: str | None = Header(default=None)

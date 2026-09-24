@@ -90,3 +90,20 @@ def test_waiting_loops_are_listed_and_resumable_over_http(httpserver):
         assert api.get("/loops").json() == []
         assert api.post("/loops/nope/resume", json={"answer": "x"}).status_code == 404
     wc.close()
+
+
+def test_catalogues_come_from_the_registries():
+    """/signals and /errors are rendered by the docs and the website; they mirror the
+    registries exactly (every flag, every detector, every catalogued code)."""
+    from webclient.errors import CATALOG
+    from webclient.signals.registry import DETECTORS, FLAGS
+
+    with TestClient(create_app()) as client:
+        sig = client.get("/signals").json()
+        assert {f["name"] for f in sig} == set(FLAGS)
+        assert sum(len(f["detectors"]) for f in sig) == len(DETECTORS)
+        spa = next(f for f in sig if f["name"] == "spa")
+        assert spa["remedy"] == "browser" and all(d["stage"] for d in spa["detectors"])
+        errs = client.get("/errors").json()
+        assert {e["code"] for e in errs} == set(CATALOG)
+        assert all(e["remedy"] and e["hint"] for e in errs)
