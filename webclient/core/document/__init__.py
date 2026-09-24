@@ -218,6 +218,7 @@ class Document(WebCore, IDocument):
         records: str = "",
         until: str = "",
         until_before: str = "",
+        total_pages: int = 0,
         stop: Any = None,
         key: Any = None,
     ) -> "Collection[Document]":
@@ -248,7 +249,8 @@ class Document(WebCore, IDocument):
         pages = await walk(
             self, by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start,
             step=step, size=size, cursor=cursor, cursor_attr=cursor_attr, records=records,
-            until=until, until_before=until_before, stop=stop, key=key, client=self._client,
+            until=until, until_before=until_before, total_pages=total_pages, stop=stop, key=key,
+            client=self._client,
         )
         return Collection(pages, client=self._client, root=self.name or self.root)
 
@@ -267,6 +269,7 @@ class Document(WebCore, IDocument):
         records: str = "",
         until: str = "",
         until_before: str = "",
+        total_pages: int = 0,
         stop: Any = None,
         key: Any = None,
     ) -> "Collection[Document]":
@@ -274,7 +277,7 @@ class Document(WebCore, IDocument):
         return self._client.loop().run(self.apaginate(
             by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start, step=step,
             size=size, cursor=cursor, cursor_attr=cursor_attr, records=records, until=until,
-            until_before=until_before, stop=stop, key=key,
+            until_before=until_before, total_pages=total_pages, stop=stop, key=key,
         ))
 
 

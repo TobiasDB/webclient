@@ -69,6 +69,21 @@ def test_paginate_stops_on_a_clamped_repeat(httpserver):
     assert len(pages) == 2
 
 
+def test_paginate_parallel_computed_with_known_total(httpserver):
+    # by="param" + a known total_pages: pages are a pure function of the index, so they are fetched
+    # CONCURRENTLY (bounded). Result is correct + in order; an over-estimated total stops at the end.
+    for i in range(1, 6):
+        httpserver.expect_request("/list", query_string=f"page={i}").respond_with_data(
+            _page([f"r{i}"]), content_type="text/html")
+    httpserver.expect_request("/list", query_string="page=6").respond_with_data("", status=404)
+    plan = (
+        wq.reference(httpserver.url_for("/list") + "?page=1").resolve()
+        .paginate(by="param", name="page", total_pages=8, max_pages=20)  # total over-estimated
+        .select_all("article.r").extract(n=wq.doc.select(".n").attr("text")).project()
+    )
+    assert [r["n"] for r in plan.collect()] == ["r1", "r2", "r3", "r4", "r5"]  # all 5, in order, stops at the 404
+
+
 # -- by="cursor": a keyset token read off each page -------------------------------------------
 
 def _cursor_page(records, cursor=None):

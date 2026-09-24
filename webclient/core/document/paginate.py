@@ -32,6 +32,7 @@ later phases.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urljoin
@@ -205,6 +206,47 @@ def _auto_advance(doc: "Document", name: str) -> "tuple[str, str]":
     return "link", name
 
 
+#: how many computed pages to fetch at once when the total is known (a bounded fan-out).
+_PARALLEL = 8
+
+
+async def _gather_bounded(refs: "list[Reference]", client: Any, limit: int) -> "list[Document]":
+    """Fetch ``refs`` CONCURRENTLY, at most ``limit`` in flight, results in input order."""
+    sem = asyncio.Semaphore(max(1, limit))
+
+    async def _one(ref: "Reference") -> "Document":
+        async with sem:
+            return cast("Document", await client.afetch(ref, optional=True))
+
+    return list(await asyncio.gather(*(_one(ref) for ref in refs)))
+
+
+async def _parallel_pages(
+    doc: "Document", *, name: str, start: int, step: int, size: int, total: int, client: Any
+) -> "list[Document]":
+    """The computed fast-path: for ``by="param"`` with a KNOWN total, the next page is a pure
+    function of the index, so build every page's reference up front and fetch them CONCURRENTLY
+    (bounded), page one first. Stops early at the first empty/not-ok page or a clamped repeat (a
+    wrong total), so the result never runs past the real end."""
+    refs = [
+        cast("Reference", _ref_of(doc).dispatch(
+            "with_params", **{name: str((start + index * size) if size else (start + index * step))}
+        ))
+        for index in range(1, total)  # page one is ``doc`` (index 0)
+    ]
+    pages: list[Document] = [doc]
+    seen = {_page_fingerprint(doc)}
+    for page in await _gather_bounded(refs, client, _PARALLEL):
+        if not (page.ok and page.content):
+            break
+        fp = _page_fingerprint(page)
+        if fp in seen:
+            break
+        seen.add(fp)
+        pages.append(page)
+    return pages
+
+
 async def walk(
     doc: "Document",
     *,
@@ -220,6 +262,7 @@ async def walk(
     records: str = "",
     until: str = "",
     until_before: str = "",
+    total_pages: int = 0,
     stop: Any = None,
     key: Any = None,
     client: Any = None,
@@ -229,11 +272,24 @@ async def walk(
     REPEATS an earlier one (by ``key``, else a content fingerprint -- an out-of-range clamp), or a
     stop fires: ``max_pages``, ``max_rows`` (with ``records``), the ``until``/``until_before``
     recency cutoff, or the ``stop`` predicate. ``stop``/``key`` are Exprs (or ``None``) evaluated
-    per page -- the bound-op capability. The engine ``client`` fetches subsequent pages."""
+    per page -- the bound-op capability. The engine ``client`` fetches subsequent pages.
+
+    COMPUTED FAST-PATH: when the advance is ``param`` and the total page count is known
+    (``total_pages``, or the hint's when ``by="auto"``) and no per-page semantic stop is in play,
+    every page reference is a pure function of its index, so the pages are fetched CONCURRENTLY
+    (bounded) instead of one-at-a-time."""
     client = client if client is not None else doc._client
     if by == "auto":
         by, name = _auto_advance(doc, name)  # pick the advance from the detected pagination hint
+        if not total_pages:  # ... and its known total, for the parallel fast-path (hint is cached)
+            hint = doc.pagination().value
+            total_pages = int(getattr(hint, "total_pages", 0) or 0) if hint is not None else 0
     bound = max(1, min(max_pages, _MAX_PAGES_CAP))
+    if by == "param" and total_pages > 1 and not (until or stop or key or max_rows):
+        return await _parallel_pages(
+            doc, name=name, start=start, step=step, size=size,
+            total=min(total_pages, bound), client=client,
+        )
     pages: list[Document] = [doc]
     seen = {await _page_key(doc, key, client)}
     rows = _row_count(doc, records)
