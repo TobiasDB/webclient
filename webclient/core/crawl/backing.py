@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, cast
 from urllib.parse import urlparse, urlsplit
 
 from ...errors import make
+from ...loop import BoundedLoop
 from ..web_core import Backing
 from .canon import (  # URL canon / scope / scoring vocabulary (pure helpers)
     _BOILER_PATH_RE,
@@ -46,6 +47,11 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger(__name__)
+
+#: the auto-drive's per-round decision -- keep going, or the frontier/budget is done. The real
+#: crawl "decision" (which edges) is made inside the round (``_drive_select`` in ``_pump``).
+_GO: Any = object()
+_DONE: Any = object()
 
 
 class CrawlBacking(Backing):
@@ -84,29 +90,54 @@ class CrawlBacking(Backing):
         await self._pump(core, lambda: self._select(core, select))
         return core
 
+    def _drive_loop(self, core: "Crawl[Any]") -> "BoundedLoop[Crawl[Any], Crawl[Any], Any]":
+        """The crawl's auto-drive as a :class:`~webclient.loop.BoundedLoop` (so the drive is the ONE
+        loop concept, not hand-rolled): each round APPLIES one best-first ``_pump`` (its edge
+        selection + concurrent batch fetch + frontier expansion), stops when the frontier/budget is
+        done (``decide`` -> :data:`_DONE`), and treats a round that fetches no new page as no
+        progress (``max_stalls=1`` -- the old ``not produced`` break; also how a driver ``Ask``
+        pauses). Built fresh per drive; crawl STATE lives on the core, so ``resume``/re-``run``
+        continues from the current frontier. (Manual ``step`` -- with its concurrent-step budget lock
+        -- keeps its own path until BoundedLoop grows a batch/concurrent round.)"""
+
+        async def apply(state: "Crawl[Any]", _decision: Any) -> None:
+            await self._pump(state, lambda: self._drive_select(state))
+
+        return BoundedLoop(
+            observe=lambda s, i, e: s,
+            decide=lambda s: _DONE if self.done(s) else _GO,
+            done_result=lambda d: "done" if d is _DONE else None,
+            apply=apply,
+            progress=lambda s: len(s.pages),
+            max_rounds=core.config.max_pages + 1,  # a safety cap; done()/stall stop first
+            max_stalls=1,  # a round with no new page -> stop (the old "not produced" break)
+            name="crawl",
+            bus=getattr(core._client, "bus", None),
+        )
+
     async def run(self, core: "Crawl[Any]") -> "Crawl[Any]":
-        """Drive the crawl to completion (the batch drain of the stream): expand the
-        best-first frontier round by round until done. Equivalent to exhausting
-        ``stream()`` -- ``config.order`` only governs a bare ``step()``, not the drive."""
-        while True:
-            produced = await self._pump(core, lambda: self._drive_select(core))
-            if self.done(core) or not produced:
-                break
+        """Drive the crawl to completion (the batch drain of the stream): expand the best-first
+        frontier round by round until done. Equivalent to exhausting ``stream()`` -- ``config.order``
+        only governs a bare ``step()``, not the drive. Driven by a :class:`BoundedLoop` (see
+        :meth:`_drive_loop`)."""
+        await self._drive_loop(core).arun(core)
         return core
 
     async def _astream(self, core: "Crawl[Any]") -> "AsyncIterator[Any]":
-        """The crawl's one engine: drive the best-first frontier round by round and
-        yield each fetched page's retained projection as the round completes. Pausing
-        (breaking the consumer) leaves the frontier + seen ledger intact, so the crawl
-        is resumable; ``run`` is this stream drained. Each round's claim/fetch/expand is
-        atomic under the step lock; the yield happens after the lock is released, so a
-        paused consumer never holds it."""
-        while not self.done(core):
-            produced = await self._pump(core, lambda: self._drive_select(core))
-            for page in produced:
+        """The crawl's one engine: drive the best-first frontier round by round (a
+        :class:`BoundedLoop`) and yield each fetched page's retained projection as the round
+        completes. Pausing (breaking the consumer) leaves the frontier + seen ledger intact, so the
+        crawl is resumable; ``run`` is this stream drained. Each round's claim/fetch/expand is atomic
+        under the step lock; the yield happens after the lock is released, so a paused consumer never
+        holds it."""
+        loop = self._drive_loop(core)
+        while True:
+            seen = len(core.pages)
+            verdict = await loop.astep(core)
+            for page in core.pages[seen:]:
                 yield page
-            if not produced:  # no progress (all robots-blocked / errored) -- stop
-                break
+            if verdict is not None:  # terminal (done / stalled / budget)
+                return
 
     async def _pump(
         self, core: "Crawl[Any]", choose: "Callable[[], list[Edge]]"
