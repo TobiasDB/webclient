@@ -14,10 +14,12 @@ cutoff. This module owns the walk (:func:`walk`), the advance (:func:`_next_ref`
 (the one backing op left here -- "where is the next page"). ``Document.apaginate`` is the thin bound
 method that runs :func:`walk` and wraps the pages in a ``Collection``.
 
-The walk is HTTP + sequential. Advance strategies: ``by="link"`` follows a ``rel="next"`` link
-discovered on each page; ``by="param"`` increments a page/offset query parameter; ``by="cursor"``
-reads a keyset/cursor token off each page (a selector + attribute, or a JSON path) and carries it in
-the next request -- so a cursor API paginates too. It is bounded by ``max_pages`` and guarded against
+The walk is HTTP + sequential. Advance strategies: ``by="auto"`` (default) resolves the advance from
+the page's detected ``pagination`` hint (param source -> ``by="param"``, else ``by="link"``), so a
+bare ``paginate()`` works; ``by="link"`` follows a ``rel="next"`` link discovered on each page;
+``by="param"`` increments a page/offset query parameter; ``by="cursor"`` reads a keyset/cursor token
+off each page (a selector + attribute, or a JSON path) and carries it in the next request -- so a
+cursor API paginates too. It is bounded by ``max_pages`` and guarded against
 the common out-of-range CLAMP (``?page=999`` re-serving an earlier page) by a per-page key -- a
 content fingerprint by default, or a semantic ``key=<Expr>`` -- so a repeat stops the walk rather than
 looping. It can stop EARLY on ``max_rows`` (enough records collected), a recency cutoff
@@ -191,10 +193,22 @@ async def _stop_here(stop: Any, doc: "Document", client: Any) -> bool:
     return truthy(await aevaluate(stop, doc, client=client))
 
 
+def _auto_advance(doc: "Document", name: str) -> "tuple[str, str]":
+    """Resolve ``by="auto"`` from the page's detected ``pagination`` flag (its :class:`PaginationHint`):
+    a computed source (``kind="param"`` with a known param) -> ``("param", <param>)``; a discovered
+    link, a numbered strip, or no hint at all -> ``("link", name)`` -- the safe default. So a bare
+    ``doc.paginate()`` walks the source the way the detector read it, with ``by="link"`` as the
+    fallback that follows ``rel=next`` / the HTTP Link header."""
+    hint = doc.pagination().value
+    if hint is not None and getattr(hint, "kind", "") == "param" and getattr(hint, "name", ""):
+        return "param", hint.name
+    return "link", name
+
+
 async def walk(
     doc: "Document",
     *,
-    by: str = "link",
+    by: str = "auto",
     max_pages: int = 20,
     max_rows: int = 0,
     name: str = "page",
@@ -217,6 +231,8 @@ async def walk(
     recency cutoff, or the ``stop`` predicate. ``stop``/``key`` are Exprs (or ``None``) evaluated
     per page -- the bound-op capability. The engine ``client`` fetches subsequent pages."""
     client = client if client is not None else doc._client
+    if by == "auto":
+        by, name = _auto_advance(doc, name)  # pick the advance from the detected pagination hint
     bound = max(1, min(max_pages, _MAX_PAGES_CAP))
     pages: list[Document] = [doc]
     seen = {await _page_key(doc, key, client)}

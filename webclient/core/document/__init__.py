@@ -206,7 +206,7 @@ class Document(WebCore, IDocument):
     async def apaginate(
         self,
         *,
-        by: str = "link",
+        by: str = "auto",
         max_pages: int = 20,
         max_rows: int = 0,
         name: str = "page",
@@ -225,11 +225,14 @@ class Document(WebCore, IDocument):
         ``select_all(...).extract(...).project()`` to extract the WHOLE dataset (the body runs
         across every page, not page one only).
 
-        HOW TO ADVANCE (``by``): ``"link"`` follows ``rel=next`` (an HTML ``a/link[rel=next]`` or an
-        HTTP ``Link:`` header, so an API paginates); ``"param"`` walks ``?{name}=`` from ``start`` by
-        ``step`` (or by ``size`` as an offset); ``"cursor"`` reads a keyset token off each page (the
-        ``cursor`` selector's ``cursor_attr`` -- ``cursor="a.next"`` + ``cursor_attr="data-after"``, or
-        a JSON path ``cursor="pageInfo.endCursor"``) and carries it in ``?{name}=``.
+        HOW TO ADVANCE (``by``): ``"auto"`` (default) picks the advance from the page's detected
+        ``pagination`` hint -- a ``?page=``/``?offset=`` source walks by that param, everything else
+        follows the next link -- so a bare ``doc.paginate()`` just works. ``"link"`` follows ``rel=next``
+        (an HTML ``a/link[rel=next]`` or an HTTP ``Link:`` header, so an API paginates); ``"param"``
+        walks ``?{name}=`` from ``start`` by ``step`` (or by ``size`` as an offset); ``"cursor"`` reads
+        a keyset token off each page (the ``cursor`` selector's ``cursor_attr`` -- ``cursor="a.next"`` +
+        ``cursor_attr="data-after"``, or a JSON path ``cursor="pageInfo.endCursor"``) and carries it in
+        ``?{name}=``.
 
         WHERE TO STOP (all optional, so a long dataset isn't walked whole for a few rows): ``max_pages``
         caps the page count; ``max_rows`` with ``records`` (the record selector) stops once that many
@@ -252,7 +255,7 @@ class Document(WebCore, IDocument):
     def paginate(
         self,
         *,
-        by: str = "link",
+        by: str = "auto",
         max_pages: int = 20,
         max_rows: int = 0,
         name: str = "page",

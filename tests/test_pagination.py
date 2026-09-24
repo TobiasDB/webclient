@@ -122,6 +122,34 @@ def test_paginate_stops_at_a_recency_cutoff(httpserver):
     assert len(pages) == 2  # d1 (all recent), d2 (crosses the cutoff, kept), then stop before d3
 
 
+# -- by="auto": resolve the advance from the detected pagination hint --------------------------
+
+def test_paginate_auto_detects_a_param_advance(httpserver):
+    # by="auto" (the default) reads the page's pagination hint. These pages carry a ?page= LINK
+    # (no rel=next), so the hint is kind="param" -> auto walks ?page=1,2. A by="link" fallback
+    # could NOT reach page 2 here (there is no rel=next), so 2 pages proves auto picked param.
+    def _pg(records, nextp=None):
+        arts = "".join(f'<article class="r"><span class="n">{n}</span></article>' for n in records)
+        tail = f'<a href="/list?page={nextp}">next</a>' if nextp else '<nav class="pagination">end</nav>'
+        return f"<html><body><main>{arts}</main>{tail}</body></html>"
+
+    httpserver.expect_request("/list", query_string="page=1").respond_with_data(_pg(["A", "B"], 2), content_type="text/html")
+    httpserver.expect_request("/list", query_string="page=2").respond_with_data(_pg(["C"], 3), content_type="text/html")
+    httpserver.expect_request("/list", query_string="page=3").respond_with_data("", status=404)
+    with WebClient() as wc:
+        pages = list(wc.fetch(httpserver.url_for("/list") + "?page=1").paginate(max_pages=10))  # no by= -> auto
+    assert len(pages) == 2  # auto -> by="param" walked page=1,2 (a link fallback would stop at 1)
+
+
+def test_paginate_auto_falls_back_to_link(httpserver):
+    # no page-param, but a rel=next link -> the hint is kind="link" (or absent) -> auto follows it.
+    httpserver.expect_request("/a1").respond_with_data(_page(["A"], "/a2"), content_type="text/html")
+    httpserver.expect_request("/a2").respond_with_data(_page(["B"]), content_type="text/html")  # no next
+    with WebClient() as wc:
+        pages = list(wc.fetch(httpserver.url_for("/a1")).paginate(max_pages=10))  # no by= -> auto -> link
+    assert len(pages) == 2  # followed rel=next
+
+
 # -- bound-op power: an Expr stop predicate and an Expr dedup key -------------------------------
 
 def _marked_page(records, next_url=None, mark=False):
