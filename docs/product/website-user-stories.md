@@ -1,6 +1,6 @@
 # Product website — user stories
 
-*Status: proposed 2026-09-24. Feature A of two (the other is the Playground). Scope: a
+*Status: agreed 2026-09-24 (decisions in §7). Feature A of two (the other is the Playground). Scope: a
 proper marketing + documentation site for webclient that also IS the package's torture
 test — every claim on the site is backed by a page the client can be pointed at, with a
 published expected result.*
@@ -28,7 +28,7 @@ website replaces it with real pages that keep the same contract (`/.lab/index.js
 | **Builder (Ben)** | an agent/LLM developer wiring tools | a tool list with schemas, MCP one-liner, typed errors with remedies, the playground | vague "AI-ready" claims, no error semantics |
 | **Data owner (Dana)** | data engineer/analyst who needs datasets, not scripts | the author-once-run-forever story, pagination handled, provenance, a query that survives redeploys | anything that looks like a fragile selector |
 | **Operator (Oli)** | platform/infra, must run it in their cluster | self-hosted, container, k8s recipe, observability (traces, /health), no data leaving | SaaS-only, opaque runtime |
-| **Stakeholder (Sam)** | non-technical decision maker forwarded the link | one diagram, three outcomes, a case study, price/licence clarity | a wall of API |
+| **Stakeholder (Sam)** | non-technical decision maker forwarded the link | one diagram, three outcomes, a case study, the cost numbers | a wall of API |
 | **Contributor (Cal)** | wants to add a signal, a tool, a backing | architecture in one screen, the registries, the lab contract, the gate | tribal knowledge |
 
 ## 3. Information architecture
@@ -54,7 +54,7 @@ website replaces it with real pages that keep the same contract (`/.lab/index.js
 /benchmarks             a large page (the large_document fixture) + the profile numbers
 /whitepaper.pdf         the PDF fixture
 /feed.xml, /sitemap.xml, /robots.txt
-/pricing                licence + self-hosting + support tiers (decision pending)
+/cost                   the economics: tokens per page, $ per extraction, author-once vs per-run — measured
 /login, /account        the login-wall fixture; the playground's auth
 ```
 
@@ -125,12 +125,14 @@ below) · "what to read next". The live demos run server-side through the servic
   resources dropped, robots honoured) and a locate loop that stops at the page I described,
   so that I see steering and stopping. *Fixture:* `sitemap`, `redirect` (old URLs),
   `errors` (a 404 page, a `/status/500`), `slow`.
-- **C5 Onboarding (P1)** As Dana, I want to type a one-line brief ("the case studies with
-  their dates") and watch the pipeline stages (search skipped — seeded with this site,
-  crawl, select, evaluate, confirm, source, query) produce a tested blob, then re-run it
-  without a model, so that "author once" is shown end to end. *AC:* interactive confirm
-  gate works in the browser; the LLM is a real model when a key is configured server-side,
-  else the scripted stub with a visible "demo model" badge.
+- **C5 Onboarding (P1)** As Dana, I want to watch a REPLAY of an onboarding run (a
+  recorded trace: brief "the case studies with their dates" → crawl, select, evaluate,
+  the confirm gate, source, query → a tested blob) at my own pace, then re-run the
+  resulting blob live without a model, so that "author once" is shown end to end with no
+  model in the loop on the public site. *AC:* the replay is a trace recorded by CI against
+  this site (the model was the stub, badged "demo model"); the scrubber drives the stage
+  rail; "try it on your data" hands off to the Playground's configurable Onboard
+  workspace.
 - **C6 Traces (P1)** As Oli, I want to open a trace recorded by the C5 run — timeline,
   snapshots, the rrweb replay of the confirm step, the ledger, the HARs — and re-run its
   plan offline from the HAR, so that observability and replay are seen, not described.
@@ -183,18 +185,27 @@ below) · "what to read next". The live demos run server-side through the servic
   run with the SSRF guard, a token for write endpoints, rate limits per IP and traces
   written to a rolling directory, so that the public demo is safe.
 
-### Epic F — Conversion and trust
+### Epic F — Cost, efficiency and trust (there is no licence or price page: the product's economics are the argument)
 
-- **F1 (P1)** As Sam, I want the licence and "self-hosted, your data never leaves" stated
-  plainly on every path, so that procurement has no questions. *(Decision: licence.)*
-- **F2 (P2)** As Eva, I want a status/benchmarks page with the profile numbers and the
-  test count, updated by CI, so that quality claims are verifiable.
-- **F3 (P2)** As Sam, I want pricing/support tiers (or an explicit "open source, support
-  available"), so that I know what it costs. *(Decision.)*
-- **F4 (P3)** As any persona, I want a newsletter/changelog subscription (the RSS feed +
-  an email form — the `forms` fixture), so that I can follow releases.
-- **F5 (P3)** As Eva, I want GitHub stars/issues and the roadmap linked, so that I see
-  it's alive.
+- **F1 (P1)** As Sam, I want a `/cost` page that states, with measured numbers, what an
+  extraction costs: tokens per page for the skeleton vs raw HTML vs markdown (the
+  token-lean views), $ per authored query at the current model prices, and $0 per
+  re-run after authoring — so that the "author once, run forever" claim is a number.
+  *AC:* numbers are produced by a script in CI against this site's pages (a fixed brief,
+  a fixed model or the stub), shown with the date and the model; a calculator lets me
+  enter pages/day and see per-run vs per-session cost.
+- **F2 (P1)** As Eva, I want the token-efficiency evidence per feature — skeleton vs
+  HTML size on the changelog, the card vs the page, `collapse=True` on the benchmarks
+  page — shown inline where the feature is demonstrated, so that efficiency is not a
+  separate claim. *Fixture:* `large` (benchmarks), `spa` (changelog).
+- **F3 (P1)** As Sam, I want "self-hosted, your data never leaves, no per-page fee"
+  stated on every path (the deployment cost is your infrastructure), so that the model is
+  clear without a pricing page. *AC:* the k8s sizing (pages per pod) is the cost of
+  running it.
+- **F4 (P2)** As Eva, I want a benchmarks/status page with the profile numbers, the test
+  count and the lab drift check, updated by CI, so that quality claims are verifiable.
+- **F5 (P3)** As any persona, I want the changelog RSS + an email form (the `forms`
+  fixture) to follow releases, and GitHub / the roadmap linked, so that I see it's alive.
 
 ## 5. Design requirements
 
@@ -225,11 +236,14 @@ below) · "what to read next". The live demos run server-side through the servic
 - Repo layout: `site/` (Astro project), `webclient/lab/` becomes the site's dynamic
   routes + the fixture contract; `deploy/` gains the site.
 
-## 7. Open decisions
+## 7. Decisions (2026-09-24)
 
-1. Product name/brand and domain (the package is `webclient`; is that the product name?).
-2. Licence and pricing/support model (F1, F3).
-3. Whether the public site runs a real LLM for the onboarding demo (C5) or the scripted
-   model only.
-4. Astro (proposed) vs Next.js; Tailwind vs a component library.
-5. Docs: keep mkdocs under `/docs` or migrate to the site's framework.
+1. **Name:** WebClient. No separate brand.
+2. **No licence or pricing page.** The economics are the argument: `/cost` with measured
+   tokens-per-page and $-per-extraction, author-once vs per-run (Epic F).
+3. **The onboarding demo on the site is a replay** of a CI-recorded trace (the stub
+   model, badged); the live, configurable Onboard workspace lives in the Playground.
+4. **Stack:** Astro + React islands, Tailwind, the shared `web/ui` component library
+   (Storybook) — kept simple; docs stay on mkdocs under `/docs` for now.
+5. **Process:** user stories → Storybook (components + wireframes as stories) → the
+   scenes (pages) assembled from them.

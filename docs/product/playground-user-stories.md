@@ -1,6 +1,6 @@
 # Playground — user stories and UX brief
 
-*Status: proposed 2026-09-24. Feature B of two (the other is the product website). Scope:
+*Status: agreed 2026-09-24 (decisions in §9). Feature B of two (the other is the product website). Scope:
 the interactive application over the whole package — explore a page, build a query,
 steer a crawl, drive a live browser, onboard a dataset with a human in the loop, and
 record / replay / debug everything — for technical and non-technical users alike. This
@@ -137,11 +137,14 @@ they need (existing endpoints are named; new ones are marked *new*).
 ### Epic 5 — Onboard a dataset with a human in the loop
 
 - **5.1 (P1)** As Dana, I want to write a brief (dataset description, fields, search
-  terms) with a template picker, run the pipeline, and watch the stages as a DAG with
-  gates (green/red), reviews (flags) and the artefacts each produced, so that the process
-  is transparent. *UX:* a horizontal stage rail; each stage expands to its artefacts
-  (seeds, crawl map, candidates ranked, evaluation, flags, query + sample rows). *API:*
-  *new:* `POST /pipelines/onboard` (server-side LLM), PipelineEvents on the stream,
+  terms) with a template picker, choose the model (the configured key, or the stub —
+  badged), the seeds (search, or URLs I paste), the transport tier, budgets (pages,
+  rounds, $) and whether to review, then run the pipeline and watch the stages as a DAG
+  with gates (green/red), reviews (flags) and the artefacts each produced, so that the
+  process is transparent and configurable. *UX:* a horizontal stage rail; each stage
+  expands to its artefacts (seeds, crawl map, candidates ranked, evaluation, flags, query
+  + sample rows); the run's options are a collapsible form above the rail. *API:* *new:*
+  `POST /pipelines/onboard` (server-side LLM or stub), PipelineEvents on the stream,
   `resume`.
 - **5.2 (P1)** As Rae, I want the confirm gate as a single decision screen — the chosen
   page's preview, the assessment (queryable? complete? paginated?), sample rows, "yes /
@@ -151,6 +154,9 @@ they need (existing endpoints are named; new ones are marked *new*).
   re-validate, so that a near-miss is fixed by hand, not re-authored.
 - **5.4 (P2)** As Dana, I want to onboard N companies for one brief and see a results
   grid (ok / exited / failed with reason, cost), so that batch onboarding is visible.
+- **5.6 (P1)** As Lee, I want the website's onboarding replay to open here with "run it
+  yourself" — the same brief pre-filled against the same site, the stub selected — so that
+  the demo becomes my first real run in one click.
 - **5.5 (P3)** As Dana, I want the reviews (crawl / select / query grades) shown with
   their issues and a "fix" affordance.
 
@@ -207,8 +213,10 @@ they need (existing endpoints are named; new ones are marked *new*).
 - **9.3 (P2)** As Oli, I want resolve policies (retry / rate / proxy / antibot / browser)
   edited as forms and applied to a session, so that resiliency is configurable without
   code.
-- **9.4 (P2)** As Oli, I want tokens/users (at least: a per-deployment token, per-user
-  API keys), so that a team can share one deployment. *(Decision: auth model.)*
+- **9.4 (P1)** As Dana, I want the model configured in Settings — an Anthropic key (kept
+  server-side, never echoed), the model, a budget cap — with the **stub model** as the
+  default when no key is set (badged everywhere it is used), so that Onboard and the index
+  author work out of the box and get real when I add a key. *API:* *new:* `/settings/llm`.
 - **9.5 (P3)** As Oli, I want limits (pool, quotas, TTLs) read-only with their env names.
 
 ### Epic 10 — Cross-cutting
@@ -225,7 +233,7 @@ they need (existing endpoints are named; new ones are marked *new*).
   selections), so links reproduce a view.
 - **10.6 (P2)** Onboarding tour on first run (three steps) and inline "why" popovers
   on flags, tiers and hints.
-- **10.7 (P3)** Multi-tenancy: workspaces per team; saved queries/briefs shared.
+- **10.7 (P3)** Saved queries / briefs / views (single-user; no auth in scope).
 
 ## 5. UX principles (the brief for design)
 
@@ -269,7 +277,7 @@ Deliverables per screen: user flow, low-fi wireframe, hi-fi mock (light/dark), s
 | **replay** endpoints | 7.3 | `POST /traces/{id}/replay?mode=static|har|live` |
 | rrweb **per document** | 7.1 | `/traces/{id}/rrweb?document_id=` (exists) + chunk boundaries |
 | **scripts / drivers / policies** admin | Settings | `/scripts`, `/drivers`, `/policies` |
-| **auth** | teams | token → users/keys (decision) |
+| **llm settings** | 9.4 | `/settings/llm` (key stored server-side, stub default) |
 | **shareable state** | 10.5 | URL-encoded state; server-side saved views |
 
 ## 8. Proposed stack (installs are fine)
@@ -283,12 +291,19 @@ Deliverables per screen: user flow, low-fi wireframe, hi-fi mock (light/dark), s
   above; developed with the Vite dev server proxied to the service.
 - Storybook for the component library shared with the website.
 
-## 9. Open decisions
+## 9. Decisions (2026-09-24)
 
-1. Auth and multi-user model (single token vs users/teams) — shapes Runs, Settings,
-   sharing.
-2. Which LLM runs server-side for Onboard / the index author (key management).
-3. Do server-held live pages (4.1) ship at launch (needs a page-session protocol) or
-   after Explore/Query/Traces?
-4. Design tooling: Figma files vs code-first design in Storybook.
-5. Name of the app (Playground / Studio / Console).
+1. **No auth.** The Playground is a single-user app on a deployment; a service token stays
+   optional at the HTTP layer.
+2. **Model:** the stub ships in the product; a real model is a Settings entry (key
+   server-side, budget cap). Every screen that used the stub says so.
+3. **The website's onboarding demo is a replay; the Playground's Onboard workspace is the
+   configurable, live one** (5.1, 5.6).
+4. **Stack:** Vite + React + TypeScript, Tailwind, Radix primitives, TanStack Query,
+   rrweb-player, CodeMirror — the shared `web/ui` library with Storybook. Kept simple:
+   one npm workspace (`web/`) holding `packages/ui`, `apps/playground`, `apps/site`.
+5. **Process:** user stories → Storybook (design tokens, primitives, wireframes as
+   stories, then real components) → the scenes (workspaces) assembled from them. Design
+   order: Explore → Query builder → Trace timeline → Confirm gate → Crawl map → Interact →
+   Onboard rail / Tools / Settings / run bar.
+6. **Name:** the Playground (the app) of WebClient (the product).
