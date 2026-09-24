@@ -46,6 +46,7 @@ class Edge(BaseModel):
     text: str = ""
     depth: int = 0
     score: float = 0.0
+    parent: str = ""  # the page this edge was discovered on (a crawl map's line)
 
 
 class Failure(BaseModel):

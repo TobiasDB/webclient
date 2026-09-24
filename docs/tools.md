@@ -128,14 +128,15 @@ The extractable field leaves inside the FIRST instance of a record selector, num
 
 ## `snapshot`
 
-Fetch a URL and return its captured content (HTML/JSON/text) with the card -- the page the Playground renders in its preview.
+Fetch a URL and return its captured content (HTML/JSON/text) with the card -- the page the Playground renders in its preview -- plus, on request, the rrweb snapshot, the pattern hints, the record options and the flags, in ONE round trip.
 
-- **returns**: {card, content, kind, encoding} · **story**: agent-developer
+- **returns**: {card, content, kind, encoding, rrweb?, patterns?, records?, flags?} · **story**: agent-developer
 
 | argument | type | default | description |
 |---|---|---|---|
 | `url` | string | required | an absolute http(s) URL |
 | `browser` | any | False | transport tier: false | 'auto' | 'always' |
+| `include` | array | None | extra views in the same response: 'rrweb' (the page as rrweb Meta + FullSnapshot, for the player), 'patterns' (the pattern hints), 'records' (the repeating-region options), 'flags' |
 
 ## `sitemap`
 

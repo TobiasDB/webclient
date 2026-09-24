@@ -154,3 +154,43 @@ def test_snapshot_tool_includes_the_player_views(httpserver):
         assert [r["type"] for r in out["rrweb"]] == [4, 2] and out["rrweb"][0]["data"]["width"] == 1280
         assert isinstance(out["records"], list) and isinstance(out["patterns"], list) and isinstance(out["flags"], list)
         assert out["document_id"].startswith("doc:")
+
+
+def test_session_crawls_manual_auto_and_a_goal(httpserver):
+    """Crawls held by a session over HTTP: a manual crawl fetches only what you pick (the
+    frontier carries the page each edge came from -- the map's lines); an auto crawl runs in
+    the background to its budget; a goal makes it a locate that stops at the matching page."""
+    import time
+
+    httpserver.expect_request("/").respond_with_data('<html><head><title>Home</title></head><body><a href="/a">A</a><a href="/b">B</a></body></html>', content_type="text/html")
+    httpserver.expect_request("/a").respond_with_data('<html><head><title>Page A</title></head><body><a href="/c">C</a></body></html>', content_type="text/html")
+    httpserver.expect_request("/b").respond_with_data('<html><head><title>Page B</title></head><body></body></html>', content_type="text/html")
+    httpserver.expect_request("/c").respond_with_data('<html><head><title>Target C</title></head><body></body></html>', content_type="text/html")
+    wc = WebClient(timeout=15.0)
+    with TestClient(create_app(wc)) as api:
+        sid = api.post("/sessions", json={}).json()["id"]
+        root = httpserver.url_for("/")
+        # manual: nothing fetched until stepped with picks
+        st = api.post(f"/sessions/{sid}/crawls", json={"seeds": root, "mode": "manual", "max_pages": 10, "obey_robots": False}).json()
+        cid = st["id"]
+        assert st["pages"] == [] and st["running"] is False
+        st = api.post(f"/crawls/{cid}/step", json={"picks": [root]}).json()
+        assert [p["title"] for p in st["pages"]] == ["Home"]
+        assert {e["url"] for e in st["frontier"]} == {httpserver.url_for("/a"), httpserver.url_for("/b")}
+        assert all(e["parent"] == root for e in st["frontier"])  # the map's lines
+        st = api.post(f"/crawls/{cid}/step", json={"picks": [httpserver.url_for("/b")]}).json()
+        assert [p["title"] for p in st["pages"]] == ["Home", "Page B"]
+        assert api.delete(f"/crawls/{cid}").json()["status"] == "closed"
+        # auto with a goal: a locate that stops at "Target"
+        st = api.post(f"/sessions/{sid}/crawls", json={"seeds": root, "mode": "auto", "max_pages": 10, "width": 2, "obey_robots": False, "goal": {"title_contains": "target"}}).json()
+        cid = st["id"]
+        for _ in range(100):
+            st = api.get(f"/crawls/{cid}").json()
+            if st["result"] is not None or st["error"]:
+                break
+            time.sleep(0.1)
+        assert st["error"] is None and st["result"]["reason"] == "found" and st["result"]["found"] == [httpserver.url_for("/c")]
+        assert [p["title"] for p in st["pages"]][-1] == "Target C"
+        assert api.get(f"/sessions/{sid}/crawls").json()[0]["id"] == cid
+        api.delete(f"/sessions/{sid}")
+    wc.close()

@@ -638,6 +638,161 @@ def create_app(
                 break
         return out
 
+    # -- crawls held by a session: start (auto, manual or with a goal), watch, step, resume --
+    app.state.crawls = {}
+
+    def _crawl_state(cid: str) -> dict[str, Any]:
+        held = app.state.crawls[cid]
+        crawl = held["crawl"]
+        pending = getattr(crawl, "pending", None)
+        goal = held.get("result")
+        pages = []
+        for pg in list(crawl.pages):
+            pages.append({"url": getattr(pg, "final_url", None) or getattr(pg, "url", ""), "title": getattr(pg, "title", None),
+                          "kind": getattr(pg, "kind", None), "status_code": getattr(pg, "status_code", None)})
+        return {
+            "id": cid, "session": held["session"], "mode": held["mode"], "seeds": held["seeds"],
+            "running": bool(held.get("thread") and held["thread"].is_alive()), "done": bool(getattr(crawl, "done", False)),
+            "status": getattr(crawl, "status", "running"), "round": int(getattr(crawl, "_round", 0) or 0),
+            "pages": pages,
+            "frontier": [e.model_dump(mode="json") for e in list(crawl.frontier)[:200]],
+            "failures": [f.model_dump(mode="json") for f in list(crawl.failures)],
+            "pending": pending.model_dump(mode="json") if pending is not None else None,
+            "goal": held.get("goal"),
+            "result": ({"reason": goal.reason, "rounds": goal.rounds, "pages": goal.pages,
+                        "found": [getattr(pg, "final_url", None) or getattr(pg, "url", "") for pg in goal.found]} if goal is not None else None),
+            "error": held.get("error"),
+        }
+
+    def _run_in_thread(cid: str, fn: Any) -> None:
+        import threading
+
+        held = app.state.crawls[cid]
+
+        def go() -> None:
+            try:
+                out = fn()
+                if out is not None:
+                    held["result"] = out
+            except Exception as exc:  # noqa: BLE001 - surfaced on the state, never lost
+                held["error"] = f"{type(exc).__name__}: {exc}"
+                log.warning("crawl %s failed: %s", cid, exc)
+        t = threading.Thread(target=go, name=f"crawl-{cid}", daemon=True)
+        held["thread"] = t
+        t.start()
+
+    @app.post("/sessions/{sid}/crawls", response_model=None)
+    def start_crawl(sid: str, body: dict[str, Any], authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """Start a crawl in a session: ``seeds`` (a URL or a list), the budget (``max_pages``,
+        ``width``, ``depth``), ``keywords`` (goal words that steer the frontier), ``obey_robots``,
+        ``browser``, and the ``mode``: ``"auto"`` runs to completion in the background;
+        ``"manual"`` fetches nothing until you ``step`` it with your picks. A ``goal``
+        (``{"title_contains": ...}`` / ``{"url_contains": ...}``) makes it a LOCATE loop that
+        stops at the first page matching it."""
+        _auth(authorization)
+        if sid not in app.state.sessions:
+            return _error(404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT)
+        import uuid
+
+        seeds_in = body.get("seeds") or body.get("seed") or []
+        seeds = [seeds_in] if isinstance(seeds_in, str) else list(seeds_in)
+        if not seeds:
+            return _error(422, "InvalidRequest", "provide 'seeds' (a URL or a list of URLs)")
+        mode = body.get("mode", "auto")
+        kw: dict[str, Any] = {k: body[k] for k in ("max_pages", "width", "depth", "keywords", "obey_robots", "browser", "scope", "same_origin") if k in body}
+        kw["auto"] = mode != "manual"
+        session = app.state.sessions[sid]
+        try:
+            crawl = session.crawl(seeds, **kw)
+        except (TypeError, ValueError) as exc:
+            return _error(422, "InvalidRequest", str(exc), hint="check the crawl options")
+        crawl.__enter__()
+        cid = uuid.uuid4().hex[:12]
+        goal = body.get("goal")
+        app.state.crawls[cid] = {"crawl": crawl, "session": sid, "mode": mode, "seeds": seeds, "goal": goal}
+        if goal:
+            from .core.crawl import locate as _locate
+
+            def until(card: Any) -> bool:
+                title = str(getattr(card, "title", "") or "").lower()
+                url = str(getattr(card, "final_url", None) or getattr(card, "url", "") or "").lower()
+                ok = True
+                if goal.get("title_contains"):
+                    ok = ok and str(goal["title_contains"]).lower() in title
+                if goal.get("url_contains"):
+                    ok = ok and str(goal["url_contains"]).lower() in url
+                return ok
+            _run_in_thread(cid, lambda: _locate(crawl, until, stop_on_first=not goal.get("all", False)))
+        elif mode != "manual":
+            _run_in_thread(cid, crawl.run)
+        log.info("crawl %s started in session %s (%s, %d seed(s))", cid, sid, mode, len(seeds))
+        return _crawl_state(cid)
+
+    @app.get("/sessions/{sid}/crawls", response_model=None)
+    def list_crawls(sid: str, authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        _auth(authorization)
+        return [_crawl_state(cid) for cid, h in app.state.crawls.items() if h["session"] == sid]
+
+    @app.get("/crawls/{cid}", response_model=None)
+    def get_crawl(cid: str, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """The crawl's state: pages, the scored frontier (with the page each edge came from),
+        failures, the round, a pending Ask, the locate result."""
+        _auth(authorization)
+        if cid not in app.state.crawls:
+            return _error(404, "InvalidRequest", f"no crawl {cid!r}")
+        return _crawl_state(cid)
+
+    @app.post("/crawls/{cid}/step", response_model=None)
+    def step_crawl(cid: str, body: dict[str, Any], authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """Fetch one round: ``picks`` (frontier URLs, or new ones) -- none = the best-first
+        top ``width`` in auto mode, nothing in manual mode."""
+        _auth(authorization)
+        if cid not in app.state.crawls:
+            return _error(404, "InvalidRequest", f"no crawl {cid!r}")
+        held = app.state.crawls[cid]
+        if held.get("thread") and held["thread"].is_alive():
+            return _error(409, "InvalidRequest", "the crawl is running; wait or stop it", retriable=True)
+        picks = body.get("picks") or None
+        try:
+            held["crawl"].step(picks)
+        except WebException as exc:
+            return _error(502, exc.error.type, str(exc), error=exc.error)
+        return _crawl_state(cid)
+
+    @app.post("/crawls/{cid}/run", response_model=None)
+    def run_crawl(cid: str, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """Drive the crawl to its budget in the background."""
+        _auth(authorization)
+        if cid not in app.state.crawls:
+            return _error(404, "InvalidRequest", f"no crawl {cid!r}")
+        held = app.state.crawls[cid]
+        if not (held.get("thread") and held["thread"].is_alive()):
+            _run_in_thread(cid, held["crawl"].run)
+        return _crawl_state(cid)
+
+    @app.post("/crawls/{cid}/resume", response_model=None)
+    def resume_crawl(cid: str, body: dict[str, Any], authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """Answer a waiting Ask with ``picks`` and continue."""
+        _auth(authorization)
+        if cid not in app.state.crawls:
+            return _error(404, "InvalidRequest", f"no crawl {cid!r}")
+        held = app.state.crawls[cid]
+        picks = body.get("picks") or body.get("answer")
+        _run_in_thread(cid, lambda: held["crawl"].resume(picks if isinstance(picks, list) else [picks] if picks else None))
+        return _crawl_state(cid)
+
+    @app.delete("/crawls/{cid}", response_model=None)
+    def close_crawl(cid: str, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        _auth(authorization)
+        held = app.state.crawls.pop(cid, None)
+        if held is None:
+            return _error(404, "InvalidRequest", f"no crawl {cid!r}")
+        try:
+            held["crawl"].close()
+        except Exception:  # noqa: BLE001 - already closed
+            pass
+        return {"id": cid, "status": "closed"}
+
     @app.get("/loops", response_model=None)
     def loops(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
         """The loops on this engine waiting for a human decision (an ``Ask``): a crawl

@@ -625,7 +625,8 @@ class BrowserFactory(ClientFactory):
         proxy). Either way the real engine major version is read so spoofed UAs match it. A
         connected browser sets ``_connected`` -- we never kill it, and launch-only options are
         skipped."""
-        if self._browser is not None and not self._browser.is_connected():
+        alive = getattr(self._browser, "is_connected", None)
+        if self._browser is not None and callable(alive) and not alive():
             # the process died under us (killed, crashed): forget it and launch afresh
             log.warning("browser: the shared browser is gone; relaunching")
             try:

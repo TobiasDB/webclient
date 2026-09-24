@@ -343,7 +343,7 @@ class CrawlBacking(Backing):
 
     def _add_edge(
         self, core: "Crawl[Any]", url: str, text: str, depth: int, score: float = 0.0,
-        *, force: bool = False,
+        *, force: bool = False, parent: str = "",
     ) -> None:
         """Add one discovered URL to the frontier if unseen and (unless ``force``) in
         scope. ``force`` is for caller-supplied URLs in ``step`` -- an explicit ask
@@ -361,7 +361,7 @@ class CrawlBacking(Backing):
         if not force and not self._in_scope(core, url):
             return
         core._seen.add(key)
-        core.frontier.append(Edge(url=url, text=text, depth=depth, score=score))
+        core.frontier.append(Edge(url=url, text=text, depth=depth, score=score, parent=parent))
 
     def _expand(self, core: "Crawl[Any]", doc: Any, depth: int) -> None:
         """Add ``doc``'s anchor links to the frontier -- dropping page-asset links and
@@ -371,7 +371,7 @@ class CrawlBacking(Backing):
             if _ext(_path(url)) in _RESOURCE_EXT:  # a resource link, not a page
                 continue
             text = (a.attr("text") or "").strip()
-            self._add_edge(core, url, text, depth, self._link_score(core, text, url, a.region))
+            self._add_edge(core, url, text, depth, self._link_score(core, text, url, a.region), parent=str(getattr(doc, "final_url", "") or getattr(doc, "url", "")))
         self._sort_frontier(core)
 
     def _expand_xhr(self, core: "Crawl[Any]", doc: Any, depth: int) -> None:
