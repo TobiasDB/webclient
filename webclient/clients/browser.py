@@ -625,6 +625,16 @@ class BrowserFactory(ClientFactory):
         proxy). Either way the real engine major version is read so spoofed UAs match it. A
         connected browser sets ``_connected`` -- we never kill it, and launch-only options are
         skipped."""
+        if self._browser is not None and not self._browser.is_connected():
+            # the process died under us (killed, crashed): forget it and launch afresh
+            log.warning("browser: the shared browser is gone; relaunching")
+            try:
+                await self._pw.stop()
+            except Exception:  # noqa: BLE001 - the driver may be gone too
+                pass
+            self._browser = self._pw = None
+            self._connected = False
+            self._contexts.clear()
         if self._browser is None:
             from playwright.async_api import async_playwright
 

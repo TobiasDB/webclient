@@ -341,6 +341,7 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
         return await getattr(value, "a" + name)(*args, **kwargs)
     args = [await _aarg(a, context, client) for a in call.args]
     kwargs = {k: await _aarg(v, context, client) for k, v in call.kwargs.items()}
+    _note_step(value, name, args, client)
     result = getattr(value, name)(*args, **kwargs)
     if _iscoro(result):  # an IO op (resolve): await, then wrap the core it yields
         from ..interface import wrap
@@ -355,6 +356,30 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
             reg.append(core)
         return wrap(core)
     return result
+
+
+#: the plan ops a watcher wants to SEE happen on the page (a Player highlights the target
+#: and moves its pointer there): the element ops and the interactions.
+_STEP_OPS = frozenset({"select", "select_all", "attr", "text_content", "extract", "click", "write",
+                       "scroll", "goto", "wait_for", "paginate", "resolve"})
+
+
+def _note_step(value: Any, name: str, args: "list[Any]", client: Any) -> None:
+    """Publish ``PlanEvent(phase="step")`` for an element / interaction op of a running plan:
+    the op, its selector (the first string arg) and the document it runs on -- the trail a
+    replay follows (select -> highlight + move there, attr -> highlight, click -> move + click)."""
+    if name not in _STEP_OPS:
+        return
+    bus = getattr(client, "bus", None) if client is not None else None
+    if bus is None:
+        return
+    from ..models import PlanEvent
+
+    selector = next((a for a in args if isinstance(a, str)), None)
+    bus.publish(PlanEvent(
+        phase="step", document_id=getattr(value, "name", None) or None,
+        detail={"op": name, "selector": selector, "args": [a for a in args if isinstance(a, (str, int, float, bool))][:4]},
+    ))
 
 
 async def _check_divergence(doc: Any, recorded: str, client: Any) -> None:

@@ -58,7 +58,7 @@ def init_source() -> str:
     rrweb.record({
       emit(e) { if (window.__wc_rrweb.length < 20000) window.__wc_rrweb.push(e); },
       recordCanvas: false, collectFonts: false, inlineStylesheet: true,
-      sampling: { mousemove: 50, mouseInteraction: true, scroll: 100, input: 'last' },
+      sampling: { mousemove: false, mouseInteraction: true, scroll: 100, input: 'last' },
     });
   } catch (e) { window.__wc_rrweb_error = String(e); }
 })();"""

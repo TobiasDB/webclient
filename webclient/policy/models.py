@@ -127,6 +127,10 @@ class BrowserConfig(BaseModel, frozen=True):
     headless: bool = True
     stealth: bool = True
     fingerprint: bool = False
+    #: move the pointer along a human-like path (``webclient.dom.mouse``) before every click /
+    #: write on a live page -- how a person reaches a control, and what the replay draws.
+    #: Off = Playwright's instant jump.
+    human_mouse: bool = True
     #: how many browser PAGES the pool may hold open at once -- ONE browser process, this
     #: many concurrent pages. Raise it to run more references/sessions concurrently against
     #: a single browser (the right way to parallelise, instead of many browser processes).

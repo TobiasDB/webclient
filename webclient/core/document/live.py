@@ -380,6 +380,12 @@ def xhr_events(
     return out
 
 
+def _human_mouse(doc: "Document") -> bool:
+    """Whether this document's client wants human-like pointer moves (``BrowserConfig``)."""
+    cfg = getattr(doc._client, "browser_config", None)
+    return bool(getattr(cfg, "human_mouse", True))
+
+
 def _html() -> "HtmlBacking":
     """The (stateless) HTML backing, for an in-memory select on captured content."""
     from .html import HtmlBacking
@@ -638,12 +644,14 @@ class LiveBacking(Backing):
         bump the correlation action-index, perform the Playwright action (loud on a timeout
         unless ``optional``), then drain the resulting DOM."""
         ms = (timeout or 30.0) * 1000
-        event = ActionEvent(
-            action=action,
-            args={"selector": selector, "text": text},
-            document_id=core.name,
-            source="core-action",
-        )
+        loc = core._page.locator(selector or "*").first
+        # the human move: where the pointer is, where the target is (its centre), and the
+        # path between -- the SAME curve the replay draws from the event's from/to
+        args: dict[str, Any] = {"selector": selector, "text": text}
+        move = await self._plan_move(core, loc, ms) if _human_mouse(core) else None
+        if move is not None:
+            args["from"], args["to"], args["box"] = move
+        event = ActionEvent(action=action, args=args, document_id=core.name, source="core-action")
         core._client.bus.publish(event)
         core._events.append(event)  # routed onto the document
         # (an interaction is captured for replay only under a recording session -- the
@@ -655,7 +663,8 @@ class LiveBacking(Backing):
             await core._page.evaluate("window.__wc_action_index = (window.__wc_action_index||0)+1")
         except Exception:  # noqa: BLE001 - a page without the init script: correlation just skips
             pass
-        loc = core._page.locator(selector or "*").first
+        if move is not None:
+            await self._move_mouse(core, move[0], move[1])
         try:
             if action == "click":
                 await loc.click(timeout=ms)
@@ -670,6 +679,44 @@ class LiveBacking(Backing):
                 raise select_error(f"{action}: no target for {selector!r}") from exc
             raise
         await drain(core)
+
+    async def _plan_move(self, core: "Document", loc: Any, ms: float) -> "tuple[list[float], list[float], dict[str, float]] | None":
+        """Where the pointer is now and where it must go (the target's centre, after
+        scrolling it into view), or ``None`` when the target has no box (hidden / absent --
+        the action itself will report that)."""
+        try:
+            await loc.scroll_into_view_if_needed(timeout=min(ms, 5000))
+            box = await loc.bounding_box()
+        except Exception:  # noqa: BLE001 - not visible yet: no move, the action decides
+            return None
+        if not box or box["width"] <= 0 or box["height"] <= 0:
+            return None
+        to = [box["x"] + box["width"] / 2, box["y"] + box["height"] / 2]
+        here = getattr(core, "_mouse", None)
+        if here is None:  # the first move of a page starts from a plausible resting spot
+            vp = core._page.viewport_size or {"width": 1280, "height": 800}
+            here = [vp["width"] * 0.55, vp["height"] * 0.45]
+        return list(here), to, {k: float(v) for k, v in box.items()}
+
+    async def _move_mouse(self, core: "Document", frm: "list[float]", to: "list[float]") -> None:
+        """Move the real pointer along the human path (the same curve the replay draws)."""
+        import asyncio
+
+        from ...dom.mouse import human_mouse_path, mouse_duration_ms, path_timings_ms
+
+        pts = human_mouse_path(frm[0], frm[1], to[0], to[1])
+        dist = ((to[0] - frm[0]) ** 2 + (to[1] - frm[1]) ** 2) ** 0.5
+        times = path_timings_ms(len(pts), mouse_duration_ms(dist))
+        prev = 0.0
+        for (x, y), t in zip(pts, times):
+            if t - prev > 0:
+                await asyncio.sleep((t - prev) / 1000.0)
+            prev = t
+            try:
+                await core._page.mouse.move(x, y)
+            except Exception:  # noqa: BLE001 - the page went away mid-move
+                return
+        core._mouse = to  # type: ignore[attr-defined]
 
     async def _await_for(
         self, core: "Document", selector: str | None, timeout: float | None

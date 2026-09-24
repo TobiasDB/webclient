@@ -449,7 +449,8 @@ class HtmlBacking(Backing):
         attribute (``class``, ``data-id``, …) as a ``Field``; the link attrs
         ``href``/``src``/``action`` as a resolvable ``Reference``; the pseudo-attrs
         ``"text"`` (all of the element's text), ``"text:own"`` (only its DIRECT text,
-        excluding child elements) and ``"html"`` (its markup).
+        excluding child elements), ``"html"`` (its markup) and ``"count"`` (how many element
+        children it has -- the stars of a rating, the items of a list -- an int ``Field``).
 
         ``pattern`` extracts a substring by regex: the value is searched (not
         anchored), and the ``group`` (an index or a named group; default: group 1 when
@@ -463,6 +464,13 @@ class HtmlBacking(Backing):
         if name == "html":
             raw = None if core._missing else self.render(core, "html")
             return _regex_field(raw, pattern, group)
+        if name == "count":  # how many element children (a rating's stars, a list's items)
+            from ...query.collection import Field as _Field
+
+            if core._missing:
+                return _Field(None, ok=False)
+            node = tree(core)
+            return _Field(sum(1 for c in node if isinstance(getattr(c, "tag", None), str)) if node is not None else 0)
         if core._missing:
             # honour the declared type: a link attr is a Reference even on a miss
             # (an empty, not-ok one whose ``.url`` is "" -- never a Field, so

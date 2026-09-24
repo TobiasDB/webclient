@@ -1130,7 +1130,14 @@ class WebClient(SessionCore, IWebClient):
         (optionally replaying an interaction chain, and keeping the page alive for the caller) --
         the live-page path behind interaction/recording, as opposed to the settled-content fetch.
         ``reuse`` (an escalating fetch's doc name) makes the live doc take that slot."""
-        lease = await self.pool.lease("page", owner=self.id or "root")  # charged to this session
+        try:
+            lease = await self.pool.lease("page", owner=self.id or "root")  # charged to this session
+        except WebException:
+            raise
+        except Exception as exc:  # the browser could not be had (dead process, launch failure)
+            raise WebException(self._note_error(
+                make("fetch.browser_failed", f"{type(exc).__name__}: {exc}", op="resolve"), "resolve", raised=True,
+            )) from exc
         browser = cast(Any, lease.client)  # the leased BrowserClient (subclass)
         try:
             # the browser client drives the page and hands back the raw facts

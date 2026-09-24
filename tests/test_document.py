@@ -454,3 +454,17 @@ def test_split_query_combines_two_sections_into_one_dataset():
     assert [r["title"] for r in rows] == ["Investor Day", "Q3 Call", "Q2 Call"]  # both sections
     assert [r["status"] for r in rows] == ["upcoming", "past", "past"]  # section derived via when
     assert rows[0]["link"] == "https://x/reg/1" and rows[1]["link"] == "https://x/rep/2"
+
+
+def test_attr_count_is_the_number_of_element_children():
+    """``attr("count")``: how many element children -- a rating's stars, a list's items."""
+    from webclient.core.document import Document
+
+    doc = Document(url="http://x", content=b'<html><body><p class="rating"><i class="star"></i><i class="star"></i><i class="star"></i> text</p><ul><li>a</li><li>b</li></ul><span class="empty"></span></body></html>')
+    assert doc.select(".rating").attr("count") == 3
+    assert doc.select("ul").attr("count") == 2
+    assert doc.select(".empty").attr("count") == 0
+    assert doc.select(".nope", optional=True).attr("count") in (None, 0) or not doc.select(".nope", optional=True).attr("count")
+    # inside a plan: a column of the extraction
+    rows = doc.select_all("p.rating").extract(stars=doc.select(".rating").attr("count")).project()
+    assert rows == [{"stars": 3}]

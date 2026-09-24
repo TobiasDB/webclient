@@ -800,15 +800,15 @@ def roadmap_tour() -> None:
     from webclient.tools import TOOLS, dispatch
     from webclient.trace import read
 
-    lab = serve_lab()
+    lab, P = _lab_site(serve_lab)
     trace_dir = Path("traces") / "demo.jsonl"  # ONE file: the whole run, replayable every way
     trace_dir.unlink(missing_ok=True)
-    print("\n== roadmap tour (lab at", lab + "/lab )")
+    print("\n== roadmap tour (against", lab, ")")
 
     with WebClient(timeout=15.0) as wc, wc.trace(trace_dir):
         # [P0/P1] Errors are catalogued + bound, and NOTHING disappears: a RETURN-policy miss
         # still lands on the ledger (doc.errors / wc.errors) as an ErrorEvent in the trace.
-        shop = wc.fetch(f"{lab}/lab/shop")
+        shop = wc.fetch(f"{lab}{P['shop']}")
         shop.select(".nope", error=RETURN)
         err = shop.errors[0]
         print("ledger:        ", err.code, "| remedy:", err.remedy, "| op:", err.op, "| raised:", wc.errors[-1].raised)
@@ -818,15 +818,16 @@ def roadmap_tour() -> None:
         print("pattern:       ", hint.name, hint.subject, f"x{hint.count}", "conf", hint.confidence)
 
         # [P4] The tool registry: one declaration -> Python / MCP / POST /tools/{name}.
-        card = dispatch("card", {"url": f"{lab}/lab/shop"}, wc)
+        card = dispatch("card", {"url": f"{lab}{P['shop']}"}, wc)
         print("tools:         ", len(TOOLS), "registered | card:", card["title"], card["flags"], card["final_tier"])
 
         # [P3] Loops: locate = a crawl with a goal; a resolve driver may ASK a human.
-        found = wc.locate(f"{lab}/lab/shop", until=lambda c: (c.title or "").startswith("About"),
-                          browser=False, obey_robots=False, max_pages=6, width=2)
+        found = wc.locate(f"{lab}{P['shop']}", until=lambda c: (c.title or "").startswith("About"),
+                          browser=False, obey_robots=False, max_pages=12, width=3,
+                          keywords=["about"])  # goal words steer the frontier (the About link sits in a footer)
         print("locate:        ", found.reason, [p.title for p in found.found], "after", found.rounds, "round(s)")
         wc.driver("resolve", lambda obs: Ask(reason="render?", options=["browser"]) if "spa" in obs.present else None)
-        spa = wc.fetch(f"{lab}/lab/spa", browser="auto")
+        spa = wc.fetch(f"{lab}{P['spa']}", browser="auto")
         print("resolve ask:   ", spa.pending.reason if spa.pending else None, "| tier:", spa.transport().final_tier)
         rendered = wc.escalate(spa, "browser")  # the human's answer: one hop, by hand
         print("escalated:     ", rendered.transport().escalation, "| records:", len(rendered.select_all("li.item")))
@@ -835,7 +836,7 @@ def roadmap_tour() -> None:
 
         # [P2] Named, phased, togglable scripts (+ rrweb recording, on because we are tracing).
         wc.scripts.register(Script("demo.title", "() => document.title", on="load"))
-        live = wc.ref(f"{lab}/lab/app").resolve(browser=True).collect()
+        live = wc.ref(f"{lab}{P['app']}").resolve(browser=True).collect()
         live.write("#qty", "2").click("#add").wait_for("#cart li")
         ran = [s for s in wc.bus.since(0, topic="script") if getattr(s, "script", None) == "demo.title"]
         print("scripts:       ", [s.name for s in wc.scripts.list()][:4], "... | demo.title ran:", bool(ran))
@@ -854,15 +855,38 @@ def roadmap_tour() -> None:
         assert cart is not None
         print("last snapshot: ", [li.attr("text") for li in cart.select_all("#cart li")])
     with WebClient(har=str(trace_dir)) as offline_wc:  # the HAR is the trace's network, translated
-        again = offline_wc.fetch(f"{lab}/lab/shop")
-        miss = offline_wc.fetch(f"{lab}/lab/never", optional=True)
+        again = offline_wc.fetch(f"{lab}{P['shop']}")
+        miss = offline_wc.fetch(f"{lab}/never-recorded", optional=True)
         print("har replay:    ", again.title, "| unrecorded ->", miss.error.code if miss.error else None)
 
-    record_onboarding(lab)
+    record_onboarding(lab, P)
     print("\nUI: run `make serve` here, then the Playground from the webclient-ui repo (it reads /traces, /events, /loops)")
 
 
-def record_onboarding(lab: str) -> None:
+def _lab_site(serve_lab: Any) -> "tuple[str, dict[str, str]]":
+    """The site the demos run against: ``SITE_URL`` (the product website, whose pages ARE the
+    lab), else the website at its dev address when it is up, else the in-process lab. Either
+    way the fixture PATHS come from ``/lab/index.json`` -- the contract both honour -- so the
+    demos never hard-code a page."""
+    import json
+    import os
+    import urllib.request
+
+    candidates = [u for u in (os.environ.get("SITE_URL"), "http://127.0.0.1:4321") if u]
+    for base in candidates:
+        try:
+            with urllib.request.urlopen(f"{base.rstrip('/')}/lab/index.json", timeout=2) as r:  # noqa: S310
+                index = json.loads(r.read())
+            return base.rstrip("/"), {f["name"]: f["path"] for f in index}
+        except Exception:  # noqa: BLE001 - not up: try the next
+            continue
+    base = serve_lab()
+    with urllib.request.urlopen(f"{base}/lab/index.json", timeout=5) as r:  # noqa: S310
+        index = json.loads(r.read())
+    return base, {f["name"]: f["path"] for f in index}
+
+
+def record_onboarding(lab: str, P: "dict[str, str] | None" = None) -> None:
     """[R] Record an onboarding run as ONE trace (``traces/onboarding.jsonl``) -- the website's
     onboarding page REPLAYS it (no model on the public site: the scripted demo model, badged).
     The pipeline pauses at the confirm gate (``interactive=True``) and is resumed with "yes",
@@ -872,7 +896,8 @@ def record_onboarding(lab: str) -> None:
 
     from webclient.pipelines import Brief, SearchHit, onboard_company
 
-    shop = f"{lab}/lab/shop"
+    P = P or {"shop": "/lab/shop"}
+    shop = f"{lab}{P['shop']}"
     code = ('wq.doc.select_all("div.card").extract(title=wq.doc.select(".title").attr("text"), '
             'price=wq.doc.select(".price").attr("text")).project()')
 
