@@ -82,6 +82,32 @@ def test_bounded_loop_arun_detects_stall_and_budget():
     assert v.reason == "budget" and v.rounds == 3
 
 
+def test_bounded_loop_arun_fans_out_a_batch_round():
+    # efficiency: with fanout set, a round's decision is a BATCH and apply runs per unit concurrently.
+    import asyncio
+
+    applied: list[str] = []
+    _DONE = object()
+
+    async def apply_one(state, unit):
+        await asyncio.sleep(0)
+        applied.append(unit)
+
+    calls = {"n": 0}
+
+    def decide(state):
+        calls["n"] += 1
+        return [f"u{calls['n']}a", f"u{calls['n']}b"] if calls["n"] <= 2 else _DONE
+
+    loop = BoundedLoop(
+        observe=lambda s, i, e: s, decide=decide,
+        done_result=lambda d: "done" if d is _DONE else None,
+        apply=apply_one, progress=lambda s: len(applied), fanout=4, max_rounds=10, name="b",
+    )
+    v = asyncio.run(loop.arun(None))
+    assert v.done and sorted(applied) == ["u1a", "u1b", "u2a", "u2b"]  # 2 rounds x 2 units, fanned out
+
+
 def test_resolve_ladder_is_a_loop_with_a_swappable_driver(httpserver):
     from webclient.core.client.resolve_loop import ResolveObservation, default_resolve_driver
 

@@ -26,6 +26,7 @@ base stays a minimal scaffold and never grows a framework.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from typing import Any, Awaitable, Generic, Literal, Protocol, TypeVar, cast, runtime_checkable
@@ -108,6 +109,7 @@ class BoundedLoop(Generic[S, O, D]):
         progress: "Callable[[S], Any] | None" = None,
         max_rounds: "int | None" = None,
         max_stalls: "int | None" = None,
+        fanout: "int | None" = None,
         name: str = "loop",
         bus: Any = None,
     ) -> None:
@@ -121,6 +123,9 @@ class BoundedLoop(Generic[S, O, D]):
         self._progress = progress
         self.max_rounds = budgets.max_rounds if max_rounds is None else max_rounds
         self.max_stalls = budgets.max_stalls if max_stalls is None else max_stalls
+        #: when set (async ``astep``/``arun`` only), a round's decision is a BATCH and ``apply`` is
+        #: called per unit CONCURRENTLY, at most ``fanout`` in flight -- the loop owns the efficiency.
+        self.fanout = fanout
         self.name = name
         self.bus = bus  # an EventBus to publish LoopEvents on (None = silent)
         # -- the checkpoint (set while waiting / between manual steps) ----------
@@ -250,7 +255,10 @@ class BoundedLoop(Generic[S, O, D]):
             self._emit("done", i, result=result)
             return self._finish(LoopVerdict(done=True, reason="done", rounds=i, result=result))
         try:
-            await _aw(self._apply(state, decision))
+            if self.fanout is not None:  # a BATCH round: apply each unit concurrently (bounded)
+                await _fan_out(decision, lambda unit: self._apply(state, unit), self.fanout)
+            else:
+                await _aw(self._apply(state, decision))
             self._error = ""
         except Exception as exc:  # noqa: BLE001 - surface it to the verdict, never crash
             log.warning("%s stopped on error at round %d: %s", self.name, i + 1, exc)
@@ -290,6 +298,22 @@ async def _aw(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+async def _fan_out(units: Any, fn: "Callable[[Any], Any]", limit: int) -> None:
+    """Apply ``fn`` to each unit of a round's batch CONCURRENTLY, at most ``limit`` in flight -- the
+    efficiency primitive a batch loop (a crawl round fetching several edges) drives its work with,
+    so concurrency lives in the loop, not hand-rolled around it. A unit's ``fn`` may be sync or async."""
+    items = list(units)
+    if not items:
+        return
+    sem = asyncio.Semaphore(max(1, limit))
+
+    async def run(unit: Any) -> None:
+        async with sem:
+            await _aw(fn(unit))
+
+    await asyncio.gather(*(run(unit) for unit in items))
 
 
 _UNSET: Any = object()  # a first-round sentinel that no progress signature can equal
