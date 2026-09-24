@@ -82,3 +82,29 @@ def test_skeleton_marks_the_record_region_with_a_select_all():
     sk = Document(content=html, kind="html", status_code=200).skeleton()
     assert "← RECORD LIST · 6 items" in sk
     assert 'select_all("li.item")' in sk
+
+
+def test_drawings_never_become_records():
+    """An SVG diagram with four repeated <g> groups (the website's home) must not outrank the
+    real product grid: geometry repeats, but it is not data."""
+    from webclient.dom.parse import parse_html
+    from webclient.dom.records import find_record_regions
+
+    html = """<html><body>
+    <svg viewBox="0 0 100 100">""" + "".join(f'<g><rect x="{i}" /><text>r{i}</text></g>' for i in range(6)) + """</svg>
+    <main>""" + "".join(f'<div class="card"><h2 class="title">P{i}</h2><span class="price">${i}</span></div>' for i in range(3)) + """</main>
+    </body></html>"""
+    regions = find_record_regions(parse_html(html), min_items=3)
+    assert regions and regions[0].item_selector == "div.card"
+    assert all("g" != r.item_selector for r in regions)
+
+
+def test_item_selector_prefers_the_first_listed_class():
+    """``class="card rounded-lg border p-4"``: the author's semantic hook comes first; utility
+    words that survive the noise filter (``border``) must not win on length."""
+    from webclient.dom.parse import parse_html
+    from webclient.dom.records import find_record_regions
+
+    html = "<html><body><main>" + "".join(
+        f'<div class="card rounded-lg border p-4"><h2>P{i}</h2><span>${i}</span></div>' for i in range(3)) + "</main></body></html>"
+    assert find_record_regions(parse_html(html), min_items=3)[0].item_selector == "div.card"

@@ -89,9 +89,9 @@ class CrawlBacking(Backing):
         best-first frontier round by round until done. Equivalent to exhausting
         ``stream()`` -- ``config.order`` only governs a bare ``step()``, not the drive."""
         while True:
-            produced = await self._pump(core, lambda: self._drive_select(core))
-            if self.done(core) or not produced:
-                break
+            produced, claimed = await self._pump(core, lambda: self._drive_select(core))
+            if self.done(core) or not claimed:  # nothing left to claim (a round of robots-blocked
+                break  # or failed edges is progress: the frontier shrank, the budget did not)
         return core
 
     async def _astream(self, core: "Crawl[Any]") -> "AsyncIterator[Any]":
@@ -102,29 +102,30 @@ class CrawlBacking(Backing):
         atomic under the step lock; the yield happens after the lock is released, so a
         paused consumer never holds it."""
         while not self.done(core):
-            produced = await self._pump(core, lambda: self._drive_select(core))
+            produced, claimed = await self._pump(core, lambda: self._drive_select(core))
             for page in produced:
                 yield page
-            if not produced:  # no progress (all robots-blocked / errored) -- stop
+            if not claimed:  # nothing to claim: the frontier is exhausted (or the driver picked none)
                 break
 
     async def _pump(
         self, core: "Crawl[Any]", choose: "Callable[[], list[Edge]]"
-    ) -> "list[Any]":
+    ) -> "tuple[list[Any], int]":
         """One round: CLAIM edges under the step lock (``choose`` + budget + frontier removal is
         atomic, and the claim is RESERVED via ``_inflight`` so concurrent rounds can't over-claim
         the page budget), then FETCH the claimed edges CONCURRENTLY -- the step lock is NOT held
         across the fetch, so the client's page pool actually fetches in parallel. ``_fetch_edge``'s
         shared-state mutations (``_expand``/history/failures) are synchronous, so parallel edges
         don't interleave them. Commits the retained pages + releases the reservation under the lock.
-        Returns the pages produced this round (for the stream to yield)."""
+        Returns the pages produced this round (for the stream to yield) and how many edges were
+        claimed -- a round whose every edge was robots-blocked produced nothing but WAS progress."""
         async with self._lock(core):
             core._round += 1
             self._emit(core, "round", budget=core.config.max_pages, pages=len(core.pages),
                        frontier=len(core.frontier))
             chosen = choose()
             if core._pending is not None:  # the driver asked for a human: nothing to fetch
-                return []
+                return [], 0
             self._emit(core, "decision", picks=[e.url for e in chosen][:20], count=len(chosen))
             room = max(0, core.config.max_pages - len(core.pages) - core._inflight)
             to_fetch = chosen[:room]
@@ -143,7 +144,7 @@ class CrawlBacking(Backing):
             if self.done(core):
                 self._emit(core, "done" if core.status != "closed" else "done",
                            pages=len(core.pages), failures=len(core.failures))
-        return produced
+        return produced, len(to_fetch)
 
     def _emit(self, core: "Crawl[Any]", phase: str, **detail: Any) -> None:
         """Publish a :class:`~webclient.models.LoopEvent` for this crawl (loop ``"crawl"``)."""

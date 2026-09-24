@@ -20,6 +20,7 @@ from .classes import is_noise_class as _is_noise_class
 from .parse import tag as _tag
 
 _SKIP = frozenset({"script", "style", "noscript", "template", "svg", "path", "br", "hr"})
+_DRAWING = frozenset({"svg", "math", "canvas"})  # subtrees whose repetition is geometry, never records
 _CHROME_TAGS = frozenset({"nav", "header", "footer", "aside"})
 _CHROME_ROLES = frozenset({"navigation", "banner", "contentinfo", "complementary"})
 
@@ -121,8 +122,10 @@ def _item_selector(members: "list[Any]") -> str:
     for m in members[1:]:
         common &= set(_semantic_classes(m))
     if common:
-        # prefer the longest shared class (usually the most specific / least generic)
-        return f"{tag}.{sorted(common, key=len)[-1]}"
+        # prefer the class the author listed FIRST (the semantic one: ``card`` in
+        # ``class="card rounded border"``), then the longest (the most specific)
+        order = _semantic_classes(members[0])
+        return f"{tag}.{sorted(common, key=lambda c: (order.index(c), -len(c)))[0]}"
     return tag
 
 
@@ -133,6 +136,8 @@ def scan_regions(root: Any, min_items: int) -> "list[tuple[Any, RecordRegion]]":
     for container in root.iter():
         if not isinstance(getattr(container, "tag", None), str):
             continue
+        if _tag(container) in _DRAWING or any(_tag(a) in _DRAWING for a in container.iterancestors()):
+            continue  # a drawing's repeated groups / rects are not data records
         children = [c for c in container if isinstance(c.tag, str) and _tag(c) not in _SKIP]
         if len(children) < min_items:
             continue

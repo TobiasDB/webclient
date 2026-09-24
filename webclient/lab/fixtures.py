@@ -106,7 +106,8 @@ def _cards() -> str:
 @fixture("shop", "A static shop listing (records, links, prices)", "extract",
          expected={"records": 3, "record_selector": "div.card", "titles": [n for n, _, _ in PRODUCTS],
                    "prices": [p for _, p, _ in PRODUCTS], "flags": [], "kind": "html", "tier": "static",
-                   "links": ["/lab/shop/items/1", "/lab/shop/items/2", "/lab/shop/items/3", "/lab/about", "/lab/login"]})
+                   "links": ["/lab/shop/items/1", "/lab/shop/items/2", "/lab/shop/items/3", "/lab/about", "/lab/login"],
+                   "item": "/lab/shop/items/2", "item_stock": 14})
 def _shop(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
     if path.startswith("/lab/shop/items/"):
         n = int(path.rsplit("/", 1)[1])
@@ -129,7 +130,7 @@ def _about(method: str, path: str, query: Query, headers: dict[str, str], body: 
 
 @fixture("spa", "A JS-gated SPA: an empty shell a script fills", "signals:spa", browser=True,
          expected={"static_flags": ["spa"], "remedy": "browser", "records_static": 0, "records_rendered": 3,
-                   "tiers_auto": ["static", "browser"]})
+                   "record_selector": "li.item", "tiers_auto": ["static", "browser"]})
 def _spa(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
     return html(page("SPA", """
 <div id="app"></div>
@@ -146,8 +147,8 @@ FEED_ITEMS = [{"title": "Q3 earnings released", "date": "2026-09-14"},
 
 
 @fixture("feed", "An XHR-backed feed: the records come from a JSON API", "signals:spa+xhr", browser=True,
-         expected={"api": "/lab/feed/api/items", "records_rendered": 3, "xhr_endpoints": ["/lab/feed/api/items"],
-                   "items": FEED_ITEMS})
+         expected={"api": "/lab/feed/api/items", "records_rendered": 3, "record_selector": "li.item",
+                   "xhr_endpoints": ["/lab/feed/api/items"], "items": FEED_ITEMS})
 def _feed(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
     if path == "/lab/feed/api/items":
         return as_json(FEED_ITEMS)
@@ -208,7 +209,7 @@ def _cursor(method: str, path: str, query: Query, headers: dict[str, str], body:
 # --------------------------------------------------------------------------- #
 
 @fixture("tabs", "Content split across ARIA tabs", "signals:tabbed",
-         expected={"flags": ["tabbed"], "tabs": ["Upcoming", "Past"], "records": 4})
+         expected={"flags": ["tabbed"], "tabs": ["Upcoming", "Past"], "records": 4, "record_selector": "li.event"})
 def _tabs(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
     return html(page("Events", """
 <main>
@@ -219,7 +220,7 @@ def _tabs(method: str, path: str, query: Query, headers: dict[str, str], body: b
 
 
 @fixture("shadow", "Records inside a shadow root", "signals:shadow_dom", browser=True,
-         expected={"flags_static": ["shadow_dom"], "records_rendered": 2})
+         expected={"flags_static": ["shadow_dom"], "records_rendered": 2, "record_selector": "li.p"})
 def _shadow(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
     return html(page("Shadow", """
 <main><product-list></product-list></main>
@@ -233,7 +234,7 @@ def _shadow(method: str, path: str, query: Query, headers: dict[str, str], body:
 
 
 @fixture("iframe", "Records inside a same-origin iframe", "signals:iframe", browser=True,
-         expected={"flags_static": ["iframe"], "records_rendered": 2})
+         expected={"flags_static": ["iframe"], "records_rendered": 2, "inner": "/lab/iframe/inner", "record_selector": "li.q"})
 def _iframe(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
     if path == "/lab/iframe/inner":
         return html(page("Inner", '<ul><li class="q">One</li><li class="q">Two</li></ul>'))
@@ -257,7 +258,8 @@ def _forms(method: str, path: str, query: Query, headers: dict[str, str], body: 
 # --------------------------------------------------------------------------- #
 
 @fixture("login", "A sign-in wall (password form on a sparse page)", "signals:login",
-         expected={"flags": ["login_present", "login_required", "forms", "buttons"], "auto_error": "fetch.login_required"})
+         expected={"flags": ["login_present", "login_required", "forms", "buttons"], "auto_error": "fetch.login_required",
+                   "account": "/lab/login", "cookie": "sid=abc123"})
 def _login(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
     if method == "POST":
         return html(page("Welcome", "<main><h1>Signed in</h1></main>"),
@@ -289,7 +291,7 @@ def _redirect(method: str, path: str, query: Query, headers: dict[str, str], bod
 
 
 @fixture("errors", "Error responses: 404 / 500 / 503 (retriable)", "errors",
-         expected={"codes": {"404": "fetch.http_status", "500": "fetch.http_status", "503": "fetch.http_status"},
+         expected={"base": "/lab/errors", "codes": {"404": "fetch.http_status", "500": "fetch.http_status", "503": "fetch.http_status"},
                    "retriable": {"404": False, "500": True, "503": True}})
 def _errors(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
     code = path.rsplit("/", 1)[-1]
@@ -351,7 +353,8 @@ SITE_PAGES = ["/lab/shop", "/lab/about", "/lab/paginated", "/lab/tabs", "/lab/fo
 
 
 @fixture("sitemap", "sitemap.xml + robots.txt discovery", "crawl:sitemap", extra=("/robots.txt", "/sitemap.xml"),
-         expected={"sitemap_urls": SITE_PAGES, "disallow": ["/lab/login", "/lab/private"], "sitemap_in_robots": True})
+         expected={"sitemap_urls": SITE_PAGES, "disallow": ["/lab/login", "/lab/private"], "sitemap_in_robots": True,
+                   "seed": "/lab/shop", "must_reach": "/lab/about", "must_skip": "/lab/login", "crawl_pages": 6})
 def _sitemap(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
     origin = f"http://{headers.get('Host') or headers.get('host') or '127.0.0.1'}"  # absolute, per the spec
     if path == "/robots.txt":
@@ -366,7 +369,8 @@ def _sitemap(method: str, path: str, query: Query, headers: dict[str, str], body
 # --------------------------------------------------------------------------- #
 
 @fixture("app", "A live cart app: type, click, rows appear (XHR-backed)", "interact", browser=True,
-         expected={"controls": ["#qty", "#add", "#load"], "after_add_rows": 1, "after_load_rows": 3})
+         expected={"controls": ["#qty", "#add", "#load"], "rows": "#cart li", "after_add_rows": 1, "after_load_rows": 3,
+                   "api": "/lab/app/api/items"})
 def _app(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
     if path == "/lab/app/api/items":
         return as_json([{"name": "Aeropress"}, {"name": "Grinder"}, {"name": "Kettle"}])
@@ -379,7 +383,7 @@ def _app(method: str, path: str, query: Query, headers: dict[str, str], body: by
 
 
 @fixture("scroll", "Infinite scroll: more rows load on scroll", "interact:scroll", browser=True,
-         expected={"initial_rows": 5, "after_scroll_rows": 10})
+         expected={"initial_rows": 5, "after_scroll_rows": 10, "row_selector": "li.r"})
 def _scroll(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
     return html(page("Scroll", """
 <main><ul id="rows">""" + "".join(f'<li class="r" style="height:400px">Row {i}</li>' for i in range(1, 6)) + """</ul></main>
