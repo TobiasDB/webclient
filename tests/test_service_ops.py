@@ -360,3 +360,21 @@ def test_the_engine_loop_carries_the_run_into_its_coroutines():
         assert loop.run(which()) is None
     finally:
         loop.stop()
+
+
+def test_one_trace_ending_does_not_stop_capture_for_another(tmp_path):
+    # two runs trace at once on one engine: the first to finish must not switch capture off for the other
+    from webclient import WebClient
+
+    wc = WebClient()
+    try:
+        engine = wc._the_engine()
+        a = wc.trace(tmp_path / "a.jsonl")
+        b = wc.trace(tmp_path / "b.jsonl")
+        assert engine.tracing
+        a.close()
+        assert engine.tracing and engine.trace_path == str(b.path)
+        b.close()
+        assert not engine.tracing
+    finally:
+        wc.close()

@@ -59,7 +59,9 @@ class Engine:
         #: the active trace path while ``WebClient.trace()`` is open (None otherwise): the
         #: client emits snapshots + captures bodies/headers only then, and the browser factory
         #: captures every response it sees onto the bus (``network.resource`` events).
-        self.trace_path: "str | None" = None
+        #: the traces being written, oldest first -- several runs can trace at once on one engine, and
+        #: one finishing must not stop capture for the others
+        self._trace_paths: list[str] = []
         #: the latest recording session opened on this engine (its plan lands in a trace's footer)
         self.last_recorder: Any = None
         #: how many LIVE consumers want the rrweb DOM recorder on regardless of a trace (a
@@ -160,17 +162,27 @@ class Engine:
     @property
     def tracing(self) -> bool:
         """Whether a trace is being written on this engine (snapshots / bodies are captured)."""
-        return self.trace_path is not None
+        return bool(self._trace_paths)
+
+    @property
+    def trace_path(self) -> "str | None":
+        """The latest trace being written (``None`` when none is)."""
+        return self._trace_paths[-1] if self._trace_paths else None
 
     def start_trace(self, path: str) -> None:
         """Mark a trace as active: the browser factory captures every response (headers +
         body) so the stream can be replayed as a HAR."""
-        self.trace_path = path
+        self._trace_paths.append(path)
         self._set_capture(True)
 
-    def stop_trace(self) -> None:
-        self.trace_path = None
-        self._set_capture(False)
+    def stop_trace(self, path: "str | None" = None) -> None:
+        """End one trace (``path``, else the latest); capture stops only when no trace is left."""
+        if path in self._trace_paths:
+            self._trace_paths.remove(path)
+        elif self._trace_paths:
+            self._trace_paths.pop()
+        if not self._trace_paths:
+            self._set_capture(False)
 
     def _set_capture(self, on: bool) -> None:
         if self._pool is not None:

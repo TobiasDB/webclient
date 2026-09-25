@@ -1396,7 +1396,7 @@ class WebClient(SessionCore, IWebClient):
         original_close = trace.close
 
         def _close() -> None:
-            engine.stop_trace()
+            engine.stop_trace(str(trace.path))
             if trace.plan is None:  # the plan of this client's (latest) recording session
                 rec = getattr(engine, "last_recorder", None) or self
                 trace.plan = getattr(rec, "_record_chain", None)
