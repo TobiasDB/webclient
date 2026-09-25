@@ -479,7 +479,7 @@ _LAZY_COLLECTION_SHAPING = [
     'def filter(self, *predicates: Any) -> "LazyCollection[T]": ...',
     'def limit(self, n: int) -> "LazyCollection[T]": ...',
     'def documents(self, column: str) -> "LazyCollection[LazyDocument]": ...',
-    'def project(self) -> "Lazy[list[dict[str, Any]]]": ...',
+    'def project(self, *, flatten: bool | list[str] | None = ..., sep: str = ...) -> "Lazy[list[dict[str, Any]]]": ...',
     'def collect(self, context: Any = ...) -> "Collection[T]": ...',
 ]
 
@@ -501,7 +501,7 @@ def _lazy_class(core: type) -> str:
             # row-shaping on a lone document (the single-element form of the
             # Collection ops); hand-written like the eager Document.extract/project.
             'def extract(self, *aliased: Any, **exprs: Any) -> "LazyDocument": ...',
-            'def project(self) -> "Lazy[dict[str, Any]]": ...',
+            'def project(self, *, flatten: bool | list[str] | None = ..., sep: str = ...) -> "Lazy[dict[str, Any]]": ...',
             # the raw bytes as a JSON-ready file value (a PDF behind a link)
             'def download(self) -> "Lazy[dict[str, Any]]": ...',
             # pagination: a hand-written BOUND op on Document (not a backing), so its

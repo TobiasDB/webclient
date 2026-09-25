@@ -439,3 +439,17 @@ The next review, and what changed:
   after the deterministic readings): ISO out; the suggestions offer "→ date" for values that are
   mostly a date, and "→ number" only for values that are mostly a number (a title with "40" in it
   is not offered as a number).
+
+
+### 13.2 Collapsing, re-editing, counts, flatten (2026-09-25)
+
+- Plan branches collapse (▾/▸, "+N" hidden lines); 10px type, tighter rows (and a denser rows table).
+- Arguments in the plan are TEXT (the whole value on hover): clicking one reopens the selector
+  panel on the element its selector matches, starting from the current selector (the button reads
+  **Update**); a manual field (selector, or attribute + pattern) applies a typed value.
+- Counts: `select_all` shows its matches (`×20`); a `select` under a collection shows how many
+  records have it (`4/5`) -- red when not all do and it is not optional (the run would fail on the
+  others); clicking it toggles `optional=True` (`4/5 opt`).
+- Flatten (package: `project(flatten=[…] | True, sep=".")`, eager and streamed): a nested output (a
+  followed page, a collection's rows / merged dict) has a **flatten** checkbox; its keys join the
+  parent row as `detail.outcome`, `detail.info.UPC`…

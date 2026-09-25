@@ -177,21 +177,21 @@ class Document(WebCore, IDocument):
         return self._client.loop().run(self.aextract(*aliased, **exprs))
 
     @overload
-    def project(self) -> dict[str, Any]:
+    def project(self, *, flatten: "bool | list[str] | None" = None, sep: str = ".") -> dict[str, Any]:
         """Project the extracted row to a plain ``dict``."""
         ...
     @overload
-    def project(self, model: type[M]) -> M:
+    def project(self, model: type[M], *, flatten: "bool | list[str] | None" = None, sep: str = ".") -> M:
         """Project the extracted row validated into ``model``."""
         ...
-    def project(self, model: "type[M] | None" = None) -> "dict[str, Any] | M":
+    def project(self, model: "type[M] | None" = None, *, flatten: "bool | list[str] | None" = None, sep: str = ".") -> "dict[str, Any] | M":
         """This document's extracted row as plain data: a ``Reference`` column
         (e.g. from ``attr('href')``) becomes its URL string and a ``Field`` its
         value, so the row is JSON-ready. One ``dict`` (not a list) -- a document
         is one row. Pass ``model`` to validate the row into it (eager only)."""
-        from ...query.collection import _project_row, _row_of
+        from ...query.collection import _project_row, _row_of, flatten_row
 
-        data = _project_row(_row_of(self, create=False) or {})
+        data = flatten_row(_project_row(_row_of(self, create=False) or {}), flatten, sep)
         if model is None:
             return data
         validate = getattr(model, "model_validate", None)

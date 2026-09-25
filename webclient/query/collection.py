@@ -254,6 +254,36 @@ def _project_row(row: dict[str, Any]) -> dict[str, Any]:
     return {k: _project_value(v) for k, v in row.items()}
 
 
+def flatten_row(row: dict[str, Any], flatten: "bool | Iterable[str] | None", sep: str = ".") -> dict[str, Any]:
+    """Merge NESTED dict columns into the row: ``flatten=True`` flattens every nested dict
+    (recursively), a list of names only those columns (a dotted name reaches deeper:
+    ``"detail.info"``); a flattened column's keys become ``column{sep}key``. Lists are left as
+    they are (a list of rows is still a list)."""
+    if not flatten:
+        return row
+    names = None if flatten is True else {str(n) for n in flatten}  # type: ignore[union-attr]
+
+    def go(r: dict[str, Any], prefix: str) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for k, v in r.items():
+            path = f"{prefix}{sep}{k}" if prefix else str(k)
+            if isinstance(v, dict) and (names is None or path in names or any(n.startswith(path + sep) for n in names)):
+                if names is None or path in names:
+                    out.update(go(v, path))
+                else:  # a deeper name is flattened inside this column; the column itself stays a dict
+                    out[k] = go_inner(v, path)
+            else:
+                out[path if prefix else k] = v
+        return out
+
+    def go_inner(r: dict[str, Any], prefix: str) -> dict[str, Any]:
+        flat = go(r, prefix)
+        cut = len(prefix) + len(sep)
+        return {k[cut:] if k.startswith(prefix + sep) else k: v for k, v in flat.items()}
+
+    return go(row, "")
+
+
 def _row_of(element: Any, *, create: bool = True) -> dict[str, Any] | None:
     """The extracted-columns dict on an element's core (a plain dict element is
     its own row). ``create`` seeds an empty row on first access."""
@@ -537,24 +567,25 @@ class Collection(Generic[T]):
         return self._derive(self._items[:n])
 
     @overload
-    def project(self) -> list[dict[str, Any]]:
+    def project(self, *, flatten: "bool | list[str] | None" = None, sep: str = ".") -> list[dict[str, Any]]:
         """Project each element's row to a plain ``dict``."""
         ...
     @overload
-    def project(self, model: type[M]) -> list[M]:
+    def project(self, model: type[M], *, flatten: "bool | list[str] | None" = None, sep: str = ".") -> list[M]:
         """Project each element's row validated into ``model``."""
         ...
 
-    def project(self, model: type[M] | None = None) -> list[Any]:
+    def project(self, model: type[M] | None = None, *, flatten: "bool | list[str] | None" = None, sep: str = ".") -> list[Any]:
         """Materialise as a plain list: each element's extracted row (cleaned to
         plain data -- a ``Reference`` column becomes its URL string, a ``Field`` its
         value), or the element itself if it has no row. ``model`` validates each row
         into it. Eager only -- a model class isn't part of the serialisable plan, so
-        call this on a materialised Collection (``...extract(...).collect().project(Model)``)."""
+        call this on a materialised Collection (``...extract(...).collect().project(Model)``).
+        ``flatten`` merges nested dict columns into each row (see :func:`flatten_row`)."""
         out: list[Any] = []
         for el in self._items:
             row = _row_of(el, create=False)
-            out.append(_project_row(row) if row is not None else el)
+            out.append(flatten_row(_project_row(row), flatten, sep) if row is not None else el)
         if model is None:
             return out
         validate = getattr(model, "model_validate", None)

@@ -570,6 +570,7 @@ async def _astream_collection(
         _project_row,
         _row_of,
         apply_extract,
+        flatten_row,
         survives_filters,
     )
 
@@ -581,6 +582,7 @@ async def _astream_collection(
     )
     if is_project:
         ops = _parse_shaping(shaping[:-2], client)
+        pkw = {k: v.value for k, v in shaping[-1].kwargs.items()}  # project(flatten=…, sep=…)
 
         async def process(el: Any) -> Any:
             # the SAME shaping primitives the eager Collection uses, so a streamed
@@ -592,7 +594,7 @@ async def _astream_collection(
                 elif not await survives_filters(el, payload, client):
                     return _DROP
             shaped = _row_of(el, create=False)
-            return _project_row(shaped) if shaped is not None else el
+            return flatten_row(_project_row(shaped), pkw.get("flatten"), pkw.get("sep", ".")) if shaped is not None else el
 
     else:  # a terminal element op: apply it to each element on its own
 

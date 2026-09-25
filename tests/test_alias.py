@@ -106,3 +106,34 @@ def test_alias_from_a_column_streams_and_round_trips(httpserver):
     with WebClient() as wc:
         again = from_blob(plan._plan.to_blob(), wc)
         assert list(again.stream()) == [{"UPC": "abc123"}, {"Price": "£9.99"}, {"Stock": "In stock (3)"}]
+
+
+def test_project_flattens_chosen_nested_columns(httpserver):
+    from webclient.query.collection import flatten_row
+
+    row = {"title": "T", "detail": {"description": "D", "info": {"UPC": "u", "Tax": "0"}}, "tags": [{"a": 1}]}
+    assert flatten_row(row, ["detail"]) == {"title": "T", "detail.description": "D", "detail.info": {"UPC": "u", "Tax": "0"}, "tags": [{"a": 1}]}
+    assert flatten_row(row, True) == {"title": "T", "detail.description": "D", "detail.info.UPC": "u", "detail.info.Tax": "0", "tags": [{"a": 1}]}
+    assert flatten_row(row, ["detail.info"]) == {"title": "T", "detail": {"description": "D", "info.UPC": "u", "info.Tax": "0"}, "tags": [{"a": 1}]}
+    assert flatten_row(row, ["detail"], sep="_")["detail_description"] == "D"
+    # in a plan, eager and streamed
+    httpserver.expect_request("/b").respond_with_data(TABLE, content_type="text/html")
+    d = wq.doc
+    plan = (
+        wq.reference(httpserver.url_for("/b")).resolve().select_all("body")
+        .extract(title=d.select("h1").attr("text"), info=d.select_all("table tr").extract(name=d.select("th").attr("text"), value=d.select("td").attr("text").alias(d.field("name"))).merge())
+        .project(flatten=["info"])
+    )
+    with WebClient() as wc:
+        assert wc.execute(plan) == [{"title": "The Book", "info.UPC": "abc123", "info.Price": "£9.99", "info.Stock": "In stock (3)"}]
+        assert list(plan.stream(wc)) == [{"title": "The Book", "info.UPC": "abc123", "info.Price": "£9.99", "info.Stock": "In stock (3)"}]
+
+
+def test_document_project_flattens(httpserver):
+    httpserver.expect_request("/b").respond_with_data(TABLE, content_type="text/html")
+    d = wq.doc
+    plan = wq.reference(httpserver.url_for("/b")).resolve().extract(
+        title=d.select("h1").attr("text"),
+        info=d.select_all("table tr").extract(name=d.select("th").attr("text"), value=d.select("td").attr("text").alias(d.field("name"))).merge(),
+    ).project(flatten=True, sep="_")
+    assert plan.collect() == {"title": "The Book", "info_UPC": "abc123", "info_Price": "£9.99", "info_Stock": "In stock (3)"}
