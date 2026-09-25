@@ -170,6 +170,14 @@ def test_runs_publish_fanout_counts(tmp_path):
             par = [e for e in got["events"] if e.get("topic") == "plan" and e.get("phase") == "parallel"]
             assert par and par[0]["detail"]["n"] == 7 and 1 <= par[0]["detail"]["limit"] <= 7
             assert par[0]["detail"]["bound"] == "http"
+            # every record ran as a fan-out ITEM: its events carry the index path, and each ends with plan.item
+            ends = [e for e in got["events"] if e.get("topic") == "plan" and e.get("phase") == "item"]
+            assert sorted(e["item"][0] for e in ends if e["detail"]["status"] == "ok") == list(range(7))
+            steps = [e for e in got["events"] if e.get("phase") == "step" and e["detail"]["op"] == "select"]
+            assert steps and all(len(e.get("item") or []) == 1 for e in steps)
+            # the run settles before it says done: the last event is a pool sample back at idle
+            last = got["events"][-1]
+            assert last["topic"] == "resources" and last["http_free"] == last["http_total"]
             # the trace listing reports each trace's size on disk
             listed = {t["id"]: t for t in client.get("/traces").json()}
             assert listed[rid]["bytes"] > 0

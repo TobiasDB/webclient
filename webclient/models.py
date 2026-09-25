@@ -46,6 +46,9 @@ class Event(BaseModel):
     session_id: str | None = None
     document_id: str | None = None
     plan_id: str | None = None
+    #: the fan-out ITEM this happened in, as an index path ([3] = the 4th record; [3, 1] = its 2nd
+    #: table row), stamped by the bus from the running plan -- so a run view can show per-item progress
+    item: list[int] | None = None
     node_id: str | None = None  # stable node identity, stamped by the
     # capture plugin (enables LiveNode
     # event narrowing; ISSUES #9)
@@ -111,7 +114,7 @@ class ConsoleEvent(Event):
 
 class PlanEvent(Event):
     topic: Topic = "plan"
-    phase: str = "started"  # started / row / done / divergence / step / fanout / parallel
+    phase: str = "started"  # started / row / done / divergence / step / fanout / parallel / item
     detail: dict[str, Any] = {}
 
 

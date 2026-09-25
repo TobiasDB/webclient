@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextvars import ContextVar
 from collections import deque
 from typing import Any, Callable
 from uuid import uuid4
@@ -43,6 +44,11 @@ from .models import (
 # EventBus
 # --------------------------------------------------------------------------- #
 
+
+
+#: the fan-out item the running code is working on (an index path; empty outside a fan-out). The
+#: executor sets it per item; the bus stamps it onto every event published meanwhile.
+CURRENT_ITEM: ContextVar[tuple[int, ...]] = ContextVar("webclient_current_item", default=())
 
 class Subscription(BaseModel):
     id: str
@@ -108,6 +114,10 @@ class EventBus(BaseModel):
             self._n += 1
             event.n = self._n
             event.ts = time.time()
+            if event.item is None:
+                item = CURRENT_ITEM.get()
+                if item:
+                    event.item = list(item)
             if self._recent.maxlen:
                 self._recent.append(event)
             subs = list(self._subs.values())

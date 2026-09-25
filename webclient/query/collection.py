@@ -203,6 +203,25 @@ class Field(Generic[T]):
                 return Field(low[v.strip().lower()])
         return Field(default)
 
+    def split(self, sep: str | None = None, maxsplit: int = -1, *, regex: bool = False,
+              strip: bool = True, keep_empty: bool = False) -> "Collection[Field[str]]":
+        """The text SPLIT into a Collection of Fields (a list in a row): on ``sep`` (whitespace when
+        omitted; a regular expression with ``regex=True``), at most ``maxsplit`` times. Parts are
+        stripped and empty ones dropped unless ``strip=False`` / ``keep_empty=True``. A missing
+        value splits to an empty Collection. ``"a, b, c".split(",")`` → ``["a", "b", "c"]``."""
+        if not self._ok:
+            return Collection([])
+        text = self._value if isinstance(self._value, str) else str(self._value)
+        if regex and sep is not None:
+            parts = re.split(sep, text, maxsplit=max(maxsplit, 0))
+        else:
+            parts = text.split(sep, maxsplit)
+        if strip:
+            parts = [p.strip() for p in parts]
+        if not keep_empty:
+            parts = [p for p in parts if p != ""]
+        return Collection([Field(p) for p in parts])
+
     def __bool__(self) -> bool:
         """Value TRUTHINESS (so ``0``/``False`` read as falsy) -- deliberately unlike
         ``is_empty`` (presence); lazy filters should prefer ``is_ok``/``is_empty``."""
@@ -514,7 +533,7 @@ class Collection(Generic[T]):
         async def one(el: Any) -> None:
             await apply_extract(el, columns, self._client)
 
-        await fan_out(list(self._items), one, limit=self._limit())
+        await fan_out(list(self._items), one, limit=self._limit(), bus=getattr(self._client, "bus", None))
         return self._derive(self._items)
 
     async def afilter(self, *predicates: Any) -> "Collection[T]":
@@ -524,7 +543,7 @@ class Collection(Generic[T]):
         async def keep(el: Any) -> bool:
             return await survives_filters(el, predicates, self._client)
 
-        flags = await fan_out(list(self._items), keep, limit=self._limit())
+        flags = await fan_out(list(self._items), keep, limit=self._limit(), bus=getattr(self._client, "bus", None))
         kept = [el for el, ok in zip(self._items, flags) if ok]
         return self._derive(kept)
 

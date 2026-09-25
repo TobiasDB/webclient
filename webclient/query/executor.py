@@ -81,7 +81,7 @@ _OPS = {
 #: ``paginate`` is bound so its ``stop``/``key`` predicates evaluate per page.
 _BINDS = {"extract", "filter", "paginate"}
 #: value ops (Field methods) that also apply to a plain read -- a str / number / a list of them.
-_VALUE_OPS = frozenset({"number", "map", "date", "datetime"})
+_VALUE_OPS = frozenset({"number", "map", "date", "datetime", "split"})
 #: ops acting on a Collection as a whole (everything else fans out per element)
 _COLL_OPS = {"extract", "filter", "project", "limit", "documents", "merge"}
 
@@ -263,7 +263,7 @@ async def _arun(
             results = await fan_out(
                 list(value),
                 _per_element(lambda el: _arun(el, prefix, 0, el, client)),
-                limit=limit,
+                limit=limit, bus=getattr(client, "bus", None),
             )
             merged = _merge_fanout(results, value.root, client)
             if split < len(rest) and isinstance(merged, Collection):
@@ -341,7 +341,8 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
             return column
     if name == "alias":  # the column's NAME rides on the chain; extract reads it (see columns_of)
         return value
-    if name in _VALUE_OPS and not hasattr(value, name):  # a plain read (str / number / list): the Field ops apply
+    # a plain read (str / number / list): the Field ops apply (a str's own .split is not the op)
+    if name in _VALUE_OPS and (not hasattr(value, name) or isinstance(value, str)):
         from .collection import Collection, Field
 
         vargs = [await _aarg(a, context, client) for a in call.args]
@@ -647,7 +648,7 @@ async def _astream_collection(
 
     limit = _fanout_limit(client, shaping)
     _note_parallel(len(items), limit, shaping, client)
-    async for result in fan_out_stream(items, _per_element(process), limit=limit):
+    async for result in fan_out_stream(items, _per_element(process), limit=limit, bus=getattr(client, "bus", None)):
         if result is not _DROP:
             yield result
 
@@ -690,18 +691,48 @@ def _note_siblings(first: BaseException, siblings: list[BaseException]) -> None:
         )
 
 
+async def _as_item(i: int, fn: Callable[[X], Awaitable[Y]], item: X, bus: Any) -> Y:
+    """Run one fan-out item with its index path set (so every event it publishes carries it),
+    publishing ``PlanEvent(phase="item")`` when it ends: ``ok``, ``dropped`` (filtered out) or
+    ``failed`` (with the error code)."""
+    from ..events import CURRENT_ITEM
+
+    token = CURRENT_ITEM.set((*CURRENT_ITEM.get(), i))
+    try:
+        try:
+            out = await fn(item)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            if bus is not None:
+                from ..models import PlanEvent
+
+                err = getattr(exc, "error", None)
+                bus.publish(PlanEvent(phase="item", detail={"status": "failed", "code": getattr(err, "code", type(exc).__name__)}))
+            raise
+        if bus is not None:
+            from ..models import PlanEvent
+
+            bus.publish(PlanEvent(phase="item", detail={"status": "dropped" if out is _DROP else "ok"}))
+        return out
+    finally:
+        CURRENT_ITEM.reset(token)
+
+
 async def fan_out(
-    items: list[X], fn: Callable[[X], Awaitable[Y]], *, limit: int
+    items: list[X], fn: Callable[[X], Awaitable[Y]], *, limit: int, bus: Any = None
 ) -> list[Y]:
     """Run ``fn`` over ``items`` with at most ``limit`` in flight, results in
     input order. A failing task cancels its siblings and raises the first
-    failure; any sibling failures are surfaced on that exception as a note."""
+    failure; any sibling failures are surfaced on that exception as a note.
+    Each item runs with its index on the item path (events carry it); ``bus``
+    also gets a ``plan.item`` event as each one ends."""
     results: list[Any] = [None] * len(items)
     pending = iter(range(len(items)))
 
     async def worker() -> None:
         for i in pending:
-            results[i] = await fn(items[i])
+            results[i] = await _as_item(i, fn, items[i], bus)
 
     try:
         async with asyncio.TaskGroup() as group:
@@ -715,7 +746,7 @@ async def fan_out(
 
 
 async def fan_out_stream(
-    items: list[X], fn: Callable[[X], Awaitable[Y]], *, limit: int
+    items: list[X], fn: Callable[[X], Awaitable[Y]], *, limit: int, bus: Any = None
 ) -> AsyncIterator[Y]:
     """Run ``fn`` over ``items`` with at most ``limit`` in flight, yielding each
     result the moment it completes (order is completion order, not input order).
@@ -727,16 +758,16 @@ async def fan_out_stream(
     sem = asyncio.Semaphore(max(min(limit, n), 1))
     queue: asyncio.Queue[tuple[bool, Any]] = asyncio.Queue()
 
-    async def run(item: X) -> None:
+    async def run(i: int, item: X) -> None:
         async with sem:
             try:
-                await queue.put((True, await fn(item)))
+                await queue.put((True, await _as_item(i, fn, item, bus)))
             except asyncio.CancelledError:
                 raise
             except BaseException as exc:  # surfaced on the consuming side
                 await queue.put((False, exc))
 
-    tasks = [asyncio.create_task(run(item)) for item in items]
+    tasks = [asyncio.create_task(run(i, item)) for i, item in enumerate(items)]
     try:
         for _ in range(n):
             ok, value = await queue.get()

@@ -202,6 +202,8 @@ def op_catalogue() -> "dict[str, Any]":
          "doc": "The value as an ISO datetime (YYYY-MM-DDTHH:MM:SS), from the same inputs as date()."},
         {"name": "map", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [{"name": "mapping", "required": True, "kind": "positional", "type": "dict"}, {"name": "default", "required": False, "kind": "positional", "default": None}],
          "doc": "The value looked up in a mapping (case-insensitive for text)."},
+        {"name": "split", "kind": "call", "io": False, "collection": False, "returns": "Collection", "params": [{"name": "sep", "required": False, "kind": "positional", "default": None}, {"name": "maxsplit", "required": False, "kind": "positional", "default": -1}, {"name": "regex", "required": False, "kind": "keyword", "default": False}],
+         "doc": "The text split into a list (a Collection of values): on sep (whitespace when omitted; a regular expression with regex=True)."},
         {"name": "alias", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [{"name": "name", "required": True, "kind": "positional"}],
          "doc": "Name the column this value becomes: a literal, an expression read off the element, or field(x) of a column beside it."},
     ]
@@ -771,6 +773,21 @@ def create_app(
             except Exception:  # noqa: BLE001 - an event that will not serialise is skipped, not fatal
                 pass
 
+        def pool_of() -> Any:
+            try:
+                return getattr(engine, "_the_engine", lambda: engine)().pool
+            except Exception:  # noqa: BLE001
+                return None
+
+        def snapshot() -> "dict[str, Any] | None":
+            pool = pool_of()
+            if pool is None:
+                return None
+            try:
+                return {"topic": "resources", "ts": time.time(), **pool.stats().model_dump()}
+            except Exception:  # noqa: BLE001 - sampling is best-effort
+                return None
+
         def sample() -> None:
             # the pool's occupancy while the run is live (only when it changes): what the run is
             # using -- http slots, browser pages, tasks waiting for one -- beside its events
@@ -781,7 +798,7 @@ def create_app(
             if pool is None:
                 return
             last: Any = None
-            while run["status"] == "running":
+            while run["status"] == "running" and not run.get("_ending"):
                 try:
                     st = pool.stats().model_dump()
                     key = (st["http_free"], st["pages_free"], st["pages_total"], st["waiting"], tuple(sorted(st["held"].items())))
@@ -795,6 +812,7 @@ def create_app(
         def work() -> None:
             threading.Thread(target=sample, name=f"run-{run_id}-res", daemon=True).start()
             sub = engine.bus.subscribe("", keep)
+            status = "error"
             tracer: Any = contextlib.nullcontext()
             if run["trace"]:
                 tdir = Path(app.state.traces_dir)
@@ -808,17 +826,26 @@ def create_app(
                     else:
                         for row in result:
                             run["rows"].append({"row": _serialize(row, store), "at": len(run["events"])})
-                run["status"] = "done"
+                status = "done"
             except WebException as exc:
-                run["status"], run["error"] = "error", exc.error.model_dump(mode="json")
+                status, run["error"] = "error", exc.error.model_dump(mode="json")
             except Exception as exc:  # noqa: BLE001 - the run reports it; the server stays up
                 from .errors import make
 
                 code = "op.unsupported" if isinstance(exc, AttributeError) else "remote.failed"
-                run["status"], run["error"] = "error", make(code, f"{type(exc).__name__}: {exc}").model_dump(mode="json")
+                status, run["error"] = "error", make(code, f"{type(exc).__name__}: {exc}").model_dump(mode="json")
             finally:
+                # settle BEFORE saying so: late events (released pages, the last fetches from the
+                # page loop) land first, then a final pool sample (back to idle), then the status --
+                # a client that stops polling at "done" has everything
+                run["_ending"] = True
+                time.sleep(0.15)
                 sub.cancel()
+                last = snapshot()
+                if last is not None:
+                    run["events"].append(last)
                 run["finished"] = time.time()
+                run["status"] = status
 
         threading.Thread(target=work, name=f"run-{run_id}", daemon=True).start()
         return {"id": run_id, "trace": run["trace"]}

@@ -73,3 +73,32 @@ def test_dates_in_a_plan(httpserver):
         when=d.select("time").attr("datetime").datetime(), day=d.select("span.d").attr("text").date()).project()
     with WebClient() as wc:
         assert wc.execute(plan) == [{"when": "2026-09-18T09:30:00+00:00", "day": "2026-09-18"}]
+
+
+def test_field_split_to_a_collection_of_fields():
+    parts = Field("a, b,, c").split(",")
+    assert [p.get() for p in parts] == ["a", "b", "c"]
+    assert [p.get() for p in Field("a  b\tc").split()] == ["a", "b", "c"]
+    assert [p.get() for p in Field("1; 2 | 3").split(r"[;|]", regex=True)] == ["1", "2", "3"]
+    assert [p.get() for p in Field("a,b,c").split(",", 1)] == ["a", "b,c"]
+    assert [p.get() for p in Field("a,,b").split(",", keep_empty=True)] == ["a", "", "b"]
+    assert len(Field(None).split(",")) == 0
+
+
+TAGS = """<html><body><ul>
+<li><b>Tea</b><i>green, hot , loose</i></li>
+<li><b>Coffee</b><i>black</i></li>
+</ul></body></html>"""
+
+
+def test_split_in_a_plan_is_a_list_per_row(httpserver):
+    httpserver.expect_request("/").respond_with_data(TAGS, content_type="text/html")
+    d = wq.doc
+    plan = (
+        wq.reference(httpserver.url_for("/")).resolve().select_all("li")
+        .extract(name=d.select("b").attr("text"), tags=d.select("i").attr("text").split(","))
+        .project()
+    )
+    with WebClient() as wc:
+        rows = wc.execute(plan)
+    assert rows == [{"name": "Tea", "tags": ["green", "hot", "loose"]}, {"name": "Coffee", "tags": ["black"]}]
