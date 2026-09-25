@@ -178,6 +178,8 @@ def test_runs_publish_fanout_counts(tmp_path):
             # the run settles before it says done: the last event is a pool sample back at idle
             last = got["events"][-1]
             assert last["topic"] == "resources" and last["http_free"] == last["http_total"]
+            # ... with the process tree's memory (and CPU, once there is a previous sample)
+            assert last["mem_mb"] > 0 and last["procs"] >= 1 and last.get("cpu_pct", 0) >= 0
             # the trace listing reports each trace's size on disk
             listed = {t["id"]: t for t in client.get("/traces").json()}
             assert listed[rid]["bytes"] > 0

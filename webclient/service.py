@@ -210,6 +210,60 @@ def op_catalogue() -> "dict[str, Any]":
     return {"Document": doc_rows, "Reference": ref_rows, "Collection": coll_rows, "Value": value_rows}
 
 
+class _ProcSampler:
+    """Memory and CPU of the server's process TREE (itself + the browsers / drivers it runs):
+    resident memory in MB and CPU in percent of one core since the last sample. Uses psutil (the
+    ``service`` extra); without it, the server's own process from the standard library."""
+
+    def __init__(self) -> None:
+        self._last: "tuple[float, float] | None" = None  # (wall, cpu seconds)
+        try:
+            import psutil
+
+            self._me: Any = psutil.Process()
+        except Exception:  # noqa: BLE001 - psutil not installed
+            self._me = None
+
+    def _cpu_mem(self) -> "tuple[float, float, int]":
+        if self._me is not None:
+            procs = [self._me]
+            try:
+                procs += self._me.children(recursive=True)
+            except Exception:  # noqa: BLE001
+                pass
+            cpu = mem = 0.0
+            for p in procs:
+                try:
+                    t = p.cpu_times()
+                    cpu += t.user + t.system
+                    mem += p.memory_info().rss
+                except Exception:  # noqa: BLE001 - a process that just exited
+                    continue
+            return cpu, mem / 1e6, len(procs)
+        import os
+        import resource
+        import sys
+
+        t = os.times()
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return t.user + t.system, peak / (1e6 if sys.platform == "darwin" else 1e3), 1
+
+    def sample(self) -> "dict[str, Any]":
+        try:
+            cpu, mem, n = self._cpu_mem()
+        except Exception:  # noqa: BLE001 - best-effort
+            return {}
+        now = time.time()
+        pct = None
+        if self._last is not None and now > self._last[0]:
+            pct = max(0.0, (cpu - self._last[1]) / (now - self._last[0]) * 100)
+        self._last = (now, cpu)
+        out: dict[str, Any] = {"mem_mb": round(mem, 1), "procs": n}
+        if pct is not None:
+            out["cpu_pct"] = round(pct, 1)
+        return out
+
+
 def _error(
     http_status: int,
     type_: str,
@@ -779,14 +833,18 @@ def create_app(
             except Exception:  # noqa: BLE001
                 return None
 
+        procs = _ProcSampler()
+
         def snapshot() -> "dict[str, Any] | None":
             pool = pool_of()
-            if pool is None:
-                return None
+            out: dict[str, Any] = {"topic": "resources", "ts": time.time()}
             try:
-                return {"topic": "resources", "ts": time.time(), **pool.stats().model_dump()}
+                if pool is not None:
+                    out.update(pool.stats().model_dump())
             except Exception:  # noqa: BLE001 - sampling is best-effort
-                return None
+                pass
+            out.update(procs.sample())
+            return out
 
         def sample() -> None:
             # the pool's occupancy while the run is live (only when it changes): what the run is
@@ -798,15 +856,18 @@ def create_app(
             if pool is None:
                 return
             last: Any = None
+            tick = 0
             while run["status"] == "running" and not run.get("_ending"):
                 try:
                     st = pool.stats().model_dump()
                     key = (st["http_free"], st["pages_free"], st["pages_total"], st["waiting"], tuple(sorted(st["held"].items())))
-                    if key != last:
+                    # the pool when it changes; memory / CPU (the server + its browsers) every ~0.3s
+                    if key != last or tick % 3 == 0:
                         last = key
-                        run["events"].append({"topic": "resources", "ts": time.time(), **st})
+                        run["events"].append({"topic": "resources", "ts": time.time(), **st, **procs.sample()})
                 except Exception:  # noqa: BLE001 - sampling is best-effort
                     pass
+                tick += 1
                 time.sleep(0.1)
 
         def work() -> None:

@@ -510,3 +510,33 @@ parallel are shown; actions are coloured by what they do. The onboarding-pipelin
 - **Rows.** Long text is clamped to two lines (click to expand). Nested objects and lists fold to
   a one-line preview (click to open). This applies in Author and Run.
 - **Traces** list each trace's size on disk (`GET /traces` returns `bytes`).
+
+### 14.2 Per-item progress, timing, resources; Author params and the plan check (2026-09-25)
+
+User decisions, recorded as built:
+
+- **Item cells.** Every card that runs per item shows `[x][x][f][-]` cells: done, missing (an
+  optional miss), failed, or pending. The header reads n/m. Nested fan-outs group per parent item,
+  as `[[][][]] [[][][]]`. Past what fits, cells and groups are binned, so 5,000 items stay one strip.
+- **Item paths.** The executor sets the item's index path per fan-out item, and the bus stamps it
+  on every event (`Event.item`, e.g. `[3, 1]`). Each item ends with `plan.item`
+  (`ok` / `dropped` / `failed`). Attribution is per item, so concurrent items no longer steal each
+  other's counts.
+- **Timing.** Fetch and interaction cards show a bar for the slowest run still in flight against
+  the median so far. It turns amber past twice the median and red past five times.
+- **End of run.** A run settles before it reports done. Late events land first, then a final pool
+  sample back at idle, so counts finish at m/m and the sparkline returns to zero.
+- **Resources.** The server's process tree (itself and its browsers) is sampled for resident
+  memory and CPU, via psutil in the `service` extra. The graph shows each value now, with max and
+  average.
+- **Author params.** "⚙ params" in the action bar, or a click on a keyword argument in the plan,
+  edits an op's parameters from its `/ops` signature. For example, resolve's `browser`.
+- **Author selector editing.** Clicking a selector in the plan opens the full selector editor:
+  parents, candidates, and fields to output. For the fan-out's own selector this needed the root
+  page fix. On a page not open yet, the editor opens when the page loads.
+- **Plan check.** After every edit, each line is evaluated on the pages at hand. A page opened from
+  a link that is not on screen is fetched in the background from the first item's link, as the
+  example. Lines that match nothing are marked ✕, reads that read nothing are marked !, and the
+  plan header shows "N to fix". Only the cause is flagged, not the lines under it.
+- **`Field.split(sep, maxsplit, regex=…)`** returns a Collection of Fields, which becomes a list in
+  a row.
