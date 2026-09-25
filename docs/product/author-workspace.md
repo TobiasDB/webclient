@@ -355,3 +355,21 @@ The next review, and what changed:
   column and the page nests beside it, and an op an object lacks is a catalogued 422
   (`op.unsupported`), not a 500. The frame's "rendering…" hang after load (the ready handshake is
   now a ping).
+
+
+### 12.1 Jump, shift to record, names from a column (2026-09-25)
+
+- An action on the page that the plan already has JUMPS there instead of adding a node: a link
+  whose element a `select(…).attr("href").resolve()` already covers focuses that page node and
+  opens the page you clicked (another book, the same plan node); a click / typing whose selector
+  matches an existing `.click` / `.write` focuses it.
+- SHIFT-click RECORDS (the reverse of before): a plain click just interacts (an unmatched link
+  browses away, unrecorded); shift on a link records `select(a).attr("href").resolve()` and opens
+  it; shift on a control records `.click(sel)`; typing into a field you shift-clicked records
+  `.write(sel, text)`. The live page: shift-click records.
+- `alias` accepts a column extracted beside it: `select_all("tr").extract(name=th.attr("text"),
+  value=td.attr("text").alias(field("name"))).merge()` -- the `name` column is spent as the key
+  (dropped from the row); a named column may carry `.alias` (the alias wins). The key/value edge
+  builds exactly this.
+- Selectors never contain `tbody`: the browser inserts it into every table, the server's HTML has
+  none (`tbody tr` matched nothing on the server); a dropped `tbody` leaves a descendant step.

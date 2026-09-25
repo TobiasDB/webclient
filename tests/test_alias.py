@@ -73,3 +73,36 @@ def test_alias_round_trips_through_the_blob(httpserver):
     plan = wq.reference(httpserver.url_for("/b")).resolve().select_all("tr").extract(wq.doc.select("td").attr("text").alias(wq.doc.select("th").attr("text"))).merge()
     with WebClient() as wc:
         assert from_blob(plan._plan.to_blob(), wc).collect() == {"UPC": "abc123", "Price": "£9.99", "Stock": "In stock (3)"}
+
+
+def test_alias_from_a_previous_column_consumes_it(httpserver):
+    # name=th, value=td.alias(field("name")): the value is keyed by its row's name; `name` is used up
+    httpserver.expect_request("/b").respond_with_data(TABLE, content_type="text/html")
+    plan = (
+        wq.reference(httpserver.url_for("/b")).resolve()
+        .select_all("table tr")
+        .extract(name=wq.doc.select("th").attr("text"), value=wq.doc.select("td").attr("text").alias(wq.doc.field("name")))
+        .merge()
+    )
+    assert plan.collect() == {"UPC": "abc123", "Price": "£9.99", "Stock": "In stock (3)"}
+
+
+def test_a_named_column_can_carry_an_alias(httpserver):
+    httpserver.expect_request("/b").respond_with_data(TABLE, content_type="text/html")
+    plan = wq.reference(httpserver.url_for("/b")).resolve().extract(value=wq.doc.select("h1").attr("text").alias("title")).project()
+    assert plan.collect() == {"title": "The Book"}
+
+
+def test_alias_from_a_column_streams_and_round_trips(httpserver):
+    from webclient import from_blob
+
+    httpserver.expect_request("/b").respond_with_data(TABLE, content_type="text/html")
+    plan = (
+        wq.reference(httpserver.url_for("/b")).resolve()
+        .select_all("table tr")
+        .extract(name=wq.doc.select("th").attr("text"), value=wq.doc.select("td").attr("text").alias(wq.doc.field("name")))
+        .project()
+    )
+    with WebClient() as wc:
+        again = from_blob(plan._plan.to_blob(), wc)
+        assert list(again.stream()) == [{"UPC": "abc123"}, {"Price": "£9.99"}, {"Stock": "In stock (3)"}]

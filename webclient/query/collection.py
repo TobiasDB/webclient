@@ -128,9 +128,9 @@ def _row_of(element: Any, *, create: bool = True) -> dict[str, Any] | None:
     return cast("dict[str, Any] | None", core._row)
 
 
-def split_alias(expr: Any) -> "tuple[Any, Any]":
-    """An extract column given POSITIONALLY must end in ``.alias(name)``: split it into
-    (the value expression, the name -- a literal or an Expr evaluated per element)."""
+def _alias_at(expr: Any) -> "tuple[Any, Any] | None":
+    """Split a chain at its trailing ``.alias(name)``: (the value expr, the name -- a literal or
+    an Expr), or None when the chain has no alias."""
     from .expr import Expr
 
     plan = getattr(expr, "_plan", None)
@@ -140,23 +140,50 @@ def split_alias(expr: Any) -> "tuple[Any, Any]":
             arg = steps[i].args[0] if steps[i].args else None
             name = Expr(arg.plan, expr._client) if arg is not None and arg.plan is not None else (arg.value if arg is not None else None)
             assert plan is not None
-            value = Expr(plan.model_copy(update={"steps": steps[: i - 1]}), expr._client)
-            return value, name
-    from ..errors import WebException, make
+            return Expr(plan.model_copy(update={"steps": steps[: i - 1]}), expr._client), name
+    return None
 
-    raise WebException(make("plan.invalid", "a positional extract column needs .alias(name): extract(expr.alias('key')) or extract(expr.alias(<expr>))"))
+
+def split_alias(expr: Any) -> "tuple[Any, Any]":
+    """An extract column given POSITIONALLY must end in ``.alias(name)``: split it into
+    (the value expression, the name -- a literal or an Expr evaluated per element)."""
+    got = _alias_at(expr)
+    if got is None:
+        from ..errors import WebException, make
+
+        raise WebException(make("plan.invalid", "a positional extract column needs .alias(name): extract(expr.alias('key')) or extract(expr.alias(<expr>))"))
+    return got
+
+
+def field_ref(name: Any) -> "str | None":
+    """The column a name expression refers to when it is exactly ``field("x")`` (a previously
+    extracted column), else None."""
+    steps = list(getattr(getattr(name, "_plan", None), "steps", []) or [])
+    if len(steps) == 2 and steps[0].kind == "get" and steps[0].name == "field" and steps[1].kind == "call" and steps[1].args:
+        v = steps[1].args[0].value
+        return v if isinstance(v, str) else None
+    return None
 
 
 def columns_of(args: "Iterable[Any]", named: dict[str, Any]) -> "list[tuple[Any, Any]]":
-    """The (name, value expr) columns of an extract: the named ones as given, the positional
-    ones split at their ``.alias(...)`` -- so a column's NAME can itself be read off the page
-    (``select_all("tr").extract(doc.select("td").attr("text").alias(doc.select("th").attr("text")))``)."""
-    out: list[tuple[Any, Any]] = []
+    """The (name, value expr) columns of an extract. Plain named columns come first, in order;
+    then the ALIASED ones -- positional (``expr.alias(name)``) or named (``value=expr.alias(name)``,
+    the alias wins over the keyword) -- so an alias can name a column from the page
+    (``.alias(doc.select("th").attr("text"))``) or from a column already extracted
+    (``.alias(doc.field("name"))``: that column is then CONSUMED -- used as the name, dropped from the
+    row -- so ``select_all("tr").extract(name=th, value=td.alias(field("name"))).merge()`` is a dict)."""
+    plain: list[tuple[Any, Any]] = []
+    aliased: list[tuple[Any, Any]] = []
+    for key, expr in named.items():
+        got = _alias_at(expr)
+        if got is None:
+            plain.append((key, expr))
+        else:
+            aliased.append((got[1], got[0]))
     for expr in args:
         value, name = split_alias(expr)
-        out.append((name, value))
-    out.extend(named.items())
-    return out
+        aliased.append((name, value))
+    return plain + aliased
 
 
 async def apply_extract(element: Any, columns: "dict[str, Any] | list[tuple[Any, Any]]", client: "WebClient | None") -> None:
@@ -164,19 +191,28 @@ async def apply_extract(element: Any, columns: "dict[str, Any] | list[tuple[Any,
     order so a later column can reference an earlier one). Loud by default: a column
     whose ``select``/``attr`` misses raises (naming the selector) -- mark a genuinely
     optional field with ``error=RETURN`` (or ``optional=True``) on its select to get
-    ``None`` instead. THE one row-extraction implementation -- shared by the eager
-    (:meth:`Collection.aextract`) and streaming (``executor._astream_collection``)
-    paths so they cannot diverge."""
+    ``None`` instead. An aliased column's name is evaluated per element; a name that is a
+    previous column (``field("x")``) consumes that column. THE one row-extraction
+    implementation -- shared by the eager (:meth:`Collection.aextract`) and streaming
+    (``executor._astream_collection``) paths so they cannot diverge."""
     from .executor import aevaluate
 
     row = _row_of(element)
     if row is None:
         return
     pairs = list(columns.items()) if isinstance(columns, dict) else columns
+    consumed: list[str] = []
     for key, expr in pairs:
-        if not isinstance(key, str):  # an aliased column: the name is read off the element
-            key = str(_raw(await aevaluate(key, element, client=client)) or "").strip() or "field"
+        if not isinstance(key, str):  # an aliased column: the name is read off the element / an earlier column
+            ref = field_ref(key)
+            if ref is not None and ref in row:
+                key = str(_raw(row[ref]) or "").strip() or ref
+                consumed.append(ref)
+            else:
+                key = str(_raw(await aevaluate(key, element, client=client)) or "").strip() or "field"
         row[key] = _raw(await aevaluate(expr, element, client=client))
+    for ref in consumed:  # a column used as a name is spent
+        row.pop(ref, None)
 
 
 async def survives_filters(element: Any, predicates: "Iterable[Any]", client: "WebClient | None") -> bool:
