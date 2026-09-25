@@ -183,3 +183,21 @@ def test_runs_publish_fanout_counts(tmp_path):
             # the trace listing reports each trace's size on disk
             listed = {t["id"]: t for t in client.get("/traces").json()}
             assert listed[rid]["bytes"] > 0
+
+
+def test_traces_can_be_deleted_one_or_all_but_kept(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from webclient.service import create_app
+
+    for name in ("a", "b", "keepme"):
+        (tmp_path / f"{name}.jsonl").write_text('{"topic":"trace"}\n' * 3)
+    with TestClient(create_app(traces_dir=tmp_path)) as client:
+        assert {t["id"] for t in client.get("/traces").json()} == {"a", "b", "keepme"}
+        r = client.delete("/traces/a").json()
+        assert r["deleted"] and r["bytes"] > 0 and not (tmp_path / "a.jsonl").exists()
+        assert client.delete("/traces/a").status_code == 404
+        assert client.delete("/traces/../etc").status_code in (404, 405)  # no path escapes
+        r = client.delete("/traces", params={"keep": "keepme"}).json()
+        assert r["deleted"] == 1 and r["kept"] == ["keepme"]
+        assert [t["id"] for t in client.get("/traces").json()] == ["keepme"]

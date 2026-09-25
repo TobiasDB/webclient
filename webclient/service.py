@@ -957,6 +957,34 @@ def create_app(
 
         return {"id": trace_id, **_read(f).summary()}
 
+    @app.delete("/traces/{trace_id}", response_model=None)
+    def delete_trace(trace_id: str, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """Delete a stored trace (its one ``.jsonl``): returns the bytes freed."""
+        _auth(authorization)
+        f = _trace_file(trace_id)
+        if isinstance(f, JSONResponse):
+            return f
+        size = f.stat().st_size
+        f.unlink()
+        return {"id": trace_id, "deleted": True, "bytes": size}
+
+    @app.delete("/traces", response_model=None)
+    def clear_traces(keep: str = "", authorization: str | None = Header(default=None)) -> "dict[str, Any]":
+        """Delete every stored trace except the ids in ``keep`` (a comma list): returns how many and
+        the bytes freed."""
+        _auth(authorization)
+        base = Path(app.state.traces_dir)
+        spare = {k.strip() for k in keep.split(",") if k.strip()}
+        n = freed = 0
+        if base.exists():
+            for f in base.glob("*.jsonl"):
+                if f.stem in spare:
+                    continue
+                freed += f.stat().st_size
+                f.unlink()
+                n += 1
+        return {"deleted": n, "bytes": freed, "kept": sorted(spare)}
+
     @app.get("/traces/{trace_id}/events", response_model=None)
     def trace_events(trace_id: str, topic: str = "", authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
         """The stream as JSON (the wire view: byte payloads and rrweb chunk bodies dropped;
