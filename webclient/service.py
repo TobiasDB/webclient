@@ -1100,6 +1100,10 @@ def create_app(
                           error=exc.error, hint="retry if retriable; else the target is unavailable or blocked")
         if not live and getattr(doc, "_page", None) is not None:
             session.release(doc)  # a CAPTURE: the content is kept, the browser page goes back to the pool
+        if live and body.get("interactive"):
+            # a person drives this page (a UI's live view): act at once -- the simulated human pointer
+            # path (120-700 ms a click) only makes sense for a plan's unattended run
+            setattr(doc, "_human_mouse", False)
         if live and sid in app.state.recording and getattr(doc, "_page", None) is not None:
             # a live page in a recording session: stream what it does ON ITS OWN too (late content)
             from .core.document.live import pump_rrweb

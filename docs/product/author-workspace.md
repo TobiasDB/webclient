@@ -598,3 +598,18 @@ Fixed, each checked against a real browser on the lab's `/changelog` (a script-r
 - **The pointer.** The mirror's pointer always moves on from where it last was, remembered across
   mirror restarts. It aims at the target as the mirror shows it, in document coordinates, so it
   stays on the element as the page scrolls.
+
+### 14.6 Exact action selectors, click latency, output ticks (2026-09-25)
+
+- **Exact selectors.** A clicked element's selector must match THAT element and nothing else on the
+  page (`exactSelector`: the best readable candidate verified to match only it, else a structural
+  path from the nearest uniquely addressable ancestor, e.g. `li:nth-of-type(3) > button`). Before,
+  a non-unique candidate could be used and the first match was clicked.
+- **Click latency.** Clicks now show in the mirror in about 0.1–0.2s, down from about 1.6s:
+  - A page a person drives (`interactive: true` on open) skips the simulated human pointer path,
+    which cost 120–700ms a click; plan runs keep it.
+  - The mirror polls every 0.25s and pulls at once after an action.
+  - Live events are stamped no later than the replay clock's now. The clock starts at the
+    recording's first moment, so it ran behind by however late the mirror opened.
+- **Output ticks.** Each "output values" row has its own key; rows sharing an attribute used to
+  tick together.

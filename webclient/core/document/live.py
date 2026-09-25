@@ -421,6 +421,9 @@ def xhr_events(
 
 def _human_mouse(doc: "Document") -> bool:
     """Whether this document's client wants human-like pointer moves (``BrowserConfig``)."""
+    own = getattr(doc, "_human_mouse", None)  # a page a PERSON drives (a UI's live page): no simulated moves
+    if own is not None:
+        return bool(own)
     cfg = getattr(doc._client, "browser_config", None)
     return bool(getattr(cfg, "human_mouse", True))
 
