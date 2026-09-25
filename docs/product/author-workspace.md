@@ -373,3 +373,21 @@ The next review, and what changed:
   builds exactly this.
 - Selectors never contain `tbody`: the browser inserts it into every table, the server's HTML has
   none (`tbody tr` matched nothing on the server); a dropped `tbody` leaves a descendant step.
+
+
+### 12.2 Reading values: patterns, counts, every attribute, numbers (2026-09-25)
+
+- `attr(name, pattern)` reads through a regex (its first group); a plan line offers `+pattern`
+  and the pattern is editable in place (Python-style inline flags such as `(?i)` work in the
+  preview too).
+- A focused `.attr()` lists EVERY attribute across all the selected elements -- text, own text,
+  `count` (children), the element's label, href / src, `data-*`, `aria-*`, class -- plus the
+  numeric reads worth having ("as a number").
+- Value ops on a read (package: `Field.number()`, `Field.map()`; the executor applies them to a
+  plain read or a list of them): `number()` is the first number in the text (`£51.77` → 51.77,
+  `In stock (22 available)` → 22) or a number word (`Three` → 3); `map({...})` looks a value up.
+  A value node offers `.number()` and `.map({…})`.
+- The star rating on books.toscrape.com (`<p class="star-rating Three">` with five icons -- the
+  icon count is always 5): the records' shared fields offer `p.star-rating · class → number`,
+  i.e. `select("p.star-rating").attr("class", "(?i)\b(zero|one|…|ten)\b").number()` → 3, and the
+  icon count (`attr("count")`) beside it; prices come as numbers the same way.

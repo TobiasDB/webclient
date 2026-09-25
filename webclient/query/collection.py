@@ -10,6 +10,8 @@ is the value leaf (``get`` + ``is_ok``/``is_empty`` + comparisons + truthiness).
 
 from __future__ import annotations
 
+import re
+
 from typing import TYPE_CHECKING, Any, Generic, Iterable, Iterator, Literal, TypeVar, cast, overload  # noqa: F401  (Literal used by generated stubs)
 
 # covariant: Field/Collection/Lazy only ever *produce* T (iterate/index/get/collect),
@@ -22,6 +24,12 @@ if TYPE_CHECKING:
     from ..core.client import WebClient
     from ..core.client.loop import EngineLoop
     from ..interface import Document, Reference
+
+
+#: number words `Field.number` reads when a value has no digits (star ratings coded as words).
+_NUMBER_WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+    "sixteen seventeen eighteen nineteen twenty".split())}
 
 
 class Field(Generic[T]):
@@ -58,6 +66,39 @@ class Field(Generic[T]):
         # (only "" / [] / {} / None / a miss are). Use this (and ``is_ok``) in ``filter`` --
         # they disagree with ``bool(field)`` on falsy-but-present values like a ``0`` price.
         return Field(not self._ok or self._value in ("", [], {}, None))
+
+    def number(self, default: Any = None) -> "Field[Any]":
+        """The value as a NUMBER: the first number in the text (``"£51.77"`` → 51.77, ``"In stock
+        (22 available)"`` → 22, ``"1,234"`` → 1234), else a number WORD (``"Three"`` → 3, as
+        books.toscrape.com codes its star ratings in a class); ``default`` when there is none."""
+        v = self.get()
+        if isinstance(v, bool):
+            return Field(int(v))
+        if isinstance(v, (int, float)):
+            return Field(v)
+        text = str(v or "")
+        m = re.search(r"-?\d[\d,]*(?:\.\d+)?|-?\.\d+", text)
+        if m:
+            raw = m.group(0).replace(",", "")
+            num = float(raw)
+            return Field(int(num) if num.is_integer() and "." not in raw else num)
+        for word in re.findall(r"[A-Za-z]+", text):
+            if word.lower() in _NUMBER_WORDS:
+                return Field(_NUMBER_WORDS[word.lower()])
+        return Field(default)
+
+    def map(self, mapping: dict[str, Any], default: Any = None) -> "Field[Any]":
+        """The value looked up in ``mapping`` (strings compare case-insensitively): a code to its
+        meaning, a word to a number; ``default`` when it is not there."""
+        v: Any = self.get()
+        key = v if isinstance(v, str) else str(v)
+        if key in mapping:
+            return Field(mapping[key])
+        if isinstance(v, str):
+            low = {str(k).lower(): val for k, val in mapping.items()}
+            if v.strip().lower() in low:
+                return Field(low[v.strip().lower()])
+        return Field(default)
 
     def __bool__(self) -> bool:
         """Value TRUTHINESS (so ``0``/``False`` read as falsy) -- deliberately unlike

@@ -80,6 +80,8 @@ _OPS = {
 #: element/page inside the op); the executor calls their async ``a<name>`` form.
 #: ``paginate`` is bound so its ``stop``/``key`` predicates evaluate per page.
 _BINDS = {"extract", "filter", "paginate"}
+#: value ops (Field methods) that also apply to a plain read -- a str / number / a list of them.
+_VALUE_OPS = frozenset({"number", "map"})
 #: ops acting on a Collection as a whole (everything else fans out per element)
 _COLL_OPS = {"extract", "filter", "project", "limit", "documents", "merge"}
 
@@ -337,6 +339,18 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
             return column
     if name == "alias":  # the column's NAME rides on the chain; extract reads it (see columns_of)
         return value
+    if name in _VALUE_OPS and not hasattr(value, name):  # a plain read (str / number / list): the Field ops apply
+        from .collection import Collection, Field
+
+        vargs = [await _aarg(a, context, client) for a in call.args]
+        vkw = {k: await _aarg(v, context, client) for k, v in call.kwargs.items()}
+
+        def one(v: Any) -> Any:
+            return getattr(v if isinstance(v, Field) else Field(v), name)(*vargs, **vkw)
+
+        if isinstance(value, (list, Collection)):
+            return [one(v) for v in value]
+        return one(value)
     if name in _BINDS:  # sub-plans passed unevaluated to the async bound op
         args = [_as_expr(a, client) for a in call.args]
         kwargs = {k: _as_expr(v, client) for k, v in call.kwargs.items()}

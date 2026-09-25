@@ -191,7 +191,15 @@ def op_catalogue() -> "dict[str, Any]":
             r["returns"] = "Document"
         elif r["name"] in ("join", "replace", "with_params"):
             r["returns"] = "Reference"
-    return {"Document": doc_rows, "Reference": ref_rows, "Collection": coll_rows}
+    value_rows = [
+        {"name": "number", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [{"name": "default", "required": False, "kind": "positional", "default": None}],
+         "doc": "The value as a number: the first number in the text, else a number word (Three → 3)."},
+        {"name": "map", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [{"name": "mapping", "required": True, "kind": "positional", "type": "dict"}, {"name": "default", "required": False, "kind": "positional", "default": None}],
+         "doc": "The value looked up in a mapping (case-insensitive for text)."},
+        {"name": "alias", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [{"name": "name", "required": True, "kind": "positional"}],
+         "doc": "Name the column this value becomes: a literal, an expression read off the element, or field(x) of a column beside it."},
+    ]
+    return {"Document": doc_rows, "Reference": ref_rows, "Collection": coll_rows, "Value": value_rows}
 
 
 def _error(
