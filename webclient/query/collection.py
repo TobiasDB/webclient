@@ -10,6 +10,7 @@ is the value leaf (``get`` + ``is_ok``/``is_empty`` + comparisons + truthiness).
 
 from __future__ import annotations
 
+import datetime as _dt
 import re
 
 from typing import TYPE_CHECKING, Any, Generic, Iterable, Iterator, Literal, TypeVar, cast, overload  # noqa: F401  (Literal used by generated stubs)
@@ -24,6 +25,94 @@ if TYPE_CHECKING:
     from ..core.client import WebClient
     from ..core.client.loop import EngineLoop
     from ..interface import Document, Reference
+
+
+_MONTHS = {m: i + 1 for i, m in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split())}
+_UNITS = {"second": 1, "sec": 1, "minute": 60, "min": 60, "hour": 3600, "hr": 3600, "day": 86400,
+          "week": 604800, "month": 2629800, "year": 31557600}
+
+
+def parse_when(value: Any, *, format: str | None = None, dayfirst: bool = False, now: "_dt.datetime | None" = None) -> "_dt.datetime | None":
+    """A datetime from a read (standard library only, so it parses the same everywhere): a
+    datetime / date; an explicit ``format``; ISO 8601; ``18 Sep 2026`` / ``Sep 18, 2026`` (with an
+    optional time); ``2026/09/18``, ``09/18/2026`` or (``dayfirst``) ``18/09/2026``; ``today`` /
+    ``yesterday`` / ``tomorrow`` / ``N units ago``. None when nothing reads as a date."""
+    if value is None:
+        return None
+    if isinstance(value, _dt.datetime):
+        return value
+    if isinstance(value, _dt.date):
+        return _dt.datetime(value.year, value.month, value.day)
+    text = " ".join(str(value).split())
+    if not text:
+        return None
+    if format:
+        try:
+            return _dt.datetime.strptime(text, format)
+        except ValueError:
+            return None
+    iso = re.search(r"\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?", text)
+    if iso:
+        try:
+            return _dt.datetime.fromisoformat(iso.group(0).replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    clock = re.search(r"(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap]\.?m\.?)?", text, re.I)
+
+    def at(y: int, m: int, d: int) -> "_dt.datetime | None":
+        h = mi = sec = 0
+        if clock:
+            h, mi, sec = int(clock.group(1)), int(clock.group(2)), int(clock.group(3) or 0)
+            ampm = (clock.group(4) or "").lower().replace(".", "")
+            if ampm == "pm" and h < 12:
+                h += 12
+            if ampm == "am" and h == 12:
+                h = 0
+        try:
+            return _dt.datetime(y, m, d, h, mi, sec)
+        except ValueError:
+            return None
+
+    mon = r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+    m = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+" + mon + r",?\s+(\d{4})", text, re.I)
+    if m:
+        return at(int(m.group(3)), _MONTHS[m.group(2).lower()[:3]], int(m.group(1)))
+    m = re.search(mon + r"\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})", text, re.I)
+    if m:
+        return at(int(m.group(3)), _MONTHS[m.group(1).lower()[:3]], int(m.group(2)))
+    m = re.search(r"\b(\d{4})[/.](\d{1,2})[/.](\d{1,2})\b", text)
+    if m:
+        return at(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = re.search(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})\b", text)
+    if m:
+        a, b, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        y = y + 2000 if y < 100 else y
+        d, mo = (a, b) if (dayfirst or a > 12) else (b, a)
+        return at(y, mo, d)
+    base = now or _dt.datetime.now()
+    low = text.lower()
+    for word, days in (("today", 0), ("yesterday", -1), ("tomorrow", 1)):
+        if re.search(rf"\b{word}\b", low):
+            day = (base + _dt.timedelta(days=days)).date()
+            return at(day.year, day.month, day.day)
+    m = re.search(r"\b(\d+|an?|one)\s+(second|sec|minute|min|hour|hr|day|week|month|year)s?\s+ago\b", low)
+    if m:
+        n = 1 if m.group(1) in ("a", "an", "one") else int(m.group(1))
+        return (base - _dt.timedelta(seconds=n * _UNITS[m.group(2)])).replace(microsecond=0)
+    # the fallback: dateutil for other written forms ("Friday 2026-Sep-18", "18.IX.2026" aside) --
+    # strict first; fuzzy only when a month is named, so a stray number never becomes a date
+    from dateutil import parser as _du
+
+    try:
+        return _du.parse(text, dayfirst=dayfirst)
+    except (ValueError, OverflowError):
+        pass
+    if re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", low):
+        try:
+            return _du.parse(text, dayfirst=dayfirst, fuzzy=True)
+        except (ValueError, OverflowError):
+            pass
+    return None
 
 
 #: number words `Field.number` reads when a value has no digits (star ratings coded as words).
@@ -86,6 +175,20 @@ class Field(Generic[T]):
             if word.lower() in _NUMBER_WORDS:
                 return Field(_NUMBER_WORDS[word.lower()])
         return Field(default)
+
+    def date(self, format: str | None = None, *, dayfirst: bool = False, default: Any = None) -> "Field[Any]":
+        """The value as a DATE, ``YYYY-MM-DD``: ISO text, written dates (``18 Sep 2026``,
+        ``September 18, 2026``), numeric ones (``09/18/2026``; ``dayfirst=True`` for
+        ``18/09/2026``), relative ones (``today``, ``yesterday``, ``3 days ago``), or an explicit
+        ``format`` (``strptime``); ``default`` when there is none."""
+        when = parse_when(self.get(), format=format, dayfirst=dayfirst)
+        return Field(when.date().isoformat() if when else default)
+
+    def datetime(self, format: str | None = None, *, dayfirst: bool = False, default: Any = None) -> "Field[Any]":
+        """The value as a DATETIME, ISO ``YYYY-MM-DDTHH:MM:SS`` (a date alone is midnight; an
+        offset is kept) -- the same inputs as :meth:`date`."""
+        when = parse_when(self.get(), format=format, dayfirst=dayfirst)
+        return Field(when.isoformat(timespec="seconds") if when else default)
 
     def map(self, mapping: dict[str, Any], default: Any = None) -> "Field[Any]":
         """The value looked up in ``mapping`` (strings compare case-insensitively): a code to its

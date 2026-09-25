@@ -14,6 +14,7 @@ dependencies = [
     "httpx>=0.24",
     "typing_extensions>=4.5",
     "typeguard>=4.0",
+    "python-dateutil>=2.8",  # Field.date() / .datetime(): the fallback parser for written dates
 ]
 
 [project.optional-dependencies]
@@ -24,7 +25,7 @@ browser = ["playwright>=1.30"]                 # M4 LiveDocument
 service = ["fastapi>=0.100", "uvicorn[standard]>=0.23"]  # M7 browser-as-a-service (ws needs the standard extra)
 # `remote` needs nothing beyond the base deps (httpx + pydantic).
 remote = []
-dev = ["pytest>=7.4", "pytest-httpserver>=1.0", "mypy>=1.10", "pyright>=1.1.380",
+dev = ["pytest>=7.4", "pytest-httpserver>=1.0", "mypy>=1.10", "pyright>=1.1.380", "types-python-dateutil>=2.8",
        "lxml-stubs", "types-PyYAML",
        "lxml>=4.9", "cssselect>=1.2", "charset-normalizer>=3.0",
        "playwright>=1.30", "fastapi>=0.100", "uvicorn[standard]>=0.23",

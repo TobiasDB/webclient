@@ -194,6 +194,10 @@ def op_catalogue() -> "dict[str, Any]":
     value_rows = [
         {"name": "number", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [{"name": "default", "required": False, "kind": "positional", "default": None}],
          "doc": "The value as a number: the first number in the text, else a number word (Three → 3)."},
+        {"name": "date", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [{"name": "format", "required": False, "kind": "positional", "default": None}, {"name": "dayfirst", "required": False, "kind": "keyword", "default": False}],
+         "doc": "The value as a date (YYYY-MM-DD): ISO, written, numeric (dayfirst), relative (3 days ago), or a strptime format."},
+        {"name": "datetime", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [{"name": "format", "required": False, "kind": "positional", "default": None}, {"name": "dayfirst", "required": False, "kind": "keyword", "default": False}],
+         "doc": "The value as an ISO datetime (YYYY-MM-DDTHH:MM:SS), from the same inputs as date()."},
         {"name": "map", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [{"name": "mapping", "required": True, "kind": "positional", "type": "dict"}, {"name": "default", "required": False, "kind": "positional", "default": None}],
          "doc": "The value looked up in a mapping (case-insensitive for text)."},
         {"name": "alias", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [{"name": "name", "required": True, "kind": "positional"}],

@@ -422,3 +422,20 @@ The next review, and what changed:
 - **The page** gets the window's height and ~60% of its width; what it shows is the records of the
   nearest collection at or above the focus (a value or an element is seen in its record, outlined).
 - Denser throughout: 10.5–12px type, one-line bars.
+
+
+### 13.1 Denser, rows under the page, dates (2026-09-25)
+
+- Layout now: the PLAN on the left (collapsible to a rail); in the middle the ACTION BAR, the PAGE,
+  and the ROWS under it (collapsible) -- `Rows` is the local preview, `Run ▶` the server's rows
+  (a JSON toggle); a right panel appears only while an op waits for its selector (suggestions, or
+  the selector editor with its one Add button). The Plan / Page / Skeleton / MD / Code tabs are gone.
+- Outputs are not tagged in the plan: an output line is framed in its colour, and the same colour
+  heads its column in the rows (and outlines it on the page). Counts show only on collections and
+  pages. Smaller type (10.5–11px) and tighter spacing throughout.
+- The page shows the nearest `select_all` (or the page) around a focused select / value, its own
+  matches outlined inside.
+- `Field.date()` / `.datetime()` (package; `python-dateutil` is now a dependency, the fallback
+  after the deterministic readings): ISO out; the suggestions offer "→ date" for values that are
+  mostly a date, and "→ number" only for values that are mostly a number (a title with "40" in it
+  is not offered as a number).

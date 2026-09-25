@@ -81,7 +81,7 @@ _OPS = {
 #: ``paginate`` is bound so its ``stop``/``key`` predicates evaluate per page.
 _BINDS = {"extract", "filter", "paginate"}
 #: value ops (Field methods) that also apply to a plain read -- a str / number / a list of them.
-_VALUE_OPS = frozenset({"number", "map"})
+_VALUE_OPS = frozenset({"number", "map", "date", "datetime"})
 #: ops acting on a Collection as a whole (everything else fans out per element)
 _COLL_OPS = {"extract", "filter", "project", "limit", "documents", "merge"}
 
