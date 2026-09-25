@@ -622,7 +622,11 @@ def roadmap_tour() -> None:
     trace_dir.unlink(missing_ok=True)
     _section(f"roadmap tour (lab at {lab}/lab )")
 
-    with WebClient(timeout=15.0) as wc, wc.trace(trace_dir):
+    with WebClient(timeout=15.0) as wc, wc.trace(trace_dir) as tr:
+        # the Plan the trace carries (Run replays the trace against it: its pipeline graph and stages)
+        tr.plan = (wq.reference(f"{lab}/lab/shop").resolve().select_all("div.card")
+                   .extract(title=wq.doc.select(".title").attr("text"), price=wq.doc.select(".price").attr("text"),
+                            link=wq.doc.select("a").attr("href")).project())
         # Errors are catalogued + bound, and NOTHING disappears: a RETURN-policy miss still lands
         # on the ledger (doc.errors / wc.errors) as an ErrorEvent in the trace.
         shop = wc.fetch(f"{lab}/lab/shop")
@@ -677,7 +681,48 @@ def roadmap_tour() -> None:
         miss = offline_wc.fetch(f"{lab}/lab/never", optional=True)
         _show("har replay", again.title, "| unrecorded ->", miss.error.code if miss.error else None)
 
+    record_onboarding(lab)
     print("\nUI: run `make serve` then open http://localhost:8000/ui/  (trace 'demo' is listed)")
+
+
+def record_onboarding(lab: str) -> None:
+    """[R] Record an onboarding run as ONE trace (``traces/onboarding.jsonl``) -- the website's
+    onboarding page REPLAYS it (no model on the public site: the scripted demo model, badged).
+    The pipeline pauses at the confirm gate (``interactive=True``) and is resumed with "yes",
+    so the gate, the resume and every stage boundary are in the stream."""
+    import json as _json
+    from pathlib import Path
+
+    from webclient.pipelines import Brief, SearchHit, onboard_company
+
+    shop = f"{lab}/lab/shop"
+    code = ('wq.doc.select_all("div.card").extract(title=wq.doc.select(".title").attr("text"), '
+            'price=wq.doc.select(".price").attr("text")).project()')
+
+    def search(query: str, k: int) -> list:
+        return [SearchHit(url=shop, title="Roasters", snippet="the featured products")]
+
+    def llm(prompt: str) -> str:  # the demo model: scripted by prompt, deterministic, $0
+        if "frontier links" in prompt:
+            return "[]"
+        if "crawled pages" in prompt:
+            return _json.dumps([{"url": shop, "kind": "page", "tier": "must", "note": "the product grid"}])
+        if "Assess this page" in prompt:
+            return _json.dumps({"dataset_present": True, "is_queryable": True, "completeness": "full",
+                                "has_pagination": False, "scrapability": 9, "verdict": "a full product list"})
+        if "query code" in prompt or "write a query" in prompt:
+            return f"here is the query:\n{code}"
+        return "{}"
+
+    path = Path("traces") / "onboarding.jsonl"
+    with WebClient(timeout=15.0) as wc, wc.trace(path):
+        result = onboard_company(
+            "Roasters", Brief(description="the featured products with their prices", fields=["title", "price"], search="products"),
+            wc=wc, llm=llm, search=search, browser=False, interactive=True,
+        )
+        if result.pending is not None:  # the confirm gate: a human says yes, once
+            result = result.resume("yes")
+    print("onboarding:    ", "ok" if result.ok else result.reason, "| trace:", path)
 
 
 if __name__ == "__main__":
