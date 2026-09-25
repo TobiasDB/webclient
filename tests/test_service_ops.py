@@ -74,3 +74,28 @@ def test_execute_an_op_the_object_lacks_is_a_422_not_a_500():
             r = client.post("/execute", json={"plan": plan, "url": srv.url_for("/")})
             assert r.status_code == 422, r.text
             assert r.json()["error"]["code"] == "op.unsupported"
+
+
+def test_execute_can_save_the_run_as_a_trace(tmp_path):
+    from fastapi.testclient import TestClient
+    from pytest_httpserver import HTTPServer
+
+    from webclient.service import create_app
+
+    with HTTPServer() as srv:
+        srv.expect_request("/").respond_with_data("<html><body><h1>Hi</h1></body></html>", content_type="text/html")
+        plan = {"root": "Reference", "steps": [
+            {"kind": "get", "name": "resolve"}, {"kind": "call", "name": "resolve", "args": [], "kwargs": {}},
+            {"kind": "get", "name": "extract"}, {"kind": "call", "name": "extract", "args": [], "kwargs": {"h": {"plan": {"root": "Document", "steps": [
+                {"kind": "get", "name": "select"}, {"kind": "call", "name": "select", "args": [{"value": "h1"}], "kwargs": {}},
+                {"kind": "get", "name": "attr"}, {"kind": "call", "name": "attr", "args": [{"value": "text"}], "kwargs": {}}]}}}},
+            {"kind": "get", "name": "project"}, {"kind": "call", "name": "project", "args": [], "kwargs": {}}]}
+        with TestClient(create_app(traces_dir=tmp_path)) as client:
+            r = client.post("/execute", json={"plan": plan, "url": srv.url_for("/"), "trace": "my run / 1"})
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["rows"] == {"h": "Hi"} and body["trace"] == "my-run-1"
+            assert (tmp_path / "my-run-1.jsonl").exists()
+            listed = {t["id"]: t for t in client.get("/traces").json()}
+            assert "my-run-1" in listed and listed["my-run-1"]["events"] > 0
+            assert client.get("/traces/my-run-1/plan").status_code == 200  # the plan rides in the footer

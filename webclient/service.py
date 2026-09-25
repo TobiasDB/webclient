@@ -12,7 +12,9 @@ client records, validated (``from_plan``) before it runs.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import re
 import time
 from pathlib import Path
 from collections import OrderedDict
@@ -404,8 +406,18 @@ def create_app(
             context = engine.ref(body["url"])
         else:
             context = None
+        # trace: "<name>" records the run as ONE trace file (every event, the plan in its footer)
+        # under traces_dir -- it lists under /traces and replays in the UI
+        trace_id: "str | None" = None
+        tracer: Any = contextlib.nullcontext()
+        if body.get("trace"):
+            trace_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(body["trace"])).strip("-.")[:80] or "run"
+            tdir = Path(app.state.traces_dir)
+            tdir.mkdir(parents=True, exist_ok=True)
+            tracer = engine.trace(tdir / f"{trace_id}.jsonl", plan=expr._plan)
         try:
-            result = engine.execute(expr, context)  # the realization machinery
+            with tracer:
+                result = engine.execute(expr, context)  # the realization machinery
         except WebException as exc:  # a fetch/resolve failure -> structured error
             err = exc.error
             return _error(
@@ -423,7 +435,10 @@ def create_app(
 
             err = make("op.unsupported", f"the plan applies an op its object does not have: {exc}")
             return _error(422, err.type, str(exc), hint=err.hint, error=err)
-        return {"rows": _serialize(result, store)}
+        out: dict[str, Any] = {"rows": _serialize(result, store)}
+        if trace_id:
+            out["trace"] = trace_id
+        return out
 
     @app.get("/document/{doc_id}", response_model=None)
     def document(

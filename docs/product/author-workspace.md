@@ -453,3 +453,7 @@ The next review, and what changed:
 - Flatten (package: `project(flatten=[…] | True, sep=".")`, eager and streamed): a nested output (a
   followed page, a collection's rows / merged dict) has a **flatten** checkbox; its keys join the
   parent row as `detail.outcome`, `detail.info.UPC`…
+- **Saving a run as a trace**: `POST /execute` takes `trace: "<name>"` and records the run as one
+  trace file under `traces_dir` (every event, the plan in its footer; `trace` comes back in the
+  response). The rows header has **⏺ trace** beside Run ▶ (it asks for a name) and links to the
+  saved trace, which opens in Traces with its replay, events and plan.
