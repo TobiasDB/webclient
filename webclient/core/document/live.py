@@ -272,6 +272,24 @@ async def drain(doc: "Document") -> None:
     doc.content = (await doc._page.content()).encode()  # keep content current
     doc._tree = None  # invalidate the cached lxml parse of the old content
     doc._flag_cache = None  # ...and the memoised flag set (the DOM just changed)
+    # the interaction NAVIGATED (a link, a submit): wait for the new page to load, then take ITS
+    # content -- and its recording, whose Meta + FullSnapshot the recorder only emits on load (without
+    # this a live mirror has nothing to draw until the next interaction: a white screen)
+    try:
+        now = doc._page.url
+    except Exception:  # noqa: BLE001 - a closed page
+        now = None
+    if now and now != (doc.final_url or doc.url):
+        try:
+            await doc._page.wait_for_load_state("load", timeout=15000)
+            await doc._page.wait_for_timeout(120)
+            doc.content = (await doc._page.content()).encode()
+            doc._tree = None
+            doc._flag_cache = None
+        except Exception:  # noqa: BLE001 - a slow page: keep what we have
+            pass
+        doc.final_url = now
+        await _drain_rrweb(doc)  # what the recorder had before the load
     snap = getattr(doc._client, "_snapshot", None)
     if snap is not None:  # under a trace: the post-interaction DOM is a snapshot
         snap(doc, "action")
@@ -393,6 +411,9 @@ def _html() -> "HtmlBacking":
     return HtmlBacking()
 
 
+
+from ...signals.cookies import DISMISS_JS as _COOKIES_JS  # noqa: E402
+
 class LiveBacking(Backing):
     """Interaction + live selection on a browser page (capability ``page``)."""
 
@@ -412,6 +433,8 @@ class LiveBacking(Backing):
     #: and installs them; the backing owns the *what*.
     page_scripts = (
         PageScript(INIT_JS, "init"),
+        # answer / hide a cookie consent banner before the snapshot (wc.cookies; the flag reads its report)
+        PageScript(_COOKIES_JS, "inline", name="wc.cookies"),
         # fold shadow-DOM / same-origin iframe content into the light DOM before the snapshot
         PageScript("() => window.__wc_inline ? window.__wc_inline() : {shadow:0,frames:0}", "inline"),
         # stamp data-wc-int for cursor:pointer / scrollable elements (dynamic interactivity)

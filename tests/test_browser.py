@@ -843,3 +843,49 @@ def test_browser_feeds_dom_x_network_correlation_signals(httpserver, wc):
         assert any("/api/data" in u for u in (spa.value or []))
     finally:
         wc.release(doc)
+
+
+def test_a_click_that_navigates_leaves_the_doc_on_the_new_page(httpserver, wc):
+    # a click that follows a link: drain waits for the new page to load, so the live doc's
+    # content, final_url and (when recording) its rrweb Meta + FullSnapshot are the NEW page's --
+    # regression: the mirror had only the old page's picture (a white screen) until the next action
+    httpserver.expect_request("/n1").respond_with_data('<html><body><a id="go" href="/n2">next</a></body></html>', content_type="text/html")
+    httpserver.expect_request("/n2").respond_with_data('<html><body><h1>second page</h1></body></html>', content_type="text/html")
+    engine = wc._the_engine()
+    engine.dom_recorders += 1  # a live session's recorder rides the page
+    got: list = []
+    sub = wc.bus.subscribe("rrweb", got.append)
+    try:
+        doc = wc.fetch(httpserver.url_for("/n1"), browser=True, keep_alive=True)
+        doc.click("#go")
+        assert doc.final_url.endswith("/n2")
+        assert b"second page" in doc.content
+        types = [e.get("type") for ev in got for e in (ev.events or [])]
+        assert types.count(2) >= 2, types  # a FullSnapshot for each page
+        wc.release(doc)
+    finally:
+        sub.cancel()
+        engine.dom_recorders -= 1
+
+
+BANNER = """<html><body style="overflow:hidden"><main><h1>Products</h1><p class="p">Widget</p></main>
+<div id="cc" style="position:fixed;bottom:0;left:0;right:0;height:80px;background:#eee">
+We use cookies to improve your experience.
+<button onclick="document.getElementById('cc').remove()">Accept all</button>
+<button onclick="document.getElementById('cc').remove(); window.__rejected = true">Reject all</button>
+</div></body></html>"""
+BANNER_NO_BUTTON = """<html><body><h1>Hi</h1><div role="dialog" style="position:fixed;top:0;width:100%;height:60px">
+This site uses cookies for tracking and personalisation.</div></body></html>"""
+
+
+def test_a_browser_render_answers_a_cookie_banner_before_the_snapshot(httpserver, wc):
+    # wc.cookies (inline, before the snapshot) REJECTS when it can, and the flag reports it
+    httpserver.expect_request("/cb").respond_with_data(BANNER, content_type="text/html")
+    doc = wc.fetch(httpserver.url_for("/cb"), browser=True)
+    assert b"We use cookies" not in doc.content and b"Widget" in doc.content
+    f = doc.cookie_banner()
+    assert f.present and f.value["action"] == "rejected" and f.value["button"] == "Reject all"
+    # a banner with nothing to press: hidden
+    httpserver.expect_request("/cb2").respond_with_data(BANNER_NO_BUTTON, content_type="text/html")
+    doc2 = wc.fetch(httpserver.url_for("/cb2"), browser=True)
+    assert doc2.cookie_banner().value["action"] == "hidden"

@@ -9,7 +9,7 @@ noisy-OR, contra signals scale it down, and it is *present* at confidence >= 0.5
 (`Settings.detection.present_threshold`). A present flag may carry a `remedy` (the transport
 escalation it calls for) and a `value` (the actionable payload).
 
-12 flags, 32 detectors.
+13 flags, 35 detectors.
 
 ## `spa`
 
@@ -70,6 +70,16 @@ escalation it calls for) and a `value` (the actionable payload).
 | detector | stage | contra | needs | evidence |
 |---|---|---|---|---|
 | `large_body` | static |  | — | A LARGE document -- the decoded body is big enough that a skeleton of it will be trimmed/collapsed to fit a token budget, so a query author sees only a reduced view. Based on CONTENT SIZE, not on the skeleton. Confidence grows with size. |
+
+## `cookie_banner`
+
+- **remedy**: `browser` · **value**: The flag's value: what the page script did (rendered), else the platform found (static).
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `consent_platform` | static |  | — | cookie_banner evidence (strong): a consent-management platform's loader or container in the served HTML (OneTrust, Cookiebot, Didomi, Quantcast, Usercentrics, TrustArc, …). |
+| `cookie_notice` | static |  | — | cookie_banner evidence: an element named as a cookie / consent / GDPR banner. |
+| `banner_answered` | rendered |  | `LiveBacking.init`, `wc.cookies` | cookie_banner evidence (rendered): the page script found a visible banner and answered / hid it before the snapshot. |
 
 ## `shadow_dom`
 

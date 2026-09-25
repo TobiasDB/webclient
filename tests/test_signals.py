@@ -169,3 +169,13 @@ def test_detectors_declare_the_scripts_they_need_and_docs_are_generated():
     r = subprocess.run([sys.executable, str(root / "scripts/gen_docs.py"), "signals", "--check"],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_cookie_banner_flag_from_a_consent_platform_or_a_notice_but_not_a_policy_link():
+    ctx = lambda body: Context.from_response(200, {"content-type": "text/html"}, {}, body)  # noqa: E731
+    ot = flags(ctx(b'<html><head><script src="https://cdn.cookielaw.org/scripttemplates/otSDKStub.js"></script></head><body></body></html>'))
+    assert ot["cookie_banner"].present and ot["cookie_banner"].value == {"vendor": "onetrust"}
+    notice = flags(ctx(b'<html><body><div id="cookie-banner">We use cookies <button>OK</button></div></body></html>'))
+    assert notice["cookie_banner"].present
+    link = flags(ctx(b'<html><body><footer><a class="cookie-policy" href="/cookies">Cookie policy</a></footer></body></html>'))
+    assert not link["cookie_banner"].present

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, cast
 
 from ...signals import Context, flags as detect_flags, framework as detect_framework
 from ...signals import dom as _dom  # noqa: F401  (registers the rendered/tree detectors)
+from ...signals import cookies as _cookies  # noqa: F401  (registers the cookie_banner detectors)
 from ..web_core import Backing
 from .html import tree
 from .models import Flag, XhrCall
@@ -32,7 +33,7 @@ class FlagsBacking(Backing):
 
     provides = frozenset(
         {"flags", "spa", "anti_bot_present", "anti_bot_triggered", "login_present",
-         "login_required", "pagination", "tabbed", "forms", "buttons", "shadow_dom", "iframe",
+         "login_required", "pagination", "tabbed", "forms", "buttons", "shadow_dom", "iframe", "cookie_banner",
          "large_document", "framework", "xhr_endpoints"}
     )
     gate = "ok"
@@ -130,13 +131,20 @@ class FlagsBacking(Backing):
         count. Cross-origin frames cannot be inlined (their content stays out of reach)."""
         return self._flags(core)["iframe"]
 
+    def cookie_banner(self, core: "Document") -> Flag:
+        """A cookie / consent banner covers the page. Static: the consent platform (OneTrust,
+        Cookiebot, Didomi, …) or a cookie notice in the served HTML. A browser render answers it
+        before the snapshot (the ``wc.cookies`` page script: reject / necessary-only first, else
+        accept; hidden when nothing answers); ``value`` is what it did (vendor / action / button)."""
+        return self._flags(core)["cookie_banner"]
+
     # -- the digest + data ops ------------------------------------------------
     def flags(self, core: "Document") -> "list[Flag]":
         """Every flag that is present, most-actionable first -- the compact digest of
         "what is notable about this page"."""
         order = (
             "anti_bot_triggered", "login_required", "spa", "shadow_dom", "iframe",
-            "anti_bot_present", "login_present", "pagination", "tabbed", "forms", "buttons",
+            "anti_bot_present", "login_present", "cookie_banner", "pagination", "tabbed", "forms", "buttons",
         )
         got = self._flags(core)
         return [got[name] for name in order if got[name].present]
