@@ -540,3 +540,30 @@ User decisions, recorded as built:
   plan header shows "N to fix". Only the cause is flagged, not the lines under it.
 - **`Field.split(sep, maxsplit, regex=…)`** returns a Collection of Fields, which becomes a list in
   a row.
+
+### 14.3 Steps on a page: the live head, snapshots, forks (2026-09-25)
+
+User decisions, recorded as built:
+
+- **A page's steps.** A page's STEPS are the page itself, then its chain of actions: click, write,
+  scroll, wait_for and similar. Each action step is a state with its own snapshot. Lines under an
+  action are evaluated and checked on that step's snapshot. The action's own target is checked on
+  the step before it.
+- **The head is always live.** The last step is shown as the live page, a mirror of a browser
+  page. A plain click acts on it without recording; it shows in the step bar as a dashed pending
+  chip. As soon as a selector is used there (an edge, the inspector, "add to plan"), the pending
+  actions become plan steps, and the new node hangs after them. Shift-click records the action as
+  a step immediately.
+- **Earlier steps.** Clicking one in the plan or the step bar (◀ ▶) shows its snapshot. Shift-click
+  on a snapshot FORKS: a fresh live page replays the steps up to it, and the new step starts a
+  branch. The old branch stays in the plan, dimmed and marked "forked away", with "use this
+  branch" to switch back. The compiler leaves off-branches out of the plan (`GNode.off`).
+- **Navigation.** A navigating click on a live page now waits for the new page. Its content,
+  final URL and recording (Meta + FullSnapshot) are the new page's, and the mirror restarts from
+  it. Before this, the mirror showed a white screen.
+- **Selectors.** Candidates now include stable attributes, such as `button[data-tab="Past"]`,
+  ranked above positional `nth-of-type` forms.
+- **Cookie banners.** The `cookie_banner` flag comes from the consent platform or a notice in the
+  served HTML. The `wc.cookies` inline page script, auto-installed on browser pages, answers the
+  banner before the snapshot. It tries reject or necessary-only first, then accept, and hides the
+  banner if nothing answers. The flag's value reports what it did.
