@@ -15,7 +15,7 @@ from pydantic import BaseModel, model_validator
 #: also appended to ``OnboardingResult.steps`` for a programmatic trace.
 
 from ...core.crawl import from_picks
-from ...core.document.models import Flag
+from ...core.document.models import Flag, PaginationHint
 from ...policy import (
     AntiBotPolicy,
     BrowserPolicy,
@@ -106,15 +106,23 @@ def _extraction_steps(doc_expr: Any) -> list[Any]:
     return steps
 
 
-def _paginate_steps(max_pages: int = 50) -> list[Any]:
-    """The plan steps for ``.paginate(by="link", max_pages=N)`` -- spliced between the reference
-    resolve and the extraction so the shipped query walks the dataset's pages (rel=next / the HTTP
-    Link header) and the body extracts across all of them. Authoring still tests page one only."""
-    return list(wq.doc.paginate(by="link", max_pages=max_pages)._plan.steps)
+def _paginate_steps(max_pages: int = 50, hint: "PaginationHint | None" = None) -> list[Any]:
+    """The plan steps for the right ``.paginate(...)`` advance, spliced between the reference resolve
+    and the extraction so the shipped query walks the dataset's pages and the body extracts across
+    all of them. The detected :class:`PaginationHint` picks the advance: a ``param`` kind with a known
+    param name -> ``by="param", name=<param>`` (walk ``?page=`` / ``?offset=``); otherwise ``by="link"``
+    (follow ``rel=next`` / the HTTP Link header), which is also the safe default when the hint is absent
+    or path-based. Authoring still tests page one only."""
+    if hint is not None and hint.kind == "param" and hint.name:
+        plan = wq.doc.paginate(by="param", name=hint.name, max_pages=max_pages)
+    else:
+        plan = wq.doc.paginate(by="link", max_pages=max_pages)
+    return list(plan._plan.steps)
 
 
 def _executable_query(
-    doc_expr: Any, url: str, resolve: "Resolve | None", *, paginate: bool = False, max_pages: int = 50
+    doc_expr: Any, url: str, resolve: "Resolve | None", *, paginate: bool = False, max_pages: int = 50,
+    hint: "PaginationHint | None" = None,
 ) -> Any:
     """DETERMINISTICALLY wrap the model's DOCUMENT-level extraction into a SELF-CONTAINED
     query rooted at the source reference with a ``resolve`` step baked in, so
@@ -133,7 +141,7 @@ def _executable_query(
     else:
         tier = resolve.browser.when if (resolve is not None and resolve.browser is not None) else None
         rooted = ref.resolve(browser=tier) if tier else ref.resolve()
-    pag = _paginate_steps(max_pages) if paginate else []
+    pag = _paginate_steps(max_pages, hint) if paginate else []
     steps = [*rooted._plan.steps, *pag, *_extraction_steps(doc_expr)]
     return Expr(Plan(root="Reference", source=rooted._plan.source, steps=steps), doc_expr._client)
 
@@ -681,20 +689,41 @@ def _short_fail_reason(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> 
     return f"{len(good)} row(s) but incomplete"
 
 
+def _pager_confirmed(doc: Any, hint: "PaginationHint | None") -> bool:
+    """Probe that the source REALLY paginates before baking a pager into the shipped blob: walk two
+    pages with the hint's advance (``by="param"`` + the param name when known, else ``by="link"``)
+    and confirm a genuine, DISTINCT second page exists. ``paginate``'s own clamp guard drops a
+    page-2 that merely re-serves page one (an out-of-range clamp) and it stops on an empty/404, so a
+    length ``>= 2`` means a working pager. A single page -- mislabelled paginated, a clamp, or an
+    unreachable page two -- returns False, so the blob is shipped page-one-only rather than paging
+    into nothing or duplicates. One extra fetch; a probe failure never breaks authoring."""
+    by, name = ("param", hint.name) if (hint is not None and hint.kind == "param" and hint.name) else ("link", "page")
+    try:
+        return len(list(doc.paginate(by=by, name=name, max_pages=2))) >= 2
+    except Exception:  # noqa: BLE001 - a probe must never break authoring
+        return False
+
+
 def _artifact_from(
     expr: Any, doc: Any, brief: Brief, candidate_url: str,
     resolve: "Resolve | None", bases: "list[str]", *, paginate: bool = False,
+    hint: "PaginationHint | None" = None,
 ) -> "tuple[QueryArtifact, list[Any]]":
     """Test one authored query against the source and build its :class:`QueryArtifact` (the
     self-contained, runnable blob + validation verdict + timeliness flag). Shared by the
     one-shot and staged authors. The extraction is TESTED on the fetched page one only (fast);
-    ``paginate`` bakes a ``.paginate(by="link")`` into the SHIPPED blob so ``run_query`` pulls
-    every page. Returns ``(artifact, extracted_rows)``."""
+    ``paginate`` bakes a ``.paginate(...)`` into the SHIPPED blob (its advance chosen from
+    ``hint``) -- but only after :func:`_pager_confirmed` verifies a real second page, so a
+    mislabelled or clamped source ships page one instead of paging into nothing. Returns
+    ``(artifact, extracted_rows)``."""
     tested, rows = _test_query(expr, doc) if doc.ok else (False, [])
     good = _populated_rows(rows)
     missing = _empty_required_fields(good, brief)  # required leaves empty on every row
     tnote, stale = _timeliness(good, brief)  # over ALL rows; a FLAG, never a ship blocker
-    exe = _executable_query(expr, candidate_url, resolve, paginate=paginate)  # self-contained + runnable
+    if paginate and doc.ok and not _pager_confirmed(doc, hint):
+        log.info("    pagination probe: no distinct second page -> shipping page one only")
+        paginate = False  # don't bake a pager that pages into nothing / a clamp
+    exe = _executable_query(expr, candidate_url, resolve, paginate=paginate, hint=hint)  # self-contained + runnable
     try:  # the visual step tree, from the VALID parsed plan (before/independent of testing)
         explain = exe.explain()
     except Exception:  # noqa: BLE001 - never let rendering the explain break authoring
@@ -1045,6 +1074,7 @@ def write_query(
     llm: LLM,
     browser: BrowserMode = "auto",
     paginated: bool = False,
+    pagination_hint: "PaginationHint | None" = None,
     retries: int = 4,
     extra_urls: Sequence[str] = (),
     resolve: "Resolve | None" = None,
@@ -1132,7 +1162,7 @@ def write_query(
             follow_up = _split_section_follow_up(empties, exprs)
             continue
         expr = exprs[0]
-        art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases, paginate=paginated)
+        art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases, paginate=paginated, hint=pagination_hint)
         if art.complete:
             if not _should_retry_for_recency(art, attempt, tries):
                 note = f" (STALE flag: {art.timeliness})" if art.stale else ""
@@ -1148,7 +1178,7 @@ def write_query(
         # swapping in the nearest real class present in the record, then re-validate.
         repaired = _repair_query(expr, doc)
         if repaired is not None:
-            rart, _rrows = _artifact_from(repaired, doc, brief, candidate_url, resolve, bases, paginate=paginated)
+            rart, _rrows = _artifact_from(repaired, doc, brief, candidate_url, resolve, bases, paginate=paginated, hint=pagination_hint)
             if rart.complete and not _should_retry_for_recency(rart, attempt, tries):
                 note = f" (STALE flag: {rart.timeliness})" if rart.stale else ""
                 log.info("%s: ✓ complete after auto-repairing a selector%s — %d row(s)",

@@ -148,6 +148,20 @@ def test_sitemap_robots_and_a_crawl(lab, wc, index):
     assert any(f.reason == "robots-disallowed" for f in crawl.failures)
 
 
+def test_interacted_pagination_loads_all_records(lab, wc):
+    # by="action": drive a JS "load more" button (an interacted pager) until the list is exhausted,
+    # then extract EVERY record from the one fully-loaded page (append / exhaust-then-extract).
+    from webclient.interface import wq
+
+    exp = expected(lab, wc, "loadmore")
+    live = wc.ref(f"{lab}/lab/loadmore").resolve(browser=True).collect()
+    assert len(live.select_all("li.item")) == exp["initial"]  # 3 to start
+    pages = list(live.paginate(by="action", action=wq.doc.click("#more"), records="li.item", max_pages=10))
+    assert len(pages) == 1  # append mode -> one fully-loaded page
+    assert len(pages[0].select_all("li.item")) == exp["total"]  # all 12 loaded
+    wc.release(live)
+
+
 @pytest.mark.parametrize("name", ["spa", "feed", "app"])
 def test_browser_fixtures(lab, wc, index, name):
     exp = expected(lab, wc, name)

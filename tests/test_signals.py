@@ -64,6 +64,91 @@ def test_tabbed_flag_fires_on_tabs_but_not_on_a_plain_table():
     assert not plain["tabbed"].present
 
 
+def test_page_param_link_detection_shares_the_canon_param_table():
+    # a link whose query carries a pagination param (offset/page/…) trips page_param_links; a
+    # ?p=<id> post link must NOT (the WordPress guard). The table is crawl.canon's, so detection
+    # and crawl's series-dedup never drift.
+    paged = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {},
+        b'<html><body><main><article>x</article>'
+        b'<a href="/list?offset=20">next</a></main></body></html>',
+    ))
+    assert any(s.name == "page_param_links" for s in paged["pagination"].signals)  # ?offset= counts
+
+    post = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {},
+        b'<html><body><main><a href="/read?p=123">a post</a></main></body></html>',
+    ))
+    assert not any(s.name == "page_param_links" for s in post["pagination"].signals)  # ?p= is an id
+
+
+def test_pagination_hint_reads_kind_name_and_totals():
+    from webclient.core.document.models import PaginationHint
+
+    f = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {},
+        b'<html><body><main><article>x</article><p>Showing 1-20 of 348</p>'
+        b'<a href="/list?page=2">next</a></main></body></html>',
+    ))
+    h = f["pagination"].value
+    assert isinstance(h, PaginationHint)
+    assert h.kind == "param" and h.name == "page"  # a page-param advance
+    assert h.total_items == 348 and h.page_size == 20  # from the "1-20 of 348" caption
+
+
+def test_pagination_hint_link_header_marks_an_api_listing():
+    # a JSON API paginated only via the HTTP Link header (no HTML pager) still detects, kind=link
+    f = flags(Context.from_response(
+        200, {"content-type": "application/json", "Link": '<https://api.x/items?page=2>; rel="next"'},
+        {}, b"[]",
+    ))
+    assert f["pagination"].present and f["pagination"].value.kind == "link"
+
+
+def test_ordered_flag_reads_sort_direction_and_relevance():
+    from webclient.core.document.models import Ordering
+
+    # newest-first <time> dates + a sort control -> date / desc / controllable (a recency stop is sound)
+    dated = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {},
+        b'<html><body><select name="sort"><option>New</option></select><main>'
+        b'<article><time datetime="2026-03-01">a</time></article>'
+        b'<article><time datetime="2026-02-01">b</time></article>'
+        b'<article><time datetime="2026-01-01">c</time></article></main></body></html>',
+    ))["ordered"].value
+    assert isinstance(dated, Ordering)
+    assert dated.key == "date" and dated.direction == "desc" and dated.controllable
+
+    # a search-results URL -> relevance order (no early pagination stop is sound)
+    rel = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {}, b"<html><body>x</body></html>",
+        url="http://x/search?q=coffee",
+    ))["ordered"].value
+    assert rel.key == "relevance"
+
+
+def test_filtered_and_live_flags():
+    from datetime import date, timedelta
+
+    from webclient.core.document.models import Filtering, Liveness
+
+    recent = (date.today() - timedelta(days=3)).isoformat()
+    html = (
+        f'<html><body><aside class="facet"><select name="filter_cat"></select></aside><main>'
+        f'<article><time datetime="{recent}">x</time></article>'
+        f'<article><time datetime="2025-01-01">y</time></article>'
+        f'<article><time datetime="2024-01-01">z</time></article></main></body></html>'
+    ).encode()
+    f = flags(Context.from_response(
+        200, {"content-type": "text/html"}, {}, html, url="http://x/list?category=news&page=2",
+    ))
+    filt = f["filtered"].value
+    assert isinstance(filt, Filtering) and filt.active == {"category": "news"}  # page= is NOT a filter
+    assert "filter_cat" in filt.controls
+    live = f["live"].value
+    assert isinstance(live, Liveness) and live.recent and live.drift_risk  # recent + newest-first -> drift
+
+
 def test_caas_content_service_marker_fires_spa_so_auto_renders():
     # a page whose records are fetched by a content-service widget (e.g. Adobe Milo /
     # a CaaS block) leaves only a shell in the served HTML; the static marker fires spa

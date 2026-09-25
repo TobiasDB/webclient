@@ -85,6 +85,7 @@ def evaluate_candidate(
     data: dict[str, Any] = dict(parsed) if isinstance(parsed, dict) else {"verdict": "could not evaluate"}
     # the flags are ground truth for structure -> they win over the model's guesses.
     data["has_pagination"] = bool(data.get("has_pagination")) or flags["pagination"].present
+    data["pagination_hint"] = flags["pagination"].value  # the detected advance (kind/name/…), or None
     # The API endpoint is used ONLY if the model names one of the OBSERVED same-origin
     # XHR endpoints (never a blind "first XHR" pick, and never a hallucinated URL) -- so
     # the reference stays the CHOSEN page unless a real data endpoint is identified. This

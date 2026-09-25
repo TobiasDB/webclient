@@ -3,7 +3,7 @@
 Each :class:`Scenario` bundles: the pages to serve, the target schema (brief), the CORRECT
 rows we expect out, and a known-good ``solution`` query (a ``wq.doc`` chain) that extracts
 them. The deterministic test (``test_messy_html.py``) proves every scenario is SOLVABLE and
-the DSL handles it; the LLM eval (``scripts/query_eval.py``) then checks whether the model
+the DSL handles it; the LLM eval (the ``evals/`` harness) then checks whether the model
 finds an equivalent query on its own -- i.e. whether it can write genuinely complex queries
 (nested resolves, sibling-no-root, regex extraction) against genuinely tricky content
 (empty-vs-archived, an Adobe-style SPA false flag).

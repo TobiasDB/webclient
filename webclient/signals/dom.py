@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, Any
-from urllib.parse import urljoin, urlparse
+from datetime import date, datetime, timezone
+from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import parse_qsl, urljoin, urlparse
 
 from ..dom import norm
 from .context import Context
@@ -204,9 +205,80 @@ def _iframe_element(ctx: Context) -> Hit | None:
 # -- pagination (tree) --------------------------------------------------------
 
 
+_PAGE_OF = re.compile(r"\bpage\s+\d+\s+of\s+([\d,]+)", re.I)  # "Page 1 of 18"
+_SHOWING = re.compile(r"\b([\d,]+)\s*(?:[-–—]|to)\s*([\d,]+)\s+of\s+([\d,]+)", re.I)  # "1-20 of 348"
+
+
+def _int(s: str) -> int:
+    """A comma-grouped integer string as an int (``"1,234" -> 1234``); 0 on garbage."""
+    try:
+        return int(s.replace(",", ""))
+    except ValueError:
+        return 0
+
+
+def _param_name(url: str) -> str:
+    """The pagination param carried by ``url`` (``?page=`` / ``?offset=`` …, canon's table), else ""."""
+    if not url:
+        return ""
+    from ..core.crawl.canon import _PAGINATION_PARAMS
+
+    from urllib.parse import parse_qsl
+
+    for k, _ in parse_qsl(urlparse(url).query):
+        if k.lower() in _PAGINATION_PARAMS:
+            return k
+    return ""
+
+
+def _totals(ctx: Context) -> "tuple[int, int, int]":
+    """``(total_pages, total_items, page_size)`` read from an ``X-Total-Count`` header and a
+    "Page 1 of 18" / "Showing 1-20 of 348" caption -- each 0 when not found."""
+    total_pages = total_items = page_size = 0
+    xtc = ctx.headers.get("x-total-count", "")
+    if xtc.isdigit():
+        total_items = int(xtc)
+    text = (ctx.visible or (norm(" ".join(ctx.tree.itertext())) if ctx.tree is not None else ""))[:5000]
+    if text:
+        if m := _PAGE_OF.search(text):
+            total_pages = _int(m.group(1))
+        if m := _SHOWING.search(text):
+            lo, hi, tot = _int(m.group(1)), _int(m.group(2)), _int(m.group(3))
+            total_items = total_items or tot
+            if 0 < lo <= hi:
+                page_size = hi - lo + 1
+    return total_pages, total_items, page_size
+
+
 def _pagination_value(signals: "list[Signal]", ctx: Context) -> Any:
-    """The next-page hint carried by the pagination signals (a rel=next / page-param URL), if any."""
-    return next((s.value for s in signals if s.value), None)
+    """A structured :class:`PaginationHint` (kind / next / name / totals) built from the pagination
+    signals + the page, so a caller can pick the advance without guessing. ``None`` when nothing fired."""
+    from ..core.document.models import PaginationHint
+
+    if not signals:
+        return None
+    fired = {s.name for s in signals}
+    # a next URL a signal already resolved (page_param_links) -- tree-derived, so correct-case
+    next_url = next((s.value for s in signals if isinstance(s.value, str) and s.value), "")
+    kind: Literal["link", "param", "numbered", "unknown"]
+    if "rel_next_link" in fired or "link_header_next" in fired:
+        kind = "link"
+        if not next_url and ctx.tree is not None:  # fill next from the tree rel=next (correct case)
+            nodes = ctx.tree.cssselect('a[rel="next"], link[rel="next"]')
+            href = nodes[0].get("href") if nodes else None
+            if href:
+                next_url = urljoin(ctx.final_url or ctx.url, href)
+    elif "page_param_links" in fired:
+        kind = "param"
+    elif "numbered_sequence" in fired:
+        kind = "numbered"
+    else:
+        kind = "unknown"
+    total_pages, total_items, page_size = _totals(ctx)
+    return PaginationHint(
+        kind=kind, next=next_url, name=_param_name(next_url) if kind == "param" else "",
+        total_pages=total_pages, total_items=total_items, page_size=page_size,
+    )
 
 
 flag("pagination", value=_pagination_value)
@@ -232,14 +304,21 @@ def _pagination_ui(ctx: Context) -> Hit | None:
 
 @detector(flag="pagination", name="page_param_links", stage="static")
 def _page_param_links(ctx: Context) -> Hit | None:
-    """pagination evidence: a link carrying a page parameter (``?page=`` / ``/page/`` etc.);
-    its resolved URL is the next-page value."""
+    """pagination evidence: a link whose query carries a pagination param (``?page=``, ``?offset=``,
+    …) or whose path is ``/page/N``; its resolved URL is the next-page value. Reads the SAME param
+    table crawl uses to collapse a series (``crawl.canon``), so detection and dedup never drift --
+    notably ``p`` is excluded (too often a post id, e.g. WordPress ``?p=123``, not a page number)."""
     if ctx.tree is None:
         return None
+    from ..core.crawl.canon import _PAGE_PATH_RE, _PAGINATION_PARAMS
+
     base = ctx.final_url or ctx.url
     for el in ctx.tree.cssselect("a[href]"):
         h = el.get("href")
-        if h and any(p in h for p in ("?page=", "&page=", "?p=", "&p=", "/page/")):
+        if not h:
+            continue
+        parts = urlparse(h)
+        if any(k.lower() in _PAGINATION_PARAMS for k, _ in parse_qsl(parts.query)) or _PAGE_PATH_RE.search(parts.path):
             return Hit(0.5, "links with a page parameter", urljoin(base, h))
     return None
 
@@ -251,6 +330,157 @@ def _numbered_sequence(ctx: Context) -> Hit | None:
         return None
     nums = [t for el in ctx.tree.cssselect("a[href]") if (t := norm("".join(el.itertext()))).isdigit()]
     return Hit(0.6, "a numbered page sequence") if len(nums) >= 3 else None
+
+
+# -- ordered (tree + the request params): HOW the listing is sorted -----------
+# decides whether an early pagination stop is sound (newest-first dates -> yes; relevance
+# / unknown -> the walk must exhaust). Evidence: a sort control, a search box, and
+# record dates that run monotonically. The request-stage sort/relevance PARAM detectors
+# live in :mod:`.request_static`; these are the tree-based ones + the value reducer.
+
+_ISO_DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")  # a sortable ISO date in text
+
+
+def _page_dates(ctx: Context) -> "list[str]":
+    """Sortable date strings in DOM order: HTML5 ``<time datetime>`` attributes first (the clean,
+    standard signal), else ISO dates found in the visible text. Truncated to the date part so they
+    sort lexically."""
+    if ctx.tree is None:
+        return []
+    stamps = [dt[:10] for el in ctx.tree.cssselect("time[datetime]") if (dt := (el.get("datetime") or "").strip())]
+    if len(stamps) >= 3:
+        return stamps
+    return _ISO_DATE.findall(ctx.visible or "")
+
+
+def _monotone_direction(vals: "list[str]") -> str:
+    """``"desc"`` when the values run non-increasing (newest-first), ``"asc"`` non-decreasing, else
+    ``""`` (not monotone, or all equal -- uninformative). Needs at least three values."""
+    seq = [v for v in vals if v]
+    if len(seq) < 3:
+        return ""
+    asc = all(a <= b for a, b in zip(seq, seq[1:]))
+    desc = all(a >= b for a, b in zip(seq, seq[1:]))
+    return "desc" if desc and not asc else "asc" if asc and not desc else ""
+
+
+@detector(flag="ordered", name="sort_control", stage="static")
+def _sort_control(ctx: Context) -> Hit | None:
+    """ordered evidence: a sort control on the page (a ``select[name*=sort]`` / ``[aria-sort]`` /
+    an order dropdown) -> the listing's order is CONTROLLABLE."""
+    if ctx.tree is not None and ctx.tree.cssselect(
+        'select[name*="sort"], select[name*="order"], [aria-sort], [class*="sort-by"], [class*="sortby"]'
+    ):
+        return Hit(0.6, "a sort control")
+    return None
+
+
+@detector(flag="ordered", name="relevance_searchbox", stage="static")
+def _relevance_searchbox(ctx: Context) -> Hit | None:
+    """ordered evidence: a search box (``input[type=search]`` / ``[role=search]``) -> the listing
+    is likely relevance-ordered, so no early pagination stop is sound."""
+    if ctx.tree is not None and ctx.tree.cssselect('input[type="search"], [role="search"]'):
+        return Hit(0.5, "a search box (relevance order)")
+    return None
+
+
+@detector(flag="ordered", name="monotone_dates", stage="static")
+def _monotone_dates(ctx: Context) -> Hit | None:
+    """ordered evidence (strong): the page's record dates run MONOTONICALLY -- so the listing is
+    date-sorted, and the direction says whether a recency ``until`` stop is sound. The direction
+    (``"desc"``/``"asc"``) is the signal value."""
+    direction = _monotone_direction(_page_dates(ctx))
+    if direction:
+        return Hit(0.7, f"record dates run {'newest' if direction == 'desc' else 'oldest'}-first", direction)
+    return None
+
+
+def _ordering_value(signals: "list[Signal]", ctx: Context) -> Any:
+    """An :class:`Ordering` (key / direction / controllable / param) built from the ordered signals,
+    so a caller knows if an early pagination stop is sound. ``None`` when nothing fired."""
+    from ..core.document.models import Ordering
+
+    if not signals:
+        return None
+    fired = {s.name for s in signals}
+    param = next((s.value for s in signals if s.name == "sort_param" and isinstance(s.value, str)), "")
+    raw_dir = next((s.value for s in signals if s.name == "monotone_dates" and isinstance(s.value, str)), "")
+    direction: Literal["asc", "desc", "unknown"] = "desc" if raw_dir == "desc" else "asc" if raw_dir == "asc" else "unknown"
+    key: Literal["date", "alpha", "price", "relevance", "unknown"]
+    if raw_dir:
+        key = "date"
+    elif "relevance_query" in fired or "relevance_searchbox" in fired:
+        key = "relevance"
+    else:
+        key = "unknown"
+    return Ordering(key=key, direction=direction, controllable="sort_param" in fired or "sort_control" in fired, param=param)
+
+
+flag("ordered", value=_ordering_value)
+
+
+# -- filtered (tree + request params): the listing is NARROWED -----------------
+
+@detector(flag="filtered", name="facet_controls", stage="static")
+def _facet_controls(ctx: Context) -> Hit | None:
+    """filtered evidence: filter / facet controls on the page (a ``[class*=facet]`` / ``[class*=filter]``
+    block, a checkbox filter form, a ``select[name*=filter]``) -> facets to narrow / partition by. The
+    control names (best-effort) are the signal value."""
+    if ctx.tree is None:
+        return None
+    names: list[str] = []
+    for el in ctx.tree.cssselect('[class*="facet"], [class*="filter"], select[name*="filter"], form input[type="checkbox"]'):
+        label = (el.get("name") or el.get("aria-label") or el.get("id") or "").strip()
+        if label and label not in names:
+            names.append(label)
+    hits = ctx.tree.cssselect('[class*="facet"], [class*="filter"], select[name*="filter"]')
+    return Hit(0.5, "filter / facet controls", names[:8]) if hits else None
+
+
+def _filtering_value(signals: "list[Signal]", ctx: Context) -> Any:
+    """A :class:`Filtering` (active filter params + the filter controls) from the filtered signals."""
+    from ..core.document.models import Filtering
+
+    if not signals:
+        return None
+    active = next((s.value for s in signals if s.name == "active_query_filters" and isinstance(s.value, dict)), {})
+    controls = next((s.value for s in signals if s.name == "facet_controls" and isinstance(s.value, list)), [])
+    return Filtering(active=active, controls=controls)
+
+
+flag("filtered", value=_filtering_value)
+
+
+# -- live (tree): the listing CHANGES over time (a feed / newest-first list) ----
+
+@detector(flag="live", name="recent_records", stage="static")
+def _recent_records(ctx: Context) -> Hit | None:
+    """live evidence: the newest record date on the page is within the last month -> a live/timely
+    listing (a feed), which shifts while you page. The newest date is the signal value."""
+    dates = _page_dates(ctx)
+    if len(dates) < 3:
+        return None
+    newest = max(dates)
+    try:
+        age = (datetime.now(timezone.utc).date() - date.fromisoformat(newest[:10])).days
+    except ValueError:
+        return None
+    return Hit(0.7, f"recent records (newest {newest})", newest) if 0 <= age <= 31 else None
+
+
+def _liveness_value(signals: "list[Signal]", ctx: Context) -> Any:
+    """A :class:`Liveness` (newest date, recent, drift risk) from the live signals. ``drift_risk`` is
+    set when the recent list is also newest-first -- paging it may duplicate/skip at boundaries."""
+    from ..core.document.models import Liveness
+
+    if not signals:
+        return None
+    newest = next((s.value for s in signals if isinstance(s.value, str) and s.value), "")
+    desc = _monotone_direction(_page_dates(ctx)) == "desc"
+    return Liveness(newest=newest, recent=True, drift_risk=bool(newest and desc))
+
+
+flag("live", value=_liveness_value)
 
 
 # -- tabbed (tree) -- same page, content split behind TAB controls ------------

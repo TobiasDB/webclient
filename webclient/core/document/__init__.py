@@ -31,7 +31,6 @@ from .flags import FlagsBacking
 from .regex import RegexBacking
 from .element_index import ElementIndexBacking
 from .paginate import PaginateBacking
-from .patterns import PatternsBacking
 
 if TYPE_CHECKING:
     from ...interface import LazyDocument
@@ -79,6 +78,7 @@ class Document(WebCore, IDocument):
         default_factory=dict  # for the content-matching ContentCorrelator (populated by the browser)
     )
     _flag_cache: Any = PrivateAttr(default=None)  # memoised flag set (one detection pass/doc)
+    _pattern_flag_cache: Any = PrivateAttr(default=None)  # memoised STRUCTURAL pattern flags
     _row: Any = PrivateAttr(default=None)  # extracted columns (extract/field)
     _surface: Any = PrivateAttr(default=None)  # the core's single eager surface
     _set_cookies: dict[str, str] = PrivateAttr(  # transport-parsed Set-Cookie
@@ -112,7 +112,6 @@ class Document(WebCore, IDocument):
         RegexBacking(),
         ElementIndexBacking(),
         PaginateBacking(),
-        PatternsBacking(),
     )
 
     @property
@@ -236,7 +235,7 @@ class Document(WebCore, IDocument):
     async def apaginate(
         self,
         *,
-        by: str = "link",
+        by: str = "auto",
         max_pages: int = 20,
         max_rows: int = 0,
         name: str = "page",
@@ -248,25 +247,28 @@ class Document(WebCore, IDocument):
         records: str = "",
         until: str = "",
         until_before: str = "",
+        total_pages: int = 0,
+        action: Any = None,
+        partition_param: str = "",
+        partition_values: "list[str] | tuple[str, ...]" = (),
         stop: Any = None,
         key: Any = None,
         next: str = "",
-        timeout: float = 10.0,
     ) -> "Collection[Document]":
         """The pages of this dataset as a ``Collection[Document]``, page one first -- chain
         ``select_all(...).extract(...).project()`` to extract the WHOLE dataset (the body runs
         across every page, not page one only).
 
-        HOW TO ADVANCE (``by``): ``"link"`` follows ``rel=next`` (an HTML ``a/link[rel=next]`` or an
-        HTTP ``Link:`` header, so an API paginates); ``"param"`` walks ``?{name}=`` from ``start`` by
-        ``step`` (or by ``size`` as an offset); ``"cursor"`` reads a keyset token off each page (the
-        ``cursor`` selector's ``cursor_attr`` -- ``cursor="a.next"`` + ``cursor_attr="data-after"``, or
-        a JSON path ``cursor="pageInfo.endCursor"``) and carries it in ``?{name}=``; ``"click"`` drives
-        an interacted pager on a LIVE browser page -- it clicks ``next`` (a "load more" / "next"
-        control) or, without one, scrolls to the bottom (infinite scroll), waits up to ``timeout``
-        seconds for ``records`` to grow, and repeats; the one page then holds every loaded record.
-        ``next`` (any ``by``) names the next link's selector when the site has no ``rel=next``
-        (``next="li.next a"`` -- its ``href`` is the next page).
+        HOW TO ADVANCE (``by``): ``"auto"`` (default) picks the advance from the page's detected
+        ``pagination`` hint -- a ``?page=``/``?offset=`` source walks by that param, everything else
+        follows the next link -- so a bare ``doc.paginate()`` just works. ``"link"`` follows ``rel=next``
+        (an HTML ``a/link[rel=next]`` or an HTTP ``Link:`` header, so an API paginates); ``"param"``
+        walks ``?{name}=`` from ``start`` by ``step`` (or by ``size`` as an offset); ``"cursor"`` reads
+        a keyset token off each page (the ``cursor`` selector's ``cursor_attr`` -- ``cursor="a.next"`` +
+        ``cursor_attr="data-after"``, or a JSON path ``cursor="pageInfo.endCursor"``) and carries it in
+        ``?{name}=``.
+        ``next`` names the next link's selector when the site has no ``rel=next`` (``next="li.next a"``
+        -- its ``href`` is the next page); interacted pagers are ``by="action"`` with an ``action``.
 
         WHERE TO STOP (all optional, so a long dataset isn't walked whole for a few rows): ``max_pages``
         caps the page count; ``max_rows`` with ``records`` (the record selector) stops once that many
@@ -282,15 +284,16 @@ class Document(WebCore, IDocument):
         pages = await walk(
             self, by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start,
             step=step, size=size, cursor=cursor, cursor_attr=cursor_attr, records=records,
-            until=until, until_before=until_before, stop=stop, key=key, next=next, timeout=timeout,
-            client=self._client,
+            until=until, until_before=until_before, total_pages=total_pages, action=action,
+            partition_param=partition_param, partition_values=partition_values,
+            stop=stop, key=key, next=next, client=self._client,
         )
         return Collection(pages, client=self._client, root=self.name or self.root)
 
     def paginate(
         self,
         *,
-        by: str = "link",
+        by: str = "auto",
         max_pages: int = 20,
         max_rows: int = 0,
         name: str = "page",
@@ -302,16 +305,20 @@ class Document(WebCore, IDocument):
         records: str = "",
         until: str = "",
         until_before: str = "",
+        total_pages: int = 0,
+        action: Any = None,
+        partition_param: str = "",
+        partition_values: "list[str] | tuple[str, ...]" = (),
         stop: Any = None,
         key: Any = None,
         next: str = "",
-        timeout: float = 10.0,
     ) -> "Collection[Document]":
         """Eager form of :meth:`apaginate` (bridged onto the engine loop)."""
         return self._client.loop().run(self.apaginate(
             by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start, step=step,
             size=size, cursor=cursor, cursor_attr=cursor_attr, records=records, until=until,
-            until_before=until_before, stop=stop, key=key, next=next, timeout=timeout,
+            until_before=until_before, total_pages=total_pages, action=action,
+            partition_param=partition_param, partition_values=partition_values, stop=stop, key=key, next=next,
         ))
 
 

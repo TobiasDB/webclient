@@ -15,7 +15,7 @@ from pydantic import BaseModel, PrivateAttr, model_validator
 #: also appended to ``OnboardingResult.steps`` for a programmatic trace.
 
 from ...core.crawl import from_picks
-from ...core.document.models import Flag
+from ...core.document.models import Flag, PaginationHint
 from ...policy import (
     AntiBotPolicy,
     BrowserPolicy,
@@ -261,6 +261,9 @@ class CandidateEval(BaseModel):
     recency_hint: str = ""  # where the MOST RECENT records are (a tab/filter/first page), for write_query
     completeness: str | None = None  # e.g. "full" | "partial" | "unknown"
     has_pagination: bool = False
+    #: the detected pagination shape (kind / next / param name / totals), so write_query bakes
+    #: the RIGHT advance (``by="param"`` with the param name, else ``by="link"``) -- None when unpaged.
+    pagination_hint: PaginationHint | None = None
     has_filters: bool = False
     dataset_is_subset: bool = False  # our brief is a subset of what's on offer
     mostly_unstructured: bool = False

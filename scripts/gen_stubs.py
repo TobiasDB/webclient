@@ -37,7 +37,7 @@ from webclient.core.document import Document, Element  # noqa: E402
 from webclient.core.reference import Reference  # noqa: E402
 from webclient.core.session import Session  # noqa: E402
 from webclient.errors import WebError  # noqa: E402
-from webclient.patterns import PatternHint  # noqa: E402
+from webclient.core.document.models import PatternHint  # noqa: E402
 from webclient.core.document.models import (  # noqa: E402
     Flag,
     Metadata,
@@ -511,7 +511,7 @@ def _lazy_class(core: type) -> str:
             'def paginate(self, *, by: str = ..., max_pages: int = ..., max_rows: int = ..., '
             'name: str = ..., start: int = ..., step: int = ..., size: int = ..., cursor: str = ..., '
             'cursor_attr: str = ..., records: str = ..., until: str = ..., until_before: str = ..., '
-            'stop: Any = ..., key: Any = ...) -> "LazyCollection[LazyDocument]": ...',
+            'total_pages: int = ..., action: Any = ..., partition_param: str = ..., partition_values: Any = ..., stop: Any = ..., key: Any = ...) -> "LazyCollection[LazyDocument]": ...',
             'def field(self, name: str) -> "LazyField[Any]": ...',
             'def reference(self, name: str) -> "LazyReference": ...',
             # sequence authoring: .step(action) chains an ACTION (a wait_for/click/

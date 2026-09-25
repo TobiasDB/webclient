@@ -1,9 +1,15 @@
 """demo.py -- one clean tour of every implemented webclient feature.
 
-Maintained with every milestone. Sections marked [M<n>]/[P<n>] appear as
-their milestone lands; ``roadmap_tour`` at the end covers the 2026-09 roadmap
+The tour reads as a sequence of USER STORIES (one function each): build a request,
+crawl a site, select + render, record a browser journey into a replayable Plan,
+drive agent loops, paginate, extract lazily, and run the same plans async / over an
+HTTP service / on a remote client. ``roadmap_tour`` then covers the 2026-09 roadmap
 (the ledger, traces + replay, tools, scripts + rrweb, loops, patterns, the UI)
-against the lab and leaves ``traces/demo.jsonl`` for ``make serve`` + the separate UI.
+against the shared lab, and leaves ``traces/demo`` for ``make serve`` -> /ui.
+
+The through-line is "everything is a Plan": :func:`browser_journey` RECORDS an eager
+session into one portable Plan and replays it, and the whole back half runs recorded
+Plans through the one evaluator -- eager, lazy, async, service and remote all agree.
 
 Runs fully offline: it serves its own demo site on localhost (needs chromium).
 
@@ -19,7 +25,6 @@ from typing import Any
 from webclient import (
     RETURN,
     DOMUpdateEvent,
-    Event,
     HtmlBacking,
     NavigationEvent,
     WaitConfig,
@@ -83,25 +88,6 @@ APP = b"""
 </body></html>
 """
 
-# a search-engine results page (DuckDuckGo-shaped): three hits, one an ad row.
-SEARCH = b"""
-<html><body>
-  <div class="result result--ad"><span>Sponsored</span></div>
-  <div class="result">
-    <a class="result__a" href="https://example.com/aeropress">Aeropress Guide</a>
-    <a class="result__snippet">How to brew a great cup with an Aeropress.</a>
-  </div>
-  <div class="result">
-    <a class="result__a" href="https://example.com/grinder">Best Burr Grinders</a>
-    <a class="result__snippet">A roundup of burr grinders for espresso.</a>
-  </div>
-  <div class="result">
-    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fkettle">Gooseneck Kettles</a>
-    <a class="result__snippet">Pouring control for pour-over coffee.</a>
-  </div>
-</body></html>
-"""
-
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
@@ -117,27 +103,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
 
             page = int(parse_qs(urlparse(self.path).query).get("p", ["1"])[0])
-            user = (
-                "friend"
-                if "token=tok" in (self.headers.get("Cookie") or "")
-                else "guest"
-            )
-            nxt = (
-                f'<a class="next" href="/feed?p={page + 1}">more</a>'
-                if page < 3
-                else ""
-            )
-            body = (
-                f"<html><body><h1>feed p{page} for {user}</h1>{nxt}" "</body></html>"
-            ).encode()
+            user = "friend" if "token=tok" in (self.headers.get("Cookie") or "") else "guest"
+            nxt = f'<a class="next" href="/feed?p={page + 1}">more</a>' if page < 3 else ""
+            body = f"<html><body><h1>feed p{page} for {user}</h1>{nxt}</body></html>".encode()
             ctype = "text/html"
         elif self.path.startswith("/releases"):  # a paginated dataset (rel=next)
             from urllib.parse import parse_qs, urlparse
 
             page = int(parse_qs(urlparse(self.path).query).get("p", ["1"])[0])
-            recs = "".join(
-                f'<article class="rel">v{page}.{i}</article>' for i in range(2)
-            )
+            recs = "".join(f'<article class="rel">v{page}.{i}</article>' for i in range(2))
             nxt = f'<link rel="next" href="/releases?p={page + 1}">' if page < 3 else ""
             body = f"<html><head>{nxt}</head><body><main>{recs}</main></body></html>".encode()
             ctype = "text/html"
@@ -148,8 +122,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"welcome")
             return
-        elif self.path.startswith("/search"):  # a search-engine results page
-            body, ctype = SEARCH, "text/html; charset=utf-8"
         elif self.path == "/spa":  # a JS-gated page (content injected by script)
             body, ctype = SPA, "text/html"
         elif self.path == "/app":  # a JS-driven live page
@@ -183,752 +155,529 @@ def serve() -> str:
     return f"http://127.0.0.1:{server.server_port}"
 
 
-def main() -> None:
-    base = serve()
+# -- output helpers: the tour reads as titled sections of aligned key/value lines ----
 
-    # [M1] References are pure request specs -- build, derive, inspect.
+def _section(title: str) -> None:
+    print(f"\n── {title} " + "─" * max(3, 64 - len(title)))
+
+
+def _show(label: str, *values: Any) -> None:
+    print(f"  {label + ':':<15}", *values)
+
+
+# -- the stories -----------------------------------------------------------------------
+
+def references(base: str) -> None:
+    """A Reference is a pure request SPEC: build one, derive variants, inspect -- no IO."""
+    _section("references (pure request specs)")
     spec = from_url(f"{base}/?utm=x", params={"page": "1"})
-    print("url:        ", spec.url)
-    print("derived:    ", spec.with_params(page="2").replace(fragment="top").url)
-    print("joined:     ", spec.join("items/1").url)
+    _show("url", spec.url)
+    _show("derived", spec.with_params(page="2").replace(fragment="top").url)
+    _show("joined", spec.join("items/1").url)
 
-    # [M2] A WebClient owns the pool, bus, plugins; it is the lifecycle root.
-    with WebClient(default_headers={"user-agent": "webclient-demo"}) as wc:
 
-        # [M2] Live event stream: everything observable crosses one bus.
-        def _on_network(e: Event) -> None:
-            code = getattr(e, "status_code", None)
-            path = getattr(getattr(e, "request", None), "path", "")
-            print(f"event:       {e.topic} #{e.seq} {code} {path}")
+def fetch_and_crawl(wc: WebClient, base: str) -> tuple[Any, Any]:
+    """Fetch through a redirect (loud by default, ``optional`` lenient), then crawl: a
+    client-held, scoped traversal -- steer a round (``step``) or self-drive (``run``), with
+    a custom driver an option. Returns ``(shop, missing)`` for the addressing story."""
+    _section("fetch + crawl")
+    shop = wc.ref(f"{base}/old").resolve()
+    _show("final url", shop.final_url)
+    missing = wc.ref(f"{base}/nope").resolve(error=RETURN)
+    _show("optional", missing.status_code, "ok:", missing.ok)
 
-        wc.bus.subscribe("network", _on_network)
+    with wc.crawl(f"{base}/feed", auto=True, max_pages=4, browser=False) as crawl:
+        crawl.step()  # one round: fetch the seed, discover + score its edges
+        _show("frontier", [(round(e.score, 2), e.url.replace(base, "")) for e in crawl.frontier])
+        crawl.run()   # then self-drive the rest
+        _show("crawled", [(p.final_url or p.url).replace(base, "") for p in crawl.pages])
 
-        # [M2] Fetch through a redirect; loud by default, optional=True lenient.
-        shop = wc.ref(f"{base}/old").resolve()
-        print("final url:  ", shop.final_url)
-        missing = wc.ref(f"{base}/nope").resolve(error=RETURN)
-        print("optional:   ", missing.status_code, "ok:", missing.ok)
+    from webclient.core.crawl import from_picks  # a custom driver: follow only /feed* pages
 
-        # [M2] Crawl: a client-held, scoped traversal used as a context manager.
-        #      The client manages the frontier (dedup/scope); the caller steers a
-        #      round (crawl.step(select)) or lets it self-drive (auto). It retains
-        #      the resolved Documents (extract/facet off them) + the unresolved
-        #      frontier edges -- resource links dropped, and scored + sorted by
-        #      importance (nav / "read more" / article links high, footer low).
-        with wc.crawl(f"{base}/feed", auto=True, max_pages=4, browser=False) as crawl:
-            crawl.step()  # one turn: fetch the seed, discover its edges
-            print("frontier:   ", [(round(e.score, 2), e.url.replace(base, ""))
-                                    for e in crawl.frontier])
-            crawl.run()   # then let it self-drive the rest
-            print("crawled:    ", [(p.final_url or p.url).replace(base, "")
-                                    for p in crawl.pages])
-        # [driver] manual is the base; best-first is the default AUTO driver. A custom
-        #      driver (any list[Edge] -> list[url] via from_picks -- e.g. an LLM edge
-        #      picker) layers on top to steer run()/step(). Here: follow only /feed* pages.
-        from webclient.core.crawl import from_picks
+    picker = from_picks(lambda edges: [e.url for e in edges if "/feed" in e.url])
+    with wc.crawl(f"{base}/feed", max_pages=4, browser=False, driver=picker) as steered:
+        steered.run()
+        _show("driven", [(p.final_url or p.url).replace(base, "") for p in steered.pages])
+    _show("sitemap", [r.url.replace(base, "") for r in wc.sitemap(f"{base}/")])
+    return shop, missing
 
-        picker = from_picks(lambda edges: [e.url for e in edges if "/feed" in e.url])
-        with wc.crawl(f"{base}/feed", max_pages=4, browser=False, driver=picker) as steered:
-            steered.run()
-            print("driven:     ", [(p.final_url or p.url).replace(base, "")
-                                    for p in steered.pages])
-        # sitemap: a cheap hunt for the site's sitemap.xml page URLs (not a crawl)
-        print("sitemap:    ", [r.url.replace(base, "") for r in wc.sitemap(f"{base}/")])
 
-        # [P1] Every object is addressable: short scoped names, a root chain
-        #      (ref -> doc), recovery by name from the resolver, shop.ref().
-        print(
-            "names:      ",
-            shop.root,
-            "->",
-            shop.name,
-            "| recovered:",
-            wc.document(shop.name) is shop,
-            wc.reference(shop.root) is shop.ref(),
-        )
-        # [P1] Error policy: a not-ok object carries a serializable WebError;
-        #      `ok` is the truth, is_ok()/is_empty() run even when not ok.
-        assert missing.error is not None  # a not-ok document always carries one
-        print(
-            "not ok:     ",
-            missing.error.type,
-            "|",
-            missing.message,
-            "| is_ok:",
-            missing.is_ok(),
-            "| empty:",
-            bool(missing.is_empty()),
-        )
+def addressing_and_errors(wc: WebClient, shop: Any, missing: Any) -> None:
+    """Every object is addressable (short scoped names, a ref->doc root chain, recovery by
+    name); a not-ok object carries a serializable WebError while ``is_ok``/``is_empty`` still run."""
+    _section("addressing + error policy")
+    _show("names", shop.root, "->", shop.name, "| recovered:",
+          wc.document(shop.name) is shop, wc.reference(shop.root) is shop.ref())
+    assert missing.error is not None
+    _show("not ok", missing.error.type, "|", missing.message,
+          "| is_ok:", missing.is_ok(), "| empty:", bool(missing.is_empty()))
 
-        # [M1] Selection: css or xpath, elements only; index/optional knobs.
-        for card in shop.select_all(".card"):
-            title = card.select(".title").attr("text")
-            price = card.select("./span[@class='price']").attr("text")  # xpath
-            link = card.select("a").attr("href")  # -> Reference
-            # [M2] Follow the link: json selection uses a dotted path.
-            item = link.resolve()
-            print(
-                f"card:        {title} {price} -> "
-                f"{item.select('name').attr("text")} (stock {item.select('stock.count').attr("text")})"
-            )
 
-        # [render] One render(format) surface, dispatched to the backing for
-        # the doc's kind. html gives markdown/text/elements/links/html; json
-        # gives elements. Good cross-kind smoke test.
-        page = shop
-        print("title:      ", page.title)
-        print("markdown:   ", page.markdown().splitlines()[0])
-        print("text:       ", page.text(main_content_only=True)[:40])
-        # skeleton(): a token-lean tag#id.class DOM outline -- an LLM reads this to
-        # write CSS selectors for the page (see docs/llm-lazy-queries.md).
-        print("skeleton:   ", page.skeleton(max_lines=3).replace("\n", " | "))
-        # controls()/element_table(): a numbered, CLASS-FREE table an agent picks indexes
-        # from -- we resolve each index to a durable selector (Phase 3, the loops' primitive).
-        print("controls:   ", [(c.index, c.role, c.selector) for c in page.controls()][:3])
-        print("elem table: ", page.element_table().replace("\n", " | ")[:64])
-        print("elements:   ", [(e.type, e.text) for e in page.render("elements")][:3])
-        print("links:      ", [r.path for r in page.render("links")])
-        print("html:       ", page.render("html").strip()[:40])
-        item = shop.select(".card a").attr("href").resolve()  # a json document
-        print("json render:", [(e.type, e.text) for e in item.render("elements")][:3])
+def selection_and_render(wc: WebClient, shop: Any) -> None:
+    """Selection (css OR xpath, elements only), following a link into its JSON detail, and the
+    one ``render(format)`` surface (markdown / text / skeleton / controls / elements / links)."""
+    _section("selection + render")
+    for card in shop.select_all(".card"):
+        title = card.select(".title").attr("text")
+        price = card.select("./span[@class='price']").attr("text")  # xpath
+        item = card.select("a").attr("href").resolve()  # href -> Reference -> json doc
+        _show("card", f"{title} {price} -> {item.select('name').attr('text')}"
+                      f" (stock {item.select('stock.count').attr('text')})")
 
-        # [M2] Events routed onto the document that caused them.
-        print("doc events: ", [e.topic for e in shop.events])
-        print("navigations:", [e.status_code for e in shop.events_of(NavigationEvent)])
-        print("actions:    ", list(shop.action_events))  # empty until browser (M4)
+    _show("title", shop.title)
+    _show("markdown", shop.markdown().splitlines()[0])
+    _show("text", shop.text(main_content_only=True)[:40])
+    _show("skeleton", shop.skeleton(max_lines=3).replace("\n", " | "))  # an LLM reads this
+    _show("controls", [(c.index, c.role, c.selector) for c in shop.controls()][:3])
+    _show("elem table", shop.element_table().replace("\n", " | ")[:64])
+    _show("elements", [(e.type, e.text) for e in shop.render("elements")][:3])
+    _show("links", [r.path for r in shop.render("links")])
+    item = shop.select(".card a").attr("href").resolve()
+    _show("json render", [(e.type, e.text) for e in item.render("elements")][:3])
 
-        # [M2] Plugins: extend behaviour by registering a Backing. A registered
-        #      backing is chosen before the built-ins, so this HtmlBacking subclass
-        #      overrides the "markdown" render and super()s every other format.
-        class Shouty(HtmlBacking):
-            provides = frozenset({"render"})  # override render only; super()s the rest
+    _show("doc events", [e.topic for e in shop.events])
+    _show("navigations", [e.status_code for e in shop.events_of(NavigationEvent)])
 
-            def render(self, core: Any, format: str, **options: Any) -> Any:
-                if format == "markdown":
-                    return core.dispatch("title").upper()
-                return super().render(core, format, **options)
+    class Shouty(HtmlBacking):  # a plugin Backing: override ONE format, super() the rest
+        provides = frozenset({"render"})
 
-        wc.use(Shouty())
-        print("plugin:     ", shop.render("markdown"))
+        def render(self, core: Any, format: str, **options: Any) -> Any:
+            return core.dispatch("title").upper() if format == "markdown" else super().render(core, format, **options)
 
-        # [M3] Sessions: identity (cookies/headers) spanning fetches, with a
-        #      ttl'd lifecycle. Cookies set by responses persist; sessions
-        #      are isolated from each other.
-        session = wc.session(ttl=300, headers={"x-app": "demo"})
-        session.ref(f"{base}/login").resolve()
-        print("session:    ", session.status, "cookies:", session.cookies)
+    wc.use(Shouty())
+    _show("plugin", shop.render("markdown"))
 
-        # [M4] browser=True -> a LiveDocument backed by a real page. Actions
-        #      auto-wait; the DOM/console/network are captured onto the document
-        #      as events. A recording session (wc.record()) mirrors the eager
-        #      navigations + interactions into ONE replayable Plan -- rec.plan --
-        #      with secrets scrubbed (a Plan is portable, so credentials/auth never
-        #      land in it). Replaying the Plan reproduces the interacted state.
-        with wc.record() as rec:
-            live = rec.ref(f"{base}/app").resolve(browser=True)
-            live.write("#qty", "3").click("#add")
-            live.wait_for("#cart li", timeout=5.0)
-            print("live dom:   ", live.select("#cart li").attr("text"))
-            print("console:    ", [e.text for e in live.console])
-            print("dom events: ", len(live.dom_mutations), "mutations captured")
 
-            # [M4] LiveNode event narrowing: an element sees only its own subtree.
-            cart = live.select("#cart")
-            print("narrowed:   ", len(cart.events_of(DOMUpdateEvent)), "under #cart")
-            recorded = rec.plan  # the resolve + ordered interaction steps, as a Plan
-        wc.release(live)  # page back to the pool
+def sessions(wc: WebClient, base: str) -> None:
+    """A session is identity (cookies/headers) with a ttl'd lifecycle, isolated per session;
+    response cookies persist across its fetches."""
+    _section("sessions")
+    session = wc.session(ttl=300, headers={"x-app": "demo"})
+    session.ref(f"{base}/login").resolve()
+    _show("session", session.status, "cookies:", session.cookies)
 
-        # [recorder] Replay the recorded Plan on a fresh page -> the same reached state
-        #      (replay = running the Expr/Plan; the recorder never touched reload/actions).
-        print("recorded:   ", recorded.describe())
-        replayed = recorded.collect()
-        print("replayed:   ", replayed.select("#cart li").attr("text"))
-        wc.release(replayed)
 
-        # [agent] A type-safe, page-scoped agent loop: a policy observes the held page and
-        #      returns a TYPED action (Click / Type / WaitFor / Scroll / Goto / Done); the
-        #      loop acts on the ONE page, bounded, recording a replayable Plan. The policy
-        #      here is a plain function; in production it's an LLM adapter (any model). It can
-        #      target a control BY INDEX from obs.elements (Phase 4) -- the loop resolves the
-        #      index to a durable selector, so the recorded step still replays.
-        from webclient.llm import Done, Observation, Type, WaitFor, drive
+def browser_journey(wc: WebClient, base: str) -> Any:
+    """Everything is a Plan: RECORD an eager browser session -- resolve + interactions -- into
+    ONE portable Plan (secrets scrubbed), then REPLAY that Plan on a fresh page to reproduce the
+    reached state. The live page captures DOM/console/network as events. Returns the live doc."""
+    _section("browser + recorder (a journey as a Plan)")
+    with wc.record() as rec:
+        live = rec.ref(f"{base}/app").resolve(browser=True)
+        live.write("#qty", "3").click("#add").wait_for("#cart li", timeout=5.0)
+        _show("live dom", live.select("#cart li").attr("text"))
+        _show("console", [e.text for e in live.console])
+        _show("dom events", len(live.dom_mutations), "mutations captured")
+        cart = live.select("#cart")  # a LiveNode sees only its own subtree's events
+        _show("narrowed", len(cart.events_of(DOMUpdateEvent)), "under #cart")
+        recorded = rec.plan  # the resolve + ordered interactions, as a Plan
+    wc.release(live)
 
-        def policy(obs: Observation):  # a scripted policy: add 2 to the cart, then finish
-            if obs.step == 0:
-                qty = next((e for e in obs.elements if e.role == "textbox"), None)
-                return Type(index=qty.index, text="2") if qty else Type(selector="#qty", text="2")
-            if obs.step == 1:
-                return WaitFor(selector="#cart")
-            return Done(result="added to cart")
+    _show("recorded", recorded.describe())
+    replayed = recorded.collect()  # replay = run the Plan on a fresh page
+    _show("replayed", replayed.select("#cart li").attr("text"))
+    wc.release(replayed)
+    return live
 
-        with wc.record() as rec2:
-            page = rec2.ref(f"{base}/app").resolve(browser=True)
-            page.click("#add")  # seed the cart, then hand off to the loop
-            run = drive(page, policy, max_steps=6)
-            journey = rec2.plan
-        wc.release(page)
-        print("agent:      ", run.reason, f"in {run.steps} step(s) — {run.result!r}")
-        print("journey:    ", journey.describe())
 
-        # [query agent] The QUERY twin of the loop: a policy picks a RECORD + FIELDS by
-        #      index (build_query), and we assemble a durable
-        #      select_all(record).extract(fields).project() query -- the model never
-        #      authors a selector. Scripted here; an LLM adapter in production.
-        from webclient.llm import QueryDecision, QueryObservation, build_query
+def agent_loops(wc: WebClient, base: str, shop: Any) -> None:
+    """Two bounded, page-scoped loops driven by a typed policy (a plain fn here; an LLM adapter
+    in production): ``drive`` acts on a held page (returning typed actions, recorded as a Plan),
+    and ``build_query`` picks a RECORD + FIELDS by index and assembles a durable extract query --
+    the model never authors a selector."""
+    _section("agent loops (interact + query)")
+    from webclient.llm import Done, Observation, Type, WaitFor, drive
 
-        def qpolicy(obs: QueryObservation):
-            if obs.step == 0 and obs.records:  # pick the top repeated record region
-                return QueryDecision(record=obs.records[0].index)
-            if obs.fields:  # add name + price columns from the record's leaves, then done
-                cols = {"name": obs.fields[0].index}
-                price = next((f for f in obs.fields if f.name.startswith("$")), None)
-                if price:
-                    cols["price"] = price.index
-                return QueryDecision(fields=cols, done=True)
-            return QueryDecision(done=True)
+    def policy(obs: Observation) -> Any:  # scripted: add 2 to the cart, then finish
+        if obs.step == 0:
+            qty = next((e for e in obs.elements if e.role == "textbox"), None)
+            return Type(index=qty.index, text="2") if qty else Type(selector="#qty", text="2")
+        if obs.step == 1:
+            return WaitFor(selector="#cart")
+        return Done(result="added to cart")
 
-        qrun = build_query(shop, qpolicy)
-        print("query agent:", qrun.describe[:60])
-        print("query rows: ", qrun.row_count, qrun.sample[:2])
+    with wc.record() as rec2:
+        page = rec2.ref(f"{base}/app").resolve(browser=True)
+        page.click("#add")  # seed the cart, then hand off to the loop
+        run = drive(page, policy, max_steps=6)
+        journey = rec2.plan
+    wc.release(page)
+    _show("agent", run.reason, f"in {run.steps} step(s) — {run.result!r}")
+    _show("journey", journey.describe())
 
-        # [paginate] Walk a paginated dataset into a Collection of same-structure pages
-        #      (rel=next), then the body extracts across ALL pages -- not page 1 only.
-        #      Bounded by max_pages and guarded against out-of-range clamps.
-        pages = wc.fetch(f"{base}/releases?p=1").paginate(by="link", max_pages=5)
-        print("paginate:   ", len(list(pages)), "pages walked")
-        dataset = (
-            wq.reference(f"{base}/releases?p=1").resolve()
-            .paginate(by="link", max_pages=5)
-            .select_all("article.rel").extract(v=wq.doc.attr("text")).project()
-        ).collect()
-        print("dataset:    ", [r["v"] for r in dataset])
+    from webclient.llm import QueryDecision, QueryObservation, build_query
 
-        # [flags] browser="auto" escalates a JS-gated page to a browser render on the
-        #      response's flags. The /spa page injects its content via JS, so the spa
-        #      flag fires (a browser remedy, built from static + rendered signals) and
-        #      the transport trail shows the static -> browser escalation.
-        probed = wc.fetch(f"{base}/spa", browser="auto")
-        spa = probed.spa()
-        print(
-            "flags:      ",
-            {
-                "spa": spa.present,
-                "confidence": spa.confidence,
-                "evidence": [s.name for s in spa.signals],
-                "tiers": probed.transport().escalation,
-            },
-        )
-        # [shadow/iframe] records hidden in shadow DOM or a same-origin iframe are
-        #      invisible to a plain HTML snapshot. The render inlines both into the light
-        #      DOM, so the captured content (and the skeleton an agent reads) holds them,
-        #      and the shadow_dom / iframe flags fire with the counts.
-        deep = wc.fetch(f"{base}/shadow", browser="always")
-        deep_text = deep.attr("text") or ""
-        print(
-            "shadow/iframe:",
-            {
-                "shadow_dom": (deep.shadow_dom().present, deep.shadow_dom().value),
-                "iframe": (deep.iframe().present, deep.iframe().value),
-                "shadow_inlined": "shadow record A" in deep_text,
-                "iframe_inlined": "iframe record" in deep_text,
-            },
-        )
-        wc.release(deep)
+    def qpolicy(obs: QueryObservation) -> Any:
+        if obs.step == 0 and obs.records:  # the top repeated record region
+            return QueryDecision(record=obs.records[0].index)
+        if obs.fields:  # add name + price columns from the record's leaves
+            cols = {"name": obs.fields[0].index}
+            price = next((f for f in obs.fields if f.name.startswith("$")), None)
+            if price:
+                cols["price"] = price.index
+            return QueryDecision(fields=cols, done=True)
+        return QueryDecision(done=True)
 
-        # [sequence] A multi-step script against ONE held page as a SINGLE plan:
-        #      .step(action) chains actions (write/click/wait_for) in order, the
-        #      interleaved .extract(...) captures accumulate onto the doc's row, and
-        #      .project() renders them. The executor resolves once, HOLDS the page
-        #      across every step, and releases it (scope-owned) when it finishes.
-        seq = (
-            wq.ref.resolve(browser="always")
-            .step(wq.doc.write("#qty", "7"))
-            .step(wq.doc.click("#add"))
-            .step(wq.doc.wait_for("#cart li"))
-            .extract(first=wq.doc.select("#cart li").attr("text"))
-            .step(wq.doc.write("#qty", "9"))
-            .step(wq.doc.click("#add"))
-            .extract(second=wq.doc.select("#cart li", index=1).attr("text"))
-            .project()
-        )
-        print("sequence:   ", wc.execute(seq, wc.ref(f"{base}/app")))
+    qrun = build_query(shop, qpolicy)
+    _show("query agent", qrun.describe[:60])
+    _show("query rows", qrun.row_count, qrun.sample[:2])
 
-        # [browser transport] a browser render now carries the REAL Playwright
-        #      main-response status + headers (not a fabricated 200 / empty), so
-        #      transport() and the access signals are accurate on a rendered page.
-        rendered = wc.fetch(f"{base}/app", browser=True)
-        print(
-            "browser xport:",
-            {
-                "status": rendered.transport().status_code,
-                "header_keys": len(rendered.transport().header_keys),
-                "final_url": (rendered.final_url or "").endswith("/app"),
-            },
-        )
-        wc.release(rendered)
 
-        # [wait] a controllable wait strategy: WaitEvent names the milestone and
-        #      WaitConfig the timeout + on-timeout policy (RAISE loud by default,
-        #      RETURN hands back the partial DOM). Here: wait for a selector.
-        waited = wc.fetch(
-            f"{base}/app",
-            browser=True,
-            wait=WaitConfig(event=WaitEvent.SELECTOR, selector="#add", timeout=5.0),
-        )
-        print("waited:     ", waited.select("#add", error=RETURN).ok)
-        wc.release(waited)
+def pagination(wc: WebClient, base: str) -> None:
+    """Walk a paginated dataset into a Collection of same-structure pages (the body then extracts
+    across ALL pages, not page one), and the manual/agent twin ``wc.paginate`` -- a stateful walk
+    on a BoundedLoop with ``step``/``run`` and a precise stop ``verdict``."""
+    _section("pagination (bound op + session)")
+    pages = wc.fetch(f"{base}/releases?p=1").paginate(by="link", max_pages=5)
+    _show("paginate", len(list(pages)), "pages walked")
+    dataset = (
+        wq.reference(f"{base}/releases?p=1").resolve()
+        .paginate(by="link", max_pages=5)
+        .select_all("article.rel").extract(v=wq.doc.attr("text")).project()
+    ).collect()
+    _show("dataset", [r["v"] for r in dataset])
 
-        reloaded = live.reload()
-        print("reloaded:   ", reloaded.select("#cart li", error=RETURN).ok)
-        wc.release(reloaded)
+    with wc.paginate(f"{base}/releases?p=1", max_pages=5) as pg:  # by="auto" reads the page hint
+        pg.step()
+        v = pg.run().verdict
+        assert v is not None
+        _show("paginate pg", v.pages, "pages, stop:", v.stop)
 
-        # [M2] Pool stats: bounded leases over http clients AND browser pages.
-        print("pool:       ", wc.pool.stats())
 
-    # [P2] One expression language: the same classes, recorded not executed.
-    #      `doc`/`ref` are lazy roots; every op call appends a step to a typed
-    #      Plan -- the wire form for the service. Reference(url) roots a plan.
+def flags_and_deep_dom(wc: WebClient, base: str) -> None:
+    """``browser="auto"`` escalates a JS-gated page on its detected flags (the spa flag, built from
+    static + rendered signals). Records hidden in shadow DOM / a same-origin iframe are inlined by
+    the render, so the captured content + the shadow_dom / iframe flags hold them."""
+    _section("flags + shadow/iframe")
+    probed = wc.fetch(f"{base}/spa", browser="auto")
+    spa = probed.spa()
+    _show("flags", {"spa": spa.present, "confidence": spa.confidence,
+                    "evidence": [s.name for s in spa.signals], "tiers": probed.transport().escalation})
+
+    deep = wc.fetch(f"{base}/shadow", browser="always")
+    deep_text = deep.attr("text") or ""
+    _show("shadow/iframe", {"shadow_dom": (deep.shadow_dom().present, deep.shadow_dom().value),
+                            "iframe": (deep.iframe().present, deep.iframe().value),
+                            "shadow_inlined": "shadow record A" in deep_text,
+                            "iframe_inlined": "iframe record" in deep_text})
+    wc.release(deep)
+
+
+def sequences_and_waits(wc: WebClient, base: str, live: Any) -> None:
+    """A multi-step script against ONE held page as a SINGLE plan (``.step(action)`` chains
+    interactions, interleaved ``.extract`` captures accumulate), a controllable wait strategy, a
+    browser render carrying the REAL Playwright response, reload, and the pool's bounded leases."""
+    _section("sequences + waits + pool")
+    seq = (
+        wq.ref.resolve(browser="always")
+        .step(wq.doc.write("#qty", "7")).step(wq.doc.click("#add")).step(wq.doc.wait_for("#cart li"))
+        .extract(first=wq.doc.select("#cart li").attr("text"))
+        .step(wq.doc.write("#qty", "9")).step(wq.doc.click("#add"))
+        .extract(second=wq.doc.select("#cart li", index=1).attr("text"))
+        .project()
+    )
+    _show("sequence", wc.execute(seq, wc.ref(f"{base}/app")))
+
+    rendered = wc.fetch(f"{base}/app", browser=True)
+    _show("browser xport", {"status": rendered.transport().status_code,
+                            "header_keys": len(rendered.transport().header_keys),
+                            "final_url": (rendered.final_url or "").endswith("/app")})
+    wc.release(rendered)
+
+    waited = wc.fetch(f"{base}/app", browser=True,
+                      wait=WaitConfig(event=WaitEvent.SELECTOR, selector="#add", timeout=5.0))
+    _show("waited", waited.select("#add", error=RETURN).ok)
+    wc.release(waited)
+
+    reloaded = live.reload()
+    _show("reloaded", reloaded.select("#cart li", error=RETURN).ok)
+    wc.release(reloaded)
+    _show("pool", wc.pool.stats())
+
+
+def lazy_plans(base: str) -> Any:
+    """One expression language: ``doc``/``ref`` are lazy roots; each op appends a step to a typed,
+    wire-safe Plan. ``explain`` renders a SQL-EXPLAIN step tree, ``wireframe`` an HTML picture.
+    Returns the plan for the evaluator story."""
+    _section("lazy plans (record, don't execute)")
     plan = (
-        wq.reference(f"{base}/")
-        .resolve()
-        .select_all(".card")
-        .extract(
-            title=wq.doc.select(".title").attr("text"),
-            price=wq.doc.select(".price").attr("text"),
-            link=wq.doc.select("a").attr("href"),
-        )
+        wq.reference(f"{base}/").resolve().select_all(".card")
+        .extract(title=wq.doc.select(".title").attr("text"),
+                 price=wq.doc.select(".price").attr("text"),
+                 link=wq.doc.select("a").attr("href"))
         .filter(wq.doc.field("price") != "")
         .project()
     )
-    print("\nlazy plan:  ", plan._plan.describe()[:60], "...")
-    print("wire form:  ", plan._plan.model_dump_json()[:70], "...")
-
-    # [viz] Read-only plan visualization: explain() renders a SQL-EXPLAIN
-    #       indented step tree, wireframe() a self-contained HTML picture of the
-    #       pipeline (page frames / selector boxes / field chips / output card).
-    print("explain:")
+    _show("lazy plan", plan._plan.describe()[:60], "...")
+    _show("wire form", plan._plan.model_dump_json()[:70], "...")
+    print("  explain:")
     for line in plan.explain().splitlines():
-        print("   ", line)
-    print("wireframe:   ", f"{len(plan.wireframe())} bytes of self-contained HTML")
+        print("     ", line)
+    _show("wireframe", f"{len(plan.wireframe())} bytes of self-contained HTML")
+    return plan
 
-    # [P3] One evaluator: the plan runs through the same @op implementations
-    #      the eager calls use; a Collection fans out per element (bounded by
-    #      the pool) and rows are delivered one at a time via stream=True.
+
+def evaluator(base: str, plan: Any) -> None:
+    """One evaluator runs the recorded Plan through the same @op implementations the eager calls
+    use: fan-out + streaming, free ``when``/``filter``, reference-following enrichment, the
+    eager==lazy identity, search-as-an-expression, the facet ops, and blob round-trip."""
+    _section("evaluator (plans run, eager == lazy)")
     with WebClient() as wc:
         for row in plan.collect():
-            print(f"  row:       {row['title']} {row['price']} -> {row['link']}")
-
-        # [§8] Full-lazy trigger: .collect() runs a recorded plan directly, and
-        #      wc.lazy is a lazy recorder bound to THIS client (companion to
-        #      collect()). wc.lazy.ref(url) roots a client-bound plan.
-        print("collect:    ", plan.collect()[0]["title"])
+            _show("row", f"{row['title']} {row['price']} -> {row['link']}")
+        _show("collect", plan.collect()[0]["title"])
         bound = wc.lazy.ref(f"{base}/").resolve().select(".title").attr("text")
-        print("wc.lazy:    ", bound.collect().get())
-
-        # [§8] Polars-style free wq.when()/filter() on the lazy surface.
+        _show("wc.lazy", bound.collect().get())
 
         labeled = (
-            wq.ref.resolve()
-            .select_all(".card")
-            .extract(
-                title=wq.doc.select(".title").attr("text"),
-                tier=wq.when(wq.doc.select(".price").attr("text") != "")
-                .then("priced")
-                .otherwise("free"),
-            )
+            wq.ref.resolve().select_all(".card")
+            .extract(title=wq.doc.select(".title").attr("text"),
+                     tier=wq.when(wq.doc.select(".price").attr("text") != "").then("priced").otherwise("free"))
             .project()
         )
-        print(
-            "free when:  ",
-            [(r["title"], r["tier"]) for r in labeled.collect(wc.ref(f"{base}/"))],
-        )
+        _show("free when", [(r["title"], r["tier"]) for r in labeled.collect(wc.ref(f"{base}/"))])
         priced = (
-            wq.filter(
-                wq.ref.resolve().select_all(".card"),
-                wq.doc.select(".price").attr("text") != "",
-            )
-            .extract(title=wq.doc.select(".title").attr("text"))
-            .project()
+            wq.filter(wq.ref.resolve().select_all(".card"), wq.doc.select(".price").attr("text") != "")
+            .extract(title=wq.doc.select(".title").attr("text")).project()
         )
-        print("free filter:", [r["title"] for r in priced.collect(wc.ref(f"{base}/"))])
+        _show("free filter", [r["title"] for r in priced.collect(wc.ref(f"{base}/"))])
 
-        # [P3] Follow each card's link (reference -> resolve) into its JSON
-        #      detail; `when/then/otherwise` branches; a missing select is a
-        #      not-ok field under the plan default, never an aborted plan.
         enriched = (
-            wq.ref.resolve()
-            .select_all(".card")
-            .extract(
-                title=wq.doc.select(".title").attr("text"),
-                link=wq.doc.select("a.link").attr("href"),
-                missing=wq.doc.select(".nope", error=RETURN).attr("text"),  # loud by default; opt out
-            )
-            .extract(
-                name=wq.doc.reference("link").resolve().select("name").attr("value"),
-                stock=wq.doc.reference("link")
-                .resolve()
-                .select("stock.count")
-                .attr("value"),
-                tag=wq.when(wq.doc.field("title") == "Grinder")
-                .then("bulky")
-                .otherwise("small"),
-            )
+            wq.ref.resolve().select_all(".card")
+            .extract(title=wq.doc.select(".title").attr("text"),
+                     link=wq.doc.select("a.link").attr("href"),
+                     missing=wq.doc.select(".nope", error=RETURN).attr("text"))
+            .extract(name=wq.doc.reference("link").resolve().select("name").attr("value"),
+                     stock=wq.doc.reference("link").resolve().select("stock.count").attr("value"),
+                     tag=wq.when(wq.doc.field("title") == "Grinder").then("bulky").otherwise("small"))
             .project()
         )
-        print("streamed:")
+        print("  streamed:")
         for row in enriched.stream(wc.ref(f"{base}/")):
-            print(
-                "  detail:   ",
-                row["title"],
-                "->",
-                row["name"],
-                row["stock"],
-                row["tag"],
-                "| missing:",
-                row["missing"],
-            )
+            _show("  detail", row["title"], "->", row["name"], row["stock"], row["tag"], "| missing:", row["missing"])
 
-        # [P3] Eager and lazy agree: the same extract on a resolved page.
         page = wc.ref(f"{base}/").resolve()
-        cards = page.select_all(".card").extract(
-            title=wq.doc.select(".title").attr("text")
-        )
-        print("eager:      ", cards.name, "->", [r["title"] for r in cards.project()])
+        cards = page.select_all(".card").extract(title=wq.doc.select(".title").attr("text"))
+        _show("eager", cards.name, "->", [r["title"] for r in cards.project()])
+        overview = page.extract(title=wq.doc.select(".title").attr("text"),
+                                link=wq.doc.select(".card a").attr("href")).project()
+        _show("doc row", overview)
 
-        # [P3] extract is the single-doc primitive (>1 expression against ONE
-        #      document); a Collection just fans it out. On a lone Document it
-        #      returns the document and project() renders one row (a dict).
-        overview = page.extract(
-            title=wq.doc.select(".title").attr("text"),
-            link=wq.doc.select(".card a").attr("href"),
-        ).project()
-        print("doc row:    ", overview)
-
-        # [P6] Search is not a verb or a config type -- it is just an expression:
-        #      resolve the query URL, pick the result nodes, extract a row each.
         hits = (
-            wc.ref(f"{base}/?q=coffee")
-            .resolve()
-            .select_all(".card")
-            .limit(2)
-            .extract(
-                title=wq.doc.select(".title").attr("text"),
-                url=wq.doc.select("a").attr("href"),
-            )
-            .project()
+            wc.ref(f"{base}/?q=coffee").resolve().select_all(".card").limit(2)
+            .extract(title=wq.doc.select(".title").attr("text"), url=wq.doc.select("a").attr("href")).project()
         )
-        print("search:     ", [(h["title"], h["url"]) for h in hits])
-        # A page overview is no longer a Summary aggregator -- it is just the facet
-        # ops (transport / metadata / structure) composed by the caller, each a
-        # token-lean, deterministic section keyed not valued.
+        _show("search", [(h["title"], h["url"]) for h in hits])
         page = wc.fetch(f"{base}/")
-        print(
-            "facets:     ",
-            {
-                "ok": page.transport().ok,
-                "title": page.metadata().title,
-                "headings": len(page.structure().toc),
-                "cdn": page.transport().cdn,
-            },
-        )
+        _show("facets", {"ok": page.transport().ok, "title": page.metadata().title,
+                         "headings": len(page.structure().toc), "cdn": page.transport().cdn})
 
-        # [D] Serialisable expressions: an LLM writes a lazy plan, encodes it to a
-        #     short blob, and rebuilds + validates + pretty-prints it before running.
-        expr = wq.doc.select(".title").attr("text")
+        expr = wq.doc.select(".title").attr("text")  # an LLM writes a plan -> a short blob -> back
         blob = expr.to_blob()
-        print("expr blob:   ", blob)
-        print("expr rebuilt:", from_blob(blob).describe())
+        _show("expr blob", blob)
+        _show("expr rebuilt", from_blob(blob).describe())
+        _show("sitemaps", [r.url for r in wc.sitemap(f"{base}/")])
 
-        # [#3] Hunt a site's real sitemap.xml URLs (none served here -> []).
-        print("sitemaps:    ", [r.url for r in wc.sitemap(f"{base}/")])
 
-    # [#7] The resiliency policy bundle is declared to a proxy service as request
-    #      headers (the service is assumed to exist; here we just show the headers).
-    from webclient.policy import ProxyPolicy, RatePolicy, Resolve
-    from webclient.policy import policy_headers
+def policy_headers_story(base: str) -> None:
+    """The resiliency policy bundle (proxy / rate / ...) declares itself to a proxy service as
+    request headers -- shown here, the service assumed to exist."""
+    _section("policy headers")
+    from webclient.policy import ProxyPolicy, RatePolicy, Resolve, policy_headers
 
-    declared = policy_headers(
-        Resolve(proxy=ProxyPolicy(pool="residential", geo="us"), rate=RatePolicy(rps=2))
-    )
-    print("policy hdrs: ", {k: declared[k] for k in sorted(declared)})
+    declared = policy_headers(Resolve(proxy=ProxyPolicy(pool="residential", geo="us"), rate=RatePolicy(rps=2)))
+    _show("policy hdrs", {k: declared[k] for k in sorted(declared)})
 
-    # [async] The same eager surface, awaited. AsyncWebClient is the very same
-    #      core with async dispatch (an instance flag, not a subclass): IO ops
-    #      hand back an awaitable, so `await ac.ref(url).resolve()` chains async
-    #      while in-memory ops stay synchronous. Deeper batching via `ac.lazy`.
+
+def async_story(base: str) -> None:
+    """The same eager surface, awaited: AsyncWebClient is the very same core with async dispatch
+    (an instance flag, not a subclass) -- IO ops hand back an awaitable, in-memory ops stay sync."""
+    _section("async (the same core, awaited)")
     import asyncio
 
     from webclient import AsyncWebClient
 
-    async def _async_demo() -> tuple:
+    async def _run() -> tuple[Any, Any, Any]:
         async with AsyncWebClient() as ac:
-            document = await ac.fetch(f"{base}/")  # await at the IO boundary
+            document = await ac.fetch(f"{base}/")
             first = (await ac.ref(f"{base}/").resolve()).select(".title").attr("text")
             rows = await (
-                wq.ref.resolve()
-                .select_all(".card")
-                .extract(title=wq.doc.select(".title").attr("text"))
-                .project()
+                wq.ref.resolve().select_all(".card")
+                .extract(title=wq.doc.select(".title").attr("text")).project()
                 .acollect(ac.ref(f"{base}/"))
             )
             return document.title, first, [r["title"] for r in rows]
 
-    title, first_title, async_rows = asyncio.run(_async_demo())
-    print("async fetch:", title, "| first:", first_title, "| async plan:", async_rows)
+    title, first_title, async_rows = asyncio.run(_run())
+    _show("async fetch", title, "| first:", first_title, "| async plan:", async_rows)
 
-    # [M7] The same WebClient behind an HTTP API -- browser as a service.
-    #      Every operation is one Plan submitted to /execute; a Document comes
-    #      back as a handle ({"__doc__": meta}) and its content crosses the
-    #      wire only via a further plan rooted at that handle's id.
+
+def service_story(base: str) -> None:
+    """The same WebClient behind an HTTP API -- browser as a service. Every operation is one Plan
+    submitted to ``/execute``; a Document rides back as a handle, its content only via a further
+    plan rooted at that handle's id."""
+    _section("service (browser as an HTTP API)")
     from fastapi.testclient import TestClient
 
     from webclient.service import create_app
 
     with TestClient(create_app(token="demo")) as api:
         auth = {"Authorization": "Bearer demo"}
-        handle = api.post(
-            "/execute",
-            headers=auth,
-            json={"plan": wq.ref.resolve()._plan.model_dump(), "url": f"{base}/"},
-        ).json()["rows"]["__doc__"]
-        print("\nservice fetch:", {k: handle[k] for k in ("kind", "ok")})
+        handle = api.post("/execute", headers=auth,
+                          json={"plan": wq.ref.resolve()._plan.model_dump(), "url": f"{base}/"}).json()["rows"]["__doc__"]
+        _show("service fetch", {k: handle[k] for k in ("kind", "ok")})
         did = handle["id"]
-        md = api.post(
-            "/execute",
-            headers=auth,
-            json={
-                "plan": wq.doc.render("markdown")._plan.model_dump(),
-                "document_id": did,
-            },
-        ).json()
-        print("service render:", md["rows"].splitlines()[0])
-        titles = api.post(
-            "/execute",
-            headers=auth,
-            json={
-                "plan": wq.doc.select_all(".title").attr("text")._plan.model_dump(),
-                "document_id": did,
-            },
-        ).json()
-        print("service select:", titles["rows"])
+        md = api.post("/execute", headers=auth,
+                      json={"plan": wq.doc.render("markdown")._plan.model_dump(), "document_id": did}).json()
+        _show("service render", md["rows"].splitlines()[0])
+        titles = api.post("/execute", headers=auth,
+                          json={"plan": wq.doc.select_all(".title").attr("text")._plan.model_dump(), "document_id": did}).json()
+        _show("service select", titles["rows"])
         plan = (
-            wq.ref.resolve()
-            .select_all(".card")
-            .extract(title=wq.doc.select(".title").attr("text"))
-            .project()
-            ._plan
+            wq.ref.resolve().select_all(".card")
+            .extract(title=wq.doc.select(".title").attr("text")).project()._plan
         )
-        rows = api.post(
-            "/execute",
-            headers=auth,
-            json={"plan": plan.model_dump(), "url": f"{base}/"},
-        ).json()
-        print("service plan:  ", rows["rows"])
+        rows = api.post("/execute", headers=auth, json={"plan": plan.model_dump(), "url": f"{base}/"}).json()
+        _show("service plan", rows["rows"])
 
-    # [remote] Remote is just a dispatch mode: the same WebClient put into "remote"
-    #      mode over a RemoteConnection, so execute runs server-side over HTTP with no
-    #      local browser or lxml (httpx + pydantic only). A fetched document is
-    #      a lazy handle; value ops run via rc.execute (one round trip each).
+
+def remote_story(base: str) -> None:
+    """Remote is just a dispatch mode: the same WebClient in "remote" mode over an HTTP connection,
+    so execute runs server-side (httpx + pydantic, no local browser/lxml). A fetched document is a
+    lazy handle; content ops round-trip; a remote crawl runs as one plan server-side."""
+    _section("remote (dispatch mode, server-side)")
     import threading
     import time
 
     import uvicorn
 
     from webclient import RemoteWebClient
+    from webclient.service import create_app
 
     app = create_app(token="demo")
-    server = uvicorn.Server(
-        uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error")
-    )
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error"))
     threading.Thread(target=server.run, daemon=True).start()
     while not server.started:
         time.sleep(0.01)
     port = server.servers[0].sockets[0].getsockname()[1]
 
     with RemoteWebClient(f"http://127.0.0.1:{port}", token="demo") as rc:
-        # The same eager surface over a remote core: rc.fetch(url) round-trips
-        # once and returns a lightweight handle carrying its metadata (title/ok)
-        # inline -- no content, no local lxml/browser.
-        remote_doc = rc.fetch(f"{base}/")
-        print("\nremote fetch:  ", remote_doc.title, "| ok:", remote_doc.ok)
-        # Content ops are eager too -- each round-trips server-side and returns the
-        # materialised value, exactly like the local client.
-        print("remote render: ", remote_doc.render("markdown").splitlines()[0])
-        # A multi-element fan-out is not per-element addressable server-side, so
-        # batch it through .lazy: one recorded plan, one round-trip.
-        print(
-            "remote select: ",
-            remote_doc.lazy.select_all(".title").attr("text").collect(),
-        )
-        # identical plan API -- runs server-side, no local browser/lxml
+        remote_doc = rc.fetch(f"{base}/")  # one round-trip -> a metadata handle
+        _show("remote fetch", remote_doc.title, "| ok:", remote_doc.ok)
+        _show("remote render", remote_doc.render("markdown").splitlines()[0])
+        _show("remote select", remote_doc.lazy.select_all(".title").attr("text").collect())  # batch via .lazy
         same_plan = (
-            wq.ref.resolve()
-            .select_all(".card")
-            .extract(title=wq.doc.select(".title").attr("text"))
-            .project()
+            wq.ref.resolve().select_all(".card")
+            .extract(title=wq.doc.select(".title").attr("text")).project()
         )
-        print("remote plan:   ", same_plan.collect(rc.ref(f"{base}/")))
-        # A remote crawl is data-producing, not a stateful server object: run() executes
-        # the WHOLE crawl as one WebClient.crawl(...).run().pages plan server-side and the
-        # pages ride back (no /crawls wire). Interactive step() is local-only.
-        remote_crawl = rc.crawl(
-            f"{base}/feed", auto=True, max_pages=3, browser=False, obey_robots=False
-        )
+        _show("remote plan", same_plan.collect(rc.ref(f"{base}/")))
+        remote_crawl = rc.crawl(f"{base}/feed", auto=True, max_pages=3, browser=False, obey_robots=False)
         remote_crawl.run()
-        print(
-            "remote crawl:  ",
-            [(p.final_url or p.url).replace(base, "") for p in remote_crawl.pages],
-        )
+        _show("remote crawl", [(p.final_url or p.url).replace(base, "") for p in remote_crawl.pages])
     server.should_exit = True
     app.state.wc.close()
 
+
+def main() -> None:
+    base = serve()
+    print("webclient demo — a tour of every feature, fully offline\n" + "=" * 62)
+
+    references(base)
+    with WebClient(default_headers={"user-agent": "webclient-demo"}) as wc:
+        wc.bus.subscribe("network", lambda e: None)  # everything observable crosses one bus
+        shop, missing = fetch_and_crawl(wc, base)
+        addressing_and_errors(wc, shop, missing)
+        selection_and_render(wc, shop)
+        sessions(wc, base)
+        live = browser_journey(wc, base)
+        agent_loops(wc, base, shop)
+        pagination(wc, base)
+        flags_and_deep_dom(wc, base)
+        sequences_and_waits(wc, base, live)
+
+    plan = lazy_plans(base)
+    evaluator(base, plan)
+    policy_headers_story(base)
+    async_story(base)
+    service_story(base)
+    remote_story(base)
     roadmap_tour()
 
 
 def roadmap_tour() -> None:
-    """[R] The roadmap features (Phases 0-7, 2026-09): the error ledger, traces + the three
-    replay modes, the tool registry, named scripts + rrweb, loops with drivers / checkpoints,
-    pattern hints, and the UI -- all against the LAB (``webclient.lab``), the fixture site
-    that tests, demos and docs share. Writes ``traces/demo.jsonl`` so ``make serve`` shows it at
-    http://localhost:8000/ui/ ."""
-    import shutil
+    """The 2026-09 roadmap features (Phases 0-7): the error ledger, traces + the three replay
+    modes, the tool registry, named scripts + rrweb, loops with drivers / checkpoints, pattern
+    hints, and the UI -- all against the shared lab (``webclient.lab``). Writes ``traces/demo.jsonl``
+    for ``make serve`` + the separate UI (webclient-ui)."""
     from pathlib import Path
 
-    from webclient import Ask, Script
+    from webclient import Ask, Script, ScriptEvent
     from webclient.lab import serve as serve_lab
     from webclient.replay import Replay
     from webclient.tools import TOOLS, dispatch
     from webclient.trace import read
 
-    lab, P = _lab_site(serve_lab)
-    trace_dir = Path("traces") / "demo.jsonl"  # ONE file: the whole run, replayable every way
+    lab = serve_lab()
+    trace_dir = Path("traces") / "demo.jsonl"  # a trace is ONE file: the whole run, replayable every way
     trace_dir.unlink(missing_ok=True)
-    print("\n== roadmap tour (against", lab, ")")
+    _section(f"roadmap tour (lab at {lab}/lab )")
 
-    with WebClient(timeout=15.0) as wc, wc.trace(trace_dir) as tr:
-        # the Plan the trace carries (the Traces workspace / the site render it as the plan tree)
-        tr.plan = (wq.reference(f"{lab}{P['shop']}").resolve().select_all("div.card")
-                   .extract(title=wq.doc.select(".title").attr("text"), price=wq.doc.select(".price").attr("text"),
-                            link=wq.doc.select("a").attr("href")).project())
-        # [P0/P1] Errors are catalogued + bound, and NOTHING disappears: a RETURN-policy miss
-        # still lands on the ledger (doc.errors / wc.errors) as an ErrorEvent in the trace.
-        shop = wc.fetch(f"{lab}{P['shop']}")
+    with WebClient(timeout=15.0) as wc, wc.trace(trace_dir):
+        # Errors are catalogued + bound, and NOTHING disappears: a RETURN-policy miss still lands
+        # on the ledger (doc.errors / wc.errors) as an ErrorEvent in the trace.
+        shop = wc.fetch(f"{lab}/lab/shop")
         shop.select(".nope", error=RETURN)
         err = shop.errors[0]
-        print("ledger:        ", err.code, "| remedy:", err.remedy, "| op:", err.op, "| raised:", wc.errors[-1].raised)
+        _show("ledger", err.code, "| remedy:", err.remedy, "| op:", err.op, "| raised:", wc.errors[-1].raised)
 
-        # [P2] Pattern hints: the repeating record list to select_all, without an LLM.
+        # Pattern hints (Signals/Flags): the repeating record list to select_all, without an LLM.
         hint = shop.patterns(for_="extract")[0]
-        print("pattern:       ", hint.name, hint.subject, f"x{hint.count}", "conf", hint.confidence)
+        _show("pattern", hint.name, hint.subject, f"x{hint.count}", "conf", hint.confidence)
 
-        # [P4] The tool registry: one declaration -> Python / MCP / POST /tools/{name}.
-        card = dispatch("card", {"url": f"{lab}{P['shop']}"}, wc)
-        print("tools:         ", len(TOOLS), "registered | card:", card["title"], card["flags"], card["final_tier"])
+        # The tool registry: one declaration -> Python / MCP / POST /tools/{name}.
+        card = dispatch("card", {"url": f"{lab}/lab/shop"}, wc)
+        _show("tools", len(TOOLS), "registered | card:", card["title"], card["flags"], card["final_tier"])
 
-        # [P3] Loops: locate = a crawl with a goal; a resolve driver may ASK a human.
-        found = wc.locate(f"{lab}{P['shop']}", until=lambda c: (c.title or "").startswith("About"),
-                          browser=False, obey_robots=False, max_pages=12, width=3,
-                          keywords=["about"])  # goal words steer the frontier (the About link sits in a footer)
-        print("locate:        ", found.reason, [p.title for p in found.found], "after", found.rounds, "round(s)")
+        # Loops: locate = a crawl with a goal; a resolve driver may ASK a human (checkpoint/resume).
+        found = wc.locate(f"{lab}/lab/shop", until=lambda c: (c.title or "").startswith("About"),
+                          browser=False, obey_robots=False, max_pages=6, width=2)
+        _show("locate", found.reason, [p.title for p in found.found], "after", found.rounds, "round(s)")
         wc.driver("resolve", lambda obs: Ask(reason="render?", options=["browser"]) if "spa" in obs.present else None)
-        spa = wc.fetch(f"{lab}{P['spa']}", browser="auto")
-        print("resolve ask:   ", spa.pending.reason if spa.pending else None, "| tier:", spa.transport().final_tier)
+        spa = wc.fetch(f"{lab}/lab/spa", browser="auto")
+        _show("resolve ask", spa.pending.reason if spa.pending else None, "| tier:", spa.transport().final_tier)
         rendered = wc.escalate(spa, "browser")  # the human's answer: one hop, by hand
-        print("escalated:     ", rendered.transport().escalation, "| records:", len(rendered.select_all("li.item")))
+        _show("escalated", rendered.transport().escalation, "| records:", len(rendered.select_all("li.item")))
         wc.release(rendered)
         wc.driver("resolve", None)
 
-        # [P2] Named, phased, togglable scripts (+ rrweb recording, on because we are tracing).
+        # Named, phased, togglable scripts (+ rrweb recording, on because we are tracing).
         wc.scripts.register(Script("demo.title", "() => document.title", on="load"))
-        live = wc.ref(f"{lab}{P['app']}").resolve(browser=True).collect()
+        live = wc.ref(f"{lab}/lab/app").resolve(browser=True).collect()
         live.write("#qty", "2").click("#add").wait_for("#cart li")
-        ran = [s for s in wc.bus.since(0, topic="script") if getattr(s, "script", None) == "demo.title"]
-        print("scripts:       ", [s.name for s in wc.scripts.list()][:4], "... | demo.title ran:", bool(ran))
+        ran = [s.script for s in wc.bus.since(0, topic="script")
+               if isinstance(s, ScriptEvent) and s.script == "demo.title"]
+        _show("scripts", [s.name for s in wc.scripts.list()][:4], "... | demo.title ran:", bool(ran))
         wc.release(live)
 
-    # [P1] Replay, three ways -- offline projections, a HAR, or the live plan.
+    # Replay, three ways -- offline projections, a HAR, or the live plan.
     reader = read(trace_dir)
-    print("trace:         ", reader.count, "events |", len(reader.snapshots), "snapshots |",
-          len(reader.rrweb()), "rrweb events (DOM + custom) |", len(reader.har()["log"]["entries"]), "HAR entries")
+    _show("trace", reader.count, "events |", len(reader.snapshots), "snapshots |",
+          len(reader.rrweb()), "rrweb events |", len(reader.har()["log"]["entries"]), "HAR entries")
     with Replay(trace_dir) as rep:
         offline = rep.document(shop.name)
         assert offline is not None
-        print("static replay: ", [c.select(".title").attr("text") for c in offline.select_all(hint.subject)],
+        _show("static replay", [c.select(".title").attr("text") for c in offline.select_all(hint.subject)],
               "| same skeleton:", offline.skeleton() == shop.skeleton())
         cart = rep.document(live.name)
         assert cart is not None
-        print("last snapshot: ", [li.attr("text") for li in cart.select_all("#cart li")])
-    with WebClient(har=str(trace_dir)) as offline_wc:  # the HAR is the trace's network, translated
-        again = offline_wc.fetch(f"{lab}{P['shop']}")
-        miss = offline_wc.fetch(f"{lab}/never-recorded", optional=True)
-        print("har replay:    ", again.title, "| unrecorded ->", miss.error.code if miss.error else None)
+        _show("last snapshot", [li.attr("text") for li in cart.select_all("#cart li")])
+        har = rep.har_path
+    with WebClient(har=str(har)) as offline_wc:
+        again = offline_wc.fetch(f"{lab}/lab/shop")
+        miss = offline_wc.fetch(f"{lab}/lab/never", optional=True)
+        _show("har replay", again.title, "| unrecorded ->", miss.error.code if miss.error else None)
 
-    record_onboarding(lab, P)
-    print("\nUI: run `make serve` here, then the Playground from the webclient-ui repo (it reads /traces, /events, /loops)")
-
-
-def _lab_site(serve_lab: Any) -> "tuple[str, dict[str, str]]":
-    """The site the demos run against: ``SITE_URL`` (the product website, whose pages ARE the
-    lab), else the website at its dev address when it is up, else the in-process lab. Either
-    way the fixture PATHS come from ``/lab/index.json`` -- the contract both honour -- so the
-    demos never hard-code a page."""
-    import json
-    import os
-    import urllib.request
-
-    candidates = [u for u in (os.environ.get("SITE_URL"), "http://127.0.0.1:4321") if u]
-    for base in candidates:
-        try:
-            with urllib.request.urlopen(f"{base.rstrip('/')}/lab/index.json", timeout=2) as r:  # noqa: S310
-                index = json.loads(r.read())
-            return base.rstrip("/"), {f["name"]: f["path"] for f in index}
-        except Exception:  # noqa: BLE001 - not up: try the next
-            continue
-    base = serve_lab()
-    with urllib.request.urlopen(f"{base}/lab/index.json", timeout=5) as r:  # noqa: S310
-        index = json.loads(r.read())
-    return base, {f["name"]: f["path"] for f in index}
-
-
-def record_onboarding(lab: str, P: "dict[str, str] | None" = None) -> None:
-    """[R] Record an onboarding run as ONE trace (``traces/onboarding.jsonl``) -- the website's
-    onboarding page REPLAYS it (no model on the public site: the scripted demo model, badged).
-    The pipeline pauses at the confirm gate (``interactive=True``) and is resumed with "yes",
-    so the gate, the resume and every stage boundary are in the stream."""
-    import json as _json
-    from pathlib import Path
-
-    from webclient.pipelines import Brief, SearchHit, onboard_company
-
-    P = P or {"shop": "/lab/shop"}
-    shop = f"{lab}{P['shop']}"
-    code = ('wq.doc.select_all("div.card").extract(title=wq.doc.select(".title").attr("text"), '
-            'price=wq.doc.select(".price").attr("text")).project()')
-
-    def search(query: str, k: int) -> list:
-        return [SearchHit(url=shop, title="Roasters", snippet="the featured products")]
-
-    def llm(prompt: str) -> str:  # the demo model: scripted by prompt, deterministic, $0
-        if "frontier links" in prompt:
-            return "[]"
-        if "crawled pages" in prompt:
-            return _json.dumps([{"url": shop, "kind": "page", "tier": "must", "note": "the product grid"}])
-        if "Assess this page" in prompt:
-            return _json.dumps({"dataset_present": True, "is_queryable": True, "completeness": "full",
-                                "has_pagination": False, "scrapability": 9, "verdict": "a full product list"})
-        if "query code" in prompt or "write a query" in prompt:
-            return f"here is the query:\n{code}"
-        return "{}"
-
-    path = Path("traces") / "onboarding.jsonl"
-    with WebClient(timeout=15.0) as wc, wc.trace(path):
-        result = onboard_company(
-            "Roasters", Brief(description="the featured products with their prices", fields=["title", "price"], search="products"),
-            wc=wc, llm=llm, search=search, browser=False, interactive=True,
-        )
-        if result.pending is not None:  # the confirm gate: a human says yes, once
-            result = result.resume("yes")
-    print("onboarding:    ", "ok" if result.ok else result.reason, "| trace:", path)
+    print("\nUI: run `make serve` then open http://localhost:8000/ui/  (trace 'demo' is listed)")
 
 
 if __name__ == "__main__":

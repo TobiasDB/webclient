@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 from pydantic import BaseModel, Field, ValidationError
 
 if TYPE_CHECKING:
-    from ..interface import WebClient
+    from .interface import WebClient
 
 __all__ = ["views", "VIEWS", 
     "Tool", "tool", "TOOLS", "get", "dispatch", "schema", "UrlArgs", "TextArgs", "SkeletonArgs",
@@ -202,7 +202,7 @@ def dispatch(name: str, args: "dict[str, Any] | BaseModel", client: "WebClient |
     """Run one tool by name against ``client`` (or the process-local default): validate
     the arguments, call the handler, return its JSON-friendly value. ``KeyError`` for an
     unknown tool; :class:`ToolError` for bad arguments."""
-    from ..interface import default_client
+    from .interface import default_client
 
     t = TOOLS[name]
     wc = client if client is not None else default_client()
@@ -254,7 +254,7 @@ def skeleton(args: SkeletonArgs, wc: "WebClient") -> str:
       "'fields' maps output columns to a CSS selector whose text is the value.",
       returns="a list of row dicts", story="data-engineer")
 def extract(args: ExtractArgs, wc: "WebClient") -> "list[dict[str, Any]]":
-    from ..interface import doc
+    from .interface import doc
 
     exprs = {name: doc.select(sel).attr("text") for name, sel in args.fields.items()}
     rows = wc.fetch(args.url).select_all(args.result)
@@ -294,8 +294,8 @@ class ElementsArgs(UrlArgs):
       "picks from by index: interactive controls, content leaves, or the repeated-record regions.",
       returns="a list of IndexedElement objects", story="agent-developer")
 def elements(args: ElementsArgs, wc: "WebClient") -> "list[dict[str, Any]]":
-    from ..dom.index import record_options
-    from ..core.document.html import tree
+    from .dom.index import record_options
+    from .core.document.html import tree
 
     doc = wc.fetch(args.url, browser=args.browser)
     if args.kind == "records":
@@ -315,8 +315,8 @@ class FieldsArgs(UrlArgs):
       "each with a per-row selector -- what a query is built from by pointing.",
       returns="a list of IndexedElement objects (selector scoped to the record)", story="data-engineer")
 def fields(args: FieldsArgs, wc: "WebClient") -> "list[dict[str, Any]]":
-    from ..dom.index import field_options
-    from ..core.document.html import tree
+    from .dom.index import field_options
+    from .core.document.html import tree
 
     doc = wc.fetch(args.url, browser=args.browser)
     return _jsonable(field_options(tree(doc), args.record, limit=args.limit))  # type: ignore[no-any-return]
@@ -357,8 +357,8 @@ def views(doc: Any, include: "list[str]") -> "dict[str, Any]":
     if "content" in want:
         out["content"] = (doc.content or b"").decode(doc.encoding or "utf-8", "replace")
     if "rrweb" in want and doc.kind == "html":
-        from ..models import SnapshotEvent
-        from ..replay.rrweb import to_rrweb
+        from .models import SnapshotEvent
+        from .replay.rrweb import to_rrweb
 
         snap = SnapshotEvent(url=doc.url, final_url=doc.final_url or doc.url, kind="html", content=doc.content,
                              status_code=doc.status_code, document_id=doc.name, ts=0.0)
@@ -366,8 +366,8 @@ def views(doc: Any, include: "list[str]") -> "dict[str, Any]":
     if "patterns" in want:
         out["patterns"] = _jsonable(doc.patterns())
     if "records" in want:
-        from ..dom.index import record_options
-        from ..core.document.html import tree
+        from .dom.index import record_options
+        from .core.document.html import tree
 
         out["records"] = _jsonable(record_options(tree(doc), top_k=20)) if doc.kind == "html" else []
     if "flags" in want:
@@ -405,7 +405,7 @@ def robots(args: UrlArgs, wc: "WebClient") -> "dict[str, Any]":
       "'include' / 'exclude'.",
       returns="{pages, urls, frontier, frontier_total, done}", story="data-engineer", aliases=("crawl",))
 def crawl(args: CrawlArgs, wc: "WebClient") -> "dict[str, Any]":
-    from ..policy import Resolve
+    from .policy import Resolve
 
     c = wc.crawl(
         args.url, auto=True, width=args.width, depth=args.depth, max_pages=args.max_pages,
@@ -430,7 +430,7 @@ def crawl(args: CrawlArgs, wc: "WebClient") -> "dict[str, Any]":
       "human-readable description + a compact blob -- author a plan and check it before running.",
       returns="{valid, describe, blob}", story="agent-developer")
 def validate_plan(args: PlanArgs, wc: "WebClient") -> "dict[str, Any]":
-    from ..query.expr import from_plan
+    from .query.expr import from_plan
 
     expr = from_plan(args.blob or args.plan or {}, wc)
     return {"valid": True, "describe": expr._plan.describe(), "blob": expr.to_blob()}
@@ -440,8 +440,8 @@ def validate_plan(args: PlanArgs, wc: "WebClient") -> "dict[str, Any]":
       "the fetch context. Rebuilt + name-validated before it runs.",
       returns="the plan's result (rows / a value / a document handle)", story="agent-developer")
 def run_plan(args: PlanArgs, wc: "WebClient") -> Any:
-    from ..query.expr import from_plan
-    from ..service import _serialize
+    from .query.expr import from_plan
+    from .service import _serialize
 
     expr = from_plan(args.blob or args.plan or {}, wc)
     context = wc.ref(args.url) if args.url else None
@@ -453,6 +453,6 @@ def run_plan(args: PlanArgs, wc: "WebClient") -> Any:
       "a plan for validate_plan / run_plan.",
       returns="markdown", story="agent-developer")
 def lazy_query_guide(args: NoArgs, wc: "WebClient") -> str:
-    from ..llm.guides import lazy_query_guide as _guide
+    from .llm.guides import lazy_query_guide as _guide
 
     return _guide()

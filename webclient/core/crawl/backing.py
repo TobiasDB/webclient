@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, cast
 from urllib.parse import urlparse, urlsplit
 
 from ...errors import make
+from ...loop import BoundedLoop
 from ..web_core import Backing
 from .canon import (  # URL canon / scope / scoring vocabulary (pure helpers)
     _BOILER_PATH_RE,
@@ -47,6 +48,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+#: a round's terminal decision -- the frontier/budget is done (the real "which edges" decision is
+#: the batch of :class:`Edge`\\ s that ``_claim`` returns; this sentinel just ends the loop).
+_DONE: Any = object()
+
 
 class CrawlBacking(Backing):
     """The traversal ops: ``step`` (one round), ``run`` (to completion), and the
@@ -73,78 +78,96 @@ class CrawlBacking(Backing):
     async def step(
         self, core: "Crawl[Any]", select: "list[Edge] | list[str] | None" = None
     ) -> "Crawl[Any]":
-        """Fetch one round. ``select`` is a subset of the frontier (edges or URLs) OR
-        brand-new URLs to fetch next (any not in the frontier are added, bypassing the
-        scope filters -- an explicit ask wins); ``None`` takes the top-``width`` scored
-        edges in best-first order, or nothing in ``manual`` order. Each fetched page is
-        retained per ``config.retain`` and its links expand the frontier.
+        """Fetch one round. ``select`` is a subset of the frontier (edges or URLs) OR brand-new URLs
+        to fetch next (any not in the frontier are added, bypassing the scope filters -- an explicit
+        ask wins); ``None`` takes the top-``width`` scored edges in best-first order, or nothing in
+        ``manual`` order. Each fetched page is retained and its links expand the frontier.
 
-        A per-crawl lock serialises rounds so the frontier-claim + budget + expansion
-        is atomic -- concurrently-awaited steps can't each claim the full budget."""
-        await self._pump(core, lambda: self._select(core, select))
+        One round of the crawl's :class:`BoundedLoop`, on a FRESH loop (so concurrently-awaited
+        ``step``s don't race the loop's round state), with the claim + budget reservation atomic
+        under the step lock -- so concurrent steps can't each claim the full page budget."""
+        loop = self._make_loop(core)
+        to_fetch = await self._claim(core, lambda: self._select(core, select))
+        decision: Any = core._pending if core._pending is not None else to_fetch
+        await loop.astep(core, decision=decision)
         return core
 
+    def _make_loop(self, core: "Crawl[Any]") -> "BoundedLoop[Crawl[Any], Any, Any]":
+        """The crawl as a :class:`~webclient.loop.BoundedLoop` (the ONE loop concept): each round
+        DECIDES a batch of frontier edges (best-first, budget-reserved under the step lock) and
+        APPLIES one FETCH per edge, which BoundedLoop fans out CONCURRENTLY (bounded by
+        ``config.width`` -- the loop owns the efficiency). Stops when the frontier/budget is done
+        (``decide`` -> :data:`_DONE`), a driver ``Ask`` pauses it, or a round fetches no new page
+        (``max_stalls=1`` -- the old "not produced" break). Crawl STATE lives on the core, so
+        ``resume``/re-``run`` continues from the current frontier."""
+
+        async def decide(state: "Crawl[Any]") -> Any:
+            if self.done(state):
+                return _DONE
+            to_fetch = await self._claim(state, lambda: self._drive_select(state))
+            if state._pending is not None:  # the driver asked for a human -> checkpoint (waiting)
+                return state._pending
+            return to_fetch
+
+        async def apply(state: "Crawl[Any]", edge: Edge) -> None:
+            await self._apply_edge(state, edge)
+
+        return BoundedLoop(
+            observe=lambda s, i, e: s, decide=decide,
+            done_result=lambda d: "done" if d is _DONE else None,
+            apply=apply, progress=lambda s: len(s.pages),
+            fanout=max(1, core.config.width),  # fetch the round's edges concurrently
+            max_rounds=core.config.max_pages + 1,  # a safety cap; done()/stall stop first
+            max_stalls=1,  # a round with no new page -> stop (the old "not produced" break)
+            name="crawl", bus=getattr(core._client, "bus", None),
+        )
+
     async def run(self, core: "Crawl[Any]") -> "Crawl[Any]":
-        """Drive the crawl to completion (the batch drain of the stream): expand the
-        best-first frontier round by round until done. Equivalent to exhausting
-        ``stream()`` -- ``config.order`` only governs a bare ``step()``, not the drive."""
-        while True:
-            produced, claimed = await self._pump(core, lambda: self._drive_select(core))
-            if self.done(core) or not claimed:  # nothing left to claim (a round of robots-blocked
-                break  # or failed edges is progress: the frontier shrank, the budget did not)
+        """Drive the crawl to completion (the batch drain of the stream): expand the best-first
+        frontier round by round until done. Driven by a :class:`BoundedLoop` (:meth:`_make_loop`)."""
+        await self._make_loop(core).arun(core)
         return core
 
     async def _astream(self, core: "Crawl[Any]") -> "AsyncIterator[Any]":
-        """The crawl's one engine: drive the best-first frontier round by round and
-        yield each fetched page's retained projection as the round completes. Pausing
-        (breaking the consumer) leaves the frontier + seen ledger intact, so the crawl
-        is resumable; ``run`` is this stream drained. Each round's claim/fetch/expand is
-        atomic under the step lock; the yield happens after the lock is released, so a
-        paused consumer never holds it."""
-        while not self.done(core):
-            produced, claimed = await self._pump(core, lambda: self._drive_select(core))
-            for page in produced:
+        """The crawl's one engine: drive the best-first frontier round by round (a
+        :class:`BoundedLoop`) and yield each round's fetched pages as it completes. Pausing (breaking
+        the consumer) leaves the frontier + seen ledger intact, so the crawl is resumable; ``run`` is
+        this stream drained."""
+        loop = self._make_loop(core)
+        while True:
+            seen = len(core.pages)
+            verdict = await loop.astep(core)
+            for page in core.pages[seen:]:
                 yield page
-            if not claimed:  # nothing to claim: the frontier is exhausted (or the driver picked none)
-                break
+            if verdict is not None:  # terminal (done / stalled / budget)
+                return
 
-    async def _pump(
-        self, core: "Crawl[Any]", choose: "Callable[[], list[Edge]]"
-    ) -> "tuple[list[Any], int]":
-        """One round: CLAIM edges under the step lock (``choose`` + budget + frontier removal is
-        atomic, and the claim is RESERVED via ``_inflight`` so concurrent rounds can't over-claim
-        the page budget), then FETCH the claimed edges CONCURRENTLY -- the step lock is NOT held
-        across the fetch, so the client's page pool actually fetches in parallel. ``_fetch_edge``'s
-        shared-state mutations (``_expand``/history/failures) are synchronous, so parallel edges
-        don't interleave them. Commits the retained pages + releases the reservation under the lock.
-        Returns the pages produced this round (for the stream to yield) and how many edges were
-        claimed -- a round whose every edge was robots-blocked produced nothing but WAS progress."""
+    async def _claim(self, core: "Crawl[Any]", choose: "Callable[[], list[Edge]]") -> "list[Edge]":
+        """The DECIDE half of a round: under the step lock, choose the edges (best-first / manual /
+        forced), cap them to the remaining page budget, remove them from the frontier and RESERVE
+        the budget via ``_inflight`` -- so concurrently-claimed rounds can't over-claim. Returns the
+        claimed edges (the batch ``apply`` fetches); ``[]`` when the driver Asked or nothing is left."""
         async with self._lock(core):
             core._round += 1
-            self._emit(core, "round", budget=core.config.max_pages, pages=len(core.pages),
-                       frontier=len(core.frontier))
             chosen = choose()
-            if core._pending is not None:  # the driver asked for a human: nothing to fetch
-                return [], 0
-            self._emit(core, "decision", picks=[e.url for e in chosen][:20], count=len(chosen))
+            if core._pending is not None:  # the driver asked for a human: claim nothing
+                return []
             room = max(0, core.config.max_pages - len(core.pages) - core._inflight)
             to_fetch = chosen[:room]
             taken = {e.url for e in to_fetch}
             core.frontier = [e for e in core.frontier if e.url not in taken]
             core._inflight += len(to_fetch)  # reserve the budget for the in-flight fetches
-        results = await asyncio.gather(*(self._fetch_edge(core, edge) for edge in to_fetch))
+            return to_fetch
+
+    async def _apply_edge(self, core: "Crawl[Any]", edge: Edge) -> None:
+        """The APPLY half (one unit of the batch, fanned out concurrently): FETCH + expand the edge
+        (outside the lock, so the batch fetches in parallel), then commit its retained page + release
+        its budget reservation under the lock. ``_fetch_edge`` records a Failure on a bad edge."""
+        page = await self._fetch_edge(core, edge)
         async with self._lock(core):
-            produced = [p for p in results if p is not None]
-            core.pages.extend(produced)
-            core._inflight -= len(to_fetch)
-            if to_fetch:
-                log.info("crawl round: fetched %d/%d, %d pages, frontier %d, failures %d",
-                         len(produced), len(to_fetch), len(core.pages), len(core.frontier),
-                         len(core.failures))
-            if self.done(core):
-                self._emit(core, "done" if core.status != "closed" else "done",
-                           pages=len(core.pages), failures=len(core.failures))
-        return produced, len(to_fetch)
+            if page is not None:
+                core.pages.append(page)
+            core._inflight -= 1
 
     def _emit(self, core: "Crawl[Any]", phase: str, **detail: Any) -> None:
         """Publish a :class:`~webclient.models.LoopEvent` for this crawl (loop ``"crawl"``)."""

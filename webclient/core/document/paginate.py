@@ -14,26 +14,27 @@ cutoff. This module owns the walk (:func:`walk`), the advance (:func:`_next_ref`
 (the one backing op left here -- "where is the next page"). ``Document.apaginate`` is the thin bound
 method that runs :func:`walk` and wraps the pages in a ``Collection``.
 
-The walk is HTTP + sequential. Advance strategies: ``by="link"`` follows a ``rel="next"`` link
-discovered on each page; ``by="param"`` increments a page/offset query parameter; ``by="cursor"``
-reads a keyset/cursor token off each page (a selector + attribute, or a JSON path) and carries it in
-the next request -- so a cursor API paginates too. It is bounded by ``max_pages`` and guarded against
+The walk is HTTP + sequential. Advance strategies: ``by="auto"`` (default) resolves the advance from
+the page's detected ``pagination`` hint (param source -> ``by="param"``, else ``by="link"``), so a
+bare ``paginate()`` works; ``by="link"`` follows a ``rel="next"`` link discovered on each page;
+``by="param"`` increments a page/offset query parameter; ``by="cursor"`` reads a keyset/cursor token
+off each page (a selector + attribute, or a JSON path) and carries it in the next request -- so a
+cursor API paginates too. It is bounded by ``max_pages`` and guarded against
 the common out-of-range CLAMP (``?page=999`` re-serving an earlier page) by a per-page key -- a
 content fingerprint by default, or a semantic ``key=<Expr>`` -- so a repeat stops the walk rather than
 looping. It can stop EARLY on ``max_rows`` (enough records collected), a recency cutoff
 (``until``/``until_before`` -- literal selector + value), or a general ``stop=<Expr>`` predicate
 (truthy against a page -> that page is the last), so a long dataset isn't walked whole for a few rows.
 
-``next=<selector>`` names the next link when the site has no ``rel=next`` (``next="a.next"`` -- its
-``href`` is the next page); and ``by="click"`` drives an INTERACTED pager on a live browser page: it
-clicks ``next`` (a "load more" button) or, without one, scrolls to the bottom (infinite scroll),
-waits for ``records`` to grow, and repeats up to ``max_pages`` times -- the one live page, now
-holding every loaded record, is the whole dataset (a single "page" in the Collection, so rows never
-repeat). The semantics flags (ordered/filtered/live) are a later phase.
+``next=<selector>`` names the next link when the site has no ``rel=next`` / ``Link`` header
+(``next="li.next a"`` -- the first match's ``href`` is the next page; its absence ends the walk);
+it applies to ``by="link"`` and ``by="auto"``. Interacted (load-more / infinite scroll) pagers are
+``by="action"`` with an ``action`` expression (``wq.doc.click("button.more")`` / ``wq.doc.scroll()``).
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urljoin
@@ -153,14 +154,7 @@ def _next_ref(
     ``None`` to stop. ``by="link"`` reads the next link off ``current`` (Link header / rel=next);
     ``by="param"`` computes the next ``?name=`` value (a page number, or an offset when ``size`` is
     set); ``by="cursor"`` reads a keyset token off ``current`` (the ``cursor`` selector's
-    ``cursor_attr``) and carries it in ``?name=`` -- no token means no next page. A ``next``
-    selector (any ``by``) overrides the discovery: the first match's ``href`` is the next page."""
-    if next:
-        el = current.select(next, optional=True)
-        ref = el.attr("href", optional=True) if el.ok else None  # a Reference (href resolves)
-        if ref is None or not getattr(ref, "ok", False):
-            return None  # the next control is gone (or unlinked) -> the last page
-        return cast("Reference", ref)
+    ``cursor_attr``) and carries it in ``?name=`` -- no token means no next page."""
     if by == "cursor":
         token = _read_one(current, cursor, cursor_attr)
         if not token:
@@ -169,6 +163,10 @@ def _next_ref(
     if by == "param":
         value = (start + index * size) if size else (start + index * step)
         return cast("Reference", _ref_of(current).dispatch("with_params", **{name: str(value)}))
+    if next:  # a named next control (no rel=next on this site): its href is the next page
+        el = current.select(next, optional=True)
+        ref = el.attr("href", optional=True) if el.ok else None  # a Reference (the href resolves)
+        return cast("Reference", ref) if ref is not None and getattr(ref, "ok", False) else None
     nxt = current.next_link()  # by == "link": Link header or an HTML rel=next
     return nxt if nxt.ok else None
 
@@ -202,65 +200,131 @@ async def _stop_here(stop: Any, doc: "Document", client: Any) -> bool:
     return truthy(await aevaluate(stop, doc, client=client))
 
 
-def _static_count(doc: "Document", records: str) -> int:
-    """How many records the document's CAPTURED content holds (the live page's DOM as of the last
-    drain) -- read statically so the walk never re-enters the engine loop."""
-    if not records:
-        return 0
-    root = tree(doc)
-    if root is None:
-        return 0
-    try:
-        return len(root.cssselect(records))
-    except Exception:  # noqa: BLE001 - a bad selector counts nothing
-        return 0
+def _auto_advance(doc: "Document", name: str) -> "tuple[str, str]":
+    """Resolve ``by="auto"`` from the page's detected ``pagination`` flag (its :class:`PaginationHint`):
+    a computed source (``kind="param"`` with a known param) -> ``("param", <param>)``; a discovered
+    link, a numbered strip, or no hint at all -> ``("link", name)`` -- the safe default. So a bare
+    ``doc.paginate()`` walks the source the way the detector read it, with ``by="link"`` as the
+    fallback that follows ``rel=next`` / the HTTP Link header."""
+    hint = doc.pagination().value
+    if hint is not None and getattr(hint, "kind", "") == "param" and getattr(hint, "name", ""):
+        return "param", hint.name
+    return "link", name
 
 
-async def _walk_click(
-    doc: "Document", *, next: str, records: str, bound: int, timeout: float, max_rows: int,
+#: how many computed pages to fetch at once when the total is known (a bounded fan-out).
+_PARALLEL = 8
+
+
+async def _gather_bounded(refs: "list[Reference]", client: Any, limit: int) -> "list[Document]":
+    """Fetch ``refs`` CONCURRENTLY, at most ``limit`` in flight, results in input order."""
+    sem = asyncio.Semaphore(max(1, limit))
+
+    async def _one(ref: "Reference") -> "Document":
+        async with sem:
+            return cast("Document", await client.afetch(ref, optional=True))
+
+    return list(await asyncio.gather(*(_one(ref) for ref in refs)))
+
+
+async def _parallel_pages(
+    doc: "Document", *, name: str, start: int, step: int, size: int, total: int, client: Any
 ) -> "list[Document]":
-    """The interacted pager: on the live page, click ``next`` (a "load more" / "next" control)
-    or -- without one -- scroll to the bottom (infinite scroll); wait up to ``timeout`` seconds
-    for the page to change (``records`` grows, else the content changes); repeat until nothing
-    changes, the control disappears, ``max_rows`` is reached, or ``bound`` pages were loaded.
-    The one live document -- refreshed, holding everything loaded -- is the whole dataset."""
-    page = doc._page
-    if page is None:
-        from ...errors import WebException, make
-
-        raise WebException(make("paginate.not_live", "paginate(by='click') needs a live browser page", op="paginate"))
-    from .live import LiveBacking, drain
-
-    live = LiveBacking()
-    loaded = 1
-    while loaded < bound:
-        before_n = _static_count(doc, records)
-        if max_rows and before_n >= max_rows:
+    """The computed fast-path: for ``by="param"`` with a KNOWN total, the next page is a pure
+    function of the index, so build every page's reference up front and fetch them CONCURRENTLY
+    (bounded), page one first. Stops early at the first empty/not-ok page or a clamped repeat (a
+    wrong total), so the result never runs past the real end."""
+    refs = [
+        cast("Reference", _ref_of(doc).dispatch(
+            "with_params", **{name: str((start + index * size) if size else (start + index * step))}
+        ))
+        for index in range(1, total)  # page one is ``doc`` (index 0)
+    ]
+    pages: list[Document] = [doc]
+    seen = {_page_fingerprint(doc)}
+    for page in await _gather_bounded(refs, client, _PARALLEL):
+        if not (page.ok and page.content):
             break
-        before_fp = _page_fingerprint(doc)
-        if next:
-            if await page.locator(next).count() == 0:
-                break  # the control is gone -> the last page
-            await live.click(doc, next, timeout=timeout, optional=True)
-        else:
-            await live.scroll(doc, timeout=timeout)
-        grew = False
-        for _ in range(max(1, int(timeout * 10))):  # poll for the page to change
-            await drain(doc)
-            if _static_count(doc, records) > before_n or (not records and _page_fingerprint(doc) != before_fp):
-                grew = True
+        fp = _page_fingerprint(page)
+        if fp in seen:
+            break
+        seen.add(fp)
+        pages.append(page)
+    return pages
+
+
+#: how long an interacted pager may take to show what one action loaded (seconds)
+_SETTLE = 5.0
+
+
+def _settle_expr() -> Any:
+    """``wq.doc.wait_for(timeout=0.1)``: a bare 0.1s wait on the live page, then a fresh capture."""
+    from ...interface import wq
+
+    return wq.doc.wait_for(timeout=0.1)
+
+
+async def _interact_pages(
+    doc: "Document", *, action: Any, records: str, max_pages: int, client: Any
+) -> "list[Document]":
+    """Interacted (append / exhaust-then-extract) pagination for a JS pager: drive the ``action``
+    -- a click on a "load more" button, or a scroll -- against the HELD live page until the record
+    count stops growing (exhausted), then emit the ONE fully-loaded page. Each interaction refreshes
+    the page's captured content, so the final ``select_all`` over that page sees every loaded record.
+    ``records`` (the record selector) measures progress; without it, the content length does."""
+    from ...query.executor import aevaluate
+
+    bound = max(1, min(max_pages, _MAX_PAGES_CAP))
+    # each action runs in its own plan scope, which would RELEASE the held live page (a click
+    # returns the page); keep it alive across the whole interaction so the caller keeps their page.
+    prev_keep = getattr(doc, "_keep_alive", False)
+    doc._keep_alive = True
+    try:
+        prev = _row_count(doc, records) if records else len(doc.content or b"")
+        for _ in range(bound):
+            try:
+                await aevaluate(action, doc, client=client)  # load more / scroll -> refreshes doc.content
+            except Exception:  # noqa: BLE001 - a gone "load more" button / failed action = exhausted
                 break
-            await page.wait_for_timeout(100)
-        if not grew:
-            break  # nothing more loaded -> the end of the dataset
-        loaded += 1
+            count = _row_count(doc, records) if records else len(doc.content or b"")
+            # a real pager loads ASYNCHRONOUSLY (a request, then the DOM): give it time to show up --
+            # re-read the page every 0.1s for up to ``_SETTLE`` seconds before calling it exhausted
+            waited = 0.0
+            while count <= prev and waited < _SETTLE:
+                try:
+                    await aevaluate(_settle_expr(), doc, client=client)  # a bare wait, then a fresh capture
+                except Exception:  # noqa: BLE001 - the page went away: exhausted
+                    break
+                waited += 0.1
+                count = _row_count(doc, records) if records else len(doc.content or b"")
+            if count <= prev:
+                break  # nothing new loaded -> the list is exhausted
+            prev = count
+    finally:
+        doc._keep_alive = prev_keep
     return [doc]
+
+
+async def _partition_pages(
+    doc: "Document", *, param: str, values: "list[str]", walk_kwargs: "dict[str, Any]", client: Any
+) -> "list[Document]":
+    """Beat a result cap by PARTITIONING: run the walk once per filter value (``?{param}={value}``)
+    and concatenate the pages. Each partition is under the cap, so together they recover the whole
+    dataset. The unfiltered base ``doc`` is not itself a partition (it is the capped listing); each
+    partition is fetched fresh from ``doc``'s URL with the filter applied."""
+    out: list[Document] = []
+    for value in values:
+        ref = cast("Reference", _ref_of(doc).dispatch("with_params", **{param: value}))
+        page1 = cast("Document", await client.afetch(ref, optional=True))
+        if page1.ok and page1.content:
+            out.extend(await walk(page1, client=client, **walk_kwargs))
+    return out
 
 
 async def walk(
     doc: "Document",
     *,
-    by: str = "link",
+    by: str = "auto",
     max_pages: int = 20,
     max_rows: int = 0,
     name: str = "page",
@@ -272,10 +336,13 @@ async def walk(
     records: str = "",
     until: str = "",
     until_before: str = "",
+    total_pages: int = 0,
+    action: Any = None,
+    partition_param: str = "",
+    partition_values: "list[str] | tuple[str, ...]" = (),
     stop: Any = None,
     key: Any = None,
     next: str = "",
-    timeout: float = 10.0,
     client: Any = None,
 ) -> "list[Document]":
     """Walk ``doc``'s dataset into a flat list of pages (page one first). Fetches each next page
@@ -284,18 +351,37 @@ async def walk(
     stop fires: ``max_pages``, ``max_rows`` (with ``records``), the ``until``/``until_before``
     recency cutoff, or the ``stop`` predicate. ``stop``/``key`` are Exprs (or ``None``) evaluated
     per page -- the bound-op capability. The engine ``client`` fetches subsequent pages.
-    ``next`` names the next link's selector (when there is no ``rel=next``); ``by="click"`` is the
-    interacted walk (see :func:`_walk_click`) and needs a live browser page."""
-    client = client if client is not None else doc._client
-    bound = max(1, min(max_pages, _MAX_PAGES_CAP))
-    if by == "click":  # the held page lives on ITS client's loop: drive it there
-        coro = _walk_click(doc, next=next, records=records, bound=bound, timeout=timeout, max_rows=max_rows)
-        page_loop = getattr(doc._client, "loop", None)
-        if page_loop is None or page_loop().on_loop_thread():
-            return await coro
-        import asyncio
 
-        return await asyncio.wrap_future(page_loop().submit(coro))
+    COMPUTED FAST-PATH: when the advance is ``param`` and the total page count is known
+    (``total_pages``, or the hint's when ``by="auto"``) and no per-page semantic stop is in play,
+    every page reference is a pure function of its index, so the pages are fetched CONCURRENTLY
+    (bounded) instead of one-at-a-time."""
+    client = client if client is not None else doc._client
+    if partition_param and partition_values:  # beat a result cap: walk once per filter value, concat
+        return await _partition_pages(
+            doc, param=partition_param, values=list(partition_values), client=client,
+            walk_kwargs=dict(
+                by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start, step=step,
+                size=size, cursor=cursor, cursor_attr=cursor_attr, records=records, until=until,
+                until_before=until_before, total_pages=total_pages, action=action, stop=stop, key=key,
+                next=next,
+            ),
+        )
+    if by == "action":  # a JS pager -- drive the action on the held live page (append/exhaust)
+        return await _interact_pages(doc, action=action, records=records, max_pages=max_pages, client=client) if action is not None else [doc]
+    if by == "auto" and next:
+        by = "link"  # a named next control: follow it (the hint's advance does not apply)
+    if by == "auto":
+        by, name = _auto_advance(doc, name)  # pick the advance from the detected pagination hint
+        if not total_pages:  # ... and its known total, for the parallel fast-path (hint is cached)
+            hint = doc.pagination().value
+            total_pages = int(getattr(hint, "total_pages", 0) or 0) if hint is not None else 0
+    bound = max(1, min(max_pages, _MAX_PAGES_CAP))
+    if by == "param" and total_pages > 1 and not (until or stop or key or max_rows):
+        return await _parallel_pages(
+            doc, name=name, start=start, step=step, size=size,
+            total=min(total_pages, bound), client=client,
+        )
     pages: list[Document] = [doc]
     seen = {await _page_key(doc, key, client)}
     rows = _row_count(doc, records)

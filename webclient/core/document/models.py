@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     # are defined below in this module).
     from ...query.collection import Collection, Field  # noqa: F401
     from ...models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event  # noqa: F401
-    from ...patterns import PatternHint  # noqa: F401
     from ...interface import LazyDocument  # noqa: F401
     from ..reference import Reference  # noqa: F401
     from . import Document  # noqa: F401
@@ -189,6 +188,79 @@ class Flag(BaseModel):
         return self.present
 
 
+class PaginationHint(BaseModel):
+    """The ``pagination`` flag's ``value``: a structured read of HOW a listing paginates, so a
+    caller (onboarding, or a no-arg ``paginate()``) can pick the right advance without guessing.
+    ``kind`` is how the next page is reached -- ``"link"`` (a discovered ``rel=next`` / HTTP
+    ``Link`` header -> ``paginate(by="link")``), ``"param"`` (a ``?page=``/``?offset=`` query
+    param -> ``paginate(by="param", name=...)``), ``"numbered"`` (only a ``1 2 3`` strip seen),
+    or ``"unknown"``. ``next`` is the resolved next-page URL when one was found; ``name`` the
+    pagination param for the computed case. ``total_pages`` / ``total_items`` / ``page_size`` come
+    from a "Page 1 of 18" / "Showing 1-20 of 348" caption or an ``X-Total-Count`` header when
+    present (0 = unknown). ``endpoint`` is a demoted XHR data endpoint (reserved; empty for now)."""
+
+    kind: Literal["link", "param", "numbered", "unknown"] = "unknown"
+    next: str = ""  # resolved next-page URL (discovered case)
+    name: str = ""  # pagination param name (computed case)
+    page_size: int = 0  # records per page, if a caption reveals it
+    total_pages: int = 0  # from "Page X of Y"
+    total_items: int = 0  # from "Showing 1-N of M" / X-Total-Count
+    endpoint: str = ""  # a demoted XHR data endpoint (reserved)
+
+
+class Ordering(BaseModel):
+    """The ``ordered`` flag's value: HOW a listing is sorted -- which decides whether an early
+    pagination stop is sound. ``key`` is the sort dimension (``date`` when record dates run
+    monotonically, ``relevance`` for a search-results page, else ``unknown``); ``direction`` is
+    ``desc`` (newest/highest first) / ``asc`` / ``unknown``; ``controllable`` is whether the page
+    exposes a sort control, with ``param`` the query param that sets it when known. Newest-first
+    dates (``key="date"``, ``direction="desc"``) make a recency ``until`` stop SOUND; a
+    ``relevance`` or ``unknown`` order means the walk must EXHAUST (no early stop is safe)."""
+
+    key: Literal["date", "alpha", "price", "relevance", "unknown"] = "unknown"
+    direction: Literal["asc", "desc", "unknown"] = "unknown"
+    controllable: bool = False
+    param: str = ""
+
+
+class Filtering(BaseModel):
+    """The ``filtered`` flag's value: the listing is NARROWED by filters. ``active`` are the filter
+    query params currently applied (so pagination must PRESERVE them, and a server-side filter can
+    beat paging to a watermark); ``controls`` are the filter/facet controls on the page (the axes to
+    partition by, the tool for beating a result cap). A subset, not the whole dataset."""
+
+    active: dict[str, str] = {}
+    controls: list[str] = []
+
+
+class PatternHint(BaseModel):
+    """One detected recurring-structure pattern -- the value carried by the pattern flags
+    (``record_regions`` / ``repeated_controls`` / ``page_template``). ``name`` is the pattern kind;
+    ``subject`` is a selector (extract / interact) or a template signature (crawl); ``count`` how
+    many repeats; ``for_`` the consumers it serves. A structural signal, expressed through the one
+    Signals/Flags registry (not a parallel one)."""
+
+    name: str
+    kind: Literal["dom", "visual", "behavior", "fingerprint"] = "dom"
+    subject: str = ""  # a selector (extract / interact) or a signature (crawl)
+    count: int = 0  # how many repeats
+    confidence: float = 0.0  # 0-1
+    for_: tuple[Literal["extract", "interact", "crawl"], ...] = ()  # the consumers this hint serves
+    evidence: str = ""  # a human-readable reason
+    value: Any = None  # a consumer-specific payload (e.g. sample labels)
+
+
+class Liveness(BaseModel):
+    """The ``live`` flag's value: the listing CHANGES over time (a feed / newest-first list).
+    ``newest`` is the most recent record date seen; ``recent`` whether it is within the last month;
+    ``drift_risk`` whether paging it risks duplicates/skips (a newest-first live list shifts while
+    you page) -- so a cross-page ``key=`` dedup, a cursor, or bigger/faster pages are wanted."""
+
+    newest: str = ""
+    recent: bool = False
+    drift_risk: bool = False
+
+
 class IDocument(BaseModel):
     """A resolved resource's data (the Core Fields), plus (for the checker) the
     eager ops ``Document`` implements -- ``select`` / ``attr`` (incl. ``attr("text")``)
@@ -252,6 +324,7 @@ class IDocument(BaseModel):
         def events_of(self, event_type: type[E]) -> "list[E]": ...
         @overload
         def events_of(self, event_type: str) -> "list[Event]": ...
+        def filtered(self) -> "Flag": ...
         def flags(self) -> "list[Flag]": ...
         def forms(self) -> "Flag": ...
         def framework(self) -> "str | None": ...
@@ -262,13 +335,17 @@ class IDocument(BaseModel):
         def is_ok(self) -> "bool | None": ...
         def large_document(self) -> "Flag": ...
         def links(self) -> "Collection[Reference]": ...
+        def live(self) -> "Flag": ...
         def login_present(self) -> "Flag": ...
         def login_required(self) -> "Flag": ...
         def markdown(self, *, main_content_only: bool = ...) -> "str": ...
         def metadata(self) -> "Metadata": ...
         def next_link(self) -> "Reference": ...
+        def ordered(self) -> "Flag": ...
+        def page_template(self) -> "Flag": ...
         def pagination(self) -> "Flag": ...
         def patterns(self, *, for_: 'str | None' = ...) -> "list[PatternHint]": ...
+        def record_regions(self) -> "Flag": ...
         def ref(self) -> "Reference": ...
         def regex(self, pattern: str, *, group: int | str = ..., flags: str = ...) -> "str | None": ...
         def regex_all(self, pattern: str, *, group: int | str = ..., flags: str = ...) -> "list[str]": ...
@@ -279,6 +356,7 @@ class IDocument(BaseModel):
         def render(self, format: Literal['links']) -> "Collection[Reference]": ...
         @overload
         def render(self, format: str, **options: Any) -> "str": ...
+        def repeated_controls(self) -> "Flag": ...
         def screenshot(self, selector: str | None = ...) -> "Document": ...
         def scroll(self, selector: str | None = ..., *, timeout: float | None = ...) -> "Document": ...
         def select(self, selector: str, *, index: int = ..., optional: bool = ..., error: Any = ...) -> "Document": ...
@@ -311,4 +389,9 @@ __all__ = [
     "Structure",
     "Signal",
     "Flag",
+    "PaginationHint",
+    "Ordering",
+    "Filtering",
+    "Liveness",
+    "PatternHint",
 ]

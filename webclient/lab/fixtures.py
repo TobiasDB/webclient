@@ -163,6 +163,28 @@ def _feed(method: str, path: str, query: Query, headers: dict[str, str], body: b
 </script>"""))
 
 
+@fixture("loadmore", "An interacted pager: a 'Load more' button appends items via JS", "pagination:interacted",
+         browser=True, expected={"record_selector": "li.item", "initial": 3, "total": 12})
+def _loadmore(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    return html(page("Load more", """
+<main><ul id="list">
+  <li class="item">Item 1</li><li class="item">Item 2</li><li class="item">Item 3</li>
+</ul>
+<button id="more" onclick="loadMore()">Load more</button></main>
+<script>
+  var loaded = 3, total = 12;
+  function loadMore() {
+    var list = document.getElementById('list');
+    for (var i = 0; i < 3 && loaded < total; i++) {
+      loaded++;
+      var li = document.createElement('li'); li.className = 'item'; li.textContent = 'Item ' + loaded;
+      list.appendChild(li);
+    }
+    if (loaded >= total) { document.getElementById('more').remove(); }
+  }
+</script>"""))
+
+
 # --------------------------------------------------------------------------- #
 # pagination: rel=next pages, a page param, a cursor API
 # --------------------------------------------------------------------------- #

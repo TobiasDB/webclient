@@ -9,7 +9,7 @@ noisy-OR, contra signals scale it down, and it is *present* at confidence >= 0.5
 (`Settings.detection.present_threshold`). A present flag may carry a `remedy` (the transport
 escalation it calls for) and a `value` (the actionable payload).
 
-13 flags, 35 detectors.
+19 flags, 47 detectors.
 
 ## `spa`
 
@@ -101,14 +101,44 @@ escalation it calls for) and a `value` (the actionable payload).
 
 ## `pagination`
 
-- **remedy**: `none` · **value**: The next-page hint carried by the pagination signals (a rel=next / page-param URL), if any.
+- **remedy**: `none` · **value**: A structured :class:`PaginationHint` (kind / next / name / totals) built from the pagination
 
 | detector | stage | contra | needs | evidence |
 |---|---|---|---|---|
+| `link_header_next` | request |  | — | pagination evidence (strong): an HTTP ``Link: <url>; rel="next"`` header (RFC 8288, as GitHub and many JSON APIs paginate) -- so a listing with NO HTML pager is still detected. Presence only: the actual next URL is re-read (with correct case) at run time by ``doc.next_link()``, since ``Context`` lowercases header values. |
 | `rel_next_link` | static |  | — | pagination evidence (strong): a ``rel="next"`` link/anchor -- the canonical next-page marker. |
 | `pagination_ui` | static |  | — | pagination evidence: a pagination/pager widget (by class or aria-label). |
-| `page_param_links` | static |  | — | pagination evidence: a link carrying a page parameter (``?page=`` / ``/page/`` etc.); its resolved URL is the next-page value. |
+| `page_param_links` | static |  | — | pagination evidence: a link whose query carries a pagination param (``?page=``, ``?offset=``, …) or whose path is ``/page/N``; its resolved URL is the next-page value. Reads the SAME param table crawl uses to collapse a series (``crawl.canon``), so detection and dedup never drift -- notably ``p`` is excluded (too often a post id, e.g. WordPress ``?p=123``, not a page number). |
 | `numbered_sequence` | static |  | — | pagination evidence: three or more purely-numeric links -- a ``1 2 3`` page-number strip. |
+
+## `ordered`
+
+- **remedy**: `none` · **value**: An :class:`Ordering` (key / direction / controllable / param) built from the ordered signals,
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `sort_param` | request |  | — | ordered evidence: a sort/order query param -> the listing's order is CONTROLLABLE. The param name is the signal value, so a caller can flip it (e.g. to oldest-first, to jump to the end). |
+| `relevance_query` | request |  | — | ordered evidence: a search query param (``?q=`` / ``?search=`` / …) -> RELEVANCE order, so no early pagination stop is sound (the walk must exhaust). |
+| `sort_control` | static |  | — | ordered evidence: a sort control on the page (a ``select[name*=sort]`` / ``[aria-sort]`` / an order dropdown) -> the listing's order is CONTROLLABLE. |
+| `relevance_searchbox` | static |  | — | ordered evidence: a search box (``input[type=search]`` / ``[role=search]``) -> the listing is likely relevance-ordered, so no early pagination stop is sound. |
+| `monotone_dates` | static |  | — | ordered evidence (strong): the page's record dates run MONOTONICALLY -- so the listing is date-sorted, and the direction says whether a recency ``until`` stop is sound. The direction (``"desc"``/``"asc"``) is the signal value. |
+
+## `filtered`
+
+- **remedy**: `none` · **value**: A :class:`Filtering` (active filter params + the filter controls) from the filtered signals.
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `active_query_filters` | request |  | — | filtered evidence: query params that are NOT pagination / tracking / locale / sort / search -> active filters narrowing the listing (so it is a subset, and paging must preserve them). The active ``{param: value}`` map is the signal value. |
+| `facet_controls` | static |  | — | filtered evidence: filter / facet controls on the page (a ``[class*=facet]`` / ``[class*=filter]`` block, a checkbox filter form, a ``select[name*=filter]``) -> facets to narrow / partition by. The control names (best-effort) are the signal value. |
+
+## `live`
+
+- **remedy**: `none` · **value**: A :class:`Liveness` (newest date, recent, drift risk) from the live signals. ``drift_risk`` is
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `recent_records` | static |  | — | live evidence: the newest record date on the page is within the last month -> a live/timely listing (a feed), which shifts while you page. The newest date is the signal value. |
 
 ## `tabbed`
 
@@ -136,3 +166,27 @@ escalation it calls for) and a `value` (the actionable payload).
 | `button_element` | static |  | — | buttons evidence: ``<button>`` / submit / button inputs on the page. |
 | `role_button` | static |  | — | buttons evidence: ``role="button"`` elements (buttons that aren't ``<button>`` tags). |
 | `onclick_attr` | static |  | — | buttons evidence (weak): elements carrying an inline ``onclick`` handler. |
+
+## `record_regions`
+
+- **remedy**: `none` · **value**: A pattern flag's value: the :class:`PatternHint` list carried by the detector that fired
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `record_list` | static |  | — | The repeating dataset regions (MDR-style dominant sibling groups): each is a ``select_all`` target for extraction. Confidence grows with group size + content richness vs the best region. The flag value is the list of :class:`PatternHint` (most confident first). |
+
+## `repeated_controls`
+
+- **remedy**: `none` · **value**: A pattern flag's value: the :class:`PatternHint` list carried by the detector that fired
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `repeated_control` | static |  | — | Interactive controls that repeat with the same structure + label shape (an "add to cart" per card, a "load more" per section): one action per item. Each hint's ``subject`` is a durable selector for the first instance; ``count`` how many share it. |
+
+## `page_template`
+
+- **remedy**: `none` · **value**: A pattern flag's value: the :class:`PatternHint` list carried by the detector that fired
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `page_template` | static |  | — | The page's template signature (for crawl dedup / clustering: same signature = same kind of page -- a listing, a detail page, a login wall). One hint, ``subject`` the signature digest. |

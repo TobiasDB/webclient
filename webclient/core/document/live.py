@@ -272,6 +272,7 @@ async def drain(doc: "Document") -> None:
     doc.content = (await doc._page.content()).encode()  # keep content current
     doc._tree = None  # invalidate the cached lxml parse of the old content
     doc._flag_cache = None  # ...and the memoised flag set (the DOM just changed)
+    doc._pattern_flag_cache = None  # ...and the structural pattern flags
     # the interaction NAVIGATED (a link, a submit): wait for the new page to load, then take ITS
     # content -- and its recording, whose Meta + FullSnapshot the recorder only emits on load (without
     # this a live mirror has nothing to draw until the next interaction: a white screen)
@@ -286,6 +287,7 @@ async def drain(doc: "Document") -> None:
             doc.content = (await doc._page.content()).encode()
             doc._tree = None
             doc._flag_cache = None
+            doc._pattern_flag_cache = None
         except Exception:  # noqa: BLE001 - a slow page: keep what we have
             pass
         doc.final_url = now

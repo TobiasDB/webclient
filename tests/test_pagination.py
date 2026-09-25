@@ -69,6 +69,36 @@ def test_paginate_stops_on_a_clamped_repeat(httpserver):
     assert len(pages) == 2
 
 
+def test_paginate_partitions_by_a_filter(httpserver):
+    # Phase 7: beat a result cap by PARTITIONING -- walk once per filter value and union. Each
+    # partition (?category=a / ?category=b) is fetched fresh + paginated; the base is not a partition.
+    httpserver.expect_request("/list", query_string="").respond_with_data(_page([]), content_type="text/html")
+    httpserver.expect_request("/list", query_string="category=a").respond_with_data(_page(["A1", "A2"], "/list?category=a&page=2"), content_type="text/html")
+    httpserver.expect_request("/list", query_string="category=a&page=2").respond_with_data(_page(["A3"]), content_type="text/html")  # a's page 2
+    httpserver.expect_request("/list", query_string="category=b").respond_with_data(_page(["B1"]), content_type="text/html")  # b, one page
+    plan = (
+        wq.reference(httpserver.url_for("/list")).resolve()
+        .paginate(by="link", partition_param="category", partition_values=["a", "b"], max_pages=10)
+        .select_all("article.r").extract(n=wq.doc.select(".n").attr("text")).project()
+    )
+    assert [r["n"] for r in plan.collect()] == ["A1", "A2", "A3", "B1"]  # a's 2 pages then b's, unioned
+
+
+def test_paginate_parallel_computed_with_known_total(httpserver):
+    # by="param" + a known total_pages: pages are a pure function of the index, so they are fetched
+    # CONCURRENTLY (bounded). Result is correct + in order; an over-estimated total stops at the end.
+    for i in range(1, 6):
+        httpserver.expect_request("/list", query_string=f"page={i}").respond_with_data(
+            _page([f"r{i}"]), content_type="text/html")
+    httpserver.expect_request("/list", query_string="page=6").respond_with_data("", status=404)
+    plan = (
+        wq.reference(httpserver.url_for("/list") + "?page=1").resolve()
+        .paginate(by="param", name="page", total_pages=8, max_pages=20)  # total over-estimated
+        .select_all("article.r").extract(n=wq.doc.select(".n").attr("text")).project()
+    )
+    assert [r["n"] for r in plan.collect()] == ["r1", "r2", "r3", "r4", "r5"]  # all 5, in order, stops at the 404
+
+
 # -- by="cursor": a keyset token read off each page -------------------------------------------
 
 def _cursor_page(records, cursor=None):
@@ -120,6 +150,34 @@ def test_paginate_stops_at_a_recency_cutoff(httpserver):
             .paginate(by="link", until="time.d", until_before="2026-01-01", max_pages=10)
         )
     assert len(pages) == 2  # d1 (all recent), d2 (crosses the cutoff, kept), then stop before d3
+
+
+# -- by="auto": resolve the advance from the detected pagination hint --------------------------
+
+def test_paginate_auto_detects_a_param_advance(httpserver):
+    # by="auto" (the default) reads the page's pagination hint. These pages carry a ?page= LINK
+    # (no rel=next), so the hint is kind="param" -> auto walks ?page=1,2. A by="link" fallback
+    # could NOT reach page 2 here (there is no rel=next), so 2 pages proves auto picked param.
+    def _pg(records, nextp=None):
+        arts = "".join(f'<article class="r"><span class="n">{n}</span></article>' for n in records)
+        tail = f'<a href="/list?page={nextp}">next</a>' if nextp else '<nav class="pagination">end</nav>'
+        return f"<html><body><main>{arts}</main>{tail}</body></html>"
+
+    httpserver.expect_request("/list", query_string="page=1").respond_with_data(_pg(["A", "B"], 2), content_type="text/html")
+    httpserver.expect_request("/list", query_string="page=2").respond_with_data(_pg(["C"], 3), content_type="text/html")
+    httpserver.expect_request("/list", query_string="page=3").respond_with_data("", status=404)
+    with WebClient() as wc:
+        pages = list(wc.fetch(httpserver.url_for("/list") + "?page=1").paginate(max_pages=10))  # no by= -> auto
+    assert len(pages) == 2  # auto -> by="param" walked page=1,2 (a link fallback would stop at 1)
+
+
+def test_paginate_auto_falls_back_to_link(httpserver):
+    # no page-param, but a rel=next link -> the hint is kind="link" (or absent) -> auto follows it.
+    httpserver.expect_request("/a1").respond_with_data(_page(["A"], "/a2"), content_type="text/html")
+    httpserver.expect_request("/a2").respond_with_data(_page(["B"]), content_type="text/html")  # no next
+    with WebClient() as wc:
+        pages = list(wc.fetch(httpserver.url_for("/a1")).paginate(max_pages=10))  # no by= -> auto -> link
+    assert len(pages) == 2  # followed rel=next
 
 
 # -- bound-op power: an Expr stop predicate and an Expr dedup key -------------------------------
@@ -222,21 +280,6 @@ def test_paginate_next_selector_without_rel_next(httpserver):
     assert [r["n"] for r in plan.collect()] == ["A", "B", "C"]
 
 
-def test_paginate_by_click_needs_a_live_page(httpserver):
-    from webclient.errors import WebException
-
-    httpserver.expect_request("/s").respond_with_data(_page(["A"]), content_type="text/html")
-    with WebClient() as wc:
-        doc = wc.fetch(httpserver.url_for("/s"))
-        try:
-            doc.paginate(by="click", next="button.more", max_pages=3)
-        except WebException as exc:
-            assert exc.error.code == "paginate.not_live"
-            assert exc.error.remedy == "browser"
-        else:
-            raise AssertionError("expected paginate.not_live")
-
-
 LOAD_MORE = """<html><body><main id="list"><article class="r"><span class="n">A</span></article></main>
 <button id="more">load more</button>
 <script>
@@ -253,15 +296,16 @@ document.getElementById('more').addEventListener('click', () => {
 </script></body></html>"""
 
 
-def test_paginate_by_click_loads_more_on_a_live_page(httpserver):
-    # the interacted pager: click "load more" until it disappears; the ONE page has every record.
+def test_paginate_by_action_loads_more_in_a_plan(httpserver):
+    # the interacted pager IN A PLAN (by="action", the action an expression): click "load more" until
+    # it is gone; the ONE page has every record, and the plan extracts them all.
     import pytest
 
     pytest.importorskip("playwright")
     httpserver.expect_request("/more").respond_with_data(LOAD_MORE, content_type="text/html")
     plan = (
         wq.reference(httpserver.url_for("/more")).resolve(browser=True)
-        .paginate(by="click", next="#more", records="article.r", max_pages=10, timeout=5)
+        .paginate(by="action", action=wq.doc.click("#more"), records="article.r", max_pages=10)
         .select_all("article.r").extract(n=wq.doc.select(".n").attr("text")).project()
     )
     with WebClient() as wc:

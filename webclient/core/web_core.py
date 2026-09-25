@@ -159,11 +159,16 @@ class WebCore:
         """Backings registered on this core's engine via ``use(backing)`` -- chosen
         BEFORE the built-in ``BACKINGS`` (so a registered backing overrides / extends
         any op) for the engine's CONTENT cores (documents / references). Only a content
-        core bound to a client/session picks them up; the engine cores themselves
-        (client / session) get none, so a document-render backing is never probed
-        against a client that has no ``kind``."""
+        core bound to a client/session picks them up; the SESSION cores themselves
+        (client / session / crawl / pagination) get none, so a document-render backing
+        (whose ``applies`` reads ``.kind``) is never probed against a core that has no
+        ``kind``."""
+        from .session_core import SessionCore
+
+        if isinstance(self, SessionCore):
+            return ()  # a session/engine core -- content backings never apply to it
         if getattr(self, "_session", None) is None and getattr(self, "_client", None) is None:
-            return ()  # the engine core itself (or an unbound core) -- no extra backings
+            return ()  # an unbound content core -- nothing registered reaches it
         engine = self._bound_engine()
         return tuple(engine._backings) if engine is not None else ()
 

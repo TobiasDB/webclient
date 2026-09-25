@@ -56,6 +56,11 @@ class FlagSpec:
     name: str
     remedy: "str | RemedyFn | None" = None
     value: "ValueFn | None" = None
+    #: which flag GROUP this is. ``"conclusion"`` (default) -- the notable conclusions auto/resolve
+    #: act on (spa / login / pagination / ...); ``"pattern"`` -- structural recon (record regions,
+    #: repeated controls, the page template) that is ALWAYS-present detail, kept out of the conclusion
+    #: set so it never pollutes "any flag present?" logic. ``flags(ctx)`` builds one group at a time.
+    group: str = "conclusion"
 
 
 DETECTORS: list[Detector] = []
@@ -80,10 +85,15 @@ def detector(
     return wrap
 
 
-def flag(name: str, *, remedy: "str | RemedyFn | None" = None, value: "ValueFn | None" = None) -> FlagSpec:
-    """Register a flag and how it derives its remedy / value. Returns the spec so a
-    caller can keep a reference; idempotent per name (a re-register replaces)."""
-    spec = FlagSpec(name=name, remedy=remedy, value=value)
+def flag(
+    name: str, *, remedy: "str | RemedyFn | None" = None, value: "ValueFn | None" = None,
+    group: str = "conclusion",
+) -> FlagSpec:
+    """Register a flag and how it derives its remedy / value. ``group`` separates the notable
+    conclusions (``"conclusion"``, the default -- what auto/resolve act on) from structural
+    ``"pattern"`` recon, so the always-present pattern flags never pollute the conclusion set.
+    Returns the spec; idempotent per name (a re-register replaces)."""
+    spec = FlagSpec(name=name, remedy=remedy, value=value, group=group)
     FLAGS[name] = spec
     return spec
 
@@ -117,14 +127,16 @@ def build_flag(name: str, signals: "list[Signal]", *, remedy: str | None = None,
     )
 
 
-def run(ctx: Context) -> "list[Signal]":
-    """Every signal that fires for ``ctx`` -- run each registered detector; a
-    detector whose inputs are absent (e.g. a rendered detector with no browser
-    events) simply returns ``None``."""
+def run(ctx: Context, wanted: "set[str] | None" = None) -> "list[Signal]":
+    """Every signal that fires for ``ctx`` -- run each registered detector; a detector whose inputs
+    are absent (e.g. a rendered detector with no browser events) simply returns ``None``. ``wanted``
+    restricts it to detectors feeding those flags (so building one group doesn't run the others)."""
     from ..core.document.models import Signal
 
     out: list[Signal] = []
     for d in DETECTORS:
+        if wanted is not None and d.flag not in wanted:
+            continue
         hit = d.fn(ctx)
         if hit is not None and hit.confidence > 0.0:
             out.append(Signal(
@@ -134,19 +146,24 @@ def run(ctx: Context) -> "list[Signal]":
     return out
 
 
-def flags(ctx: Context) -> "dict[str, Flag]":
-    """Every registered flag, built from the signals that fired for ``ctx``. A flag
-    with no evidence is present=False (a total surface -- never an error)."""
-    signals = run(ctx)
+def flags(ctx: Context, *, group: str = "conclusion") -> "dict[str, Flag]":
+    """The flags of one ``group`` built from the signals that fired for ``ctx`` -- ``"conclusion"``
+    (the default: the notable conclusions auto/resolve act on) or ``"pattern"`` (structural recon).
+    A flag with no evidence is present=False (a total surface -- never an error). Building one group
+    runs only that group's detectors, so the always-present pattern flags never enter the conclusion
+    set."""
+    wanted = {name for name, spec in FLAGS.items() if spec.group == group}
+    signals = run(ctx, wanted)
     by: dict[str, list[Signal]] = {}
     for s in signals:
         by.setdefault(s.flag, []).append(s)
     out: dict[str, Flag] = {}
-    for name, spec in FLAGS.items():
-        group = by.get(name, [])
-        remedy = spec.remedy(group, ctx) if callable(spec.remedy) else spec.remedy
-        value = spec.value(group, ctx) if spec.value is not None else None
-        out[name] = build_flag(name, group, remedy=remedy, value=value)
+    for name in wanted:
+        spec = FLAGS[name]
+        group_signals = by.get(name, [])
+        remedy = spec.remedy(group_signals, ctx) if callable(spec.remedy) else spec.remedy
+        value = spec.value(group_signals, ctx) if spec.value is not None else None
+        out[name] = build_flag(name, group_signals, remedy=remedy, value=value)
     return out
 
 

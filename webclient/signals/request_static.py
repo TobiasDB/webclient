@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qsl, urlparse
 
 from .context import Context
 from .registry import Hit, detector, flag
@@ -262,3 +263,62 @@ def _redirect_to_login(ctx: Context) -> Hit | None:
     ):
         return Hit(0.8, "redirected to a login URL")
     return None
+
+
+# -- pagination (request): the HTTP Link header, so a JSON/API listing paginates too ----------
+_LINK_REL_NEXT = re.compile(r';\s*[^,]*\brel\s*=\s*"?next"?', re.I)
+
+
+@detector(flag="pagination", name="link_header_next", stage="request")
+def _link_header_next(ctx: Context) -> Hit | None:
+    """pagination evidence (strong): an HTTP ``Link: <url>; rel="next"`` header (RFC 8288, as
+    GitHub and many JSON APIs paginate) -- so a listing with NO HTML pager is still detected.
+    Presence only: the actual next URL is re-read (with correct case) at run time by
+    ``doc.next_link()``, since ``Context`` lowercases header values."""
+    raw = ctx.headers.get("link")
+    return Hit(0.95, "an HTTP Link rel=next header") if raw and _LINK_REL_NEXT.search(raw) else None
+
+
+# -- ordering (request): sort + relevance query params -----------------------------------------
+_SORT_PARAMS = frozenset({"sort", "order", "orderby", "sort_by", "sortby", "order_by", "sortorder"})
+_SEARCH_PARAMS = frozenset({"q", "query", "s", "search", "keyword", "keywords", "term"})
+
+
+def _query_keys(ctx: Context) -> "list[str]":
+    """The listing URL's query-param names, lowercased."""
+    return [k.lower() for k, _ in parse_qsl(urlparse(ctx.final_url or ctx.url).query)]
+
+
+@detector(flag="ordered", name="sort_param", stage="request")
+def _sort_param(ctx: Context) -> Hit | None:
+    """ordered evidence: a sort/order query param -> the listing's order is CONTROLLABLE. The param
+    name is the signal value, so a caller can flip it (e.g. to oldest-first, to jump to the end)."""
+    for k in _query_keys(ctx):
+        if k in _SORT_PARAMS:
+            return Hit(0.7, f"a ?{k}= sort param", k)
+    return None
+
+
+@detector(flag="ordered", name="relevance_query", stage="request")
+def _relevance_query(ctx: Context) -> Hit | None:
+    """ordered evidence: a search query param (``?q=`` / ``?search=`` / …) -> RELEVANCE order, so
+    no early pagination stop is sound (the walk must exhaust)."""
+    for k in _query_keys(ctx):
+        if k in _SEARCH_PARAMS:
+            return Hit(0.6, f"a ?{k}= search query (relevance order)")
+    return None
+
+
+@detector(flag="filtered", name="active_query_filters", stage="request")
+def _active_query_filters(ctx: Context) -> Hit | None:
+    """filtered evidence: query params that are NOT pagination / tracking / locale / sort / search
+    -> active filters narrowing the listing (so it is a subset, and paging must preserve them). The
+    active ``{param: value}`` map is the signal value."""
+    from ..core.crawl.canon import _LOCALE_PARAMS, _PAGINATION_PARAMS, _TRACKING
+
+    ignore = _PAGINATION_PARAMS | _TRACKING | _LOCALE_PARAMS | _SORT_PARAMS | _SEARCH_PARAMS
+    active = {
+        k: v for k, v in parse_qsl(urlparse(ctx.final_url or ctx.url).query)
+        if k.lower() not in ignore and v
+    }
+    return Hit(0.7, f"{len(active)} active filter param(s)", active) if active else None
