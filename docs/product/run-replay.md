@@ -1,6 +1,6 @@
 # Run replay: watching a run (live or recorded) as the plan it is
 
-Status: phase 1 built, 2026-09-25 (phases 2–3 to come). It replaces the trace view's flat event list and generic replay
+Status: phases 1–3 built, 2026-09-25. It replaces the trace view's flat event list and generic replay
 for plan runs. Traces of loops and crawls keep the Traces workspace for now.
 
 ## The problems (user feedback)
@@ -100,3 +100,21 @@ Everything below is a view of (stage × item × document × time), so nothing ne
 - **Events tree.** Stage ▸ item ▸ event, with only opened groups rendered, and errors on top.
 - **Playback.** Play at 1–64×. **Follow** tracks the active item; a click pins a stage or item.
 - **Traces view.** No event cards (the Player's `pulses={false}`).
+
+## Built (phases 2–3), after the first review
+
+- **Playback.** Step by step is the default: one visible moment every 0.4s (a select, a read, an
+  action, a page fetched). A run's steps are milliseconds apart, so no time speed showed them. The
+  recorded clock is available at 0.1×–16×.
+- **Browser pages.** A page with an rrweb recording replays that recording, seeked to the moment,
+  with the step's or action's element outlined on the rebuilt DOM and scrolled into view. Other
+  pages show their snapshot AT that moment (`upto` the latest snapshot before it), not the final
+  page. Actions (click, write) are outlined like selects.
+- **Other traces.** Mark lanes show each loop's rounds (waiting for a person in amber), each
+  pipeline's stages (enter → exit bars, red when stopped), background requests, scripts, DOM
+  changes and errors. A trace with no plan shows a PROCESS panel in place of the graph: the
+  pipelines' stages in order (duration, passed or stopped), the loops (rounds, last decision), and
+  the pages opened (click one to replay it). The Traces list opens every trace in Run.
+- **Clean traces.** A run's trace starts at the run (`since=bus.cursor`); it used to replay the
+  bus's retained history, so earlier runs appeared in it. Concurrent runs on one engine still share
+  the bus; isolating them per run is open.
