@@ -585,3 +585,16 @@ Fixed, each checked against a real browser on the lab's `/changelog` (a script-r
 - **One live page.** Author holds a single live page. Opening a head first returns the session's
   other live pages to the pool; before this, earlier loads' heads exhausted it and "opening a live
   page…" waited forever.
+
+### 14.5 Session status and the pointer (2026-09-25)
+
+- **One watched session.** The app shares a single session. A heartbeat checks it every 10s while
+  the tab is visible, and any call that answers `NoSuchSession` marks it lost.
+- **Status chip.** The header shows the session's state: connecting, "API unreachable" (recovers by
+  itself), or "session lost" with a **reconnect** button. Reconnect opens a new session, and every
+  workspace reopens its pages in it. Settings is no longer needed for this.
+- **Tabs give pages back.** A tab that goes away releases its live pages at once (a `pagehide`
+  beacon). While the browser pool is full, Author says so instead of waiting silently.
+- **The pointer.** The mirror's pointer always moves on from where it last was, remembered across
+  mirror restarts. It aims at the target as the mirror shows it, in document coordinates, so it
+  stays on the element as the page scrolls.
