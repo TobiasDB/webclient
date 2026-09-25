@@ -270,3 +270,93 @@ def test_a_runs_trace_holds_only_its_own_run(tmp_path):
             second = client.get(f"/traces/{ids[1]}/events").json()
             assert sum(1 for e in second if e.get("topic") == "plan" and e.get("phase") == "started") == 1
             assert sum(1 for e in second if e.get("topic") == "plan" and e.get("phase") == "row") == 3
+
+
+def test_concurrent_runs_keep_their_own_traces(tmp_path):
+    # two runs at once share the engine's bus; each run's trace (and live events) hold only its own
+    import time as _t
+
+    from fastapi.testclient import TestClient
+    from pytest_httpserver import HTTPServer
+    from werkzeug.wrappers import Response
+
+    from webclient.service import create_app
+
+    def slow(tag: str):
+        def handler(_req):
+            _t.sleep(0.3)  # both runs are in flight together
+            body = "<html><body>" + "".join(f'<li class="r"><b>{tag}{i}</b></li>' for i in range(3)) + "</body></html>"
+            return Response(body, content_type="text/html")
+        return handler
+
+    def plan() -> dict:
+        return {"root": "Reference", "steps": [
+            {"kind": "get", "name": "resolve"}, {"kind": "call", "name": "resolve", "args": [], "kwargs": {}},
+            {"kind": "get", "name": "select_all"}, {"kind": "call", "name": "select_all", "args": [{"value": "li.r"}], "kwargs": {}},
+            {"kind": "get", "name": "extract"}, {"kind": "call", "name": "extract", "args": [], "kwargs": {"n": {"plan": {"root": "Document", "steps": [
+                {"kind": "get", "name": "select"}, {"kind": "call", "name": "select", "args": [{"value": "b"}], "kwargs": {}},
+                {"kind": "get", "name": "attr"}, {"kind": "call", "name": "attr", "args": [{"value": "text"}], "kwargs": {}}]}}}},
+            {"kind": "get", "name": "project"}, {"kind": "call", "name": "project", "args": [], "kwargs": {}}]}
+
+    with HTTPServer() as srv:
+        srv.expect_request("/a").respond_with_handler(slow("a"))
+        srv.expect_request("/b").respond_with_handler(slow("b"))
+        with TestClient(create_app(traces_dir=tmp_path)) as client:
+            ids = {tag: client.post("/runs", json={"plan": plan(), "url": srv.url_for(f"/{tag}")}).json()["id"] for tag in "ab"}
+            for rid in ids.values():
+                for _ in range(200):
+                    if client.get(f"/runs/{rid}").json()["status"] != "running":
+                        break
+                    _t.sleep(0.05)
+            for tag, rid in ids.items():
+                other = "b" if tag == "a" else "a"
+                for events in (client.get(f"/traces/{rid}/events").json(), client.get(f"/runs/{rid}").json()["events"]):
+                    plan_events = [e for e in events if e.get("topic") == "plan"]
+                    assert sum(1 for e in plan_events if e.get("phase") == "started") == 1
+                    rows = [e for e in plan_events if e.get("phase") == "row"]
+                    assert len(rows) == 3
+                    assert all(f"{tag}" in str(e["detail"]) and f"'{other}0'" not in str(e["detail"]) for e in rows)
+                    assert all(e.get("run_id") in (None, rid) for e in events)  # resources samples carry none
+                    assert f"/{other}" not in " ".join(str(e.get("url", "")) for e in events)
+
+
+def test_the_bus_stamps_the_run_and_attributes_a_pages_later_events_to_it():
+    from webclient.events import EventBus, run_scope
+    from webclient.models import Event
+
+    bus = EventBus()
+    seen: list[Event] = []
+    bus.subscribe("", seen.append, run_id="r1")
+    with run_scope("r1"):
+        bus.publish(Event(topic="x", document_id="d1"))
+    bus.publish(Event(topic="y", document_id="d1"))  # e.g. a browser callback, outside the run's context
+    bus.publish(Event(topic="z", document_id="d2"))  # another page: not this run's
+    with run_scope("r2"):
+        bus.publish(Event(topic="w"))
+    assert [e.topic for e in seen] == ["x", "y"]
+    assert [e.topic for e in bus.since(0, run_id="r1")] == ["x", "y"]
+
+
+def test_the_engine_loop_carries_the_run_into_its_coroutines():
+    import asyncio
+
+    from webclient.core.client.loop import EngineLoop
+    from webclient.events import CURRENT_RUN, run_scope
+
+    loop = EngineLoop()
+    try:
+        async def which() -> "str | None":
+            await asyncio.sleep(0)
+            return CURRENT_RUN.get()
+
+        with run_scope("r7"):
+            assert loop.run(which()) == "r7"
+            assert loop.submit(which()).result() == "r7"
+
+            async def gen():
+                yield CURRENT_RUN.get()
+
+            assert list(loop.stream(gen())) == ["r7"]
+        assert loop.run(which()) is None
+    finally:
+        loop.stop()

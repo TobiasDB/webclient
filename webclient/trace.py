@@ -131,12 +131,13 @@ class Trace:
             "schema_version": SCHEMA_VERSION, "webclient": __version__, "started": self.started}))
 
     # -- attaching ------------------------------------------------------------
-    def attach(self, bus: "EventBus", *, since: int = 0, topic: str = "") -> "Trace":
+    def attach(self, bus: "EventBus", *, since: int = 0, topic: str = "", run_id: str | None = None) -> "Trace":
         """Subscribe to ``bus`` (from now on; ``since`` replays the bus's retained history
-        past that cursor first so a late attach still captures the run so far)."""
-        for event in bus.since(since, topic=topic):
+        past that cursor first so a late attach still captures the run so far). ``run_id`` keeps
+        only that run's events (see ``events.run_scope``) -- another run on the same engine stays out."""
+        for event in bus.since(since, topic=topic, run_id=run_id):
             self.write(event)
-        self._sub = bus.subscribe(topic, self.write)
+        self._sub = bus.subscribe(topic, self.write, run_id=run_id)
         return self
 
     def detach(self) -> None:

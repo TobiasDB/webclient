@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 from contextvars import ContextVar
-from collections import deque
-from typing import Any, Callable
+from collections import OrderedDict, deque
+from typing import Any, Callable, Iterator
 from uuid import uuid4
 
 from pydantic import BaseModel, PrivateAttr
@@ -50,6 +51,22 @@ from .models import (
 #: executor sets it per item; the bus stamps it onto every event published meanwhile.
 CURRENT_ITEM: ContextVar[tuple[int, ...]] = ContextVar("webclient_current_item", default=())
 
+#: the RUN the running code belongs to (an id the caller picks, e.g. the service's run id). Set it with
+#: :func:`run_scope`; the bus stamps it onto every event published meanwhile (``Event.run_id``), so two
+#: runs sharing one engine -- one bus -- can still be told apart (a trace keeps only its own run's).
+CURRENT_RUN: ContextVar[str | None] = ContextVar("webclient_current_run", default=None)
+
+
+@contextmanager
+def run_scope(run_id: str) -> Iterator[str]:
+    """Everything published inside is stamped ``run_id`` (the engine loop carries it into the
+    coroutines it runs for this caller)."""
+    token = CURRENT_RUN.set(run_id)
+    try:
+        yield run_id
+    finally:
+        CURRENT_RUN.reset(token)
+
 class Subscription(BaseModel):
     id: str
     topic: Topic
@@ -82,6 +99,9 @@ class EventBus(BaseModel):
     _seq: dict[str | None, int] = PrivateAttr(default_factory=dict)
     _n: int = PrivateAttr(default=0)
     _recent: "deque[Event]" = PrivateAttr(default_factory=deque)
+    #: document id -> the run that opened it: events a page publishes from outside the run's
+    #: context (browser callbacks, pumps) belong to the run whose page it is
+    _doc_run: "OrderedDict[str, str]" = PrivateAttr(default_factory=OrderedDict)
 
     def model_post_init(self, __context: Any) -> None:
         """Size the history ring to ``history``."""
@@ -92,7 +112,7 @@ class EventBus(BaseModel):
         """The global sequence number of the last published event (0 before any)."""
         return self._n
 
-    def since(self, n: int = 0, *, topic: Topic = "") -> list[Event]:
+    def since(self, n: int = 0, *, topic: Topic = "", run_id: str | None = None) -> list[Event]:
         """The retained events with a global sequence GREATER than ``n`` (optionally by topic
         prefix), oldest first -- the catch-up a resuming subscriber replays before going live.
         Bounded by ``history``: an older cursor gets what is still retained."""
@@ -100,6 +120,7 @@ class EventBus(BaseModel):
             return [
                 e for e in self._recent
                 if (e.n or 0) > n and topic_matches(topic, e.topic)
+                and (run_id is None or e.run_id == run_id)
             ]
 
     def publish(self, event: Event) -> None:
@@ -118,6 +139,12 @@ class EventBus(BaseModel):
                 item = CURRENT_ITEM.get()
                 if item:
                     event.item = list(item)
+            if event.run_id is None:
+                event.run_id = CURRENT_RUN.get() or (self._doc_run.get(key) if key else None)
+            if event.run_id and key and self._doc_run.get(key) != event.run_id:
+                self._doc_run[key] = event.run_id
+                while len(self._doc_run) > 5_000:
+                    self._doc_run.popitem(last=False)
             if self._recent.maxlen:
                 self._recent.append(event)
             subs = list(self._subs.values())
@@ -140,6 +167,7 @@ class EventBus(BaseModel):
         session_id: str | None = None,
         document_id: str | None = None,
         plan_id: str | None = None,
+        run_id: str | None = None,
     ) -> Subscription:
         """Handler fires for events whose topic matches ``topic`` by dotted
         prefix ("" matches everything) and every given correlation filter."""
@@ -148,6 +176,7 @@ class EventBus(BaseModel):
             "session_id": session_id,
             "document_id": document_id,
             "plan_id": plan_id,
+            "run_id": run_id,
         }
         with self._lock:
             self._subs[sub_id] = (topic, filters, handler)

@@ -1377,7 +1377,7 @@ class WebClient(SessionCore, IWebClient):
         return cast(Document, self.bridge(_hop()))
 
     # -- tracing -------------------------------------------------------------
-    def trace(self, path: "str | Path", *, since: int = 0, plan: Any = None) -> "Trace":
+    def trace(self, path: "str | Path", *, since: int = 0, plan: Any = None, run_id: str | None = None) -> "Trace":
         """Write a TRACE of everything this engine does into ONE file ``path``
         (``with wc.trace("run.jsonl"): ...``): every bus event, one per line -- a document
         snapshot after each fetch / load / interaction, every response body the static tier
@@ -1385,13 +1385,14 @@ class WebClient(SessionCore, IWebClient):
         the footer (``plan=``, or this client's recording session's plan when one is open).
         Everything a replay needs is in that stream (see :mod:`webclient.trace` /
         :mod:`webclient.replay`). ``since`` replays the bus's retained history past that
-        cursor into the trace first."""
+        cursor into the trace first. ``run_id`` records only that run (the code inside
+        ``events.run_scope(run_id)``), so another run on this engine does not leak into it."""
         from ...trace import Trace
 
         engine = self._the_engine()
         trace = Trace(path, plan=plan)
         engine.start_trace(str(trace.path))
-        trace.attach(self.bus, since=since)
+        trace.attach(self.bus, since=since, run_id=run_id)
         original_close = trace.close
 
         def _close() -> None:

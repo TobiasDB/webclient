@@ -16,6 +16,7 @@ import contextlib
 import logging
 import re
 import time
+import uuid
 from pathlib import Path
 from collections import OrderedDict
 from typing import Any, cast
@@ -24,6 +25,7 @@ from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconne
 from fastapi.responses import JSONResponse
 
 from .errors import WebError, WebException
+from .events import run_scope
 from .query.expr import from_plan
 from .interface import Document, Reference, WebClient
 from .settings import current as _settings
@@ -466,14 +468,15 @@ def create_app(
         # under traces_dir -- it lists under /traces and replays in the UI
         trace_id: "str | None" = None
         tracer: Any = contextlib.nullcontext()
+        exec_run = uuid.uuid4().hex  # stamps this call's events: a concurrent run's stay out of its trace
         if body.get("trace"):
             trace_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(body["trace"])).strip("-.")[:80] or "run"
             tdir = Path(app.state.traces_dir)
             tdir.mkdir(parents=True, exist_ok=True)
             # from NOW: the bus's retained history (earlier runs' events) is not this run's
-            tracer = engine.trace(tdir / f"{trace_id}.jsonl", plan=expr._plan, since=engine.bus.cursor)
+            tracer = engine.trace(tdir / f"{trace_id}.jsonl", plan=expr._plan, since=engine.bus.cursor, run_id=exec_run)
         try:
-            with tracer:
+            with run_scope(exec_run), tracer:
                 result = engine.execute(expr, context)  # the realization machinery
         except WebException as exc:  # a fetch/resolve failure -> structured error
             err = exc.error
@@ -801,8 +804,6 @@ def create_app(
         """Start executing ``plan`` (against ``url`` when given) in the background; returns the
         run id (also its trace id when ``trace`` is not false)."""
         import threading
-        import uuid
-
         _auth(authorization)
         wc_: WebClient = app.state.wc
         try:
@@ -873,16 +874,17 @@ def create_app(
 
         def work() -> None:
             threading.Thread(target=sample, name=f"run-{run_id}-res", daemon=True).start()
-            sub = engine.bus.subscribe("", keep)
+            # only THIS run's events (another run on the engine shares its bus)
+            sub = engine.bus.subscribe("", keep, run_id=run_id)
             status = "error"
             tracer: Any = contextlib.nullcontext()
             if run["trace"]:
                 tdir = Path(app.state.traces_dir)
                 tdir.mkdir(parents=True, exist_ok=True)
                 # from NOW: the bus's retained history (earlier runs' events) is not this run's
-                tracer = engine.trace(tdir / f"{run_id}.jsonl", plan=expr._plan, since=engine.bus.cursor)
+                tracer = engine.trace(tdir / f"{run_id}.jsonl", plan=expr._plan, since=engine.bus.cursor, run_id=run_id)
             try:
-                with tracer:
+                with run_scope(run_id), tracer:
                     result = engine.execute(expr, context, stream=True)
                     if isinstance(result, (dict, str, int, float)) or result is None:
                         run["rows"].append({"row": _serialize(result, store), "at": len(run["events"])})
@@ -1285,8 +1287,6 @@ def create_app(
         _auth(authorization)
         if sid not in app.state.sessions:
             return _error(404, "NoSuchSession", f"no session {sid!r}", hint=_SESSION_HINT)
-        import uuid
-
         seeds_in = body.get("seeds") or body.get("seed") or []
         seeds = [seeds_in] if isinstance(seeds_in, str) else list(seeds_in)
         if not seeds:

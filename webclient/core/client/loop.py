@@ -17,6 +17,23 @@ log = logging.getLogger(__name__)
 _SENTINEL = object()
 
 
+def _carried(coro: Coroutine[Any, Any, T]) -> Coroutine[Any, Any, T]:
+    """``coro`` wrapped to run in the CALLER's run (``events.CURRENT_RUN``): a coroutine handed to
+    another thread's loop starts in that loop's context, so the run id would be lost -- and every
+    event of the run published on the loop unattributed."""
+    from ...events import CURRENT_RUN
+
+    run = CURRENT_RUN.get()
+    if run is None:
+        return coro
+
+    async def _in_run() -> T:
+        CURRENT_RUN.set(run)
+        return await coro
+
+    return _in_run()
+
+
 class EngineLoop:
     def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()
@@ -53,7 +70,7 @@ class EngineLoop:
         """Schedule ``coro`` on the loop and return its ``concurrent.futures``
         Future (for an async caller to ``wrap_future`` and await without
         blocking its own loop)."""
-        return asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return asyncio.run_coroutine_threadsafe(_carried(coro), self._loop)
 
     def run(self, coro: Coroutine[Any, Any, T], timeout: float | None = None) -> T:
         """Run ``coro`` on the engine loop from a SYNC caller and block for its result. Refuses to
@@ -69,7 +86,7 @@ class EngineLoop:
         if self.closed or self._stopping:
             coro.close()
             raise RuntimeError("engine loop is stopped (WebClient closed?)")
-        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
+        return asyncio.run_coroutine_threadsafe(_carried(coro), self._loop).result(timeout)
 
     def stream(self, source: AsyncIterator[T], buffer: int = 8) -> Iterator[T]:
         """Bridge an async iterator into a blocking sync iterator.
@@ -94,7 +111,7 @@ class EngineLoop:
             except BaseException as exc:  # surfaced on the consuming side
                 await q.put(exc)
 
-        asyncio.run_coroutine_threadsafe(_pump(), self._loop)
+        asyncio.run_coroutine_threadsafe(_carried(_pump()), self._loop)
         try:
             while True:
                 if self.closed:
