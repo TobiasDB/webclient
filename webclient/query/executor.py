@@ -17,9 +17,10 @@ from __future__ import annotations
 import logging
 import asyncio
 import operator
-from contextlib import asynccontextmanager
+import time
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, TypeVar, cast
+from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Iterator, TypeVar, cast
 
 from .expr import Expr
 from .plan import Arg, Plan, Step
@@ -204,11 +205,65 @@ async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> An
     async with _plan_scope():
         client = client or expr._client or getattr(context, "_client", None)
         if isinstance(context, Expr):  # an Expr context (wc.ref(url)) runs first
-            context = await aevaluate(context, client=client)
+            with _plan_at(()):
+                context = await aevaluate(context, client=client)
         if log.isEnabledFor(logging.DEBUG):
             log.debug("evaluate %s", expr._plan.describe())
-        value = _start(expr._plan, context, client)
-        return await _arun(value, expr._plan.steps, 0, context, client)
+        with _plan_at(_nested_address()):
+            value = _start(expr._plan, context, client)
+            return await _arun(value, expr._plan.steps, 0, context, client)
+
+
+# -- step addresses ------------------------------------------------------------
+#: where the plan being walked sits: () at the root, else the enclosing step's address plus the arg
+#: segment the sub-plan came from (``("6", "kw:title")``). Each step runs at this + its own index.
+_PLAN_AT: ContextVar[tuple[str, ...]] = ContextVar("webclient_plan_at", default=())
+
+
+def _nested_address() -> tuple[str, ...]:
+    """The address a (sub-)plan starting NOW sits at: the current step's, with the segment its caller
+    pushed (``kw:title``) -- or ``sub`` when the caller named none (a bound op's own sub-plan)."""
+    from ..events import CURRENT_STEP
+
+    cur = CURRENT_STEP.get()
+    return (*cur, "sub") if cur and cur[-1].isdigit() else cur
+
+
+@contextmanager
+def _plan_at(at: tuple[str, ...]) -> Iterator[None]:
+    token = _PLAN_AT.set(at)
+    try:
+        yield
+    finally:
+        _PLAN_AT.reset(token)
+
+
+@contextmanager
+def _step_at(index: int) -> Iterator[None]:
+    """Run as the step at ``index`` of the plan being walked (the bus stamps it on every event)."""
+    from ..events import CURRENT_STEP
+
+    token = CURRENT_STEP.set((*_PLAN_AT.get(), str(index)))
+    try:
+        yield
+    finally:
+        CURRENT_STEP.reset(token)
+
+
+@contextmanager
+def arg_segment(segment: "str | None") -> Iterator[None]:
+    """Descend into the arg ``segment`` (``kw:title``, ``arg:0``) of the running step: a sub-plan
+    evaluated inside is addressed under it."""
+    from ..events import CURRENT_STEP
+
+    if not segment:
+        yield
+        return
+    token = CURRENT_STEP.set((*CURRENT_STEP.get(), *segment.split("/")))
+    try:
+        yield
+    finally:
+        CURRENT_STEP.reset(token)
 
 
 def _first_coll_op(steps: list[Step]) -> int:
@@ -240,7 +295,7 @@ def _merge_fanout(results: list[Any], root: str, client: Any) -> Any:
 
 
 async def _arun(
-    value: Any, steps: list[Step], i: int, context: Any, client: Any
+    value: Any, steps: list[Step], i: int, context: Any, client: Any, base: int = 0
 ) -> Any:
     """Walk the remaining plan steps over a running value. When the value is a Collection and the
     next step is an ELEMENT op, fan out only the element-op PREFIX per element (up to the next
@@ -259,19 +314,29 @@ async def _arun(
             split = _first_coll_op(rest)  # prefix = element ops; suffix = the collection shaping
             prefix = rest[:split]
             limit = _fanout_limit(client, prefix)
-            _note_parallel(len(value), limit, prefix, client)
+            at = base + i  # the prefix's steps keep their addresses in the full plan
+            with _step_at(at):
+                _note_parallel(len(value), limit, prefix, client)
             results = await fan_out(
                 list(value),
-                _per_element(lambda el: _arun(el, prefix, 0, el, client)),
+                _per_element(lambda el: _arun(el, prefix, 0, el, client, at)),
                 limit=limit, bus=getattr(client, "bus", None),
             )
             merged = _merge_fanout(results, value.root, client)
             if split < len(rest) and isinstance(merged, Collection):
                 # continue the whole-collection shaping (extract/filter/project/...) on the FLAT
                 # merged collection, so the rows are flat across every fanned-out element.
-                return await _arun(merged, rest[split:], 0, merged, client)
+                return await _arun(merged, rest[split:], 0, merged, client, at + split)
             return merged
-        value, i = await _aapply(value, steps, i, context, client)
+        with _step_at(base + i):
+            t0 = time.perf_counter()
+            try:
+                out, nxt = await _aapply(value, steps, i, context, client)
+            except BaseException as exc:
+                _note_result(steps[i], None, t0, client, exc)
+                raise
+            _note_result(steps[i], out, t0, client)
+        value, i = out, nxt
     return value
 
 
@@ -290,12 +355,12 @@ async def _aapply(
     if step.kind == "op":
         if step.name == "not":  # unary: ~expr -> logical not (no rhs arg)
             return (not truthy(value)), i + 1
-        other = await _aarg(step.args[0], context, client) if step.args else None
+        other = await _aarg(step.args[0], context, client, "arg:0") if step.args else None
         return _OPS[step.name](value, other), i + 1
     if step.kind == "when":
         cond, then_arg, else_arg = step.args
-        chosen = then_arg if truthy(await _aarg(cond, context, client)) else else_arg
-        return await _aarg(chosen, context, client), i + 1
+        chosen, seg = (then_arg, "arg:1") if truthy(await _aarg(cond, context, client, "arg:0")) else (else_arg, "arg:2")
+        return await _aarg(chosen, context, client, seg), i + 1
     if step.kind == "fn":  # is_empty(x) == x.is_empty()
         op = getattr(value, step.name, None)
         result = op() if callable(op) else op
@@ -323,7 +388,8 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
     if name == "step":
         if call.args and call.args[0].plan is not None:
             action = Expr(call.args[0].plan, client)
-            await aevaluate(action, value, client=client)
+            with arg_segment("arg:0"):
+                await aevaluate(action, value, client=client)
         if call.fp:  # a recorded step carries a state fingerprint -- compare, never gate
             await _check_divergence(value, call.fp, client)
         return value
@@ -345,8 +411,8 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
     if name in _VALUE_OPS and (not hasattr(value, name) or isinstance(value, str)):
         from .collection import Collection, Field
 
-        vargs = [await _aarg(a, context, client) for a in call.args]
-        vkw = {k: await _aarg(v, context, client) for k, v in call.kwargs.items()}
+        vargs = [await _aarg(a, context, client, f"arg:{n}") for n, a in enumerate(call.args)]
+        vkw = {k: await _aarg(v, context, client, f"kw:{k}") for k, v in call.kwargs.items()}
 
         def one(v: Any) -> Any:
             return getattr(v if isinstance(v, Field) else Field(v), name)(*vargs, **vkw)
@@ -361,8 +427,8 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
         if name == "paginate":
             _note_fanout(value, name, None, bound, client)
         return bound
-    args = [await _aarg(a, context, client) for a in call.args]
-    kwargs = {k: await _aarg(v, context, client) for k, v in call.kwargs.items()}
+    args = [await _aarg(a, context, client, f"arg:{n}") for n, a in enumerate(call.args)]
+    kwargs = {k: await _aarg(v, context, client, f"kw:{k}") for k, v in call.kwargs.items()}
     _note_step(value, name, args, client)
     result = getattr(value, name)(*args, **kwargs)
     if name in _FANOUT_OPS and not _iscoro(result):
@@ -424,6 +490,83 @@ def _note_fanout(value: Any, name: str, selector: "str | None", result: Any, cli
                           detail={"op": name, "selector": selector, "n": n}))
 
 
+def _describe_value(value: Any) -> "dict[str, Any]":
+    """What a step produced, for a run view: its KIND (Reference / Document / Element -- a document
+    that is a part of a page -- / Collection / Field / list / value), the page it is or is on, how many
+    it holds, a short preview of a value, and whether it is ok (a RETURN-policy miss is not)."""
+    from .collection import Collection, Field
+
+    out: "dict[str, Any]" = {}
+    cls = type(value).__name__
+    if isinstance(value, Collection):
+        out.update(kind="Collection", n=len(value), document_id=None, parent=getattr(value, "root", None) or None)
+    elif isinstance(value, Field):
+        raw = value.get()
+        out.update(kind="Field", preview=_preview(raw))
+    elif cls in ("Document", "Reference") or hasattr(value, "_page") or hasattr(value, "url"):
+        name = getattr(value, "name", "") or ""
+        kind = cls if cls in ("Document", "Reference") else "Document"
+        if kind == "Document" and not name:
+            kind = "Element"
+        out.update(kind=kind, document_id=name or None, parent=getattr(value, "root", None) or None)
+        url = getattr(value, "final_url", None) or getattr(value, "url", None)
+        if url:
+            out["url"] = str(url)
+    elif isinstance(value, dict):
+        out.update(kind="Row", preview=_preview(value))
+    elif isinstance(value, (list, tuple)):
+        out.update(kind="list", n=len(value), preview=_preview(list(value)[:5]))
+    else:
+        out.update(kind="value", preview=_preview(value))
+    ok = getattr(value, "ok", True)
+    if ok is False:
+        err = getattr(value, "error", None)
+        out.update(ok=False, error=getattr(err, "code", None) or "miss")
+    return out
+
+
+def _preview(v: Any) -> Any:
+    """A short, serialisable preview of a value (strings clipped; containers summarised)."""
+    if v is None or isinstance(v, (bool, int, float)):
+        return v
+    if isinstance(v, str):
+        return v if len(v) <= 160 else v[:157] + "..."
+    if isinstance(v, dict):
+        return {str(k): _preview(x) for k, x in list(v.items())[:12]}
+    if isinstance(v, (list, tuple)):
+        return [_preview(x) for x in list(v)[:5]]
+    return _preview(str(v))
+
+
+def _note_result(step: Step, value: Any, t0: float, client: Any, exc: "BaseException | None" = None) -> None:
+    """Publish ``PlanEvent(phase="result")`` as a step finishes: the op, what it produced (see
+    ``_describe_value``), how long it took, or the error it raised. With the bus's step address and
+    item path this places the step's OUTPUT in the plan -- the page it fetched, the N it fanned out to,
+    the value it read -- so a run view is built from the plan and these, not guessed."""
+    if step.kind != "get" or step.name in ("alias",):
+        return
+    bus = getattr(client, "bus", None) if client is not None else None
+    if bus is None:
+        return
+    from ..models import PlanEvent
+
+    detail: "dict[str, Any]" = {"op": step.name, "ms": round((time.perf_counter() - t0) * 1000, 2)}
+    if exc is not None:
+        err = getattr(exc, "error", None)
+        detail.update(ok=False, error=getattr(err, "code", None) or type(exc).__name__,
+                      message=str(getattr(err, "detail", None) or exc)[:300])
+        if isinstance(exc, asyncio.CancelledError):
+            detail["error"] = "cancelled"
+    else:
+        try:
+            detail.update(_describe_value(value))
+        except Exception:  # noqa: BLE001 - describing is best-effort; the run goes on
+            pass
+    detail.setdefault("ok", True)
+    doc = detail.get("document_id") or detail.get("parent")
+    bus.publish(PlanEvent(phase="result", document_id=doc if isinstance(doc, str) and doc.startswith("doc:") else None, detail=detail))
+
+
 def _note_step(value: Any, name: str, args: "list[Any]", client: Any) -> None:
     """Publish ``PlanEvent(phase="step")`` for an element / interaction op of a running plan:
     the op, its selector (the first string arg) and the document it runs on -- the trail a
@@ -474,12 +617,13 @@ def _as_expr(arg: Arg, client: Any) -> Any:
     return Expr(arg.plan, client) if arg.plan is not None else arg.value
 
 
-async def _aarg(arg: Arg, context: Any, client: Any) -> Any:
+async def _aarg(arg: Arg, context: Any, client: Any, segment: "str | None" = None) -> Any:
     """A plan arg EVALUATED to a concrete value: a literal as-is, a sub-plan run against the
-    current context."""
+    current context (addressed under ``segment`` -- ``arg:0`` / ``kw:name`` -- of the running step)."""
     if arg.plan is None:
         return arg.value
-    return await aevaluate(Expr(arg.plan, client), context, client=client)
+    with arg_segment(segment):
+        return await aevaluate(Expr(arg.plan, client), context, client=client)
 
 
 def _start(plan: "Plan", context: Any, client: Any) -> Any:
@@ -548,14 +692,15 @@ async def astream(
             return
 
         head, shaping = steps[:tail], steps[tail:]
-        base = await _arun(_start(expr._plan, context, client), head, 0, context, client)
-        if not isinstance(base, Collection):  # head wasn't a collection -- finish eager
-            value = await _arun(base, shaping, 0, context, client)
-            for row in value if isinstance(value, list) else [value]:
+        with _plan_at(_nested_address()):
+            base = await _arun(_start(expr._plan, context, client), head, 0, context, client)
+            if not isinstance(base, Collection):  # head wasn't a collection -- finish eager
+                value = await _arun(base, shaping, 0, context, client, tail)
+                for row in value if isinstance(value, list) else [value]:
+                    yield row
+                return
+            async for row in _astream_collection(base, shaping, client, tail):
                 yield row
-            return
-        async for row in _astream_collection(base, shaping, client):
-            yield row
 
 
 def _stream_tail(steps: list[Step]) -> int | None:
@@ -583,10 +728,10 @@ def _stream_tail(steps: list[Step]) -> int | None:
     return None
 
 
-def _parse_shaping(steps: list[Step], client: Any) -> list[tuple[str, Any]]:
+def _parse_shaping(steps: list[Step], client: Any) -> list[tuple[str, Any, int]]:
     """Parse a run of ``extract``/``filter`` get+call pairs into ops with their
-    sub-expressions reconstructed (extract -> {col: Expr}; filter -> [Expr])."""
-    ops: list[tuple[str, Any]] = []
+    sub-expressions reconstructed (extract -> {col: Expr}; filter -> [Expr]) and their index."""
+    ops: list[tuple[str, Any, int]] = []
     i = 0
     while i + 1 < len(steps):
         get_step, call = steps[i], steps[i + 1]
@@ -595,16 +740,16 @@ def _parse_shaping(steps: list[Step], client: Any) -> list[tuple[str, Any]]:
 
             ops.append(
                 ("extract", columns_of([_as_expr(a, client) for a in call.args],
-                                       {k: _as_expr(v, client) for k, v in call.kwargs.items()}))
+                                       {k: _as_expr(v, client) for k, v in call.kwargs.items()}), i)
             )
         else:  # filter
-            ops.append(("filter", [_as_expr(a, client) for a in call.args]))
+            ops.append(("filter", [_as_expr(a, client) for a in call.args], i))
         i += 2
     return ops
 
 
 async def _astream_collection(
-    base: "Collection[Any]", shaping: list[Step], client: Any
+    base: "Collection[Any]", shaping: list[Step], client: Any, at: int = 0
 ) -> AsyncIterator[Any]:
     """Stream the final fan-out of ``base`` under ``shaping`` as elements
     complete. Rows (``...project()``) or per-element op results are yielded the
@@ -632,22 +777,29 @@ async def _astream_collection(
             # the SAME shaping primitives the eager Collection uses, so a streamed
             # row and a collected row of the same plan are identical (incl. the
             # Reference->URL / Field->value row cleaning).
-            for kind, payload in ops:
-                if kind == "extract":
-                    await apply_extract(el, payload, client)
-                elif not await survives_filters(el, payload, client):
-                    return _DROP
+            for kind, payload, idx in ops:
+                with _step_at(at + idx):
+                    t0 = time.perf_counter()
+                    if kind == "extract":
+                        await apply_extract(el, payload, client)
+                        _note_result(shaping[idx], el, t0, client)
+                    elif not await survives_filters(el, payload, client):
+                        return _DROP
             shaped = _row_of(el, create=False)
-            return flatten_row(_project_row(shaped), pkw.get("flatten"), pkw.get("sep", ".")) if shaped is not None else el
+            row = flatten_row(_project_row(shaped), pkw.get("flatten"), pkw.get("sep", ".")) if shaped is not None else el
+            with _step_at(at + len(shaping) - 2):  # the project step, for THIS item: the row it projected
+                _note_result(shaping[-2], row, time.perf_counter(), client)
+            return row
 
     else:  # a terminal element op: apply it to each element on its own
 
         async def process(el: Any) -> Any:
-            value = await _arun(el, shaping, 0, el, client)
+            value = await _arun(el, shaping, 0, el, client, at)
             return value.get() if isinstance(value, Field) else value
 
     limit = _fanout_limit(client, shaping)
-    _note_parallel(len(items), limit, shaping, client)
+    with _step_at(at):
+        _note_parallel(len(items), limit, shaping, client)
     async for result in fan_out_stream(items, _per_element(process), limit=limit, bus=getattr(client, "bus", None)):
         if result is not _DROP:
             yield result

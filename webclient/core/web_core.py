@@ -206,6 +206,12 @@ class WebCore:
             is_prop = op in type(self).prop_ops()
             remote = self._remote_call(op, is_prop)
             return remote if is_prop else remote(*args, **kwargs)
+        address = self._record_address(op, args, kwargs) if op in _RECORDABLE_OPS else None
+        if address is not None:
+            return self._dispatch_recorded(address, op, args, kwargs)
+        return self._dispatch(op, args, kwargs)
+
+    def _dispatch(self, op: str, args: Any, kwargs: Any) -> Any:
         try:
             result = getattr(self.backing(op), op)(self, *args, **kwargs)
             if op in type(self).io_ops():
@@ -219,6 +225,76 @@ class WebCore:
         if op in _RECORDABLE_OPS:
             self._maybe_record(op, args, kwargs)
         return result
+
+    def _record_address(self, op: str, args: Any, kwargs: Any) -> "str | None":
+        """The address a RECORDED call takes in the recording's plan (``None`` off the recording
+        path): a navigation starts the chain (its ``resolve`` step), an interaction is the op inside
+        the ``.step(...)`` appended next. What the call publishes is attached to that step -- a
+        recorded session's trace replays against its plan like an executed one."""
+        client = getattr(self, "_session", None) or getattr(self, "_client", None) or self
+        if not getattr(client, "_recording", False):
+            return None
+        from ..query.executor import _PLAN_LIVE
+
+        if _PLAN_LIVE.get() is not None:
+            return None
+        if op in ("resolve", "fetch"):
+            return "0"  # a fresh chain: Reference -> resolve
+        chain = getattr(client, "_record_chain", None)
+        if chain is None:
+            return None
+        return f"{len(chain._plan.steps)}/arg:0/0"
+
+    def _dispatch_recorded(self, address: str, op: str, args: Any, kwargs: Any) -> Any:
+        """Run a recorded call AS its plan step: the step's events are stamped with its address,
+        and it publishes the same ``step`` / ``result`` events an executed plan's step does."""
+        import time
+
+        from ..events import CURRENT_STEP
+
+        engine = self._bound_engine()
+        bus = engine.bus if engine is not None else None
+        token = CURRENT_STEP.set(tuple(address.split("/")))
+        t0 = time.perf_counter()
+        try:
+            if bus is not None:
+                from ..models import PlanEvent
+
+                sel = next((a for a in args if isinstance(a, str)), None)
+                bus.publish(PlanEvent(phase="step", document_id=getattr(self, "name", None) or None,
+                                      detail={"op": op, "selector": sel if op not in ("fetch",) else None, "args": [a for a in args if isinstance(a, (str, int, float, bool))][:4], "recorded": True}))
+            try:
+                result = self._dispatch(op, args, kwargs)
+            except BaseException as exc:
+                self._note_recorded_result(bus, op, None, t0, exc)
+                raise
+            if hasattr(result, "__await__"):  # an async client: the step runs when awaited
+                return self._recorded_awaitable(result, address, bus, op, t0)
+            self._note_recorded_result(bus, op, result, t0)
+            return result
+        finally:
+            CURRENT_STEP.reset(token)
+
+    async def _recorded_awaitable(self, coro: Any, address: str, bus: Any, op: str, t0: float) -> Any:
+        from ..events import CURRENT_STEP
+
+        CURRENT_STEP.set(tuple(address.split("/")))
+        try:
+            result = await coro
+        except BaseException as exc:
+            self._note_recorded_result(bus, op, None, t0, exc)
+            raise
+        self._note_recorded_result(bus, op, result, t0)
+        return result
+
+    @staticmethod
+    def _note_recorded_result(bus: Any, op: str, value: Any, t0: float, exc: "BaseException | None" = None) -> None:
+        if bus is None:
+            return
+        from ..query.executor import _note_result
+        from ..query.plan import Step
+
+        _note_result(Step(kind="get", name=op), value, t0, type("_C", (), {"bus": bus})(), exc)
 
     def _note_error(self, error: WebError, op: str = "", *, raised: bool = False) -> WebError:
         """Record ``error`` on the ledger: bind it to this core (``op`` / ``subject``), keep it on

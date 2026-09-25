@@ -367,16 +367,34 @@ def columns_of(args: "Iterable[Any]", named: dict[str, Any]) -> "list[tuple[Any,
     row -- so ``select_all("tr").extract(name=th, value=td.alias(field("name"))).merge()`` is a dict)."""
     plain: list[tuple[Any, Any]] = []
     aliased: list[tuple[Any, Any]] = []
+    plain_segs: list[tuple[str, str]] = []
+    aliased_segs: list[tuple[str, str]] = []
     for key, expr in named.items():
         got = _alias_at(expr)
         if got is None:
             plain.append((key, expr))
+            plain_segs.append((f"kw:{key}", ""))
         else:
             aliased.append((got[1], got[0]))
-    for expr in args:
+            aliased_segs.append((f"kw:{key}", f"kw:{key}/{_steps_len(got[0])}/arg:0"))
+    for n, expr in enumerate(args):
         value, name = split_alias(expr)
         aliased.append((name, value))
-    return plain + aliased
+        aliased_segs.append((f"arg:{n}", f"arg:{n}/{_steps_len(value)}/arg:0"))
+    out = _Columns(plain + aliased)
+    out.segs = plain_segs + aliased_segs
+    return out
+
+
+class _Columns(list):  # type: ignore[type-arg]
+    """An extract's columns, with where each sits in the extract call (its value's arg segment and its
+    aliased name's) -- so the steps a column runs are addressed in the plan (``events.CURRENT_STEP``)."""
+
+    segs: "list[tuple[str, str]]"
+
+
+def _steps_len(expr: Any) -> int:
+    return len(getattr(getattr(expr, "_plan", None), "steps", []) or [])
 
 
 async def apply_extract(element: Any, columns: "dict[str, Any] | list[tuple[Any, Any]]", client: "WebClient | None") -> None:
@@ -393,17 +411,22 @@ async def apply_extract(element: Any, columns: "dict[str, Any] | list[tuple[Any,
     row = _row_of(element)
     if row is None:
         return
+    from .executor import arg_segment
+
     pairs = list(columns.items()) if isinstance(columns, dict) else columns
+    segs = getattr(columns, "segs", None) or [(f"kw:{k}" if isinstance(k, str) else "", "") for k, _ in pairs]
     consumed: list[str] = []
-    for key, expr in pairs:
+    for (key, expr), (seg, name_seg) in zip(pairs, segs):
         if not isinstance(key, str):  # an aliased column: the name is read off the element / an earlier column
             ref = field_ref(key)
             if ref is not None and ref in row:
                 key = str(_raw(row[ref]) or "").strip() or ref
                 consumed.append(ref)
             else:
-                key = str(_raw(await aevaluate(key, element, client=client)) or "").strip() or "field"
-        row[key] = _raw(await aevaluate(expr, element, client=client))
+                with arg_segment(name_seg):
+                    key = str(_raw(await aevaluate(key, element, client=client)) or "").strip() or "field"
+        with arg_segment(seg):
+            row[key] = _raw(await aevaluate(expr, element, client=client))
     for ref in consumed:  # a column used as a name is spent
         row.pop(ref, None)
 
@@ -415,9 +438,12 @@ async def survives_filters(element: Any, predicates: "Iterable[Any]", client: "W
     shared by eager and streaming paths."""
     from .executor import aevaluate, truthy
 
-    for pred in predicates:
-        if not truthy(await aevaluate(pred, element, client=client)):
-            return False
+    from .executor import arg_segment
+
+    for n, pred in enumerate(predicates):
+        with arg_segment(f"arg:{n}"):
+            if not truthy(await aevaluate(pred, element, client=client)):
+                return False
     return True
 
 

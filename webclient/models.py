@@ -49,6 +49,9 @@ class Event(BaseModel):
     #: the RUN this belongs to, stamped by the bus (see ``events.run_scope``): concurrent runs on one
     #: engine share its bus, and a run's trace keeps only its own events
     run_id: str | None = None
+    #: the PLAN STEP this happened in, stamped by the bus (``events.CURRENT_STEP``): an address into the
+    #: plan -- ``"6/kw:title/0"`` is step 0 of the ``title=`` column of the extract at step 6
+    step: str | None = None
     #: the fan-out ITEM this happened in, as an index path ([3] = the 4th record; [3, 1] = its 2nd
     #: table row), stamped by the bus from the running plan -- so a run view can show per-item progress
     item: list[int] | None = None
@@ -117,7 +120,7 @@ class ConsoleEvent(Event):
 
 class PlanEvent(Event):
     topic: Topic = "plan"
-    phase: str = "started"  # started / row / done / divergence / step / fanout / parallel / item
+    phase: str = "started"  # started / row / done / divergence / step / result / fanout / parallel / item
     detail: dict[str, Any] = {}
 
 

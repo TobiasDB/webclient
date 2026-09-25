@@ -51,6 +51,13 @@ from .models import (
 #: executor sets it per item; the bus stamps it onto every event published meanwhile.
 CURRENT_ITEM: ContextVar[tuple[int, ...]] = ContextVar("webclient_current_item", default=())
 
+#: the PLAN STEP the running code is executing, as an address into the plan: the step's index in its
+#: plan's step list (the ``get`` of a get+call pair), descending into a sub-plan by the arg it sits in --
+#: ``("6", "kw:title", "0")`` is step 0 of the ``title=`` column of the extract at step 6. The executor
+#: sets it; the bus stamps it (joined with "/") onto every event published meanwhile (``Event.step``),
+#: so a page fetched, a request, an action or an error is attached to the step that caused it.
+CURRENT_STEP: ContextVar[tuple[str, ...]] = ContextVar("webclient_current_step", default=())
+
 #: the RUN the running code belongs to (an id the caller picks, e.g. the service's run id). Set it with
 #: :func:`run_scope`; the bus stamps it onto every event published meanwhile (``Event.run_id``), so two
 #: runs sharing one engine -- one bus -- can still be told apart (a trace keeps only its own run's).
@@ -139,6 +146,10 @@ class EventBus(BaseModel):
                 item = CURRENT_ITEM.get()
                 if item:
                     event.item = list(item)
+            if event.step is None:
+                step = CURRENT_STEP.get()
+                if step:
+                    event.step = "/".join(step)
             if event.run_id is None:
                 event.run_id = CURRENT_RUN.get() or (self._doc_run.get(key) if key else None)
             if event.run_id and key and self._doc_run.get(key) != event.run_id:
