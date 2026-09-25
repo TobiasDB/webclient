@@ -354,11 +354,16 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
     if name in _BINDS:  # sub-plans passed unevaluated to the async bound op
         args = [_as_expr(a, client) for a in call.args]
         kwargs = {k: _as_expr(v, client) for k, v in call.kwargs.items()}
-        return await getattr(value, "a" + name)(*args, **kwargs)
+        bound = await getattr(value, "a" + name)(*args, **kwargs)
+        if name == "paginate":
+            _note_fanout(value, name, None, bound, client)
+        return bound
     args = [await _aarg(a, context, client) for a in call.args]
     kwargs = {k: await _aarg(v, context, client) for k, v in call.kwargs.items()}
     _note_step(value, name, args, client)
     result = getattr(value, name)(*args, **kwargs)
+    if name in _FANOUT_OPS and not _iscoro(result):
+        _note_fanout(value, name, next((a for a in args if isinstance(a, str)), None), result, client)
     if _iscoro(result):  # an IO op (resolve): await, then wrap the core it yields
         from ..interface import wrap
 
@@ -378,6 +383,26 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
 #: and moves its pointer there): the element ops and the interactions.
 _STEP_OPS = frozenset({"select", "select_all", "attr", "text_content", "extract", "click", "write",
                        "scroll", "goto", "wait_for", "paginate", "resolve"})
+
+
+#: ops that FAN OUT (one value becomes many): their match count is published as a fanout event
+_FANOUT_OPS = frozenset({"select_all", "links"})
+
+
+def _note_fanout(value: Any, name: str, selector: "str | None", result: Any, client: Any) -> None:
+    """Publish ``PlanEvent(phase="fanout")`` -- how many items an op fanned out to (the matches of a
+    select_all, the pages of a paginate) -- so a run view can show a stage's progress against it."""
+    bus = getattr(client, "bus", None) if client is not None else None
+    if bus is None:
+        return
+    try:
+        n = len(result)
+    except TypeError:
+        return
+    from ..models import PlanEvent
+
+    bus.publish(PlanEvent(phase="fanout", document_id=getattr(value, "name", None) or None,
+                          detail={"op": name, "selector": selector, "n": n}))
 
 
 def _note_step(value: Any, name: str, args: "list[Any]", client: Any) -> None:

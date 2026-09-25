@@ -137,3 +137,32 @@ def test_runs_stream_rows_and_events_and_record_a_trace(tmp_path):
             later = client.get(f"/runs/{rid}", params={"rows": 3, "events": got["n_events"]}).json()
             assert len(later["rows"]) == 2 and later["events"] == []
             assert client.get("/runs").json()[0]["id"] == rid
+
+
+def test_runs_publish_fanout_counts(tmp_path):
+    import time as _t
+
+    from fastapi.testclient import TestClient
+    from pytest_httpserver import HTTPServer
+
+    from webclient.service import create_app
+
+    html = "<html><body>" + "".join(f'<li class="r"><b>{i}</b></li>' for i in range(7)) + "</body></html>"
+    with HTTPServer() as srv:
+        srv.expect_request("/").respond_with_data(html, content_type="text/html")
+        plan = {"root": "Reference", "steps": [
+            {"kind": "get", "name": "resolve"}, {"kind": "call", "name": "resolve", "args": [], "kwargs": {}},
+            {"kind": "get", "name": "select_all"}, {"kind": "call", "name": "select_all", "args": [{"value": "li.r"}], "kwargs": {}},
+            {"kind": "get", "name": "extract"}, {"kind": "call", "name": "extract", "args": [], "kwargs": {"n": {"plan": {"root": "Document", "steps": [
+                {"kind": "get", "name": "select"}, {"kind": "call", "name": "select", "args": [{"value": "b"}], "kwargs": {}},
+                {"kind": "get", "name": "attr"}, {"kind": "call", "name": "attr", "args": [{"value": "text"}], "kwargs": {}}]}}}},
+            {"kind": "get", "name": "project"}, {"kind": "call", "name": "project", "args": [], "kwargs": {}}]}
+        with TestClient(create_app(traces_dir=tmp_path)) as client:
+            rid = client.post("/runs", json={"plan": plan, "url": srv.url_for("/")}).json()["id"]
+            for _ in range(100):
+                got = client.get(f"/runs/{rid}").json()
+                if got["status"] != "running":
+                    break
+                _t.sleep(0.05)
+            fan = [e for e in got["events"] if e.get("topic") == "plan" and e.get("phase") == "fanout"]
+            assert fan and fan[0]["detail"] == {"op": "select_all", "selector": "li.r", "n": 7}

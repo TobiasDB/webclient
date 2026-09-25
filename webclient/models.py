@@ -111,7 +111,7 @@ class ConsoleEvent(Event):
 
 class PlanEvent(Event):
     topic: Topic = "plan"
-    phase: str = "started"  # started / row / done / divergence
+    phase: str = "started"  # started / row / done / divergence / step / fanout
     detail: dict[str, Any] = {}
 
 
