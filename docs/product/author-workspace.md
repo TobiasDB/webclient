@@ -1,6 +1,6 @@
 # The Author workspace — Explore + Query + Interact as one flow
 
-*Status: built as the GRAPH BUILDER (§10). Proposed 2026-09-25 with modes (look / pick / drive), reworked the same day
+*Status: built as the GRAPH BUILDER, driven as a focusable literal plan (§10-§11). Proposed 2026-09-25 with modes (look / pick / drive), reworked the same day
 into the plan-centric, scope-based workspace of §8 -- no modes, one menu generated from the
 object's surface. Sections 1-7 are the original proposal and its review; §8 is what stands.
 Wireframes are in Storybook (`Wireframes/Author`).*
@@ -289,3 +289,38 @@ title, price, detail=select("h3 a").attr("href").resolve().extract(description,
 info=select_all("table tr").extract(td.alias(th)).merge()).project()).project()` and the server
 returns 40 rows with their details; offline, the same plan is the package's
 `tests/test_books_story.py`.
+
+
+## 11. The plan of objects, focused (2026-09-25)
+
+The user kept the object graph as the model ("we are leaning into the models -- references,
+documents, collections -- that IS the plan") and changed how it is driven:
+
+- **The plan on the left is the graph written as a literal plan**: `Reference("…")`, then
+  `.resolve(browser="auto")`, `.select_all("li.col-xs-6")`, `.select("h3 a")`,
+  `.attr("title") → title`, indented by what hangs off what, each line typed (Reference /
+  Document / Element / Collection / Value) with its sample. Arguments edit in place.
+- **Clicking a line sets the FOCUS**: the page renders only that object (its ancestors keep
+  their styling; everything else is hidden) and every new selector is rooted there. A
+  collection renders one record at a time (‹ record 3/20 ›). When the focused op still needs
+  its own selector, the page renders the op's INPUT instead, so the selector is picked where
+  it will be evaluated.
+- **The focused line shows its edges**: the ops of its object's surface (`.select_all("…")`,
+  `.select("…")`, `.attr("text")`, `.attr("href").resolve()`, `.click("…")`, `.paginate(…)`,
+  the page's own ops). An edge that needs a selector is added empty ("⇧click the page") and
+  waits: shift-click the page, or pick a SUGGESTION -- records for `select_all` (the detected
+  groups and the repeating classes inside the focus), field elements for `select`, useful
+  attributes for `attr`, controls for `click` / `write`.
+- **The page is a real render**: a static capture renders in a sandboxed frame with its own CSS
+  and JS (`PageFrame`; the page never gets the workspace's origin; a small agent inside it draws
+  the outlines, isolates the focus, reports shift-clicks and link clicks); a live page is the
+  mirrored browser where plain clicks go through to the real page (and can be recorded as
+  `.click()` nodes). Hover outlines everything; SHIFT-click picks.
+- **Shift-click opens the selector editor** (the inspector): the element's hierarchy up to the
+  focus with tag / id / class toggles, candidates by group (incl. the parents' groups: a cell's
+  row), every match outlined as you edit, the element's attributes to read (named, or named from
+  the page), and "use for .select_all()" when the focused op is waiting for its selector.
+
+Verified with the books story through this flow (headless, books.toscrape.com): the plan builds
+line by line with focus rendering the record, the book page and the table row in turn, and Run
+returns 40 rows over 2 pages with each book's description and details.
