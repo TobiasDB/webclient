@@ -52,6 +52,9 @@ def init_source() -> str:
     return bundle() + """
 ;(() => {
   if (window.__wc_rrweb_on) return;
+  // the TOP page records: it serialises same-origin iframes (and open shadow roots) itself; a
+  // recorder inside a frame would take the frame away from it and buffer where nobody drains
+  try { if (window.top !== window) return; } catch (e) { return; }
   window.__wc_rrweb_on = true;
   window.__wc_rrweb = [];
   try {

@@ -1100,6 +1100,14 @@ def create_app(
                           error=exc.error, hint="retry if retriable; else the target is unavailable or blocked")
         if not live and getattr(doc, "_page", None) is not None:
             session.release(doc)  # a CAPTURE: the content is kept, the browser page goes back to the pool
+        if live and sid in app.state.recording and getattr(doc, "_page", None) is not None:
+            # a live page in a recording session: stream what it does ON ITS OWN too (late content)
+            from .core.document.live import pump_rrweb
+
+            try:
+                doc._client.loop().submit(pump_rrweb(doc))
+            except Exception:  # noqa: BLE001 - no loop: the mirror updates on interactions only
+                log.debug("no rrweb pump for %s", doc.name)
         _store_for(sid)[doc.name] = doc
         return _handle(doc)
 

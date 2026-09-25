@@ -567,3 +567,21 @@ User decisions, recorded as built:
   served HTML. The `wc.cookies` inline page script, auto-installed on browser pages, answers the
   banner before the snapshot. It tries reject or necessary-only first, then accept, and hides the
   banner if nothing answers. The flag's value reports what it did.
+
+### 14.4 The live mirror shows what the page shows (2026-09-25)
+
+Fixed, each checked against a real browser on the lab's `/changelog` (a script-rendered app),
+`/news` (fetched content), `/status` (shadow DOM) and `/whitepaper` (iframe):
+
+- **Late content.** A live page in a recording session is pumped: its recorder is drained every
+  0.4s, not only after an interaction, so content the page adds on its own reaches the mirror.
+- **Replayer start.** The Player's live replayer starts empty at the recording's first moment and
+  adds every event. Building it from the first batch and starting it "now" had dropped updates
+  stamped earlier, such as fetched items.
+- **Top-frame recorder.** Only the top page records. It serialises same-origin iframes and open
+  shadow roots itself. A recorder inside the frame had taken the frame away from it.
+- **Fold copies.** A live page drops the capture's fold copies (`data-wc-shadow` /
+  `data-wc-frame`), which would otherwise show next to the real frame or shadow root.
+- **One live page.** Author holds a single live page. Opening a head first returns the session's
+  other live pages to the pool; before this, earlier loads' heads exhausted it and "opening a live
+  page…" waited forever.

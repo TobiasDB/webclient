@@ -889,3 +889,32 @@ def test_a_browser_render_answers_a_cookie_banner_before_the_snapshot(httpserver
     httpserver.expect_request("/cb2").respond_with_data(BANNER_NO_BUTTON, content_type="text/html")
     doc2 = wc.fetch(httpserver.url_for("/cb2"), browser=True)
     assert doc2.cookie_banner().value["action"] == "hidden"
+
+
+def test_a_live_pages_recording_keeps_flowing_without_interactions(httpserver, wc):
+    # content the page adds ON ITS OWN after load (a fetch, a timer) reaches a live mirror: the
+    # pump drains the recorder on a timer, not only after an interaction
+    from webclient.core.document.live import pump_rrweb
+
+    httpserver.expect_request("/late").respond_with_data(
+        '<html><body><p>first</p><script>setTimeout(() => document.body.insertAdjacentHTML("beforeend", '
+        '"<p class=late>LATE</p>"), 2500)</script></body></html>', content_type="text/html")
+    engine = wc._the_engine()
+    engine.dom_recorders += 1
+    got: list = []
+    sub = wc.bus.subscribe("rrweb", got.append)
+    try:
+        doc = wc.fetch(httpserver.url_for("/late"), browser=True, keep_alive=True)
+        n0 = sum(len(ev.events or []) for ev in got)
+        fut = wc.loop().submit(pump_rrweb(doc, every=0.2))
+        import time as _t
+
+        _t.sleep(3.5)
+        after = [e for ev in got for e in (ev.events or [])]
+        assert len(after) > n0 and any(e.get("type") == 3 for e in after[n0:])  # incremental (mutation) events
+        assert "LATE" in str(after[n0:])
+        wc.release(doc)
+        fut.result(timeout=5)  # the pump stops once the page is released
+    finally:
+        sub.cancel()
+        engine.dom_recorders -= 1

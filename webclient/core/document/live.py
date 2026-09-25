@@ -322,6 +322,27 @@ def captured_event(fact: "dict[str, Any]", doc: "Document") -> NetworkEvent:
     )
 
 
+async def pump_rrweb(doc: "Document", every: float = 0.4) -> None:
+    """Keep a LIVE page's recording flowing while it is held: drain the rrweb recorder every
+    ``every`` seconds, not only after an interaction -- so what the page does on its own (content
+    fetched after load, timers, lazy sections, a SPA rendering late) reaches a live mirror.
+    Stops when the page is released / closed."""
+    import asyncio
+
+    # the capture folded shadow roots / same-origin frames into the light DOM (for its snapshot); on a
+    # page that stays LIVE those copies would show twice (the real frame / shadow root + the copy)
+    try:
+        await doc._page.evaluate("() => document.querySelectorAll('[data-wc-shadow],[data-wc-frame]').forEach((e) => e.remove())")
+    except Exception:  # noqa: BLE001 - a page without folds / mid-navigation
+        pass
+    while getattr(doc, "_page", None) is not None:
+        try:
+            await _drain_rrweb(doc)
+        except Exception:  # noqa: BLE001 - a page mid-navigation / closing: try again next tick
+            pass
+        await asyncio.sleep(every)
+
+
 async def _drain_rrweb(doc: "Document") -> None:
     """Pull the rrweb recorder's buffer (if it is on) into an RRWebEvent chunk."""
     from ...rrweb import DRAIN_SOURCE, SCRIPT_NAME, chunk
