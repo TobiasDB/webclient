@@ -197,6 +197,36 @@ class Document(WebCore, IDocument):
         validate = getattr(model, "model_validate", None)
         return validate(data) if validate is not None else model(**data)
 
+    # -- the raw bytes: a file (a PDF, an image, a CSV) as row data --------------------
+    def download(self) -> dict[str, Any]:
+        """This document's RAW BYTES as a JSON-ready file value -- ``{url, filename,
+        content_type, size, sha256, base64}`` -- so a plan can return a file (a PDF behind a
+        link: ``select("a.pdf").attr("href").resolve().download()``). The bytes are the
+        response body as fetched (a rendered page's are its final HTML); decode ``base64``
+        to get them back."""
+        import base64
+        import hashlib
+        from pathlib import PurePosixPath
+        from urllib.parse import urlparse
+
+        data = self.content or b""
+        if isinstance(data, str):
+            data = data.encode(self.encoding or "utf-8")
+        headers = {k.lower(): v for k, v in (self.response_headers or {}).items()}
+        url = self.final_url or self.url
+        name = ""
+        disp = headers.get("content-disposition", "")
+        if "filename=" in disp:
+            name = disp.split("filename=", 1)[1].strip().strip('"').split(";")[0]
+        if not name:
+            name = PurePosixPath(urlparse(url).path).name or "download"
+        return {
+            "url": url, "filename": name,
+            "content_type": headers.get("content-type", "").split(";")[0] or {"html": "text/html", "json": "application/json", "xml": "application/xml"}.get(self.kind, "application/octet-stream"),
+            "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+            "base64": base64.b64encode(data).decode("ascii"),
+        }
+
     # -- pagination: walk this dataset's pages into a Collection --------------------
     # A BOUND op (hand-written, like extract), so the executor hands ``stop``/``key``
     # to it UNEVALUATED and the walk evaluates them per page -- a semantic stop the

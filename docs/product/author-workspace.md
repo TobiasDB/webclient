@@ -324,3 +324,34 @@ documents, collections -- that IS the plan") and changed how it is driven:
 Verified with the books story through this flow (headless, books.toscrape.com): the plan builds
 line by line with focus rendering the record, the book page and the table row in turn, and Run
 returns 40 rows over 2 pages with each book's description and details.
+
+
+## 12. Picking by click, recording what you do (2026-09-25)
+
+The next review, and what changed:
+
+- **No shift-click picking.** An edge that needs an argument (`.select_all("…")`, `.select("…")`,
+  `.click("…")`…) puts the page in PICK mode (the frame is ringed amber): a plain click picks,
+  or a suggestion does. Otherwise the page is INTERACTIVE and what you do is RECORDED: following
+  a link adds `.select(a).attr("href").resolve()` and opens that page as the focus; clicking a
+  control adds `.click(sel)`; typing adds `.write(sel, text)` (typing into the same field again
+  updates it); submitting records the submit button's click. Actions need a browser to replay,
+  so the page's `resolve` switches to `browser=True`. Hold SHIFT to do any of it without
+  recording (a shift-followed link browses away; "back to the page" returns).
+- **A collection in focus shows ALL its elements** (the frame keeps every match and its
+  ancestors, hides the rest); a click inside any of them roots the selector at that one.
+- **Rows** explode nested values into dotted columns (`detail.info.UPC`); on a page opened from
+  a record, only the rows whose page is open are shown, with the parent row's columns repeated.
+  The server run shows the nested JSON (a JSON toggle).
+- **Key → value tables**: a collection whose elements hold two cells (th/td, dt/dd, or two
+  children) offers `.extract(td.alias(th))` -- the rows become one dict (`alias` + `merge`); any
+  value's column can be named literally or from the page (a selector relative to the record).
+- **Files**: `Document.download()` returns the raw bytes as a file value (`url, filename,
+  content_type, size, sha256, base64`; the name from `Content-Disposition` when given) --
+  `select("a.pdf").attr("href").resolve().download()`; a binary page offers it, and a file cell
+  renders as a download link. `.html()` returns a page's HTML.
+- **Fixed**: the server run's 500 -- a link read (`attr("href")`) that was itself an output with a
+  page opened under it compiled to `extract` on a Reference; a Reference / Value now keeps its own
+  column and the page nests beside it, and an op an object lacks is a catalogued 422
+  (`op.unsupported`), not a 500. The frame's "rendering…" hang after load (the ready handshake is
+  now a ping).

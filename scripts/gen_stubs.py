@@ -494,6 +494,8 @@ def _lazy_class(core: type) -> str:
             # Collection ops); hand-written like the eager Document.extract/project.
             'def extract(self, *aliased: Any, **exprs: Any) -> "LazyDocument": ...',
             'def project(self) -> "Lazy[dict[str, Any]]": ...',
+            # the raw bytes as a JSON-ready file value (a PDF behind a link)
+            'def download(self) -> "Lazy[dict[str, Any]]": ...',
             # pagination: a hand-written BOUND op on Document (not a backing), so its
             # stop/key sub-plans are recorded and evaluated per page. Yields the pages.
             'def paginate(self, *, by: str = ..., max_pages: int = ..., max_rows: int = ..., '

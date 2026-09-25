@@ -53,3 +53,24 @@ def test_open_document_reuses_a_held_capture():
             assert b["id"] == a["id"] and b.get("reused") is True
             assert c["id"] != a["id"]
             assert len(srv.log) == 2  # two fetches, not three
+
+
+def test_execute_an_op_the_object_lacks_is_a_422_not_a_500():
+    from fastapi.testclient import TestClient
+    from pytest_httpserver import HTTPServer
+
+    from webclient.service import create_app
+
+    with HTTPServer() as srv:
+        srv.expect_request("/").respond_with_data('<html><body><a href="/x">x</a></body></html>', content_type="text/html")
+        plan = {"root": "Reference", "steps": [
+            {"kind": "get", "name": "resolve"}, {"kind": "call", "name": "resolve", "args": [], "kwargs": {}},
+            {"kind": "get", "name": "extract"}, {"kind": "call", "name": "extract", "args": [], "kwargs": {"x": {"plan": {"root": "Document", "steps": [
+                {"kind": "get", "name": "select"}, {"kind": "call", "name": "select", "args": [{"value": "a"}], "kwargs": {}},
+                {"kind": "get", "name": "attr"}, {"kind": "call", "name": "attr", "args": [{"value": "href"}], "kwargs": {}},
+                {"kind": "get", "name": "extract"}, {"kind": "call", "name": "extract", "args": [], "kwargs": {}}]}}}},
+            {"kind": "get", "name": "project"}, {"kind": "call", "name": "project", "args": [], "kwargs": {}}]}
+        with TestClient(create_app()) as client:
+            r = client.post("/execute", json={"plan": plan, "url": srv.url_for("/")})
+            assert r.status_code == 422, r.text
+            assert r.json()["error"]["code"] == "op.unsupported"

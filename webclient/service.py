@@ -157,6 +157,8 @@ def op_catalogue() -> "dict[str, Any]":
          "params": [{"name": "**fields", "required": False, "kind": "keyword"}],
          "doc": "Capture named fields: each keyword is a sub-plan rooted at this element (a row per element under select_all)."},
         {"name": "project", "kind": "call", "io": False, "collection": False, "params": [], "doc": "The captured rows as plain dicts."},
+        {"name": "download", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [],
+         "doc": "The document's raw bytes as a file value: url, filename, content_type, size, sha256, base64 (a PDF, an image)."},
         {"name": "paginate", "kind": "call", "io": True, "collection": True, "bound": True,
          "params": params_of(_Doc.apaginate), "doc": doc_of(_Doc.apaginate)},
         {"name": "limit", "kind": "call", "io": False, "collection": True, "params": [{"name": "n", "required": True, "kind": "positional", "type": "int"}], "doc": "The first n of a collection."},
@@ -404,6 +406,11 @@ def create_app(
                 "blocking, or refused by policy",
                 error=err,
             )
+        except AttributeError as exc:  # an op the object does not have (a malformed plan), not a crash
+            from .errors import make
+
+            err = make("op.unsupported", f"the plan applies an op its object does not have: {exc}")
+            return _error(422, err.type, str(exc), hint=err.hint, error=err)
         return {"rows": _serialize(result, store)}
 
     @app.get("/document/{doc_id}", response_model=None)
