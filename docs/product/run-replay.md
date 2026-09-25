@@ -1,7 +1,7 @@
 # Run replay: watching a run (live or recorded) as the plan it is
 
-Status: phases 1–3 built, 2026-09-25. It replaces the trace view's flat event list and generic replay
-for plan runs. Traces of loops and crawls keep the Traces workspace for now.
+Status: phases 1–3 built, 2026-09-25. Run is also the trace viewer: the Traces workspace is gone
+(`/traces/<id>` redirects to `/run?trace=<id>`).
 
 ## The problems (user feedback)
 
@@ -118,3 +118,15 @@ Everything below is a view of (stage × item × document × time), so nothing ne
 - **Clean traces.** A run's trace starts at the run (`since=bus.cursor`); it used to replay the
   bus's retained history, so earlier runs appeared in it. Concurrent runs on one engine still share
   the bus; isolating them per run is open.
+
+## Built (after the second review)
+
+- **One workspace.** With nothing loaded, Run lists the recorded traces with their size in KB, and
+  can delete them or clear all of them (the site's own traces are kept). The run bar's **recorded ▾**
+  opens any of them.
+- **Compact screen.** Activity, Output and Events start folded, and the lanes are 9px each.
+- **The element, clearly.** The item's own element is SPOTLIT: the rest of the page is dimmed, the
+  element is outlined, and it is centred on screen. The centring is re-checked as images load.
+- **The i-th iteration everywhere.** Older traces have no item paths and no fan-out events. For them,
+  the iteration is counted from the fan's own step, and the fan feeding each stage comes from the
+  plan's structure. Item 37 of a two-page `select_all` spotlights the 18th book on page 2.
