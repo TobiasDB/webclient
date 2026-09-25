@@ -443,14 +443,14 @@ class LiveBacking(Backing):
 
     provides = frozenset(
         {"click", "write", "wait_for", "select", "select_all", "evaluate",
-         "screenshot", "goto", "scroll"}
+         "screenshot", "goto", "back", "scroll"}
     )
     collections = frozenset({"select_all"})
     props = frozenset({"dom_mutations", "console"})
     #: the always-IO browser interactions -> awaitable under async. ``select`` /
     #: ``select_all`` are omitted: on a *static* document (the common case) they
     #: are in-memory (HtmlBacking), so the surface types them synchronously.
-    io = frozenset({"click", "write", "wait_for", "evaluate", "screenshot", "goto", "scroll"})
+    io = frozenset({"click", "write", "wait_for", "evaluate", "screenshot", "goto", "back", "scroll"})
     #: the browser scripts this backing owns: the mutation observer (``init``,
     #: read by ``dom_mutations`` via ``drain``) and the buffer drain (``drain``
     #: phase, run after replay to discard load-time mutations). The client gathers
@@ -652,6 +652,22 @@ class LiveBacking(Backing):
             pass
         await core._page.goto(url, timeout=ms)
         core.final_url = core._page.url  # the held page now shows ``url``
+        await drain(core)
+        return core
+
+    async def back(self, core: "Document", *, timeout: float | None = None) -> "Document":
+        """Go BACK in the held page's history -- the browser's back button, on the SAME page (no
+        new page, nothing replayed). With no history to go back to, the page stays where it is.
+        The captured content (and a live mirror's recording) is the page it lands on."""
+        ms = (timeout or 30.0) * 1000
+        core._client.bus.publish(ActionEvent(action="back", args={}, document_id=core.name, source="core-action"))
+        try:
+            await core._page.go_back(timeout=ms, wait_until="load")
+            if core._page.url in ("about:blank", ""):  # the tab's blank start: not a page of the site
+                await core._page.go_forward(timeout=ms, wait_until="load")
+        except Exception:  # noqa: BLE001 - no history / a slow page: stay where it is
+            pass
+        core.final_url = core._page.url
         await drain(core)
         return core
 

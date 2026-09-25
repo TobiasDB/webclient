@@ -918,3 +918,19 @@ def test_a_live_pages_recording_keeps_flowing_without_interactions(httpserver, w
     finally:
         sub.cancel()
         engine.dom_recorders -= 1
+
+
+def test_back_goes_back_on_the_same_live_page(httpserver, wc):
+    # the browser's back button, on the held page: no new page, nothing replayed
+    httpserver.expect_request("/b1").respond_with_data('<html><body><h1>one</h1><a id="go" href="/b2">next</a></body></html>', content_type="text/html")
+    httpserver.expect_request("/b2").respond_with_data('<html><body><h1>two</h1></body></html>', content_type="text/html")
+    doc = wc.fetch(httpserver.url_for("/b1"), browser=True, keep_alive=True)
+    page = doc._page
+    doc.click("#go")
+    assert doc.final_url.endswith("/b2") and b"two" in doc.content
+    doc.back()
+    assert doc.final_url.endswith("/b1") and b"one" in doc.content
+    assert doc._page is page  # the same page
+    doc.back()  # nothing further back: stays
+    assert doc.final_url.endswith("/b1")
+    wc.release(doc)

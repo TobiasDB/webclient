@@ -613,3 +613,19 @@ Fixed, each checked against a real browser on the lab's `/changelog` (a script-r
     recording's first moment, so it ran behind by however late the mirror opened.
 - **Output ticks.** Each "output values" row has its own key; rows sharing an attribute used to
   tick together.
+
+### 14.7 Live back, and where in the plan the live page is (2026-09-25)
+
+- **⟵ back** is the browser's back button on the SAME live page (`Document.back()`: no new page,
+  nothing replayed; it never goes back past the site's first page). The actions not yet in the
+  plan are trimmed to those that lead where it lands (each remembers the URL it went from and to).
+- **⟲ to the plan** goes back until none is left. Only a click that made no history entry, such as
+  a tab or a filter, forces a rebuild at the plan's head.
+- **The mirror's document.** It is the head's document only while nothing is pending. Once the
+  live page moves on, each page keeps its own document, so the preview and line values stay
+  computed on the pages they belong to. Before, the list page was evaluated on a book page.
+- **Where in the plan.** After the live page moves on, a page of the plan whose selectors match
+  it (≥60%), or whose URL it is, takes it over. The live page is RE-HOMED there: focus moves,
+  selectors and actions apply to that page, and the rows show the records whose page is open, so
+  a book's detail row fills in. The clicks that got there are not made steps, since the plan
+  reaches that page by its own link. Back to the list re-homes it to the list page.
