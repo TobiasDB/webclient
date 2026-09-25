@@ -155,6 +155,32 @@ def _retry_after_seconds(value: str | None) -> float | None:
         return None
 
 
+
+def _row_event(count: int, row: Any) -> Any:
+    """``PlanEvent(phase="row")`` carrying the row (JSON-safe, long strings capped) and its index -- so a
+    recorded run replays its rows as they arrived, not just that some did."""
+    import json
+
+    from ...models import PlanEvent
+    from ...query.collection import Field
+
+    value = row.get() if isinstance(row, Field) else row
+
+    def cap(v: Any) -> Any:
+        if isinstance(v, str):
+            return v if len(v) <= 2000 else v[:2000] + "…"
+        if isinstance(v, dict):
+            return {str(k): cap(x) for k, x in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [cap(x) for x in list(v)[:200]]
+        return v
+
+    try:
+        safe = json.loads(json.dumps(cap(value), default=str))
+    except Exception:  # noqa: BLE001 - an unserialisable row: its text
+        safe = str(value)[:2000]
+    return PlanEvent(phase="row", detail={"index": count - 1, "row": safe})
+
 class NameScope:
     """An ordered, optionally LRU-capped map of scoped names to objects. Names
     are ``{kind}:{scope:03d}-{seq:03d}``; refs and docs share the scope's seq.
@@ -690,7 +716,7 @@ class WebClient(SessionCore, IWebClient):
         count = 0
         for row in self.loop().stream(astream(expr, context, client=self)):
             count += 1
-            self.bus.publish(PlanEvent(phase="row"))
+            self.bus.publish(_row_event(count, row))
             yield row.get() if isinstance(row, Field) else row
         self.bus.publish(PlanEvent(phase="done", detail={"rows": count}))
 
@@ -710,7 +736,7 @@ class WebClient(SessionCore, IWebClient):
             )
             for row in result if isinstance(result, list) else [result]:
                 count += 1
-                self.bus.publish(PlanEvent(phase="row"))
+                self.bus.publish(_row_event(count, row))
                 yield row.get() if isinstance(row, Field) else row
             self.bus.publish(PlanEvent(phase="done", detail={"rows": count}))
             return
@@ -721,7 +747,7 @@ class WebClient(SessionCore, IWebClient):
         )
         async for row in rows:
             count += 1
-            self.bus.publish(PlanEvent(phase="row"))
+            self.bus.publish(_row_event(count, row))
             yield row.get() if isinstance(row, Field) else row
         self.bus.publish(PlanEvent(phase="done", detail={"rows": count}))
 

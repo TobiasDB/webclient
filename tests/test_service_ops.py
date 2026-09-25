@@ -180,6 +180,10 @@ def test_runs_publish_fanout_counts(tmp_path):
             assert last["topic"] == "resources" and last["http_free"] == last["http_total"]
             # ... with the process tree's memory (and CPU, once there is a previous sample)
             assert last["mem_mb"] > 0 and last["procs"] >= 1 and last.get("cpu_pct", 0) >= 0
+            # every row event carries the row (a replay shows the rows as they arrived) and its index
+            rows = [e for e in got["events"] if e.get("topic") == "plan" and e.get("phase") == "row"]
+            assert sorted(e["detail"]["index"] for e in rows) == list(range(7))
+            assert sorted(e["detail"]["row"]["n"] for e in rows) == [str(i) for i in range(7)]
             # the trace listing reports each trace's size on disk
             listed = {t["id"]: t for t in client.get("/traces").json()}
             assert listed[rid]["bytes"] > 0
@@ -201,3 +205,35 @@ def test_traces_can_be_deleted_one_or_all_but_kept(tmp_path):
         r = client.delete("/traces", params={"keep": "keepme"}).json()
         assert r["deleted"] == 1 and r["kept"] == ["keepme"]
         assert [t["id"] for t in client.get("/traces").json()] == ["keepme"]
+
+
+
+def test_a_trace_serves_a_page_as_it_was(tmp_path):
+    import time as _t
+
+    from fastapi.testclient import TestClient
+    from pytest_httpserver import HTTPServer
+
+    from webclient.service import create_app
+
+    with HTTPServer() as srv:
+        srv.expect_request("/").respond_with_data("<html><body><li class='r'><b>x</b></li></body></html>", content_type="text/html")
+        plan = {"root": "Reference", "steps": [
+            {"kind": "get", "name": "resolve"}, {"kind": "call", "name": "resolve", "args": [], "kwargs": {}},
+            {"kind": "get", "name": "select_all"}, {"kind": "call", "name": "select_all", "args": [{"value": "li.r"}], "kwargs": {}},
+            {"kind": "get", "name": "extract"}, {"kind": "call", "name": "extract", "args": [], "kwargs": {"n": {"plan": {"root": "Document", "steps": [
+                {"kind": "get", "name": "select"}, {"kind": "call", "name": "select", "args": [{"value": "b"}], "kwargs": {}},
+                {"kind": "get", "name": "attr"}, {"kind": "call", "name": "attr", "args": [{"value": "text"}], "kwargs": {}}]}}}},
+            {"kind": "get", "name": "project"}, {"kind": "call", "name": "project", "args": [], "kwargs": {}}]}
+        with TestClient(create_app(traces_dir=tmp_path)) as client:
+            rid = client.post("/runs", json={"plan": plan, "url": srv.url_for("/")}).json()["id"]
+            for _ in range(100):
+                got = client.get(f"/runs/{rid}").json()
+                if got["status"] != "running":
+                    break
+                _t.sleep(0.05)
+            step = next(e for e in got["events"] if e.get("phase") == "step" and e["detail"]["op"] == "select_all")
+            page = client.get(f"/traces/{rid}/documents/{step['document_id']}").json()
+            assert "<li class='r'>" in page["content"] or '<li class="r">' in page["content"]
+            assert page["url"].startswith(srv.url_for("/")) and page["n"] <= step["n"]
+            assert client.get(f"/traces/{rid}/documents/nope").status_code == 404

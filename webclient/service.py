@@ -957,6 +957,45 @@ def create_app(
 
         return {"id": trace_id, **_read(f).summary()}
 
+    # a parsed trace is kept (by path + size + mtime: a trace still being written re-reads): a replay asks
+    # for page after page of the same trace, and a 10 MB file must not be parsed per request
+    _trace_cache: "OrderedDict[tuple[str, int, float], Any]" = OrderedDict()
+
+    def _reader(f: Path) -> Any:
+        from .trace import read as _read
+
+        st = f.stat(); key = (str(f), st.st_size, st.st_mtime)
+        got = _trace_cache.get(key)
+        if got is None:
+            got = _read(f); got.events  # parse now, once
+            _trace_cache[key] = got
+            while len(_trace_cache) > 3:
+                _trace_cache.popitem(last=False)
+        return got
+
+    @app.get("/traces/{trace_id}/documents/{doc_id}", response_model=None)
+    def trace_document(trace_id: str, doc_id: str, upto: int | None = None,
+                       authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """A page of the trace as it was: the latest snapshot of ``doc_id`` (at or before event
+        ``upto``, when given) -- its content, url, status and the event it came from."""
+        _auth(authorization)
+        f = _trace_file(trace_id)
+        if isinstance(f, JSONResponse):
+            return f
+        best: Any = None
+        for e in _reader(f).events:
+            if getattr(e, "document_id", None) != doc_id or getattr(e, "topic", "") != "snapshot":
+                continue
+            if upto is not None and (e.n or 0) > upto:
+                break
+            best = e
+        if best is None:
+            return _error(404, "InvalidRequest", f"no snapshot of {doc_id!r} in trace {trace_id!r}")
+        raw = best.content if isinstance(best.content, (bytes, bytearray)) else str(best.content or "").encode()
+        return {"document_id": doc_id, "n": best.n, "ts": best.ts, "url": best.url, "final_url": getattr(best, "final_url", None),
+                "status_code": getattr(best, "status_code", None), "kind": getattr(best, "kind", "html"),
+                "content": raw.decode("utf-8", "replace")}
+
     @app.delete("/traces/{trace_id}", response_model=None)
     def delete_trace(trace_id: str, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
         """Delete a stored trace (its one ``.jsonl``): returns the bytes freed."""
@@ -993,9 +1032,7 @@ def create_app(
         f = _trace_file(trace_id)
         if isinstance(f, JSONResponse):
             return f
-        from .trace import read as _read
-
-        return [_wire(e) for e in _read(f).events if not topic or e.topic.startswith(topic)]
+        return [_wire(e) for e in _reader(f).events if not topic or e.topic.startswith(topic)]
 
     @app.get("/traces/{trace_id}/events/{n}", response_model=None)
     def trace_event(trace_id: str, n: int, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
@@ -1005,9 +1042,8 @@ def create_app(
         if isinstance(f, JSONResponse):
             return f
         from .trace import encode as _encode
-        from .trace import read as _read
 
-        for e in _read(f).events:
+        for e in _reader(f).events:
             if e.n == n:
                 return _encode(e)
         return _error(404, "InvalidRequest", f"no event #{n} in trace {trace_id!r}")
