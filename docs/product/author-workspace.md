@@ -457,3 +457,28 @@ The next review, and what changed:
   trace file under `traces_dir` (every event, the plan in its footer; `trace` comes back in the
   response). The rows header has **⏺ trace** beside Run ▶ (it asks for a name) and links to the
   saved trace, which opens in Traces with its replay, events and plan.
+
+
+## 14. The Run workspace (2026-09-25)
+
+Run ▶ in Author opens **Run** with the plan. The server executes it in the background
+(`POST /runs`: rows stream, every bus event is kept, a trace is written; `GET /runs/{id}?rows=&events=`
+returns what arrived since the counts the client holds; each row carries the event index it
+arrived at). The workspace shows:
+
+- **the plan as stages** -- an EXPLAIN tree (FETCH, PAGES, EACH, FIND, READ, CAST, COLUMNS, EMIT…;
+  a record's columns and a followed page branch under COLUMNS) that realises live: each stage's
+  count so far, lit while active, dim until reached, ✕ where it failed (attributed from the
+  executor's `plan.step` events and the error ledger; identical stages share their events,
+  untraced stages count as their parent);
+- **the output** as rows stream in; **errors** (click to jump there) and the **event log**
+  (click a stage to see only its events);
+- **a timeline**: ⏮ ◀ slider ▶ ⏭ -- the stages, the rows and the log as they were at any event;
+  "live" follows the run;
+- the run's **trace** (replay, events, plan in Traces), **run again**, and the runs held.
+
+Also: the static render strips widgets that cannot work in a sandboxed copy (reCAPTCHA, hCaptcha,
+Turnstile, analytics) -- the "could not connect to the reCAPTCHA service" notice came from one; a
+pick inside a **shadow DOM** says so and offers the browser tier (its capture folds shadow DOM and
+same-origin frames into the page); a picked **iframe** offers its page as a Document
+(`select(iframe).attr("src").resolve()`).

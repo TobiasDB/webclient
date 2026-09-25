@@ -733,6 +733,92 @@ def create_app(
             return _error(404, "InvalidRequest", f"no trace {trace_id!r}", hint="GET /traces lists them")
         return target
 
+    # -- runs: a plan executed in the background, watched live --------------------
+    # POST /runs starts it (rows stream in, every bus event is kept, a trace is written);
+    # GET /runs/{id}?rows=&events= returns what arrived since, so a client can follow it live,
+    # and every row carries the event index it arrived at, so the run can be scrubbed back.
+    app.state.runs = OrderedDict()
+
+    @app.post("/runs", response_model=None)
+    def start_run(body: dict[str, Any], authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """Start executing ``plan`` (against ``url`` when given) in the background; returns the
+        run id (also its trace id when ``trace`` is not false)."""
+        import threading
+        import uuid
+
+        _auth(authorization)
+        wc_: WebClient = app.state.wc
+        try:
+            expr = from_plan(body["plan"], wc_)
+        except (ValueError, KeyError) as exc:
+            return _error(422, "InvalidPlan", str(exc), hint="check the plan's root, operator and step names")
+        sid = expr._plan.session_id
+        engine = app.state.sessions[sid] if sid in app.state.sessions else wc_
+        store = _store_for(sid)
+        context: Any = engine.ref(body["url"]) if body.get("url") else None
+        name = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(body.get("name") or "")).strip("-.")[:60]
+        run_id = f"{name or 'run'}-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+        run: dict[str, Any] = {"id": run_id, "status": "running", "rows": [], "events": [], "error": None,
+                               "started": time.time(), "finished": None, "describe": expr._plan.describe(),
+                               "trace": run_id if body.get("trace", True) else None}
+        app.state.runs[run_id] = run
+        while len(app.state.runs) > 30:
+            app.state.runs.popitem(last=False)
+
+        def keep(event: Any) -> None:
+            try:
+                run["events"].append(_wire(event))
+            except Exception:  # noqa: BLE001 - an event that will not serialise is skipped, not fatal
+                pass
+
+        def work() -> None:
+            sub = engine.bus.subscribe("", keep)
+            tracer: Any = contextlib.nullcontext()
+            if run["trace"]:
+                tdir = Path(app.state.traces_dir)
+                tdir.mkdir(parents=True, exist_ok=True)
+                tracer = engine.trace(tdir / f"{run_id}.jsonl", plan=expr._plan)
+            try:
+                with tracer:
+                    result = engine.execute(expr, context, stream=True)
+                    if isinstance(result, (dict, str, int, float)) or result is None:
+                        run["rows"].append({"row": _serialize(result, store), "at": len(run["events"])})
+                    else:
+                        for row in result:
+                            run["rows"].append({"row": _serialize(row, store), "at": len(run["events"])})
+                run["status"] = "done"
+            except WebException as exc:
+                run["status"], run["error"] = "error", exc.error.model_dump(mode="json")
+            except Exception as exc:  # noqa: BLE001 - the run reports it; the server stays up
+                from .errors import make
+
+                code = "op.unsupported" if isinstance(exc, AttributeError) else "remote.failed"
+                run["status"], run["error"] = "error", make(code, f"{type(exc).__name__}: {exc}").model_dump(mode="json")
+            finally:
+                sub.cancel()
+                run["finished"] = time.time()
+
+        threading.Thread(target=work, name=f"run-{run_id}", daemon=True).start()
+        return {"id": run_id, "trace": run["trace"]}
+
+    @app.get("/runs", response_model=None)
+    def list_runs(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
+        """The runs this server holds (newest first): id, status, rows, events, times, the plan."""
+        _auth(authorization)
+        return [{k: r[k] for k in ("id", "status", "started", "finished", "describe", "trace")} | {"rows": len(r["rows"]), "events": len(r["events"])}
+                for r in reversed(list(app.state.runs.values()))]
+
+    @app.get("/runs/{run_id}", response_model=None)
+    def get_run(run_id: str, rows: int = 0, events: int = 0, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":
+        """A run's state and what arrived since ``rows`` / ``events`` (the counts the client holds)."""
+        _auth(authorization)
+        r = app.state.runs.get(run_id)
+        if r is None:
+            return _error(404, "InvalidRequest", f"no run {run_id!r}", hint="runs are kept in memory; its trace (if recorded) is under /traces")
+        return {"id": r["id"], "status": r["status"], "error": r["error"], "started": r["started"], "finished": r["finished"],
+                "describe": r["describe"], "trace": r["trace"], "n_rows": len(r["rows"]), "n_events": len(r["events"]),
+                "rows": r["rows"][rows:], "events": r["events"][events:]}
+
     @app.get("/traces", response_model=None)
     def traces(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
         """The stored traces under ``traces_dir`` (one ``.jsonl`` each): id, event count,
