@@ -57,7 +57,7 @@ The recorder publishes the same `step` and `result` events for recorded calls. A
 
 ## The model (UI, pure, tested)
 
-**`planNodes(plan)`**: every step of the plan and its sub-plans, by address. Each node has:
+**`planModel(plan)`**: every step of the plan and its sub-plans, by address. Each node has:
 - its op, arg and kwargs;
 - the object type it yields (Reference → Document → Element / Collection → Field; the same `typeAfter` rules the Author graph uses);
 - its parent object;
@@ -79,7 +79,7 @@ The recorder publishes the same `step` and `result` events for recorded calls. A
 - **`rows`**: the projected rows, with the item each came from.
 - **`errors`**: each with its step, item and document.
 
-**`stateAt(events, t)`** uses a checkpoint every 500 events, so scrubbing is O(500) and not O(n).
+**`RunFolder`** holds the run at a cursor and folds forward incrementally (a live stream, playback); a step back refolds from the start once. **`locate(model, state, step, item)`** gives the item's page and the way down to its element (`ol.row li[7] › h3 a`) from the step results. **`tell(event)`** says an event in words.
 
 ## The screen
 
@@ -124,15 +124,13 @@ The recorder publishes the same `step` and `result` events for recorded calls. A
 
 ## Layers (UI)
 
-1. **`lib/run/plan.ts`**: `planNodes`, addresses and types.
-2. **`lib/run/state.ts`**: `reduce`, `stateAt` and selectors (follow, the item's page, the element path).
+1. **`lib/run/plan.ts`**: `planModel`, addresses and types.
+2. **`lib/run/state.ts`**, **`locate.ts`**, **`tell.ts`**: `reduce`, `RunFolder`, `followItem`, `locate`, `tell`.
 3. **`lib/run/layout.ts`**: a fixed layout of plan nodes (columns by depth, rows by branch).
 4. **Components**, each small and stateless, each with a story:
-   - `RunGraph`, built from `ObjectNode`, `OpEdge`, `ItemStrip` and `ValueChip`;
-   - `PageStage`, built from the existing `PageFrame` / `Player`, plus `EventCard`;
-   - `Timeline`, built from `Lane`s and a `Cursor`;
-   - `RowsTable`;
-   - `EventFeed`.
+   - `RunGraph`, built from `StepCard` and `ItemStrip` (stories: `Run/A plan, played`);
+   - `RunTimeline`;
+   - in the Playground: `PageStage` (the existing `PageFrame` / `Player`, plus an event card) and `EventFeed`.
 5. **The Run scene**, which only wires things together: the source (a live run, a trace, or a plan alone), the cursor and play, and the selection.
 
 ## Next (package)
