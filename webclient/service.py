@@ -771,7 +771,29 @@ def create_app(
             except Exception:  # noqa: BLE001 - an event that will not serialise is skipped, not fatal
                 pass
 
+        def sample() -> None:
+            # the pool's occupancy while the run is live (only when it changes): what the run is
+            # using -- http slots, browser pages, tasks waiting for one -- beside its events
+            try:
+                pool = getattr(engine, "_the_engine", lambda: engine)().pool
+            except Exception:  # noqa: BLE001
+                pool = None
+            if pool is None:
+                return
+            last: Any = None
+            while run["status"] == "running":
+                try:
+                    st = pool.stats().model_dump()
+                    key = (st["http_free"], st["pages_free"], st["pages_total"], st["waiting"], tuple(sorted(st["held"].items())))
+                    if key != last:
+                        last = key
+                        run["events"].append({"topic": "resources", "ts": time.time(), **st})
+                except Exception:  # noqa: BLE001 - sampling is best-effort
+                    pass
+                time.sleep(0.1)
+
         def work() -> None:
+            threading.Thread(target=sample, name=f"run-{run_id}-res", daemon=True).start()
             sub = engine.bus.subscribe("", keep)
             tracer: Any = contextlib.nullcontext()
             if run["trace"]:
@@ -821,8 +843,8 @@ def create_app(
 
     @app.get("/traces", response_model=None)
     def traces(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
-        """The stored traces under ``traces_dir`` (one ``.jsonl`` each): id, event count,
-        started / finished."""
+        """The stored traces under ``traces_dir`` (one ``.jsonl`` each): id, event count, size on
+        disk (``bytes``), started / finished."""
         _auth(authorization)
         from .trace import read as _read
 
@@ -831,7 +853,7 @@ def create_app(
         if base.exists():
             for f in sorted(base.glob("*.jsonl")):
                 r = _read(f)
-                out.append({"id": f.stem, "events": r.count, "started": r.header.get("started"),
+                out.append({"id": f.stem, "events": r.count, "bytes": f.stat().st_size, "started": r.header.get("started"),
                             "finished": r.footer.get("finished"), "schema_version": r.schema_version})
         return out
 

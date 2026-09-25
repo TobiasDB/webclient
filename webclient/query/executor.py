@@ -258,10 +258,12 @@ async def _arun(
             rest = steps[i:]
             split = _first_coll_op(rest)  # prefix = element ops; suffix = the collection shaping
             prefix = rest[:split]
+            limit = _fanout_limit(client, prefix)
+            _note_parallel(len(value), limit, prefix, client)
             results = await fan_out(
                 list(value),
                 _per_element(lambda el: _arun(el, prefix, 0, el, client)),
-                limit=_fanout_limit(client, prefix),
+                limit=limit,
             )
             merged = _merge_fanout(results, value.root, client)
             if split < len(rest) and isinstance(merged, Collection):
@@ -387,6 +389,22 @@ _STEP_OPS = frozenset({"select", "select_all", "attr", "text_content", "extract"
 
 #: ops that FAN OUT (one value becomes many): their match count is published as a fanout event
 _FANOUT_OPS = frozenset({"select_all", "links"})
+
+
+def _note_parallel(n: int, limit: int, steps: "list[Step] | None", client: Any) -> None:
+    """Publish ``PlanEvent(phase="parallel")`` as a fan-out starts: how many items, how many run
+    at once (``limit``: the http concurrency, or the page pool when each item leases a page) and
+    which resource bounds it -- so a run view can show what runs in parallel."""
+    bus = getattr(client, "bus", None) if client is not None else None
+    if bus is None:
+        return
+    from ..models import PlanEvent
+
+    bus.publish(PlanEvent(phase="parallel", detail={
+        "n": n, "limit": max(min(limit, n), 1) if n else 0,
+        "bound": "page" if _leases_pages(steps) else "http",
+        "ops": [s.name for s in (steps or ()) if s.kind == "get"][:8],
+    }))
 
 
 def _note_fanout(value: Any, name: str, selector: "str | None", result: Any, client: Any) -> None:
@@ -627,9 +645,9 @@ async def _astream_collection(
             value = await _arun(el, shaping, 0, el, client)
             return value.get() if isinstance(value, Field) else value
 
-    async for result in fan_out_stream(
-        items, _per_element(process), limit=_fanout_limit(client, shaping)
-    ):
+    limit = _fanout_limit(client, shaping)
+    _note_parallel(len(items), limit, shaping, client)
+    async for result in fan_out_stream(items, _per_element(process), limit=limit):
         if result is not _DROP:
             yield result
 

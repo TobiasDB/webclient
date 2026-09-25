@@ -482,3 +482,31 @@ Turnstile, analytics) -- the "could not connect to the reCAPTCHA service" notice
 pick inside a **shadow DOM** says so and offers the browser tier (its capture folds shadow DOM and
 same-origin frames into the page); a picked **iframe** offers its page as a Document
 (`select(iframe).attr("src").resolve()`).
+
+### 14.1 Run as a pipeline graph (2026-09-25)
+
+User decisions: Run shows the plan as a graph in the manner of Prefect / Dagster; it **loads a plan
+without running it** (Run ▶ starts it; Author's button is "Open in Run", and a plan or blob can be
+pasted); fan-out must stay readable at 50–5,000 items; resources, concurrency and what runs in
+parallel are shown; actions are coloured by what they do. The onboarding-pipeline tab is deferred.
+
+- **Cards.** A card is a run of steps that happen together (select · attr · number). A fetch or a
+  fan-out starts its own card. Whole-collection ops (extract, merge, project) are small join pills.
+  An alias's name read rides on the card it names. Each card shows its output name, its ops, and
+  its count against the expected count.
+- **Colour.** The left band and badge give the action: fetch, fan-out, find, read, interact, shape.
+  The border gives the state: waiting, running, done, failed.
+- **Fan-out at scale.** The cards that run once per item sit in a dashed **lane** labelled
+  "per item ×N over R runs · K at once (http slots | browser pages)". One lane stands for every
+  item. The fan-out card bins its items into at most 36 cells: done, in flight, waiting. Fan-out
+  edges draw as a bundle with a ×N badge.
+- **Resources.** The executor publishes `plan.parallel` (`n`, `limit`, `bound`) when a fan-out
+  starts, and `plan.fanout` (`n`) when select_all / links / paginate return. A run samples the
+  pool while live as `resources` events. The graph shows http slots and browser pages in use,
+  the queue, and a sparkline.
+- **Navigation.** Wheel or pinch zooms about the pointer, drag pans, arrows / + / − / 0 work from
+  the keyboard, "fit" re-fits, and ⤢ maximises the graph over the rows.
+- **Author.** The rows bar has a **Graph** popup with the same view and nothing run.
+- **Rows.** Long text is clamped to two lines (click to expand). Nested objects and lists fold to
+  a one-line preview (click to open). This applies in Author and Run.
+- **Traces** list each trace's size on disk (`GET /traces` returns `bytes`).

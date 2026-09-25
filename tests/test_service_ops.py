@@ -166,3 +166,10 @@ def test_runs_publish_fanout_counts(tmp_path):
                 _t.sleep(0.05)
             fan = [e for e in got["events"] if e.get("topic") == "plan" and e.get("phase") == "fanout"]
             assert fan and fan[0]["detail"] == {"op": "select_all", "selector": "li.r", "n": 7}
+            # the fan-out's width: 7 items, run up to the http concurrency at once
+            par = [e for e in got["events"] if e.get("topic") == "plan" and e.get("phase") == "parallel"]
+            assert par and par[0]["detail"]["n"] == 7 and 1 <= par[0]["detail"]["limit"] <= 7
+            assert par[0]["detail"]["bound"] == "http"
+            # the trace listing reports each trace's size on disk
+            listed = {t["id"]: t for t in client.get("/traces").json()}
+            assert listed[rid]["bytes"] > 0
