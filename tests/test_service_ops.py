@@ -237,3 +237,36 @@ def test_a_trace_serves_a_page_as_it_was(tmp_path):
             assert "<li class='r'>" in page["content"] or '<li class="r">' in page["content"]
             assert page["url"].startswith(srv.url_for("/")) and page["n"] <= step["n"]
             assert client.get(f"/traces/{rid}/documents/nope").status_code == 404
+
+
+def test_a_runs_trace_holds_only_its_own_run(tmp_path):
+    # the bus retains history; a run's trace starts at the run, not with earlier runs' events
+    import time as _t
+
+    from fastapi.testclient import TestClient
+    from pytest_httpserver import HTTPServer
+
+    from webclient.service import create_app
+
+    html = "<html><body>" + "".join(f'<li class="r"><b>{i}</b></li>' for i in range(3)) + "</body></html>"
+    with HTTPServer() as srv:
+        srv.expect_request("/").respond_with_data(html, content_type="text/html")
+        plan = {"root": "Reference", "steps": [
+            {"kind": "get", "name": "resolve"}, {"kind": "call", "name": "resolve", "args": [], "kwargs": {}},
+            {"kind": "get", "name": "select_all"}, {"kind": "call", "name": "select_all", "args": [{"value": "li.r"}], "kwargs": {}},
+            {"kind": "get", "name": "extract"}, {"kind": "call", "name": "extract", "args": [], "kwargs": {"n": {"plan": {"root": "Document", "steps": [
+                {"kind": "get", "name": "select"}, {"kind": "call", "name": "select", "args": [{"value": "b"}], "kwargs": {}},
+                {"kind": "get", "name": "attr"}, {"kind": "call", "name": "attr", "args": [{"value": "text"}], "kwargs": {}}]}}}},
+            {"kind": "get", "name": "project"}, {"kind": "call", "name": "project", "args": [], "kwargs": {}}]}
+        with TestClient(create_app(traces_dir=tmp_path)) as client:
+            ids = []
+            for _ in range(2):
+                rid = client.post("/runs", json={"plan": plan, "url": srv.url_for("/")}).json()["id"]
+                for _ in range(100):
+                    if client.get(f"/runs/{rid}").json()["status"] != "running":
+                        break
+                    _t.sleep(0.05)
+                ids.append(rid)
+            second = client.get(f"/traces/{ids[1]}/events").json()
+            assert sum(1 for e in second if e.get("topic") == "plan" and e.get("phase") == "started") == 1
+            assert sum(1 for e in second if e.get("topic") == "plan" and e.get("phase") == "row") == 3

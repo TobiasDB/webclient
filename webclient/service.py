@@ -470,7 +470,8 @@ def create_app(
             trace_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(body["trace"])).strip("-.")[:80] or "run"
             tdir = Path(app.state.traces_dir)
             tdir.mkdir(parents=True, exist_ok=True)
-            tracer = engine.trace(tdir / f"{trace_id}.jsonl", plan=expr._plan)
+            # from NOW: the bus's retained history (earlier runs' events) is not this run's
+            tracer = engine.trace(tdir / f"{trace_id}.jsonl", plan=expr._plan, since=engine.bus.cursor)
         try:
             with tracer:
                 result = engine.execute(expr, context)  # the realization machinery
@@ -878,7 +879,8 @@ def create_app(
             if run["trace"]:
                 tdir = Path(app.state.traces_dir)
                 tdir.mkdir(parents=True, exist_ok=True)
-                tracer = engine.trace(tdir / f"{run_id}.jsonl", plan=expr._plan)
+                # from NOW: the bus's retained history (earlier runs' events) is not this run's
+                tracer = engine.trace(tdir / f"{run_id}.jsonl", plan=expr._plan, since=engine.bus.cursor)
             try:
                 with tracer:
                     result = engine.execute(expr, context, stream=True)
