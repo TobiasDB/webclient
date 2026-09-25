@@ -391,3 +391,34 @@ The next review, and what changed:
   icon count is always 5): the records' shared fields offer `p.star-rating · class → number`,
   i.e. `select("p.star-rating").attr("class", "(?i)\b(zero|one|…|ten)\b").number()` → 3, and the
   icon count (`attr("count")`) beside it; prices come as numbers the same way.
+
+
+## 13. The layout (2026-09-25): plan · action bar + page · output / picking
+
+```
+┌ toolbar: URL · tier · Start ··························· undo · Save · Export · Import · Run ▶ ┐
+├ PLAN (280px) ─┬ ACTION BAR: .select_all("li.col-xs-6") ×20 · showing each li ×20 ── url ⟳ live ┬ OUTPUT / PICKING (340px) ┐
+│ Reference(…)  │  + .select_all  + .select  + .attr  + .limit  + output ▾   [x] output  named ▾ │ idle: Rows · Run · Plan ·  │
+│  .resolve()   ├────────────────────────────────────────────────────────────────────────────────┤ Page · Skeleton · MD · Code│
+│   .select_all │                                                                                │                            │
+│    .select    │                     THE PAGE  (the window's height; real render)                │ picking: suggestions, or   │
+│     .attr → x │                                                                                │ the selector editor with   │
+│               │                                                                                │ ONE button: Add .op("…")   │
+└───────────────┴────────────────────────────────────────────────────────────────────────────────┴────────────────────────────┘
+```
+
+- **The plan** is the literal chain only: no type tags (the op implies the object); an output shows
+  as a small `→ name` chip. Nothing is edited there but the arguments.
+- **The action bar** (above the page) is where the focused line is acted on: its ops (`+ .select_all`,
+  `+ .select`, `+ .attr`, `+ .number()`, `.resolve(…)`, `.paginate`, the page's ops), the `+ output ▾`
+  menu (the fields the records share, every attribute, numbers), the pager for a page, and OUTPUT:
+  a checkbox, and only when it is an output, how it is named -- a name, a column beside it, or a
+  selector read off the page.
+- **Picking**: adding an op that needs a selector turns the bar amber ("choose the selector…",
+  cancel); the right column shows suggestions; a click on the page opens the selector editor there
+  (parents with class toggles, candidates, the selector and its count, optional outputs read off
+  it) with ONE button -- `Add .select_all("…")` -- the op is already chosen. Esc cancels (an op left
+  without a selector is removed).
+- **The page** gets the window's height and ~60% of its width; what it shows is the records of the
+  nearest collection at or above the focus (a value or an element is seen in its record, outlined).
+- Denser throughout: 10.5–12px type, one-line bars.
