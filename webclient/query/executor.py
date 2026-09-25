@@ -209,7 +209,7 @@ async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> An
                 context = await aevaluate(context, client=client)
         if log.isEnabledFor(logging.DEBUG):
             log.debug("evaluate %s", expr._plan.describe())
-        with _plan_at(_nested_address()):
+        with _plan_at(_nested_address()), _plan_id(expr._plan):
             value = _start(expr._plan, context, client)
             return await _arun(value, expr._plan.steps, 0, context, client)
 
@@ -227,6 +227,21 @@ def _nested_address() -> tuple[str, ...]:
 
     cur = CURRENT_STEP.get()
     return (*cur, "sub") if cur and cur[-1].isdigit() else cur
+
+
+@contextmanager
+def _plan_id(plan: "Plan") -> Iterator[None]:
+    """The plan a TOP-LEVEL evaluation runs (a sub-plan's events belong to the plan it is part of)."""
+    from ..events import CURRENT_PLAN
+
+    if CURRENT_PLAN.get() is not None:
+        yield
+        return
+    token = CURRENT_PLAN.set(plan.id)
+    try:
+        yield
+    finally:
+        CURRENT_PLAN.reset(token)
 
 
 @contextmanager
@@ -692,7 +707,7 @@ async def astream(
             return
 
         head, shaping = steps[:tail], steps[tail:]
-        with _plan_at(_nested_address()):
+        with _plan_at(_nested_address()), _plan_id(expr._plan):
             base = await _arun(_start(expr._plan, context, client), head, 0, context, client)
             if not isinstance(base, Collection):  # head wasn't a collection -- finish eager
                 value = await _arun(base, shaping, 0, context, client, tail)

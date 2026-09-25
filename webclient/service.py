@@ -913,7 +913,7 @@ def create_app(
                 run["status"] = status
 
         threading.Thread(target=work, name=f"run-{run_id}", daemon=True).start()
-        return {"id": run_id, "trace": run["trace"]}
+        return {"id": run_id, "trace": run["trace"], "plan_id": expr._plan.id}
 
     @app.get("/runs", response_model=None)
     def list_runs(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
@@ -1090,7 +1090,8 @@ def create_app(
         blob = _read(f).plan_blob
         if blob is None:
             return _error(404, "InvalidRequest", f"trace {trace_id!r} recorded no plan")
-        return {"blob": blob, "describe": from_blob(blob, None).describe()}
+        expr = from_blob(blob, None)
+        return {"blob": blob, "describe": expr.describe(), "plan_id": expr._plan.id}
 
     @app.get("/events", response_model=None)
     def events_history(since: int = 0, topic: str = "", document_id: str | None = None, payload: bool = False,

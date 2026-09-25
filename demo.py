@@ -627,6 +627,8 @@ def roadmap_tour() -> None:
         tr.plan = (wq.reference(f"{lab}/lab/shop").resolve().select_all("div.card")
                    .extract(title=wq.doc.select(".title").attr("text"), price=wq.doc.select(".price").attr("text"),
                             link=wq.doc.select("a").attr("href")).project())
+        # ...and RUN it, in the trace: every event it causes is attached to its step (Run replays it as the plan)
+        _show("the plan", [r["title"] for r in wc.execute(tr.plan)])
         # Errors are catalogued + bound, and NOTHING disappears: a RETURN-policy miss still lands
         # on the ledger (doc.errors / wc.errors) as an ErrorEvent in the trace.
         shop = wc.fetch(f"{lab}/lab/shop")

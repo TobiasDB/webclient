@@ -88,6 +88,16 @@ class Plan(BaseModel):
         mutates a shared plan."""
         return self.model_copy(update={"steps": [*self.steps, step]})
 
+    @property
+    def id(self) -> str:
+        """A short, stable id for WHAT this plan does (its root, source and steps -- not the session it runs
+        in): every event of a run of it carries it (``Event.plan_id``), so a trace holding several plans'
+        runs is told apart by plan."""
+        import hashlib
+
+        body = self.model_dump(include={"root", "source", "steps"}, exclude_defaults=True, exclude_none=True)
+        return hashlib.sha1(json.dumps(body, separators=(",", ":"), sort_keys=True, default=str).encode()).hexdigest()[:12]
+
     def to_blob(self) -> str:
         """A portable, self-describing blob for the whole expression: compact JSON
         (only non-default fields). The inverse of :meth:`from_blob`. Plain JSON --

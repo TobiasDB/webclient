@@ -1,6 +1,6 @@
 # Run: a plan, played
 
-Status: design, 2026-09-25. It replaces `run-replay.md`. The Run workspace is rebuilt on this design.
+Status: built, 2026-09-25 (it replaces the old run-replay design). The package contract and the UI's layers below exist and are tested.
 
 ## The one idea
 
@@ -32,6 +32,7 @@ Every event carries the following:
 | `item` | The fan-out index path, e.g. `[7]` or `[7, 2]`. |
 | `document_id` | The page the event concerns. |
 | `run_id` | The run the event belongs to. Concurrent runs never mix. |
+| `plan_id` | The plan whose run it is (`Plan.id`, a hash of its root, source and steps). A trace can hold several plans' runs; a sub-plan's events carry its plan's id. The trace's `/plan` and `POST /runs` return it. |
 | `ts` | Its time. |
 | `n` | Its order. |
 

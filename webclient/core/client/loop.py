@@ -21,15 +21,16 @@ def _carried(coro: Coroutine[Any, Any, T]) -> Coroutine[Any, Any, T]:
     """``coro`` wrapped to run in the CALLER's run (``events.CURRENT_RUN``): a coroutine handed to
     another thread's loop starts in that loop's context, so the run id would be lost -- and every
     event of the run published on the loop unattributed."""
-    from ...events import CURRENT_RUN, CURRENT_STEP
+    from ...events import CURRENT_PLAN, CURRENT_RUN, CURRENT_STEP
 
-    run, step = CURRENT_RUN.get(), CURRENT_STEP.get()
-    if run is None and not step:
+    run, step, plan = CURRENT_RUN.get(), CURRENT_STEP.get(), CURRENT_PLAN.get()
+    if run is None and not step and plan is None:
         return coro
 
     async def _in_run() -> T:
         CURRENT_RUN.set(run)
         CURRENT_STEP.set(step)  # a recorded call's step: what it publishes on the loop is attached to it
+        CURRENT_PLAN.set(plan)
         return await coro
 
     return _in_run()

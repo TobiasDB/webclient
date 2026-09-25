@@ -58,6 +58,10 @@ CURRENT_ITEM: ContextVar[tuple[int, ...]] = ContextVar("webclient_current_item",
 #: so a page fetched, a request, an action or an error is attached to the step that caused it.
 CURRENT_STEP: ContextVar[tuple[str, ...]] = ContextVar("webclient_current_step", default=())
 
+#: the PLAN being executed (its ``Plan.id``): set when a top-level plan starts (a sub-plan keeps its plan's);
+#: the bus stamps it as ``Event.plan_id``
+CURRENT_PLAN: ContextVar[str | None] = ContextVar("webclient_current_plan", default=None)
+
 #: the RUN the running code belongs to (an id the caller picks, e.g. the service's run id). Set it with
 #: :func:`run_scope`; the bus stamps it onto every event published meanwhile (``Event.run_id``), so two
 #: runs sharing one engine -- one bus -- can still be told apart (a trace keeps only its own run's).
@@ -146,6 +150,8 @@ class EventBus(BaseModel):
                 item = CURRENT_ITEM.get()
                 if item:
                     event.item = list(item)
+            if event.plan_id is None:
+                event.plan_id = CURRENT_PLAN.get()
             if event.step is None:
                 step = CURRENT_STEP.get()
                 if step:

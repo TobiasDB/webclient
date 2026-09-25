@@ -94,3 +94,26 @@ def test_a_recorded_call_is_attached_to_its_step_in_the_recorded_plan(tmp_path):
     assert any(getattr(e, "phase", None) == "step" and e.detail.get("recorded") for e in at0)
     result = next(e for e in at0 if getattr(e, "phase", None) == "result")
     assert result.detail["kind"] == "Document" and result.detail["ok"]
+
+
+def test_every_event_carries_the_plan_it_belongs_to(tmp_path):
+    # a trace can hold several plans' runs: each event says which plan (its id), a sub-plan's are its plan's
+    from webclient.query.expr import from_plan
+
+    with HTTPServer() as srv:
+        html = "<html><body>" + "".join(f'<li class="r"><b>{i}</b><a href="/d{i}">x</a></li>' for i in range(2)) + "</body></html>"
+        srv.expect_request("/").respond_with_data(html, content_type="text/html")
+        for i in range(2):
+            srv.expect_request(f"/d{i}").respond_with_data(f"<p class='desc'>about {i}</p>", content_type="text/html")
+        with TestClient(create_app(traces_dir=tmp_path)) as client:
+            started = client.post("/runs", json={"plan": PLAN, "url": srv.url_for("/")}).json()
+            for _ in range(200):
+                if client.get(f"/runs/{started['id']}").json()["status"] != "running":
+                    break
+                time.sleep(0.05)
+            events = client.get(f"/traces/{started['id']}/events").json()
+            meta = client.get(f"/traces/{started['id']}/plan").json()
+    pid = from_plan(PLAN, None)._plan.id
+    assert started["plan_id"] == pid and meta["plan_id"] == pid
+    stepped = [e for e in events if e.get("step")]
+    assert stepped and all(e.get("plan_id") == pid for e in stepped)  # the nested columns' too
