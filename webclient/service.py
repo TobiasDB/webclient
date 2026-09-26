@@ -785,6 +785,10 @@ def create_app(
         ).split(",") if o.strip()
     ]
     app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
+    # a run's events are tens of MB of repetitive JSON (a 100k-event trace: ~28 MB, ~2 MB gzipped)
+    from fastapi.middleware.gzip import GZipMiddleware
+
+    app.add_middleware(GZipMiddleware, minimum_size=4096)
 
     def _trace_file(trace_id: str) -> "Path | JSONResponse":
         """The file of a stored trace by id (``<traces_dir>/<id>.jsonl``); 404 when unknown or
@@ -818,7 +822,7 @@ def create_app(
         context: Any = engine.ref(body["url"]) if body.get("url") else None
         name = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(body.get("name") or "")).strip("-.")[:60]
         run_id = f"{name or 'run'}-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
-        run: dict[str, Any] = {"id": run_id, "status": "running", "rows": [], "events": [], "error": None,
+        run: dict[str, Any] = {"id": run_id, "plan_id": expr._plan.id, "status": "running", "rows": [], "events": [], "error": None,
                                "started": time.time(), "finished": None, "describe": expr._plan.describe(),
                                "trace": run_id if body.get("trace", True) else None}
         app.state.runs[run_id] = run
@@ -938,7 +942,7 @@ def create_app(
         r = app.state.runs.get(run_id)
         if r is None:
             return _error(404, "InvalidRequest", f"no run {run_id!r}", hint="runs are kept in memory; its trace (if recorded) is under /traces")
-        return {"id": r["id"], "status": r["status"], "error": r["error"], "started": r["started"], "finished": r["finished"],
+        return {"id": r["id"], "plan_id": r.get("plan_id"), "status": r["status"], "error": r["error"], "started": r["started"], "finished": r["finished"],
                 "describe": r["describe"], "trace": r["trace"], "n_rows": len(r["rows"]), "n_events": len(r["events"]),
                 "rows": r["rows"][rows:], "events": r["events"][events:]}
 
@@ -1038,14 +1042,26 @@ def create_app(
         return {"deleted": n, "bytes": freed, "kept": sorted(spare)}
 
     @app.get("/traces/{trace_id}/events", response_model=None)
-    def trace_events(trace_id: str, topic: str = "", authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+    def trace_events(trace_id: str, topic: str = "", authorization: str | None = Header(default=None)) -> "Any":
         """The stream as JSON (the wire view: byte payloads and rrweb chunk bodies dropped;
         ``/traces/{id}/events/{n}`` has one event in full)."""
         _auth(authorization)
         f = _trace_file(trace_id)
         if isinstance(f, JSONResponse):
             return f
-        return [_wire(e) for e in _reader(f).events if not topic or e.topic.startswith(topic)]
+        reader = _reader(f)
+        if topic:
+            return [_wire(e) for e in reader.events if e.topic.startswith(topic)]
+        # the whole stream: encoded ONCE per trace (a 100k-event trace re-encoded per request was seconds)
+        body = getattr(reader, "_wire_json", None)
+        if body is None:
+            import json as _json
+
+            body = _json.dumps([_wire(e) for e in reader.events], separators=(",", ":"), default=str).encode()
+            reader._wire_json = body
+        from fastapi import Response
+
+        return Response(content=body, media_type="application/json")
 
     @app.get("/traces/{trace_id}/events/{n}", response_model=None)
     def trace_event(trace_id: str, n: int, authorization: str | None = Header(default=None)) -> "dict[str, Any] | JSONResponse":

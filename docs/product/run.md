@@ -145,6 +145,35 @@ When a link read off a page is opened (a `resolve` of an `attr("href")`), up to 
 
 Frames and recordings report where their spotlight is on screen (`onSpot`), which is where the arrow starts. A `limit(n)` keeps its items' positions, so steps after `select_all(...).limit(n)` still run per item of the `select_all`, and their counts are capped at n.
 
+## What the screen does (as built)
+
+- **Follow the moment** (the default) shows the step that just fired, whichever item it is for. An item waiting on a page to load does not hold the screen while others read. "One item at a time" is also available, and the choice is remembered.
+- **Highlights last as long as their steps.**
+  - The moment's element is spotlit.
+  - Steps still in flight stay outlined where they are, e.g. "resolve… · item 7" on the link being opened.
+  - While an item's steps run, the list it came from stays outlined, with its own match labelled "item 12 of 40".
+- **A fan-out step itself** outlines every match (×N).
+  - A `limit` shows its first n, the rest faint.
+  - A `filter` shows what it kept, the rest faint. Its result reports `kept`, so items after it are found as the matches they are.
+- **Outputs sit on their cards.** Shaping steps (`extract`, `project`, `merge`) are not cards. Each output is a badge ("→ title") on the step that makes it.
+- **The same step once.** Steps that are identical (same op and arguments on the same input) are one node, with the reads branching off it.
+- **Cards.**
+  - Clicking a card opens its details: what it runs for; runs done, failed and running out of how many; timings; the item's result; its outputs; its failures.
+  - Clicking a cell goes to that step, for that item, at the moment it ran.
+  - A nested fan-out's density bar also shows the current item's own rows as cells.
+- **A nested crawl** shows as its chain of pages, with an arrow from each followed link to the page it opened. At most two panes are open. The other pages are chips, and clicking one opens it beside the page it opened.
+- **A row selected** opens every page its values came from, side by side. Each value is outlined with its column's name, and arrows link the pages.
+- **Browser recordings** play what happened between moments: a short step forward is played at real speed, not jumped. Step mode dwells as long as the run took.
+- **Resources**: memory, CPU and pages in use are shown in the bar at the cursor, with lanes on the timeline.
+
+## Scale
+
+A 96k-event run (8,000 items) opens in about 3.4 s (the service encodes a trace's events once and gzips them: 28 MB to 1.5 MB). It steps at about 20–30 ms per frame in the development build. Element paths are cached per snapshot, because a list's every row is outlined on each frame.
+
+## Tested
+
+`make e2e` in webclient-ui replays committed traces in a real browser. It checks every behaviour above with 13 specs.
+
 ## Recorded scripts are plans too
 
 Under `wc.record()`, what a script READS off the page it reached is recorded as well: `select`, `select_all`, `attr`, `text_content`, `links`, and a `resolve` of a link read off it. They form a tree over the journey's page.
