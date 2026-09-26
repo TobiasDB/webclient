@@ -338,6 +338,19 @@ class QueryArtifact(BaseModel):
     #: blocks a working query from shipping.
     timeliness: str = ""
     stale: bool = False
+    #: which dataset-query this artifact IS: ``"latest"`` (A -- the newest rows, page one, no
+    #: backfill), ``"all"`` (B -- the whole dataset, pagination walked), ``"single"`` (an unpaged
+    #: source, where latest == all), or ``""`` (mode not assigned). A "latest" and an "all" query
+    #: are authored per source; both hang off :class:`OnboardingResult`.
+    mode: str = ""
+    #: COMPLETENESS (from the dataset shape): does this query cover the WHOLE dataset -- pagination
+    #: walked, no active filter narrowing it? ``covers_all`` is the verdict; the note explains.
+    completeness: str = ""
+    covers_all: bool = True
+    #: CORRECTNESS (from the dataset shape): is the captured set the right one -- unfiltered, with a
+    #: known order? ``correct`` is False when an active filter makes the visible rows a subset.
+    correctness: str = ""
+    correct: bool = True
     #: why each EARLIER authoring attempt was rejected (one short line each, in order), so the
     #: onboard output shows the path to this query -- empty when the first attempt succeeded.
     attempts: list[str] = []

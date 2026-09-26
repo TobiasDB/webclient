@@ -2095,3 +2095,24 @@ def test_onboard_company_is_a_pipeline_with_an_interactive_confirm_gate(site):
             wc=wc, llm=llm, search=search, browser=False, interactive=True,
         ).resume("no")
         assert declined.exited and declined.reason == "declined at the confirm gate" and not declined.ok
+
+
+def test_query_assessments_from_dataset_shape():
+    # the completeness / correctness notes are derived from the page's dataset SHAPE
+    # (doc.dataset() -- the pagination / filtered / ordered signals), not the model.
+    from webclient.core.document.models import DatasetHint, Filtering, Ordering
+    from webclient.pipelines.onboarding.query_assess import completeness_note, correctness_note
+
+    plain = DatasetHint(url="http://x/list")  # one page, unfiltered, order unknown
+    assert completeness_note(plain, paginated=False) == ("COMPLETENESS: one page -- the whole dataset is on a single page.", True)
+    assert correctness_note(plain)[1] is True
+
+    filtered = DatasetHint(url="http://x/list?cat=a", filtered=Filtering(active={"cat": "a"}, controls=["cat"]))
+    cnote, covers = completeness_note(filtered, paginated=False)
+    assert covers is False and "SUBSET" in cnote
+    rnote, correct = correctness_note(filtered)
+    assert correct is False and "active filter" in rnote
+
+    ordered = DatasetHint(url="http://x/list", ordered=Ordering(key="date", direction="desc"))
+    rnote2, correct2 = correctness_note(ordered)
+    assert correct2 is True and "newest-first" in rnote2

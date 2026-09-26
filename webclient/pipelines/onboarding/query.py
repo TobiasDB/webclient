@@ -10,7 +10,7 @@ from typing import Any, Sequence
 
 from ...interface import WebClient
 from ...query.expr import from_blob
-from ...core.document.models import PaginationHint
+from ...core.document.models import DatasetHint, PaginationHint
 from ...policy import Resolve
 from ...llm.guides import lazy_query_guide
 from ...llm.prompts import render_prompt
@@ -29,10 +29,12 @@ from .query_diagnose import (
     _should_retry_for_recency,
 )
 from .query_repair import _repair_query
+from .query_assess import completeness_note, correctness_note
 from .authors import AuthoringError, Author, _make_author
 
 
-def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False, recency: str = "") -> str:
+def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False, recency: str = "",
+                  dataset_summary: str = "") -> str:
     # Deliberately narrow: the packaged query spec + the skeleton + the ask. Nothing
     # about fetching, resolving, or running -- only CSS selectors and the query syntax.
     pager = (
@@ -40,6 +42,12 @@ def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False, recen
         "the pipeline follows the pagination automatically. Do NOT add a 'next' field."
         if paginated else ""
     )
+    # what the page IS, from its own signals -- so the model selects the WHOLE current set, not a
+    # filtered/archived subset (this is how completeness / correctness / timeliness are met).
+    shape = (f"\n\nDATASET SHAPE (from the page's signals -- select the WHOLE current set, not a "
+             f"filtered or archived subset):\n{dataset_summary}" if dataset_summary else "")
+    hints = (f"\n\nDATASET NOTES (from the brief -- how this dataset is laid out): {brief.hints}"
+             if brief.hints else "") + shape
     return render_prompt(
         "write_query",
         guide=lazy_query_guide(),
@@ -47,8 +55,7 @@ def _query_prompt(brief: Brief, skeleton: str, *, paginated: bool = False, recen
         fields_line=_fields_line(brief),
         pager=pager,
         skeleton=skeleton,
-        hints=(f"\n\nDATASET NOTES (from the brief -- how this dataset is laid out): {brief.hints}"
-               if brief.hints else ""),
+        hints=hints,
         recency=(f"\n\nRECENCY (from the page evaluation): {recency}" if recency else ""),
     )
 
@@ -105,14 +112,16 @@ def _pager_confirmed(doc: Any, hint: "PaginationHint | None") -> bool:
 def _artifact_from(
     expr: Any, doc: Any, brief: Brief, candidate_url: str,
     resolve: "Resolve | None", bases: "list[str]", *, paginate: bool = False,
-    hint: "PaginationHint | None" = None,
+    hint: "PaginationHint | None" = None, dataset: "DatasetHint | None" = None, mode: str = "",
 ) -> "tuple[QueryArtifact, list[Any]]":
     """Test one authored query against the source and build its :class:`QueryArtifact` (the
-    self-contained, runnable blob + validation verdict + timeliness flag). Shared by the
-    one-shot and staged authors. The extraction is TESTED on the fetched page one only (fast);
-    ``paginate`` bakes a ``.paginate(...)`` into the SHIPPED blob (its advance chosen from
-    ``hint``) -- but only after :func:`_pager_confirmed` verifies a real second page, so a
-    mislabelled or clamped source ships page one instead of paging into nothing. Returns
+    self-contained, runnable blob + validation verdict + the three assessments: timeliness,
+    completeness, correctness). Shared by the one-shot and staged authors. The extraction is TESTED
+    on the fetched page one only (fast); ``paginate`` bakes a ``.paginate(...)`` into the SHIPPED
+    blob (its advance chosen from ``hint``) -- but only after :func:`_pager_confirmed` verifies a
+    real second page, so a mislabelled or clamped source ships page one instead of paging into
+    nothing. ``dataset`` (from ``doc.dataset()``) supplies the shape the completeness/correctness
+    notes read; ``mode`` tags the artifact (``"latest"`` / ``"all"`` / ``"single"``). Returns
     ``(artifact, extracted_rows)``."""
     tested, rows = _test_query(expr, doc) if doc.ok else (False, [])
     good = _populated_rows(rows)
@@ -121,6 +130,8 @@ def _artifact_from(
     if paginate and doc.ok and not _pager_confirmed(doc, hint):
         log.info("    pagination probe: no distinct second page -> shipping page one only")
         paginate = False  # don't bake a pager that pages into nothing / a clamp
+    compl, covers_all = completeness_note(dataset, paginated=paginate)  # whole dataset? (pagination / filter)
+    corr, correct = correctness_note(dataset)  # the right set? (unfiltered, order known)
     exe = _executable_query(expr, candidate_url, resolve, paginate=paginate, hint=hint)  # self-contained + runnable
     try:  # the visual step tree, from the VALID parsed plan (before/independent of testing)
         explain = exe.explain()
@@ -139,6 +150,11 @@ def _artifact_from(
         base_urls=bases,
         timeliness=tnote,
         stale=stale,
+        mode=mode or ("all" if paginate else "single"),
+        completeness=compl,
+        covers_all=covers_all,
+        correctness=corr,
+        correct=correct,
     )
     return art, rows
 
@@ -159,7 +175,7 @@ def _representative_sample(part_rows: "list[list[Any]]", limit: int = 5) -> "lis
 
 def _combined_artifact(
     exprs: "list[Any]", doc: Any, brief: Brief, candidate_url: str,
-    resolve: "Resolve | None", bases: "list[str]",
+    resolve: "Resolve | None", bases: "list[str]", *, dataset: "DatasetHint | None" = None,
 ) -> "tuple[QueryArtifact, list[Any], list[int]]":
     """Test each SECTION query against the ONE fetched source and build a single combined
     :class:`QueryArtifact` whose rows are the CONCATENATION of every section's rows. Each
@@ -186,6 +202,8 @@ def _combined_artifact(
     combined_good = [r for good in part_goods for r in good]
     missing = _empty_required_fields(combined_good, brief)  # required leaves empty across the union
     tnote, stale = _timeliness(combined_good, brief)  # over the union; a FLAG, never a blocker
+    compl, covers_all = completeness_note(dataset, paginated=False)  # a split query is not paged
+    corr, correct = correctness_note(dataset)
     first = parts[0]
     art = QueryArtifact(
         blob=first.blob,
@@ -200,6 +218,11 @@ def _combined_artifact(
         base_urls=bases,
         timeliness=tnote,
         stale=stale,
+        mode="all",  # a split (multi-section) query captures the whole set on the page
+        completeness=compl,
+        covers_all=covers_all,
+        correctness=corr,
+        correct=correct,
         parts=parts,
     )
     return art, combined_good, [len(g) for g in part_goods]
@@ -236,7 +259,13 @@ def write_query(
     if doc is None:
         doc = wc.fetch(candidate_url, browser=browser, optional=True)
     skeleton = _skeleton_for(doc) if doc.ok else ""
-    prompt = _query_prompt(brief, skeleton, paginated=paginated, recency=recency)
+    dataset: "DatasetHint | None" = None  # what the page IS (pagination / filters / order), for the
+    try:                                  # prompt (select the whole set) + the completeness/correctness notes.
+        dataset = doc.dataset() if doc.ok else None
+    except Exception:  # noqa: BLE001 - dataset detection must never break authoring
+        dataset = None
+    prompt = _query_prompt(brief, skeleton, paginated=paginated, recency=recency,
+                           dataset_summary=dataset.summary if dataset is not None else "")
     bases = [candidate_url, *extra_urls]
     best: QueryArtifact | None = None
     best_complete: QueryArtifact | None = None  # a complete-but-STALE fallback (recency retries)
@@ -272,7 +301,7 @@ def write_query(
             attempts.append(f"attempt {attempt + 1}: {reason}")
             continue
         if len(exprs) > 1:  # a SPLIT dataset: test each section, concatenate, judge the UNION
-            art, rows, counts = _combined_artifact(exprs, doc, brief, candidate_url, resolve, bases)
+            art, rows, counts = _combined_artifact(exprs, doc, brief, candidate_url, resolve, bases, dataset=dataset)
             empties = [i + 1 for i, c in enumerate(counts) if c == 0]
             if art.complete:
                 if _should_retry_for_recency(art, attempt, tries):  # stale union -> push for recent
@@ -300,7 +329,7 @@ def write_query(
             follow_up = _split_section_follow_up(empties, exprs)
             continue
         expr = exprs[0]
-        art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases, paginate=paginated, hint=pagination_hint)
+        art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases, paginate=paginated, hint=pagination_hint, dataset=dataset)
         if art.complete:
             if not _should_retry_for_recency(art, attempt, tries):
                 note = f" (STALE flag: {art.timeliness})" if art.stale else ""
@@ -316,7 +345,7 @@ def write_query(
         # swapping in the nearest real class present in the record, then re-validate.
         repaired = _repair_query(expr, doc)
         if repaired is not None:
-            rart, _rrows = _artifact_from(repaired, doc, brief, candidate_url, resolve, bases, paginate=paginated, hint=pagination_hint)
+            rart, _rrows = _artifact_from(repaired, doc, brief, candidate_url, resolve, bases, paginate=paginated, hint=pagination_hint, dataset=dataset)
             if rart.complete and not _should_retry_for_recency(rart, attempt, tries):
                 note = f" (STALE flag: {rart.timeliness})" if rart.stale else ""
                 log.info("%s: ✓ complete after auto-repairing a selector%s — %d row(s)",
