@@ -87,10 +87,16 @@ from .reference import (  # noqa: F401
     write_reference,
     write_resolve,
 )
-from .query import (  # noqa: F401
+from .query import (  # noqa: F401  -- orchestration (kept in .query)
     _query_prompt,
     _recency_guidance,
-    _data_rows,
+    run_query,
+    _artifact_from,
+    _representative_sample,
+    _combined_artifact,
+    write_query,
+)
+from .query_build import (  # noqa: F401  -- parse a reply into a query + wrap it runnable
     _extraction_steps,
     _paginate_steps,
     _executable_query,
@@ -102,6 +108,13 @@ from .query import (  # noqa: F401
     _QUERY_SPLIT,
     _split_queries,
     _parse_queries,
+    _iter_field_select_args,
+    _iter_all_select_args,
+    _CHILD_COMBINATOR,
+    _normalize_selectors,
+)
+from .query_diagnose import (  # noqa: F401  -- run, assess, and build the model feedback
+    _data_rows,
     _row_selector,
     _selector_match_count,
     _no_rows_hint,
@@ -113,20 +126,21 @@ from .query import (  # noqa: F401
     _content_hint,
     _QUERY_TEST_TIMEOUT,
     _test_query,
-    run_query,
+    _short_fail_reason,
+    _resolve_on_non_link,
+    _should_retry_for_recency,
+    _precheck_sections,
+    _split_section_follow_up,
+    _recency_follow_up,
+)
+from .query_repair import (  # noqa: F401  -- deterministic selector repair
     _SEL_CLASS,
     _record_classes,
     _selector_hits,
     _repair_selector,
-    _iter_field_select_args,
-    _iter_all_select_args,
-    _CHILD_COMBINATOR,
-    _normalize_selectors,
     _repair_query,
-    _short_fail_reason,
-    _artifact_from,
-    _representative_sample,
-    _combined_artifact,
+)
+from .authors import (  # noqa: F401  -- the query-authoring engine seam
     AuthoringError,
     Author,
     _TextAuthor,
@@ -134,12 +148,6 @@ from .query import (  # noqa: F401
     _llm_query_policy,
     _LoopAuthor,
     _make_author,
-    _resolve_on_non_link,
-    _should_retry_for_recency,
-    _precheck_sections,
-    _split_section_follow_up,
-    _recency_follow_up,
-    write_query,
 )
 from .dates import (  # noqa: F401
     _TIMELINESS_INTERVALS,
