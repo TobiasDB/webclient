@@ -198,6 +198,8 @@ def op_catalogue() -> "dict[str, Any]":
     value_rows = [
         {"name": "number", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [{"name": "default", "required": False, "kind": "positional", "default": None}],
          "doc": "The value as a number: the first number in the text, else a number word (Three → 3)."},
+        {"name": "link", "kind": "call", "io": False, "collection": False, "returns": "Reference", "params": [{"name": "base", "required": False, "kind": "positional", "default": None}],
+         "doc": "The value as a link: a resolvable Reference (like attr('href')) -- a URL written as text, relative ones against the page it was read on."},
         {"name": "date", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [{"name": "format", "required": False, "kind": "positional", "default": None}, {"name": "dayfirst", "required": False, "kind": "keyword", "default": False}],
          "doc": "The value as a date (YYYY-MM-DD): ISO, written, numeric (dayfirst), relative (3 days ago), or a strptime format."},
         {"name": "datetime", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [{"name": "format", "required": False, "kind": "positional", "default": None}, {"name": "dayfirst", "required": False, "kind": "keyword", "default": False}],

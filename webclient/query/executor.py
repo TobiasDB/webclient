@@ -82,7 +82,7 @@ _OPS = {
 #: ``paginate`` is bound so its ``stop``/``key`` predicates evaluate per page.
 _BINDS = {"extract", "filter", "paginate"}
 #: value ops (Field methods) that also apply to a plain read -- a str / number / a list of them.
-_VALUE_OPS = frozenset({"number", "map", "date", "datetime", "split"})
+_VALUE_OPS = frozenset({"number", "map", "date", "datetime", "split", "link"})
 #: ops acting on a Collection as a whole (everything else fans out per element)
 _COLL_OPS = {"extract", "filter", "project", "limit", "documents", "merge"}
 
@@ -219,6 +219,9 @@ async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> An
 #: segment the sub-plan came from (``("6", "kw:title")``). Each step runs at this + its own index.
 _PLAN_AT: ContextVar[tuple[str, ...]] = ContextVar("webclient_plan_at", default=())
 
+#: the page / element a chain last read from (a text link read off it resolves against it)
+_READ_FROM: ContextVar[Any] = ContextVar("webclient_read_from", default=None)
+
 
 def _nested_address() -> tuple[str, ...]:
     """The address a (sub-)plan starting NOW sits at: the current step's, with the segment its caller
@@ -343,6 +346,8 @@ async def _arun(
                 # merged collection, so the rows are flat across every fanned-out element.
                 return await _arun(merged, rest[split:], 0, merged, client, at + split)
             return merged
+        if hasattr(value, "final_url") and hasattr(value, "_client"):  # a page / element: what later reads are read from
+            _READ_FROM.set(value)
         with _step_at(base + i):
             t0 = time.perf_counter()
             try:
@@ -429,8 +434,17 @@ async def _acall(value: Any, name: str, call: Step, context: Any, client: Any) -
         vargs = [await _aarg(a, context, client, f"arg:{n}") for n, a in enumerate(call.args)]
         vkw = {k: await _aarg(v, context, client, f"kw:{k}") for k, v in call.kwargs.items()}
 
+        # a text LINK resolves against the page the plan is reading: the element / page the chain last read
+        # from, else the one it runs on -- with its client
+        src = (_READ_FROM.get() or context) if name == "link" else None
+        base = (getattr(src, "final_url", None) or getattr(src, "url", None)) if src is not None else None
+        owner = getattr(src, "_client", None) if src is not None else None
+
         def one(v: Any) -> Any:
-            return getattr(v if isinstance(v, Field) else Field(v), name)(*vargs, **vkw)
+            f = v if isinstance(v, Field) else Field(v)
+            if name == "link" and f._base is None:
+                f._base, f._client = (str(base) if base else None), owner
+            return getattr(f, name)(*vargs, **vkw)
 
         if isinstance(value, (list, Collection)):
             return [one(v) for v in value]

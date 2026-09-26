@@ -458,6 +458,17 @@ class HtmlBacking(Backing):
         and a regex non-match are LENIENT (an empty ``Field``, never an error) -- only an
         absent REAL attribute raises by default (soften it with ``optional=True`` /
         ``error=``), since asking for a missing attribute is the true mistake."""
+        value = self._attr(core, name, pattern, group=group, optional=optional, error=error)
+        if isinstance(value, Field):  # where it was read: a text link (``.link()``) resolves against the page
+            value._base = core.final_url or core.url
+            value._client = core._client
+        return value
+
+    def _attr(
+        self, core: "Document", name: str, pattern: str | None = None, *,
+        group: int | str | None = None, optional: bool = False, error: Any = None,
+    ) -> Any:
+        """The implementation of :meth:`attr` (it stamps where a Field was read)."""
         if name in ("text", "text:own"):
             raw = None if core._missing else self._text(core, own=name == "text:own")
             return _regex_field(raw, pattern, group)

@@ -124,11 +124,15 @@ _NUMBER_WORDS = {w: i for i, w in enumerate(
 class Field(Generic[T]):
     """A scalar leaf: a value plus whether it is present/ok."""
 
-    __slots__ = ("_value", "_ok")
+    __slots__ = ("_value", "_ok", "_base", "_client")
 
     def __init__(self, value: Any = None, *, ok: bool = True) -> None:
         self._value = value
         self._ok = ok and value is not None
+        #: where the value was read (the page's URL) and the client that read it -- so ``.link()`` resolves
+        #: relative text and the Reference it makes can be resolved
+        self._base: "str | None" = None
+        self._client: Any = None
 
     def get(self, default: Any = None) -> T:
         """The field's value, or ``default`` when it is empty/missing."""
@@ -189,6 +193,21 @@ class Field(Generic[T]):
         offset is kept) -- the same inputs as :meth:`date`."""
         when = parse_when(self.get(), format=format, dayfirst=dayfirst)
         return Field(when.isoformat(timespec="seconds") if when else default)
+
+    def link(self, base: str | None = None) -> Any:
+        """The value as a LINK: a resolvable ``Reference`` (like ``attr("href")``) -- for a URL written as TEXT
+        (a ``data-url``, a link in a table cell, ``"/catalogue/x.html"``). Relative text resolves against
+        ``base``, else the page it was read on. An empty value is an empty (not-ok) Reference."""
+        from urllib.parse import urljoin
+
+        from ..core.reference import from_url
+
+        text = str(self.get() or "").strip()
+        ref = from_url(urljoin(base or self._base or "", text) if text else "")
+        client = self._client
+        if client is not None:
+            ref._client = client
+        return ref
 
     def map(self, mapping: dict[str, Any], default: Any = None) -> "Field[Any]":
         """The value looked up in ``mapping`` (strings compare case-insensitively): a code to its

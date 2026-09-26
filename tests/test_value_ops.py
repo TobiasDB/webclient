@@ -102,3 +102,32 @@ def test_split_in_a_plan_is_a_list_per_row(httpserver):
     with WebClient() as wc:
         rows = wc.execute(plan)
     assert rows == [{"name": "Tea", "tags": ["green", "hot", "loose"]}, {"name": "Coffee", "tags": ["black"]}]
+
+
+def test_link_makes_a_text_url_a_resolvable_reference(httpserver):
+    # a URL written as TEXT (a data attribute, a table cell) -> a Reference, like attr("href"): relative text
+    # resolves against the page it was read on, and the Reference resolves
+    from webclient import WebClient, wq
+    from webclient.core.reference import Reference
+
+    httpserver.expect_request("/list").respond_with_data(
+        '<ul><li data-url="/item/1"><span>/item/2</span></li></ul>', content_type="text/html")
+    httpserver.expect_request("/item/1").respond_with_data("<h1>One</h1>", content_type="text/html")
+    httpserver.expect_request("/item/2").respond_with_data("<h1>Two</h1>", content_type="text/html")
+    from webclient.query.collection import Field
+
+    base = httpserver.url_for("/list")
+    ref = Field("/item/1").link(base)
+    assert isinstance(ref, Reference) and ref.url == httpserver.url_for("/item/1")
+    from webclient.core.reference import from_url
+    assert Field(None, ok=False).link(base).url == from_url("").url  # nothing to link: the empty reference a missing href is
+    with WebClient() as wc:
+        doc = wc.fetch(base)
+        # lazily, in a plan: a text link followed
+        plan = (wq.reference(httpserver.url_for("/list")).resolve().select_all("li")
+                .extract(name=wq.doc.select("span").attr("text").link().resolve().select("h1").attr("text")).project())
+        assert wc.execute(plan) == [{"name": "Two"}]
+        # the data attribute, as a link, followed
+        plan2 = (wq.reference(base).resolve().select("li").attr("data-url").link().resolve().select("h1").attr("text"))
+        assert wc.execute(plan2) == "One"
+        assert doc.select("li").attr("data-url") == "/item/1"
