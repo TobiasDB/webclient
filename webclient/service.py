@@ -687,6 +687,66 @@ def create_app(
             for s in CATALOG.values()
         ]
 
+    _examples_cache: "list[dict[str, Any]]" = []  # lazily built worked onboardings (deterministic, $0)
+
+    @app.get("/examples", response_model=None)
+    def examples(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        """Worked onboarding EXAMPLES, one per dataset shape (static records, prices across pages,
+        a table, a single record, a split dataset, an XHR feed, a PDF): the source, the A/latest +
+        B/all query plans (openable in the Author, runnable in Run) and their three assessments.
+        Built by running the pipeline against the lab with the scripted shim -- real output, not
+        canned -- and cached after the first request."""
+        _auth(authorization)
+        if not _examples_cache:
+            from .lab import serve as serve_lab
+            from .pipelines.examples import build_examples
+
+            wc_: WebClient = app.state.wc
+            _examples_cache.extend(build_examples(wc_, serve_lab()))
+        return _examples_cache
+
+    @app.post("/onboard", response_model=None)
+    def onboard_ep(
+        body: dict[str, Any], authorization: str | None = Header(default=None)
+    ) -> "dict[str, Any] | JSONResponse":
+        """Run the onboarding pipeline for ``{company, brief, url?, model?, browser?, budget?}`` and
+        return the result -- the chosen source, the resolve, the A/latest + B/all query plans + their
+        assessments, and the step trace. ``brief`` is a packaged brief NAME or an inline
+        ``{description, fields, search?}``; ``url`` seeds the crawl at a known page (else web search).
+        Needs a model configured on the API (``ANTHROPIC_API_KEY`` / ``WEBCLIENT_LLM__*``)."""
+        _auth(authorization)
+        from .clients.llm import Budget, LlmClient, cheapest_model
+        from .pipelines.onboarding import Brief, SearchHit, ddg_search, onboard_company
+
+        company = str(body.get("company") or "").strip()
+        if not company:
+            return _error(400, "InvalidRequest", "company is required")
+        spec = body.get("brief")
+        if isinstance(spec, str):  # a packaged brief name
+            from importlib.resources import files
+            res = files("webclient.pipelines").joinpath(f"briefs/{spec.replace('-', '_')}.md")
+            alt = files("webclient.pipelines").joinpath(f"briefs/{spec.replace('_', '-')}.md")
+            hit = res if res.is_file() else (alt if alt.is_file() else None)
+            if hit is None:
+                return _error(400, "InvalidRequest", f"no packaged brief {spec!r}")
+            brief = Brief.from_markdown(hit.read_text(encoding="utf-8"))
+        elif isinstance(spec, dict) and spec.get("description"):
+            brief = Brief(description=str(spec["description"]), fields=list(spec.get("fields") or []),
+                          search=str(spec.get("search") or ""), hints=str(spec.get("hints") or ""))
+        else:
+            return _error(400, "InvalidRequest", "brief is required (a packaged name or {description, fields})")
+        budget = Budget(max_usd=body.get("budget"))
+        llm = LlmClient(budget=budget, model=str(body.get("model") or cheapest_model()))
+        if not llm.auth:
+            return _error(400, "InvalidRequest", "no model configured on the API",
+                          hint="set ANTHROPIC_API_KEY (or WEBCLIENT_LLM__*) to run onboarding; the EXAMPLES need no model")
+        seed = body.get("url")
+        search = ((lambda q, k: [SearchHit(url=str(seed), title=company, snippet="")]) if seed else ddg_search)
+        wc_: WebClient = app.state.wc
+        result = onboard_company(company, brief, wc=wc_, llm=llm, search=search,
+                                 browser=bool(body.get("browser", True)), budget=budget)
+        return result.model_dump(mode="json")
+
     @app.post("/tools/{name}", response_model=None)
     def run_tool(
         name: str, body: dict[str, Any], authorization: str | None = Header(default=None)
