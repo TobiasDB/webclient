@@ -163,6 +163,47 @@ def _feed(method: str, path: str, query: Query, headers: dict[str, str], body: b
 </script>"""))
 
 
+JOBS = [{"id": i, "title": t, "location": loc, "content": f"<p>{t}: EMBED-DESCRIPTION-{i}. You will build things.</p>"}
+        for i, (t, loc) in enumerate([("Desk Quant Analyst", "London"), ("Data Engineer", "Madrid"),
+                                      ("Platform Engineer", "Montreal"), ("Risk Analyst", "Singapore")], 1)]
+
+
+@fixture("jobs", "A job board: a listing rendered from a JSON API, each posting in a cross-origin embed", "network:embed",
+         browser=True, expected={"api": "/lab/jobs/api", "records_rendered": len(JOBS), "record_selector": "li.job",
+                                 "jobs": JOBS})
+def _jobs(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """The shape of a careers site on a hosted job board: the listing's records come from the board's
+    API (what an agent should read instead), and each detail page shows its posting in an iframe
+    served from ANOTHER origin (this server as 127.0.0.1 vs localhost), rendered late by script."""
+    if path == "/lab/jobs/api":
+        return as_json({"jobs": JOBS, "meta": {"total": len(JOBS)}})
+    if path == "/lab/jobs/embed":
+        job = next((j for j in JOBS if str(j["id"]) == (query.get("id") or [""])[0]), JOBS[0])
+        return html(page("Apply", f"""<div id="post">loading…</div><script>
+  setTimeout(function(){{ document.getElementById('post').innerHTML = {json.dumps('<h2>' + str(job['title']) + '</h2>' + str(job['content']))}; }}, 300);
+</script>"""))
+    if path == "/lab/jobs/detail":
+        jid = (query.get("id") or ["1"])[0]
+        return html(page("Opening", f"""<main><h1 class="title">…</h1><div id="embed"></div></main><script>
+  fetch('/lab/jobs/api').then(function(r){{ return r.json(); }}).then(function(d){{
+    var j = d.jobs.filter(function(x){{ return String(x.id) === '{jid}'; }})[0];
+    document.querySelector('h1.title').textContent = j.title;
+    var other = location.hostname === '127.0.0.1' ? 'localhost' : '127.0.0.1';
+    var f = document.createElement('iframe');
+    f.src = location.protocol + '//' + other + ':' + location.port + '/lab/jobs/embed?id={jid}';
+    f.style.width = '600px'; f.style.height = '300px';
+    document.getElementById('embed').appendChild(f);
+  }});
+</script>"""))
+    return html(page("Careers", """<main><h1>Open opportunities</h1><ul id="list"></ul></main><script>
+  fetch('/lab/jobs/api').then(function(r){ return r.json(); }).then(function(d){
+    document.getElementById('list').innerHTML = d.jobs.map(function(j){
+      return '<li class="job"><a href="/lab/jobs/detail?id=' + j.id + '">' + j.title + '</a><p class="loc">' + j.location + '</p></li>';
+    }).join('');
+  });
+</script>"""))
+
+
 @fixture("loadmore", "An interacted pager: a 'Load more' button appends items via JS", "pagination:interacted",
          browser=True, expected={"record_selector": "li.item", "initial": 3, "total": 12})
 def _loadmore(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:

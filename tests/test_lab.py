@@ -185,3 +185,33 @@ def test_browser_fixtures(lab, wc, index, name):
         live.click("#load").wait_for(f"{rows}:nth-child({exp['after_load_rows']})")
         assert len(live.select_all(rows)) == exp["after_load_rows"]
         wc.release(live)
+
+
+def test_job_board_nested_browser_resolve_reads_the_embed_and_shows_its_api(lab, wc, tmp_path):
+    # the shape of a careers site on a hosted board: the listing is rendered from a JSON API, each
+    # posting lives in a CROSS-origin embed rendered late. A nested browser="auto" resolve must wait
+    # for it and capture it; the trace shows which step held which page, and the listing's network
+    # view names the API (and the field) its titles came from.
+    from webclient.interface import wq
+    from webclient.trace import read
+
+    exp = expected(lab, wc, "jobs")
+    plan = (
+        wq.reference(f"{lab}/lab/jobs").resolve(browser="auto")
+        .select_all("li.job")
+        .extract(title=wq.doc.select("a").attr("text"),
+                 detail=wq.doc.select("a").attr("href").resolve(browser="auto").extract(post=wq.doc.select("[data-wc-frame] h2").attr("text"), text=wq.doc.text()).project())
+        .project()
+    )
+    with wc.trace(tmp_path / "jobs.jsonl"):
+        rows = wc.execute(plan)
+    assert [r["title"] for r in rows] == [j["title"] for j in exp["jobs"]]
+    assert all(f"EMBED-DESCRIPTION-{j['id']}" in r["detail"]["text"] for r, j in zip(rows, exp["jobs"]))
+    evs = read(tmp_path / "jobs.jsonl").events
+    leased = [e for e in evs if e.topic == "resource" and (e.detail or {}).get("what") == "leased" and e.detail.get("kind") == "page"]
+    assert len(leased) >= 1 + len(exp["jobs"]) and any("kw:detail" in (e.step or "") for e in leased)
+    views = [e for e in evs if e.topic == "network.view"]
+    listing = next(v for v in views if v.detail["url"].endswith("/lab/jobs"))
+    api = next(r for r in listing.detail["requests"] if r["url"].endswith("/lab/jobs/api"))
+    fields = {n.get("field") for n in api["produced"]}
+    assert api["matched"] >= len(exp["jobs"]) and {f"jobs[{i}].title" for i in range(len(exp["jobs"]))} <= fields
