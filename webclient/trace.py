@@ -129,7 +129,9 @@ class Trace:
         self.count = 0
         self._sub: "Subscription | None" = None
         self._bodies: set[str] = set()  # the hashes of the bodies already written (see _line)
-        self._fh = self.path.open("w", encoding="utf-8")
+        # line-buffered: each event reaches the file as it is written, so a run being watched (the service
+        # reads its trace for each page) never reads a half-written line or a page not written yet
+        self._fh = self.path.open("w", encoding="utf-8", buffering=1)
         from . import __version__
 
         self._line(TraceEvent(phase="start", ts=self.started, detail={
@@ -198,37 +200,45 @@ class TraceReader:
         self.path = Path(path)
         self.registry = registry or EventRegistry()
         self._events: "list[Event] | None" = None
+        self._offset = 0  # the bytes read so far (a trace still being written is read on, not re-read)
+        self._bodies: dict[str, tuple[Any, bool]] = {}  # the de-duplicated bodies seen so far
 
     def raw(self) -> Iterator[dict[str, Any]]:
         """The event dicts as stored, in order -- a de-duplicated body (``body_ref``) restored."""
         bodies: dict[str, tuple[Any, bool]] = {}
         with self.path.open(encoding="utf-8") as fh:
             for line in fh:
-                if not line.strip():
-                    continue
-                data = json.loads(line)
-                sha = data.pop("body_sha", None)
-                if sha is not None:
-                    bodies[sha] = (data.get("body"), "body" in (data.get("_b64") or []))
-                ref = data.pop("body_ref", None)
-                if ref is not None and ref in bodies:
-                    data["body"], b64 = bodies[ref]
-                    if b64:
-                        data["_b64"] = [*(data.get("_b64") or []), "body"]
-                yield data
+                if line.strip():
+                    yield _restore(json.loads(line), bodies)
+
+    def refresh(self) -> int:
+        """Read what was appended since the last read (a trace still being written); returns how many
+        events it added. A partial last line is left for the next refresh."""
+        if self._events is None:
+            self._events = []
+        added = 0
+        with self.path.open("rb") as fh:
+            fh.seek(self._offset)
+            chunk = fh.read()
+        end = chunk.rfind(b"\n") + 1  # whole lines only
+        for line in chunk[:end].splitlines():
+            if not line.strip():
+                continue
+            try:
+                data = _restore(json.loads(line), self._bodies)
+                self._events.append(self.registry.load(decode(data)))
+                added += 1
+            except Exception as exc:  # noqa: BLE001 - one bad line never hides the rest
+                log.warning("trace: skipping an unreadable event (%s)", exc)
+        self._offset += end
+        return added
 
     @property
     def events(self) -> "list[Event]":
-        """Every event (the trace header / footer included), typed. Cached."""
+        """Every event (the trace header / footer included), typed. Cached; :meth:`refresh` reads on."""
         if self._events is None:
-            out: list[Event] = []
-            for data in self.raw():
-                try:
-                    out.append(self.registry.load(decode(data)))
-                except Exception as exc:  # noqa: BLE001 - one bad line never hides the rest
-                    log.warning("trace: skipping unreadable event #%s (%s)", data.get("n"), exc)
-            self._events = out
-        return self._events
+            self.refresh()
+        return self._events or []
 
     # -- header / footer ------------------------------------------------------
     @property
@@ -291,6 +301,19 @@ class TraceReader:
         from .replay.har import har_from_events
 
         return har_from_events(self.of("network"))
+
+
+def _restore(data: dict[str, Any], bodies: "dict[str, tuple[Any, bool]]") -> dict[str, Any]:
+    """A stored event with its de-duplicated body put back (``body_ref`` -> the body written first)."""
+    sha = data.pop("body_sha", None)
+    if sha is not None:
+        bodies[sha] = (data.get("body"), "body" in (data.get("_b64") or []))
+    ref = data.pop("body_ref", None)
+    if ref is not None and ref in bodies:
+        data["body"], b64 = bodies[ref]
+        if b64:
+            data["_b64"] = [*(data.get("_b64") or []), "body"]
+    return data
 
 
 def read(path: "str | Path") -> TraceReader:

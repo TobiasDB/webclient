@@ -269,3 +269,22 @@ def test_trace_stores_a_repeated_body_once_and_reads_it_back(tmp_path):
     got = [e for e in read(path).events if e.topic == "network.resource"]
     assert [e.body for e in got] == [big, binary] * 3
     assert got[2].started == 101.0 and got[2].elapsed == 0.25
+
+
+def test_a_trace_being_written_is_read_on_as_it_grows(tmp_path):
+    # a watched run: the service reads a trace still being written -- each event is on disk as it is
+    # written (never a half line), and a reader reads on from where it was, bodies restored
+    from webclient.models import NetworkEvent
+    from webclient.trace import Trace, read
+
+    path = tmp_path / "live.jsonl"
+    tr = Trace(path)
+    tr.write(NetworkEvent(topic="network.resource", url="https://a/1", body=b"y" * 1000))
+    reader = read(path)
+    assert [e.url for e in reader.events if e.topic == "network.resource"] == ["https://a/1"]
+    tr.write(NetworkEvent(topic="network.resource", url="https://a/2", body=b"y" * 1000))  # the same body: a ref
+    assert reader.refresh() == 1
+    got = [e for e in reader.events if e.topic == "network.resource"]
+    assert [e.url for e in got] == ["https://a/1", "https://a/2"] and got[1].body == b"y" * 1000
+    tr.close()
+    assert reader.refresh() == 1 and reader.footer.get("events") == 2

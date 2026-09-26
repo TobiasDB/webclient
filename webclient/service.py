@@ -974,21 +974,26 @@ def create_app(
 
         return {"id": trace_id, **_read(f).summary()}
 
-    # a parsed trace is kept (by path + size + mtime: a trace still being written re-reads): a replay asks
-    # for page after page of the same trace, and a 10 MB file must not be parsed per request
-    _trace_cache: "OrderedDict[tuple[str, int, float], Any]" = OrderedDict()
+    # a parsed trace is kept (by path); a trace still being written is READ ON from where it was (not
+    # re-parsed): a watched run asks for page after page of a growing trace
+    _trace_cache: "OrderedDict[str, tuple[Any, int, float]]" = OrderedDict()
 
     def _reader(f: Path) -> Any:
         from .trace import read as _read
 
-        st = f.stat(); key = (str(f), st.st_size, st.st_mtime)
-        got = _trace_cache.get(key)
-        if got is None:
-            got = _read(f); got.events  # parse now, once
-            _trace_cache[key] = got
-            while len(_trace_cache) > 3:
-                _trace_cache.popitem(last=False)
-        return got
+        st = f.stat()
+        got = _trace_cache.get(str(f))
+        if got is None or st.st_size < got[1]:  # new, or rewritten: parse from the start
+            reader = _read(f); reader.events
+        else:
+            reader = got[0]
+            if (st.st_size, st.st_mtime) != got[1:]:
+                reader.refresh()
+        _trace_cache[str(f)] = (reader, st.st_size, st.st_mtime)
+        _trace_cache.move_to_end(str(f))
+        while len(_trace_cache) > 3:
+            _trace_cache.popitem(last=False)
+        return reader
 
     @app.get("/traces/{trace_id}/documents/{doc_id}", response_model=None)
     def trace_document(trace_id: str, doc_id: str, upto: int | None = None,
@@ -1053,12 +1058,13 @@ def create_app(
         if topic:
             return [_wire(e) for e in reader.events if e.topic.startswith(topic)]
         # the whole stream: encoded ONCE per trace (a 100k-event trace re-encoded per request was seconds)
-        body = getattr(reader, "_wire_json", None)
-        if body is None:
+        held = getattr(reader, "_wire_json", None)  # (events encoded, body): a trace still growing re-encodes
+        if held is None or held[0] != len(reader.events):
             import json as _json
 
-            body = _json.dumps([_wire(e) for e in reader.events], separators=(",", ":"), default=str).encode()
-            reader._wire_json = body
+            held = (len(reader.events), _json.dumps([_wire(e) for e in reader.events], separators=(",", ":"), default=str).encode())
+            reader._wire_json = held
+        body = held[1]
         from fastapi import Response
 
         return Response(content=body, media_type="application/json")
