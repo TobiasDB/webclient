@@ -12,6 +12,7 @@ import json
 import time
 import zlib
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Any, Callable
 
 Response = "tuple[int, dict[str, str], bytes]"
@@ -30,8 +31,87 @@ def as_json(value: Any, *, status: int = 200, headers: "dict[str, str] | None" =
     return status, {**JSON, **(headers or {})}, json.dumps(value).encode()
 
 
+# The webclient BRAND mark: a fan-out "plan graph" glyph (one node fanning to two -- the crawl /
+# fan-out the package is built on) + the wordmark. One identity, shared verbatim with the
+# webclient-ui design system so the lab and the app read as one product.
+BRAND_MARK = (
+    '<svg class="brand-mark" viewBox="0 0 24 24" width="19" height="19" fill="none" aria-hidden="true">'
+    '<path d="M7.4 8.2 14.6 11 M7.4 15.8 14.6 13" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round"/>'
+    '<circle cx="6" cy="7" r="2.5" fill="var(--accent)"/>'
+    '<circle cx="6" cy="17" r="2.3" stroke="var(--accent)" stroke-width="1.7"/>'
+    '<circle cx="17" cy="12" r="2.3" stroke="var(--accent)" stroke-width="1.7"/></svg>')
+
+
+def brand(tag: str = "") -> str:
+    """The wordmark: the mark + ``webclient`` + an optional muted tag (``lab`` / a page name)."""
+    suffix = f'<span class="brand-tag">{tag}</span>' if tag else ""
+    return f'<span class="brand">{BRAND_MARK}<span class="brand-word">webclient</span>{suffix}</span>'
+
+
+# A shared, eye-friendly theme injected into every fixture page. It uses the SAME semantic tokens
+# and values as the webclient-ui design system (surface / ink / line / accent / muted), so the two
+# sites are one brand. It styles the markup the fixtures already use and adds NO DOM, no anchors and
+# no network request -- so it never changes a record count, a link set, a signal or a
+# rendered/static comparison a test asserts. It carries NO brand / platform marker literals (the
+# cookie-banner detector substring-scans the raw HTML, <style> included) and never force-shows a
+# [hidden] panel. Fixtures that need a real signal put its markers in their OWN body.
+LAB_CSS = """<style>
+:root{--surface:#fff;--surface-2:#f6f7f9;--surface-3:#eceef2;--ink:#16181d;--ink-2:#3d4250;
+--muted:#6b7280;--line:#e3e6eb;--line-2:#cdd2da;--accent:#2457e6;--accent-ink:#fff;--accent-soft:#e6edff;
+--ok:#15803d;--warn:#b45309;--bad:#b91c1c;--radius:12px}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--surface:#0f1115;--surface-2:#161a21;
+--surface-3:#1f2430;--ink:#e8eaf0;--ink-2:#b6bcc9;--muted:#8b93a3;--line:#262c38;--line-2:#343c4b;
+--accent:#6b8cff;--accent-ink:#0b1020;--accent-soft:#1b2440;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171}}
+:root[data-theme=dark]{--surface:#0f1115;--surface-2:#161a21;--surface-3:#1f2430;--ink:#e8eaf0;
+--ink-2:#b6bcc9;--muted:#8b93a3;--line:#262c38;--line-2:#343c4b;--accent:#6b8cff;--accent-ink:#0b1020;
+--accent-soft:#1b2440;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+body{margin:0 auto;max-width:64rem;padding:2rem 1.25rem 4rem;color:var(--ink);background:var(--surface-2);
+font:15px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+h1{font-size:1.7rem;line-height:1.2;margin:.2rem 0 1rem;letter-spacing:-.015em}
+h2{font-size:1.15rem;margin:1.6rem 0 .6rem;letter-spacing:-.01em}h3{font-size:1rem;margin:.35rem 0}
+p{margin:.5rem 0}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+small{color:var(--muted)}
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.86em}
+code{background:var(--surface-3);padding:.05rem .3rem;border-radius:4px}
+pre{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:.9rem 1rem;overflow:auto}
+pre code{background:none;padding:0}
+.brand{display:inline-flex;align-items:center;gap:.5rem;font-weight:600}
+.brand-mark{flex:none}
+.brand-word{letter-spacing:-.02em}
+.brand-tag{color:var(--muted);font-weight:500;border-left:1px solid var(--line-2);padding-left:.55rem;letter-spacing:.02em}
+nav{display:flex;flex-wrap:wrap;gap:1.1rem;align-items:center;padding-bottom:.8rem;margin-bottom:1.4rem;border-bottom:1px solid var(--line)}
+nav a{font-weight:550;color:var(--ink-2)}nav a:hover{color:var(--accent)}
+footer{margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--line);color:var(--muted);font-size:.85rem}
+ul{padding-left:1.2rem}li{margin:.15rem 0}
+.card{display:flex;align-items:center;gap:.9rem;flex-wrap:wrap;padding:.8rem 1rem;margin:.6rem 0;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+.card .title,.card .name{font-weight:600}
+.price{margin-left:auto;font-weight:650;background:var(--accent-soft);color:var(--accent);padding:.1rem .55rem;border-radius:999px;font-size:.85rem}
+a.link{align-self:center;font-size:.85rem;border:1px solid var(--line);padding:.15rem .6rem;border-radius:7px;color:var(--ink-2)}
+a.link:hover{border-color:var(--accent);color:var(--accent)}
+article.row{display:flex;align-items:center;gap:.8rem;padding:.5rem .8rem;margin:.35rem 0;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+article.row .n{font-variant-numeric:tabular-nums;color:var(--muted);min-width:2ch;text-align:right}
+time{color:var(--muted);font-size:.85rem}
+form{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.8rem 0}
+input,select,button{font:inherit;padding:.45rem .7rem;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink)}
+button{cursor:pointer}button[type=submit],.btn{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:550}
+[role=tablist]{display:flex;gap:.4rem;border-bottom:1px solid var(--line);margin-bottom:.8rem}
+[role=tab]{border:none;background:none;padding:.4rem .8rem;border-radius:8px 8px 0 0;color:var(--muted)}
+[role=tab][aria-selected=true]{color:var(--ink);font-weight:600;box-shadow:inset 0 -2px 0 var(--accent)}
+[hidden]{display:none!important}
+table{border-collapse:collapse;width:100%;margin:.8rem 0;font-size:.92rem}
+th,td{border:1px solid var(--line);padding:.45rem .7rem;text-align:left}
+thead th{background:var(--accent-soft);color:var(--accent)}
+iframe{border:1px solid var(--line);border-radius:var(--radius);max-width:100%}
+.lab-notice-bar{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);padding:1rem 1.25rem;display:flex;gap:1rem;align-items:center;justify-content:center;flex-wrap:wrap;box-shadow:0 -8px 24px rgba(16,24,40,.12)}
+.lab-badge{display:inline-block;background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:.05rem .5rem;font-size:.75rem;font-weight:600}
+</style>"""
+
+
 def page(title: str, body: str, *, head: str = "") -> str:
-    return f"<!doctype html><html><head><title>{title}</title>{head}</head><body>{body}</body></html>"
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f"<title>{title}</title>{LAB_CSS}{head}</head><body>{body}</body></html>")
 
 
 @dataclass
@@ -75,16 +155,39 @@ def fixture(name: str, title: str, feature: str, *, expected: "dict[str, Any] | 
 # --------------------------------------------------------------------------- #
 
 def landing() -> bytes:
-    return page("webclient", """
+    return page("webclient", f"""
+<nav>{brand()}<a href="/lab">the lab</a><a href="/lab/index.json">index.json</a></nav>
 <main>
-<h1>webclient</h1>
-<p>A declarative web client: fetch pages, select and extract structured data, render to
-markdown, drive a real browser, and run the <em>same plan</em> sync, async or remote.</p>
+<h1>Everything is a plan.</h1>
+<p>A declarative web client and LLM toolkit: fetch pages, select and extract structured data,
+render to markdown, drive a real browser, crawl and paginate — and run the <em>same plan</em>
+sync, async or remote. An op doesn't <em>do</em> the work; it <strong>records</strong> a
+wire-safe, typed plan, so <code>RUN(t) = fold(plan, events[0..t])</code>: every run is
+replayable, traceable and portable.</p>
+
+<h2>The design, in five ideas</h2>
 <ul>
- <li><a href="/lab">The lab</a> — every feature has a fixture page and an expected result.</li>
- <li><a href="/lab/index.json">index.json</a> — the fixtures, machine-readable.</li>
+ <li><strong>One plan, three modes.</strong> Sync, async and remote are dispatch modes over
+   the same recorded plan — not three code paths.</li>
+ <li><strong>Tiers that escalate on evidence.</strong> A cheap static fetch first; the client
+   escalates to a real browser only when <em>signals</em> say it must (a JS-gated SPA, a
+   consent wall, shadow DOM).</li>
+ <li><strong>Signals → flags.</strong> Tiered, confidence-scored <em>signals</em> (evidence)
+   combine into <em>flags</em> (conclusions: <code>spa</code>, <code>login_required</code>,
+   <code>pagination</code>, …) that auto-remediation and the pipeline act on.</li>
+ <li><strong>One bounded loop.</strong> Pagination, crawl, extract and interaction all derive
+   from a single observe → decide → apply loop.</li>
+ <li><strong>Traceable by construction.</strong> Every step stamps events (rrweb DOM,
+   network facts correlated to the DOM, pool leases) — watch a run as it unfolds.</li>
 </ul>
-</main>""").encode()
+
+<h2>The lab</h2>
+<p>This site <em>is</em> the test suite. Every feature has a fixture page under
+<a href="/lab">/lab</a>, and each publishes its <strong>expected result</strong> as JSON — so
+tests, demos and docs all assert against one set of facts.</p>
+<p><a class="link" href="/lab">Browse the fixtures →</a></p>
+</main>
+<footer>webclient lab · a declarative web client &amp; LLM toolkit</footer>""").encode()
 
 
 # --------------------------------------------------------------------------- #
@@ -459,3 +562,178 @@ def _scroll(method: str, path: str, query: Query, headers: dict[str, str], body:
     }
   });
 </script>"""))
+
+
+# --------------------------------------------------------------------------- #
+# a consent wall (cookie_banner signal -> browser remedy)
+# --------------------------------------------------------------------------- #
+
+@fixture("consent", "A consent wall over the content (a CMP banner)", "signals:cookie_banner", browser=True,
+         expected={"flags_static": ["cookie_banner"], "vendor": "onetrust", "remedy": "browser",
+                   "record_selector": "div.card", "records": 3})
+def _consent(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """The content is there in the served HTML, but a consent-management platform's banner sits
+    over it (and blocks scrolling on real sites). The served markup carries the CMP's markers
+    (here OneTrust's), so the ``cookie_banner`` signal fires at the static tier and the remedy is
+    a browser render whose ``wc.cookies`` page script answers the banner before the snapshot."""
+    return html(page("Roasters Coffee", f"""
+<script src="https://cdn.cookielaw.org/scripttemplates/otSDKStub.js"></script>
+<main><h1>Featured</h1>{_cards()}</main>
+<div id="onetrust-banner-sdk" class="lab-notice-bar" role="dialog" aria-label="Privacy">
+  <span>We use cookies to make the roast just right.</span>
+  <button id="onetrust-reject-all-handler" type="button">Reject all</button>
+  <button id="onetrust-accept-btn-handler" class="btn" type="button">Accept all</button>
+</div>"""))
+
+
+# --------------------------------------------------------------------------- #
+# a dataset split across differently-shaped sections (the split-query case)
+# --------------------------------------------------------------------------- #
+
+ARCHIVE = [("2026-08-30", "Ethiopia Cupping"), ("2026-08-16", "Roast Day"), ("2026-08-02", "Latte Art Jam")]
+
+
+@fixture("sections", "One dataset split across differently-shaped sections", "extract:split",
+         expected={"upcoming_selector": "div.callout", "archived_selector": "li.past", "upcoming": 1,
+                   "archived": len(ARCHIVE), "total": 1 + len(ARCHIVE), "upcoming_title": "Autumn Cupping"})
+def _sections(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """A single logical dataset (events) whose rows live in two DIFFERENTLY-SHAPED sections: one
+    UPCOMING callout (a single row in its own format) and an ARCHIVED list (many uniform rows).
+    A single ``select_all`` tuned to the archive silently drops the upcoming row -- the case the
+    pipeline handles by authoring one simple query per section and concatenating the results."""
+    past = "".join(f'<li class="past"><span class="date">{d}</span> <span class="what">{w}</span></li>' for d, w in ARCHIVE)
+    return html(page("Events", f"""
+<main><h1>Events</h1>
+<section class="upcoming"><h2>Next up</h2>
+  <div class="callout"><span class="when">Oct 3</span> — <span class="what">Autumn Cupping</span>
+  <span class="lab-badge">upcoming</span></div>
+</section>
+<section class="archive"><h2>Past events</h2><ul>{past}</ul></section>
+</main>"""))
+
+
+# --------------------------------------------------------------------------- #
+# a real HTML table (rows/columns; GFM markdown), structured metadata (JSON-LD + OpenGraph)
+# --------------------------------------------------------------------------- #
+
+TABLE_ROWS = [("Aeropress", "$39", "12"), ("Grinder", "$129", "4"), ("Gooseneck Kettle", "$59", "9")]
+
+
+@fixture("table", "A data table (rows, columns; renders to GFM markdown)", "extract:table",
+         expected={"row_selector": "tbody tr", "rows": len(TABLE_ROWS), "columns": ["Item", "Price", "Stock"],
+                   "first_row": list(TABLE_ROWS[0])})
+def _table(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    head = "".join(f"<th>{h}</th>" for h in ("Item", "Price", "Stock"))
+    rows = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in TABLE_ROWS)
+    return html(page("Prices", f"""
+<main><h1>Prices</h1><table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></main>"""))
+
+
+@fixture("structured", "Structured metadata: JSON-LD + Open Graph + canonical", "metadata:structured",
+         expected={"schema_types": ["Product"], "og_keys": ["og:image", "og:title", "og:type"],
+                   "page_type": "Product", "canonical": "/lab/structured", "feed": "/lab/rss"})
+def _structured(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    ld = json.dumps({"@context": "https://schema.org", "@type": "Product", "name": "Aeropress",
+                     "offers": {"@type": "Offer", "price": "39.00", "priceCurrency": "USD"}})
+    extra = ('<link rel="canonical" href="/lab/structured">'
+             '<meta property="og:title" content="Aeropress">'
+             '<meta property="og:type" content="Product">'
+             '<meta property="og:image" content="/lab/og.png">'
+             '<link rel="alternate" type="application/rss+xml" href="/lab/rss">'
+             f'<script type="application/ld+json">{ld}</script>')
+    return html(page("Aeropress — Roasters", '<main><h1 class="name">Aeropress</h1>'
+                     '<p class="price">$39.00</p></main>', head=extra))
+
+
+# --------------------------------------------------------------------------- #
+# resiliency: a rate limit (429 + Retry-After); auth: a bearer-token API
+# --------------------------------------------------------------------------- #
+
+@fixture("ratelimit", "A rate limit: 429 with Retry-After (retriable)", "resiliency:rate_limit",
+         expected={"status": 429, "retry_after": 2, "retriable": True, "error": "fetch.http_status"})
+def _ratelimit(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    return html(page("Too many requests", "<main><h1>429</h1><p>Slow down.</p></main>"),
+                status=429, headers={"Retry-After": "2"})
+
+
+TOKEN = "lab-secret"  # noqa: S105 -- a fixture credential, not a real one
+
+
+@fixture("token", "A bearer-token JSON API (401 without the header)", "auth:token",
+         expected={"header": "Authorization", "scheme": "Bearer", "token": TOKEN, "data": "/lab/token/data",
+                   "unauth_status": 401, "items": 3})
+def _token(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    if path == "/lab/token/data":
+        auth = headers.get("Authorization") or headers.get("authorization") or ""
+        if auth != f"Bearer {TOKEN}":
+            return as_json({"error": "unauthorized"}, status=401,
+                           headers={"WWW-Authenticate": 'Bearer realm="lab"'})
+        return as_json({"items": [{"id": i, "name": n} for n, _, i in PRODUCTS]})
+    return html(page("API", """
+<main><h1>Products API</h1>
+<p>Fetch <code>/lab/token/data</code> with <code>Authorization: Bearer lab-secret</code>.</p>
+</main>"""))
+
+
+# --------------------------------------------------------------------------- #
+# a listing whose ORDER, FILTERS and LIVENESS the pagination loop must reason about
+# --------------------------------------------------------------------------- #
+
+BOARD = [("Senior Engineer", "London"), ("Data Scientist", "Berlin"), ("Product Designer", "Remote"),
+         ("Platform Engineer", "Madrid"), ("Staff SRE", "Lisbon")]
+
+
+@fixture("board", "A live, sorted, filterable listing (ordered/filtered/live)", "signals:pagination_shape",
+         expected={"record_selector": "li.post", "records": len(BOARD),
+                   "present": ["ordered", "filtered", "live"], "order_direction": "desc"})
+def _board(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """The shape a pagination loop must reason about: the listing is DATE-SORTED newest-first
+    (``ordered``, so an early recency stop is sound), it is TIMELY -- the newest rows are days old
+    (``live``, so it drifts while you page) -- and it has SORT + FACET controls (``ordered`` /
+    ``filtered``, so the order and the active filters are knowable). Dates are generated relative
+    to today so the ``live`` window never ages out."""
+    today = date.today()
+    posts = "".join(
+        f'<li class="post"><span class="title">{t}</span> <span class="loc">{loc}</span>'
+        f'<time datetime="{(today - timedelta(days=3 * i)).isoformat()}">{3 * i}d ago</time></li>'
+        for i, (t, loc) in enumerate(BOARD)  # i=0 newest -> dates run desc (newest-first)
+    )
+    return html(page("Market", f"""
+<main><h1>Market</h1>
+<form class="filters" role="search" action="/lab/board" method="get">
+  <input type="search" name="q" placeholder="search listings">
+  <select name="sort"><option>Newest</option><option>Oldest</option><option>Title</option></select>
+  <select name="filter_city"><option>Any city</option><option>London</option><option>Berlin</option></select>
+  <label><input type="checkbox" name="remote"> Remote only</label>
+  <button type="submit">Apply</button>
+</form>
+<ul class="listings">{posts}</ul></main>"""))
+
+
+# --------------------------------------------------------------------------- #
+# a small linked site to crawl (scope, dedup across cross-links / cycles)
+# --------------------------------------------------------------------------- #
+
+#: path -> (title, out-links). Cross-links and back-links form cycles (each page is fetched
+#: once); one OFF-SITE link is out of scope under same_origin.
+SITE: dict[str, tuple[str, list[str]]] = {
+    "/lab/site": ("Handbook", ["/lab/site/guides", "/lab/site/api", "/lab/site/about", "https://example.com/external"]),
+    "/lab/site/guides": ("Guides", ["/lab/site/guides/1", "/lab/site/guides/2", "/lab/site", "/lab/site/api"]),
+    "/lab/site/api": ("API reference", ["/lab/site/guides", "/lab/site"]),
+    "/lab/site/about": ("About", ["/lab/site"]),
+    "/lab/site/guides/1": ("Quickstart", ["/lab/site/guides", "/lab/site/guides/2"]),
+    "/lab/site/guides/2": ("Recipes", ["/lab/site/guides", "/lab/site/guides/1"]),
+}
+
+
+@fixture("site", "A small linked site to crawl (scope, dedup, cycles)", "crawl:site",
+         expected={"seed": "/lab/site", "pages": sorted(SITE), "count": len(SITE),
+                   "offsite": "https://example.com/external"})
+def _site(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    node = SITE.get(path)
+    if node is None:
+        return html(page("Not found", "<main><h1>404</h1></main>"), status=404)
+    title, links = node
+    nav = "".join(f'<li><a href="{u}">{title if u == path else u.rsplit("/", 1)[-1] or "home"}</a></li>' for u in links)
+    return html(page(title, f'<main><h1>{title}</h1><p>Part of the handbook.</p>'
+                     f'<nav aria-label="site"><ul>{nav}</ul></nav></main>'))

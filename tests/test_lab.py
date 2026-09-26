@@ -164,6 +164,72 @@ def test_interacted_pagination_loads_all_records(lab, wc):
     wc.release(live)
 
 
+def test_split_sections_table_and_structured_metadata(lab, wc, index):
+    # a dataset split across two differently-shaped sections: each is its own simple query.
+    sx = expected(lab, wc, "sections")
+    sec = wc.fetch(f"{lab}{index['sections']['path']}")
+    up = sec.select_all(sx["upcoming_selector"])
+    past = sec.select_all(sx["archived_selector"])
+    assert len(up) == sx["upcoming"] and len(past) == sx["archived"]
+    assert up[0].select(".what").attr("text") == sx["upcoming_title"]
+
+    # a data table: rows/columns, and a GFM table in the markdown render.
+    tx = expected(lab, wc, "table")
+    tbl = wc.fetch(f"{lab}{index['table']['path']}")
+    rows = tbl.select_all(tx["row_selector"])
+    assert len(rows) == tx["rows"]
+    assert [c.attr("text") for c in rows[0].select_all("td")] == tx["first_row"]
+    assert all(col in tbl.markdown() for col in tx["columns"])
+
+    # structured metadata: JSON-LD type, Open Graph keys, canonical, and the feed link.
+    mx = expected(lab, wc, "structured")
+    meta = wc.fetch(f"{lab}{index['structured']['path']}").metadata()
+    assert meta.schema_types == mx["schema_types"] and meta.page_type == mx["page_type"]
+    assert meta.og_keys == mx["og_keys"]
+    assert meta.canonical_url.replace(lab, "") == mx["canonical"]
+    assert [f.replace(lab, "") for f in meta.feeds] == [mx["feed"]]
+
+
+def test_consent_wall_and_token_auth(lab, wc, index):
+    # a consent wall: cookie_banner fires from the served HTML (static tier), remedy is a browser render.
+    cx = expected(lab, wc, "consent")
+    doc = wc.fetch(f"{lab}{index['consent']['path']}", browser=False)
+    assert doc.cookie_banner().present and doc.cookie_banner().remedy == cx["remedy"]
+    assert len(doc.select_all(cx["record_selector"])) == cx["records"]
+
+    # a bearer-token API: 401 without the header, the records with it.
+    tx = expected(lab, wc, "token")
+    url = f"{lab}{tx['data']}"
+    denied = wc.fetch(url, error=RETURN)
+    assert denied.error.code == "fetch.http_status"
+    ok = wc.fetch(url, headers={tx["header"]: f"{tx['scheme']} {tx['token']}"})
+    assert ok.kind == "json" and len(ok.select_all("items")) == tx["items"]
+
+
+def test_board_ordered_filtered_live_signals(lab, wc, index):
+    # the pagination-shape signals: the listing is date-sorted newest-first (ordered), timely
+    # (live, so it drifts while you page), and has sort + facet controls (ordered / filtered).
+    bx = expected(lab, wc, "board")
+    doc = wc.fetch(f"{lab}{index['board']['path']}")
+    assert len(doc.select_all(bx["record_selector"])) == bx["records"]
+    # the pagination-shape flags are read via their own accessors (not the flags() digest).
+    assert all(getattr(doc, name)().present for name in bx["present"])
+    assert doc.ordered().value.direction == bx["order_direction"]
+
+
+def test_crawl_mini_site_scopes_and_dedups(lab, wc, index):
+    # a small linked site with cross-links, cycles and one off-site link: every in-scope page is
+    # reached exactly once (dedup), and the off-site link stays out of scope (same_origin).
+    sx = expected(lab, wc, "site")
+    with wc.crawl(f"{lab}{sx['seed']}", auto=True, max_pages=40, depth=5, browser=False, obey_robots=False) as cr:
+        cr.run()
+    got = {p.final_url.replace(lab, "") for p in cr.pages}
+    on_site = [u for u in got if u == "/lab/site" or u.startswith("/lab/site/")]
+    assert set(sx["pages"]) <= got
+    assert not any("example.com" in u for u in got)
+    assert len(on_site) == sx["count"]
+
+
 @pytest.mark.parametrize("name", ["spa", "feed", "app"])
 def test_browser_fixtures(lab, wc, index, name):
     exp = expected(lab, wc, name)

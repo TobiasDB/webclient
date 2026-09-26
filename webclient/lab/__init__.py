@@ -23,7 +23,7 @@ import threading
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from .fixtures import FIXTURES, Fixture, landing
+from .fixtures import FIXTURES, LAB_CSS, Fixture, brand, landing
 
 __all__ = ["serve", "FIXTURES", "Fixture", "LabServer"]
 
@@ -76,15 +76,114 @@ def route(
     return 404, {"Content-Type": "text/plain"}, b"not found"
 
 
+# fixtures grouped for the index, in this order (matched on the feature's prefix before ':')
+_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Records & extraction", ("extract", "fetch", "metadata")),
+    ("Detection · signals → flags", ("signals",)),
+    ("Pagination", ("pagination",)),
+    ("Interaction, network & the browser", ("interact", "network")),
+    ("Document kinds", ("kind",)),
+    ("Transport, auth & resiliency", ("transport", "errors", "resiliency", "auth")),
+    ("Discovery & crawl", ("crawl",)),
+)
+
+
+def _category(feature: str) -> str:
+    head = feature.split(":")[0]
+    for label, prefixes in _CATEGORIES:
+        if head in prefixes:
+            return label
+    return "Other"
+
+
+_INDEX_CSS = """<style>
+.lab-head{max-width:48rem}
+.lab-notes{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));margin:1rem 0 2rem}
+.lab-note{border:1px solid var(--line);border-radius:var(--radius);background:var(--card);padding:.8rem .95rem}
+.lab-note h3{margin:0 0 .25rem;font-size:.92rem}
+.lab-note p{margin:0;color:var(--muted);font-size:.88rem}
+.lab-search{width:100%;max-width:22rem;margin:.5rem 0 1.5rem}
+.lab-grid{display:grid;gap:.7rem;grid-template-columns:repeat(auto-fill,minmax(17rem,1fr))}
+.lab-item{display:block;border:1px solid var(--line);border-radius:var(--radius);background:var(--card);padding:.7rem .85rem;color:inherit}
+.lab-item:hover{border-color:var(--accent);text-decoration:none}
+.lab-item .nm{font-weight:650;color:inherit}
+.lab-item .nm:hover{color:var(--accent)}
+.lab-item .ds{color:var(--muted);font-size:.86rem;margin:.15rem 0 .45rem}
+.lab-item .ft{font-family:ui-monospace,Menlo,monospace;font-size:.72rem;color:var(--chip-fg);background:var(--chip);padding:.03rem .4rem;border-radius:999px}
+.lab-item .exp{font-size:.78rem}
+.lab-count{color:var(--muted);font-weight:400;font-size:.8rem}
+.lab-cat{scroll-margin-top:1rem}
+</style>"""
+
+
 def _index_html() -> bytes:
-    rows = "".join(
-        f'<li><a href="{f.path}">{f.name}</a> — {f.title} <small>({f.feature}'
-        f'{", browser" if f.browser else ""})</small> · <a href="/lab/{f.name}.json">expected</a></li>'
-        for f in FIXTURES.values()
+    groups: dict[str, list[Fixture]] = {}
+    for f in FIXTURES.values():
+        groups.setdefault(_category(f.feature), []).append(f)
+    order = [label for label, _ in _CATEGORIES] + [g for g in groups if g not in dict(_CATEGORIES)]
+
+    def card(f: Fixture) -> str:
+        badge = ' <span class="lab-badge">browser</span>' if f.browser else ""
+        return (f'<div class="lab-item" data-q="{f.name} {f.title} {f.feature}">'
+                f'<a class="nm" href="{f.path}">{f.name}</a>{badge}'
+                f'<div class="ds">{f.title}</div>'
+                f'<span class="ft">{f.feature}</span> '
+                f'<a class="exp" href="/lab/{f.name}.json">expected →</a></div>')
+
+    sections = "".join(
+        f'<section class="lab-cat" id="{label.split()[0].lower()}"><h2>{label} '
+        f'<span class="lab-count">{len(groups[label])}</span></h2>'
+        f'<div class="lab-grid">{"".join(card(f) for f in groups[label])}</div></section>'
+        for label in order if label in groups
     )
-    return (f"<html><head><title>webclient lab</title></head><body><h1>Lab</h1>"
-            f"<p>One fixture per feature; each publishes its expected result.</p><ul>{rows}</ul>"
-            f"</body></html>").encode()
+
+    notes = "".join(f'<div class="lab-note"><h3>{h}</h3><p>{p}</p></div>' for h, p in (
+        ("Everything is a plan",
+         "An op records a wire-safe, typed plan; <code>RUN(t)=fold(plan, events)</code>. "
+         "The same plan runs sync, async or remote — dispatch modes, not three code paths."),
+        ("Tiers escalate on evidence",
+         "A cheap static fetch first; the client goes to a real browser only when signals say it "
+         "must (a JS-gated SPA, a consent wall, shadow DOM)."),
+        ("Signals → flags",
+         "Tiered, confidence-scored signals (evidence) combine into flags (conclusions: spa, "
+         "login_required, pagination, cookie_banner …) that auto-remediation and the pipeline act on."),
+        ("One bounded loop",
+         "Pagination, crawl, extract and interaction all derive from one observe → decide → apply loop."),
+        ("Traceable by construction",
+         "Each step stamps events — rrweb DOM, network facts correlated to the DOM, pool leases — "
+         "so a run can be watched as it unfolds and replayed later."),
+        ("The lab is the contract",
+         "Every fixture publishes its expected result as JSON. Tests, demos and docs all assert "
+         "against one set of facts — the website can run the same suite (LAB_URL)."),
+    ))
+
+    body = f"""
+<nav>{brand("lab")}<a href="/">home</a><a href="/lab/index.json">index.json</a></nav>
+<div class="lab-head">
+<h1>The lab</h1>
+<p>One offline site that is the package's torture test, demo site and docs playground. Each
+page under <code>/lab/&lt;name&gt;</code> strains one feature and publishes its expected result
+at <code>/lab/&lt;name&gt;.json</code>.</p>
+</div>
+<div class="lab-notes">{notes}</div>
+<input class="lab-search" type="search" placeholder="filter fixtures… (name, feature)" oninput="labFilter(this.value)">
+{sections}
+<footer>{len(FIXTURES)} fixtures · every one has an expected result</footer>
+<script>
+function labFilter(q){{
+  q = (q||'').trim().toLowerCase();
+  document.querySelectorAll('.lab-item').forEach(function(el){{
+    el.style.display = !q || (el.getAttribute('data-q')||'').toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+  }});
+  document.querySelectorAll('.lab-cat').forEach(function(sec){{
+    var any = [].some.call(sec.querySelectorAll('.lab-item'), function(el){{ return el.style.display !== 'none'; }});
+    sec.style.display = any ? '' : 'none';
+  }});
+}}
+</script>"""
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f"<title>webclient lab</title>{LAB_CSS}{_INDEX_CSS}</head><body>{body}</body></html>").encode()
 
 
 class LabServer:

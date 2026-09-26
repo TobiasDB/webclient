@@ -642,6 +642,11 @@ def roadmap_tour() -> None:
         hint = shop.patterns(for_="extract")[0]
         _show("pattern", hint.name, hint.subject, f"x{hint.count}", "conf", hint.confidence)
 
+        # Pagination-shape signals: a listing's ORDER, FILTERS and LIVENESS -> how to page it safely.
+        board = wc.fetch(f"{lab}/lab/board")
+        _show("shape", "ordered", board.ordered().value.direction, "| live newest", board.live().value.newest,
+              "| filters", board.filtered().value.controls)
+
         # The tool registry: one declaration -> Python / MCP / POST /tools/{name}.
         card = dispatch("card", {"url": f"{lab}/lab/shop"}, wc)
         _show("tools", len(TOOLS), "registered | card:", card["title"], card["flags"], card["final_tier"])
@@ -650,6 +655,10 @@ def roadmap_tour() -> None:
         found = wc.locate(f"{lab}/lab/shop", until=lambda c: (c.title or "").startswith("About"),
                           browser=False, obey_robots=False, max_pages=6, width=2)
         _show("locate", found.reason, [p.title for p in found.found], "after", found.rounds, "round(s)")
+        # Crawl: a scoped, deduped traversal of a small linked site (cross-links / cycles -> each page once).
+        with wc.crawl(f"{lab}/lab/site", auto=True, max_pages=20, depth=4, browser=False, obey_robots=False) as site:
+            site.run()
+        _show("crawl", len(site.pages), "pages |", ", ".join(sorted((p.final_url or "").replace(lab, "") for p in site.pages)))
         wc.driver("resolve", lambda obs: Ask(reason="render?", options=["browser"]) if "spa" in obs.present else None)
         spa = wc.fetch(f"{lab}/lab/spa", browser="auto")
         _show("resolve ask", spa.pending.reason if spa.pending else None, "| tier:", spa.transport().final_tier)
