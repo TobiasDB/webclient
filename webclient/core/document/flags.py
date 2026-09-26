@@ -20,7 +20,7 @@ from ...signals import patterns as _patterns  # noqa: F401  (registers the patte
 from ...signals import cookies as _cookies  # noqa: F401  (registers the cookie_banner detectors)
 from ..web_core import Backing
 from .html import tree
-from .models import DatasetHint, Filtering, Flag, Ordering, PaginationHint, PatternHint, XhrCall
+from .models import DatasetHint, Filtering, Flag, NetworkView, Ordering, PaginationHint, PatternHint, XhrCall
 
 if TYPE_CHECKING:
     from . import Document
@@ -36,7 +36,7 @@ class FlagsBacking(Backing):
         {"flags", "spa", "anti_bot_present", "anti_bot_triggered", "login_present",
          "login_required", "pagination", "ordered", "filtered", "live", "tabbed", "forms",
          "buttons", "shadow_dom", "iframe", "cookie_banner", "large_document", "framework", "xhr_endpoints",
-         "record_regions", "repeated_controls", "page_template", "patterns", "dataset"}
+         "record_regions", "repeated_controls", "page_template", "patterns", "dataset", "network"}
     )
     gate = "ok"
 
@@ -231,6 +231,16 @@ class FlagsBacking(Backing):
     def framework(self, core: "Document") -> "str | None":
         """The detected JS framework name (from markers in the served HTML), or None."""
         return detect_framework((core.content or b"").decode(core.encoding or "utf-8", "replace"))
+
+    def network(self, core: "Document") -> NetworkView:
+        """The page's NETWORK joined to the DOM it built: every request a browser load made (in
+        start order: when, how long, from which frame, how big, its status and type) and, for each
+        data request (xhr / fetch), the page nodes it most likely produced (CSS paths + their text,
+        with a confidence) and its body. How a page got its data: read an SPA's API off it instead
+        of its rendered HTML. A static document has none (its HTML is the whole story)."""
+        from .network import network_view
+
+        return network_view(core)
 
     def xhr_endpoints(self, core: "Document") -> "list[XhrCall]":
         """The XHR/fetch calls a browser render captured -- an SPA's real data sources."""

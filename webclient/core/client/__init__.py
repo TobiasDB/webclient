@@ -1450,6 +1450,7 @@ class WebClient(SessionCore, IWebClient):
             phase=phase, url=doc.url, final_url=doc.final_url or doc.url, kind=doc.kind,  # type: ignore[arg-type]
             status_code=doc.status_code, headers=dict(doc.response_headers or {}),
             encoding=doc.encoding, content=doc.content, tiers=list(doc._tiers),
+            lease=getattr(getattr(doc, "_lease", None), "id", None) or None,
             document_id=doc.name, session_id=doc.session_id or None, source="core-trace",
         ))
 

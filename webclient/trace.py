@@ -21,6 +21,7 @@ The log is the source of truth; old shapes are upcast on read through the
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import time
@@ -39,6 +40,7 @@ log = logging.getLogger(__name__)
 __all__ = ["Trace", "TraceReader", "read", "encode", "decode", "wire", "SCHEMA_VERSION"]
 
 _PAYLOADS = ("content", "body", "events")  # the fields a wire view drops
+_DEDUP_MIN = 256  # bodies at least this long are written once per trace (then referenced by hash)
 
 
 def encode(event: Event, *, payload: bool = True) -> dict[str, Any]:
@@ -126,6 +128,7 @@ class Trace:
         self.started = time.time()
         self.count = 0
         self._sub: "Subscription | None" = None
+        self._bodies: set[str] = set()  # the hashes of the bodies already written (see _line)
         self._fh = self.path.open("w", encoding="utf-8")
         from . import __version__
 
@@ -149,7 +152,19 @@ class Trace:
 
     # -- writing --------------------------------------------------------------
     def _line(self, event: Event) -> None:
-        self._fh.write(json.dumps(encode(event), separators=(",", ":")) + "\n")
+        data = encode(event)
+        body = data.get("body")
+        if isinstance(body, str) and len(body) >= _DEDUP_MIN:
+            # a body is stored ONCE per trace: every page of a site re-downloads the same bundles and
+            # feeds, and inline they were most of a trace. Later copies carry only its hash.
+            sha = hashlib.sha1(body.encode("utf-8", "surrogatepass")).hexdigest()
+            if sha in self._bodies:
+                data.pop("body")
+                data["body_ref"] = sha
+            else:
+                self._bodies.add(sha)
+                data["body_sha"] = sha
+        self._fh.write(json.dumps(data, separators=(",", ":")) + "\n")
 
     def write(self, event: Event) -> None:
         """Append one event (payloads inline)."""
@@ -185,11 +200,22 @@ class TraceReader:
         self._events: "list[Event] | None" = None
 
     def raw(self) -> Iterator[dict[str, Any]]:
-        """The event dicts as stored, in order."""
+        """The event dicts as stored, in order -- a de-duplicated body (``body_ref``) restored."""
+        bodies: dict[str, tuple[Any, bool]] = {}
         with self.path.open(encoding="utf-8") as fh:
             for line in fh:
-                if line.strip():
-                    yield json.loads(line)
+                if not line.strip():
+                    continue
+                data = json.loads(line)
+                sha = data.pop("body_sha", None)
+                if sha is not None:
+                    bodies[sha] = (data.get("body"), "body" in (data.get("_b64") or []))
+                ref = data.pop("body_ref", None)
+                if ref is not None and ref in bodies:
+                    data["body"], b64 = bodies[ref]
+                    if b64:
+                        data["_b64"] = [*(data.get("_b64") or []), "body"]
+                yield data
 
     @property
     def events(self) -> "list[Event]":

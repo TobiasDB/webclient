@@ -251,3 +251,21 @@ def test_browser_har_replay_serves_the_page_offline(httpserver, tmp_path):
         page.wait_for("#cart li")
         assert [li.attr("text") for li in page.select_all("#cart li")] == ["a", "b"]
         wc2.release(page)
+
+
+def test_trace_stores_a_repeated_body_once_and_reads_it_back(tmp_path):
+    # every page of a site re-downloads the same bundles: a body is written once, later copies by hash
+    from webclient.models import NetworkEvent
+    from webclient.trace import Trace, read
+
+    big = b"x" * 5000
+    binary = bytes(range(256)) * 20
+    path = tmp_path / "t.jsonl"
+    with Trace(path) as tr:
+        for i in range(3):
+            tr.write(NetworkEvent(topic="network.resource", url=f"https://a/{i}", body=big, started=100.0 + i, elapsed=0.25))
+            tr.write(NetworkEvent(topic="network.resource", url=f"https://b/{i}", body=binary))
+    assert path.stat().st_size < 3 * len(big)  # not three copies
+    got = [e for e in read(path).events if e.topic == "network.resource"]
+    assert [e.body for e in got] == [big, binary] * 3
+    assert got[2].started == 101.0 and got[2].elapsed == 0.25

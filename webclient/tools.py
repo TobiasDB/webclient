@@ -346,7 +346,8 @@ def views(doc: Any, include: "list[str]") -> "dict[str, Any]":
     """The requested views of an already-fetched document, in one dict: ``card``,
     ``content``, ``rrweb`` (Meta + FullSnapshot for the player), ``patterns``, ``records``
     (the repeating-region options), ``flags``, ``skeleton``, ``markdown``, ``controls``,
-    ``elements`` (the content elements), ``transport``. Always carries ``document_id``,
+    ``elements`` (the content elements), ``transport``, ``network`` (the load's requests joined to
+    the nodes each put on the page -- see ``doc.network()``). Always carries ``document_id``,
     ``kind``, ``url``, ``title`` and ``live``."""
     out: dict[str, Any] = {"document_id": doc.name, "kind": doc.kind, "encoding": doc.encoding,
                            "url": doc.final_url or doc.url, "title": doc.title, "live": getattr(doc, "_page", None) is not None,
@@ -382,6 +383,8 @@ def views(doc: Any, include: "list[str]") -> "dict[str, Any]":
         out["elements"] = _jsonable(doc.content_elements()) if doc.kind == "html" else []
     if "transport" in want:
         out["transport"] = _jsonable(doc.transport())
+    if "network" in want:
+        out["network"] = _jsonable(doc.network())
     return out
 
 

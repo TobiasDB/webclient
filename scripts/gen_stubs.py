@@ -37,7 +37,7 @@ from webclient.core.document import Document, Element  # noqa: E402
 from webclient.core.reference import Reference  # noqa: E402
 from webclient.core.session import Session  # noqa: E402
 from webclient.errors import WebError  # noqa: E402
-from webclient.core.document.models import DatasetHint, PatternHint  # noqa: E402
+from webclient.core.document.models import DatasetHint, NetworkView, PatternHint  # noqa: E402
 from webclient.core.document.models import (  # noqa: E402
     Flag,
     Metadata,
@@ -98,6 +98,7 @@ _NS = {
     "WebError": WebError,
     "PatternHint": PatternHint,
     "DatasetHint": DatasetHint,
+    "NetworkView": NetworkView,
     "Transport": Transport,
     "Metadata": Metadata,
     "Signal": Signal,

@@ -77,6 +77,9 @@ class Document(WebCore, IDocument):
     _xhr_bodies: dict[str, list[str]] = PrivateAttr(  # url -> XHR/fetch response texts (in order),
         default_factory=dict  # for the content-matching ContentCorrelator (populated by the browser)
     )
+    _requests: list[dict[str, Any]] = PrivateAttr(  # every request a browser load made (see network())
+        default_factory=list
+    )
     _flag_cache: Any = PrivateAttr(default=None)  # memoised flag set (one detection pass/doc)
     _pattern_flag_cache: Any = PrivateAttr(default=None)  # memoised STRUCTURAL pattern flags
     _row: Any = PrivateAttr(default=None)  # extracted columns (extract/field)

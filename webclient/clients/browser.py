@@ -158,6 +158,10 @@ class PageResult:
     #: text/JSON only), for the content-matching :class:`ContentCorrelator`. Populated by the
     #: ``response`` listener; the ordering correlator ignores it. Best-effort -- may be empty.
     bodies: dict[str, list[str]] = field(default_factory=dict)
+    #: EVERY request the load made (not only while tracing): url, method, type, status, when it
+    #: started, how long it took, its frame, size and content type -- and a data response's text
+    #: (xhr / fetch, text or JSON, capped). The document's network view is built from them.
+    requests: list[dict[str, Any]] = field(default_factory=list)
     #: every ``drain``-phase script's load-time result, keyed by script NAME -- a backing
     #: reads its own (the mutation observer's dict feeds ``mutations``/``stamps``/``xhr``
     #: above for back-compat; the rrweb recorder's list lands here as ``wc.rrweb``).
@@ -184,6 +188,53 @@ _FRAME_FOLD_JS = """(f, [html, url]) => {
   h.innerHTML = html;
   f.parentNode.insertBefore(h, f.nextSibling);
 }"""
+
+
+#: the most requests one page load keeps facts for, and the most data bodies (xhr / fetch) it keeps
+_REQUESTS_MAX = 800
+_DATA_BODIES_MAX = 60
+_DATA_BODY_MAX = 3_000_000  # one data body (a whole jobs feed is ~1 MB)
+_DATA_BODIES_BUDGET = 12_000_000  # all of a load's data bodies
+
+
+async def _request_facts(responses: "list[Any]") -> "list[dict[str, Any]]":
+    """Plain facts for each Response of a load: what was asked, when it started (epoch s) and how
+    long it took, the frame that asked, its status / type / size / content type -- and, for a data
+    request (xhr / fetch) with a text or JSON body, the body itself (capped) so a view can show it
+    and match it against the page. Never raises; a torn-down response keeps what it has."""
+    out: list[dict[str, Any]] = []
+    bodies, budget = 0, _DATA_BODIES_BUDGET
+    for r in responses:
+        f: dict[str, Any] = {"url": r.url, "status": r.status}
+        try:
+            req = r.request
+            f["method"], f["resource_type"] = req.method, req.resource_type
+            tm = req.timing or {}
+            if (tm.get("startTime") or 0) > 0:
+                f["started"] = tm["startTime"] / 1000.0
+                if (tm.get("responseEnd") or -1) >= 0:
+                    f["elapsed"] = tm["responseEnd"] / 1000.0
+            try:
+                f["frame"] = r.frame.url
+            except Exception:  # noqa: BLE001 - no frame (a worker)
+                pass
+            h = r.headers or {}
+            ctype = h.get("content-type", "")
+            f["content_type"] = ctype.split(";")[0].strip()
+            if h.get("content-length", "").isdigit():
+                f["size"] = int(h["content-length"])
+            if req.resource_type in ("xhr", "fetch") and bodies < _DATA_BODIES_MAX and budget > 0 and any(t in ctype.lower() for t in _BODY_CONTENT_TYPES):
+                text = await r.text()
+                f["size"] = f.get("size") or len(text.encode("utf-8", "replace"))
+                cap = min(_DATA_BODY_MAX, budget)
+                f["body"] = text[:cap]
+                f["truncated"] = len(text) > cap
+                budget -= len(f["body"])
+                bodies += 1
+        except Exception:  # noqa: BLE001 - a redirect / torn-down response
+            pass
+        out.append(f)
+    return out
 
 
 def _frame_depth(frame: Any) -> int:
@@ -260,8 +311,21 @@ class BrowserClient(Client):
             try:
                 fact["method"] = r.request.method
                 fact["resource_type"] = r.request.resource_type
+                # WHEN it ran (the drain is later, in bulk): the request's own start + duration, and the
+                # frame that made it -- what lines a request up against the DOM changes it caused
+                tm = r.request.timing or {}
+                if (tm.get("startTime") or 0) > 0:
+                    fact["started"] = tm["startTime"] / 1000.0
+                    end = tm.get("responseEnd", -1)
+                    if end is not None and end >= 0:
+                        fact["elapsed"] = end / 1000.0
+                try:
+                    fact["frame"] = r.frame.url
+                except Exception:  # noqa: BLE001 - a service-worker / detached request has no frame
+                    pass
                 fact["headers"] = dict(await r.all_headers())
                 body = await r.body()
+                fact["size"] = len(body)
                 fact["body"] = bytes(body) if len(body) <= _CAPTURE_MAX_BYTES else None
             except Exception:  # noqa: BLE001 - a redirect / torn-down response: keep the facts we have
                 pass
@@ -377,9 +441,13 @@ class BrowserClient(Client):
         def _on_request(r: Any) -> None:
             network.append((r.method, r.url, r.resource_type))
 
+        seen: list[Any] = []  # every Response of the load -- the page's network, read after settle
+
         def _on_response(r: Any) -> None:
             # collect the Response objects synchronously; bodies are read (awaited) after the
             # wait, so the handler stays cheap and there is no async-listener scheduling race.
+            if len(seen) < _REQUESTS_MAX:
+                seen.append(r)
             # Only when the content correlator is opted in -- otherwise bodies are never used.
             if not _want_bodies():
                 return
@@ -396,6 +464,7 @@ class BrowserClient(Client):
             result = await self._open_body(
                 page, url, wait, scripts, replay, console, network, responses
             )
+            result.requests = await _request_facts(seen)
             if self.capturing:
                 result.captured = await self.drain_network()
             return result

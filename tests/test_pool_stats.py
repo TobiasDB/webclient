@@ -121,3 +121,27 @@ def test_permit_not_leaked_on_create_failure():
         await pool.aclose()
 
     asyncio.run(run())
+
+
+def test_a_browser_lease_is_announced_with_its_step_and_named_on_the_snapshot(httpserver, tmp_path):
+    # a run view shows which step holds which page: the pool announces every lease (queued time,
+    # held / waiting / limit) and its release, stamped with the running step; the snapshot names it
+    import pytest
+
+    pytest.importorskip("playwright")
+    from webclient import WebClient
+    from webclient.interface import wq
+    from webclient.trace import read
+
+    httpserver.expect_request("/p").respond_with_data("<html><body><h1>hi</h1></body></html>", content_type="text/html")
+    with WebClient() as wc:
+        with wc.trace(tmp_path / "t.jsonl"):
+            wc.execute(wq.reference(httpserver.url_for("/p")).resolve(browser=True).select("h1").attr("text"))
+    evs = read(tmp_path / "t.jsonl").events
+    pool = [e for e in evs if e.topic == "resource" and e.source == "pool" and e.detail.get("kind") == "page"]
+    leased = [e for e in pool if e.detail["what"] == "leased"]
+    released = [e for e in pool if e.detail["what"] == "released"]
+    assert leased and released and leased[0].detail["lease"] == released[0].detail["lease"]
+    assert leased[0].step == "0" and leased[0].detail["limit"] >= 1 and "waited" in leased[0].detail
+    snap = next(e for e in evs if e.topic == "snapshot" and e.phase == "load")
+    assert snap.lease == leased[0].detail["lease"]

@@ -35,12 +35,18 @@ class PoolStats(BaseModel):
 class Lease:
     """A held ``Client``; an async context manager that releases on exit."""
 
-    def __init__(self, pool: "ClientPool", client: Client, owner: "str | None" = None) -> None:
+    def __init__(self, pool: "ClientPool", client: Client, owner: "str | None" = None, *, id: str = "") -> None:
+        import time
+
         self._pool = pool
         self.client = client
         self.kind = client.kind
         self.owner = owner  # the session that holds it (for per-owner quotas)
         self.released = False  # guard against a double-release inflating the permit
+        #: which lease this is (``page#7``): the leased / released events and the documents that
+        #: hold it carry it, so a run view can tell which step holds which page
+        self.id = id
+        self.t0 = time.monotonic()
 
     async def __aenter__(self) -> "Lease":
         """Use a lease as an ``async with`` -- hands back itself (its ``.client``)."""
@@ -86,6 +92,7 @@ class ClientPool:
         self._held: dict[str, int] = {k: 0 for k in factories}
         self._created: dict[str, int] = {k: 0 for k in factories}
         self._waiting: dict[str, int] = {k: 0 for k in factories}
+        self._seq = 0  # leases handed out (their ids)
 
     def _semaphore(self, kind: str) -> asyncio.Semaphore:
         """The per-kind concurrency gate, created lazily at that kind's limit (default 10)."""
@@ -126,7 +133,10 @@ class ClientPool:
         ``owner`` (a session id) is charged against the per-owner quota, when one is set."""
         if owner is not None:
             await self._wait_quota(kind, owner)
+        import time
+
         sem = self._semaphore(kind)
+        asked = time.monotonic()
         self._waiting[kind] += 1
         contended = sem.locked()
         if contended:
@@ -158,8 +168,12 @@ class ClientPool:
                 await self._uncharge(kind, owner)
             raise
         self._held[kind] += 1
-        log.debug("pool: leased %s (held=%d idle=%d)", kind, self._held[kind], len(self._idle[kind]))
-        return Lease(self, client, owner)
+        self._seq += 1
+        lease = Lease(self, client, owner, id=f"{kind}#{self._seq}")
+        log.debug("pool: leased %s (held=%d idle=%d)", lease.id, self._held[kind], len(self._idle[kind]))
+        self._emit("leased", kind=kind, lease=lease.id, waited=round(time.monotonic() - asked, 3),
+                   held=self._held[kind], waiting=self._waiting[kind], limit=self._limit(kind))
+        return lease
 
     async def _uncharge(self, kind: str, owner: str) -> None:
         if self._owner_cond is None:
@@ -178,9 +192,13 @@ class ClientPool:
         release can't bleed permits and deadlock the pool. Idempotent (a double-release no-ops)."""
         if lease.released:  # idempotent: a second release must not inflate the permit
             return
+        import time
+
         lease.released = True
         kind = lease.kind
         self._held[kind] -= 1
+        self._emit("released", kind=kind, lease=lease.id, held_s=round(time.monotonic() - lease.t0, 3),
+                   held=self._held[kind], waiting=self._waiting[kind], limit=self._limit(kind))
         # always return the permit, even if reset()/recycle/aclose() raises (a
         # crashed browser page whose close() throws, say) -- otherwise the permit
         # bleeds and the pool deadlocks after enough flaky releases.
@@ -202,6 +220,10 @@ class ClientPool:
                 await client.aclose()
             self._idle[kind].clear()
             await factory.aclose()
+
+    def _limit(self, kind: str) -> int:
+        """A kind's concurrency cap."""
+        return self._limits.get(kind, self._DEFAULT_LIMIT)
 
     def _total(self, kind: str) -> int:
         """The denominator ``free`` is measured against. A recycled kind reuses a

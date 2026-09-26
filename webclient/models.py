@@ -83,10 +83,22 @@ class NetworkEvent(Event):
     index: int | None = None  # 1-based COMPLETION order among xhr/fetch (the phase counter the
     # DOM stamps key to); None for a non-correlated request
     t_s: float | None = None  # seconds since the FIRST request (relative float), for the timeline
+    started: float | None = None  # when the request STARTED (epoch seconds; a browser capture's own timing)
+    frame: str | None = None  # the URL of the frame that made it (the page, or an embedded frame)
+    size: int | None = None  # the response body's size in bytes (kept even when the body is not)
 
 
 class NavigationEvent(NetworkEvent):
     topic: Topic = "network.navigation"
+
+
+class NetworkViewEvent(Event):
+    """A document's network joined to the DOM it built (``doc.network()``, bodies left out: they are
+    in the stream's ``network.resource`` events) -- published with its load snapshot under a trace,
+    so a run view can show each page's requests and what each put on the page."""
+
+    topic: Topic = "network.view"
+    detail: dict[str, Any] = {}
 
 
 # -- dom -------------------------------------------------------------------- #
@@ -188,6 +200,7 @@ class SnapshotEvent(Event):
     encoding: str | None = None
     content: bytes | None = None
     tiers: list[str] = []
+    lease: str | None = None  # the browser page lease that rendered it (``page#7``; see the pool's events)
 
 
 class ResourceEvent(Event):
@@ -211,6 +224,7 @@ class TraceEvent(Event):
 CORE_EVENTS: tuple[type[Event], ...] = (
     NetworkEvent,
     NavigationEvent,
+    NetworkViewEvent,
     DOMEvent,
     DOMUpdateEvent,
     ActionEvent,

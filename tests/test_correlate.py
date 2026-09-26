@@ -261,3 +261,37 @@ def test_content_falls_back_to_ordering_when_no_bodies_were_captured():
         == OrderingCorrelator(window_s=0.05).correlate(net, dom).candidates_for("n1")
         == [2, 3]
     )
+
+
+def test_network_view_ties_a_data_request_to_the_nodes_it_rendered(httpserver, tmp_path):
+    # an SPA: the page asks an API for its records and renders them. network() lists the load's
+    # requests (when, how long, how big) and, for the data request, its body and the nodes it put on
+    # the page -- as CSS paths into the snapshot. Under a trace the same view is an event (no bodies).
+    import pytest
+
+    pytest.importorskip("playwright")
+    from webclient import WebClient
+    from webclient.trace import read
+
+    httpserver.expect_request("/api/jobs").respond_with_json({"jobs": [{"title": "Quant Analyst Zebra"}, {"title": "Data Engineer Yak"}]})
+    httpserver.expect_request("/app").respond_with_data("""<html><body><h1>Jobs</h1><ul id="list"></ul><script>
+      setTimeout(() => fetch('/api/jobs').then(r => r.json()).then(d => {
+        const ul = document.getElementById('list');
+        for (const j of d.jobs) { const li = document.createElement('li'); li.textContent = j.title; ul.appendChild(li); }
+      }), 50);
+    </script></body></html>""", content_type="text/html")
+    with WebClient() as wc:
+        with wc.trace(tmp_path / "t.jsonl"):
+            doc = wc.fetch(httpserver.url_for("/app"), browser="always")
+            view = doc.network()
+            picks = [doc.select(n.selector, optional=True).ok for r in view.requests for n in r.produced]
+    data = [r for r in view.requests if r.data]
+    assert len(data) == 1 and data[0].url.endswith("/api/jobs") and data[0].status == 200
+    assert data[0].at is not None and data[0].elapsed is not None and '"Zebra' not in (data[0].body or "x") and "Zebra" in (data[0].body or "")
+    texts = " ".join(n.text for n in data[0].produced)
+    assert "Quant Analyst Zebra" in texts and "Data Engineer Yak" in texts
+    assert picks and all(picks)  # the paths pick the nodes
+    assert view.requests[0].type == "document" and view.by_type.get("fetch") == 1
+    ev = [e for e in read(tmp_path / "t.jsonl").events if e.topic == "network.view"]
+    assert ev and ev[0].document_id == doc.name
+    assert any(r.get("produced") for r in ev[0].detail["requests"]) and not any(r.get("body") for r in ev[0].detail["requests"])

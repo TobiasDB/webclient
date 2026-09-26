@@ -16,6 +16,8 @@ client just leases a page and fires ``on_load``; it never shapes events itself.
 
 from __future__ import annotations
 
+import logging
+
 from typing import TYPE_CHECKING, Any, cast
 
 from ...clients import PageScript
@@ -30,6 +32,8 @@ if TYPE_CHECKING:
 
 #: installed on every navigation -- an id-path-tagging MutationObserver feeding
 #: ``window.__wc_mutations`` (see ``LiveBacking.page_scripts``).
+log = logging.getLogger(__name__)
+
 INIT_JS = """(() => {
   if (window.__wc_installed) return;
   window.__wc_installed = true;
@@ -321,7 +325,25 @@ def captured_event(fact: "dict[str, Any]", doc: "Document") -> NetworkEvent:
         topic="network.resource", url=str(fact.get("url") or ""), method=str(fact.get("method") or "GET"),
         status_code=fact.get("status"), headers=dict(fact.get("headers") or {}), body=fact.get("body"),
         resource_type=fact.get("resource_type"), document_id=doc.name, source="browser",
+        started=fact.get("started"), elapsed=fact.get("elapsed"), frame=fact.get("frame"), size=fact.get("size"),
     )
+
+
+def publish_network_view(doc: "Document") -> None:
+    """Under a trace: the page's network joined to what it built (``doc.network()``, bodies left
+    out -- they are in the stream), as a ``network.view`` event, so a run view can show each page's
+    requests and what each put on the page. A view is a nicety: it never breaks the capture."""
+    from ...models import NetworkViewEvent
+    from .network import network_view
+
+    try:
+        view = network_view(doc, bodies=False)
+    except Exception:  # noqa: BLE001
+        log.debug("network view failed", exc_info=True)
+        return
+    doc._client.bus.publish(NetworkViewEvent(
+        detail=view.model_dump(mode="json", exclude_none=True), document_id=doc.name,
+        session_id=doc.session_id or None, source="core-trace"))
 
 
 async def pump_rrweb(doc: "Document", every: float = 0.4) -> None:
@@ -494,6 +516,7 @@ class LiveBacking(Backing):
         core._xhr_bodies.update(bodies)
         core._events.extend(xhr_events(getattr(result, "xhr", []), core, core._xhr_bodies))
         core._stamps.extend(getattr(result, "stamps", []))
+        core._requests = list(getattr(result, "requests", []) or [])
         core._render_stats = getattr(result, "dom_stats", {}) or {}
         # the rrweb recorder's load-time chunk (only present while tracing)
         from ...rrweb import SCRIPT_NAME, chunk
@@ -503,6 +526,8 @@ class LiveBacking(Backing):
             core._client.bus.publish(rr)
         for fact in getattr(result, "captured", []) or []:  # under a trace: every response, for the HAR
             core._client.bus.publish(captured_event(fact, core))
+        if core._requests and getattr(core._client._the_engine(), "tracing", False):
+            publish_network_view(core)
 
     def _loop(self, core: "Document") -> "EngineLoop":
         """The engine loop the live page runs on (where interaction ops are bridged)."""
