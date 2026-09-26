@@ -133,7 +133,19 @@ The recorder publishes the same `step` and `result` events for recorded calls. A
    - in the Playground: `PageStage` (the existing `PageFrame` / `Player`, plus an event card) and `EventFeed`.
 5. **The Run scene**, which only wires things together: the source (a live run, a trace, or a plan alone), the cursor and play, and the selection.
 
-## Next (package)
+## Recorded scripts are plans too
 
-- **Recording select-side ops.** Recording covers navigations and interactions. Recording `select` / `select_all` / `attr` / `extract` as a tree would turn any imperative script into a plan with columns.
-- **Element identity.** An Element's identity is `(step, item)` plus its parent `document_id`. A scoped name for elements would let errors on elements name them.
+Under `wc.record()`, what a script READS off the page it reached is recorded as well: `select`, `select_all`, `attr`, `text_content`, `links`, and a `resolve` of a link read off it. They form a tree over the journey's page.
+
+- **Loops.** A collection's items share one "each item" node, so a loop over the cards records its reads once. Each read is stamped with its item.
+- **`rec.reads_plan`.** It compiles the tree to the plan that does the same in one go: the journey, then `.select_all(…).extract(<a column per read>).project()`. Running it gives the same values the loop read.
+- **Events.** Every read runs as its step. Its events are stamped `@n<k>` with the item, and publish `step` and `result` like a plan's steps.
+- **The trace.** A trace of the session carries the compiled plan and a map from each `@n<k>` to its address in it (`/traces/{id}/plan` returns `steps`). Run folds a recorded script exactly like an executed plan.
+- **`rec.plan`** is still the journey alone, replayable to the page it reached.
+
+A step's result says what a collection holds (`of`): a `select_all` gives a list of **Elements**, whether run eagerly or as a plan. The graph labels it `ELEMENT[] · N`.
+
+## Next
+
+- Reads recorded before an interaction replay after it. The reads hang off the journey's last page.
+- A scoped name for elements, so errors on elements can name them.

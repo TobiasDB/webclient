@@ -848,6 +848,13 @@ def create_app(
             out.update(procs.sample())
             return out
 
+        def publish_sample(detail: "dict[str, Any]") -> None:
+            # a resource SAMPLE of this run (memory, CPU, the pool): on the bus as the run's, so its live events
+            # and its trace both carry it (the sampler's thread has no run context: say whose it is)
+            from .models import ResourceEvent
+
+            engine.bus.publish(ResourceEvent(source="sampler", run_id=run_id, detail={"what": "sample", **detail}))
+
         def sample() -> None:
             # the pool's occupancy while the run is live (only when it changes): what the run is
             # using -- http slots, browser pages, tasks waiting for one -- beside its events
@@ -866,7 +873,7 @@ def create_app(
                     # the pool when it changes; memory / CPU (the server + its browsers) every ~0.3s
                     if key != last or tick % 3 == 0:
                         last = key
-                        run["events"].append({"topic": "resources", "ts": time.time(), **st, **procs.sample()})
+                        publish_sample({**st, **procs.sample()})
                 except Exception:  # noqa: BLE001 - sampling is best-effort
                     pass
                 tick += 1
@@ -907,7 +914,7 @@ def create_app(
                 time.sleep(0.15)
                 sub.cancel()
                 last = snapshot()
-                if last is not None:
+                if last is not None:  # the pool back to idle, after the run: straight into the run's events
                     run["events"].append(last)
                 run["finished"] = time.time()
                 run["status"] = status
@@ -1091,7 +1098,8 @@ def create_app(
         if blob is None:
             return _error(404, "InvalidRequest", f"trace {trace_id!r} recorded no plan")
         expr = from_blob(blob, None)
-        return {"blob": blob, "describe": expr.describe(), "plan_id": expr._plan.id}
+        reader = _read(f)
+        return {"blob": blob, "describe": expr.describe(), "plan_id": expr._plan.id, "steps": reader.plan_steps}
 
     @app.get("/events", response_model=None)
     def events_history(since: int = 0, topic: str = "", document_id: str | None = None, payload: bool = False,

@@ -121,6 +121,8 @@ class Trace:
             self.path = self.path.with_suffix(".jsonl")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.plan = plan
+        #: where a recording's recorded steps (``@n3``) landed in ``plan`` (``recording.ReadTree.compile``)
+        self.steps: dict[str, str] = {}
         self.started = time.time()
         self.count = 0
         self._sub: "Subscription | None" = None
@@ -161,7 +163,7 @@ class Trace:
         blob = plan if isinstance(plan, str) else (plan.to_blob() if hasattr(plan, "to_blob") else None)
         finished = time.time()
         self._line(TraceEvent(phase="end", ts=finished, detail={
-            "finished": finished, "events": self.count, "plan": blob}))
+            "finished": finished, "events": self.count, "plan": blob, **({"steps": self.steps} if self.steps else {})}))
         self._fh.flush()
         self._fh.close()
         log.info("trace closed: %d events -> %s", self.count, self.path)
@@ -227,6 +229,11 @@ class TraceReader:
     def plan_blob(self) -> "str | None":
         """The blob of the Plan that produced the run, when one was recorded."""
         return self.footer.get("plan")
+
+    @property
+    def plan_steps(self) -> "dict[str, str]":
+        """Where a recording's recorded steps (an event's ``step``: ``@n3``) are in the plan (``4/kw:title/2``)."""
+        return dict(self.footer.get("steps") or {})
 
     def summary(self) -> dict[str, Any]:
         """Header + footer facts in one dict (what ``/traces/{id}`` returns)."""

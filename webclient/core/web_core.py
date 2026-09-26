@@ -30,6 +30,9 @@ log = logging.getLogger(__name__)
 #: the eager ops a recording session mirrors into its Plan (see ``WebClient.record``):
 #: the navigations that root a page journey and the live interactions that advance it.
 #: Reads (``select``/``attr``/``title``/...) are never recorded -- they don't change state.
+#: the ops a recording records as READS of what it reached (see ``client.recording``)
+READ_OPS = frozenset({"select", "select_all", "attr", "text_content", "links", "resolve"})
+
 _RECORDABLE_OPS = frozenset(
     {"resolve", "fetch", "click", "write", "wait_for", "goto", "scroll"}
 )
@@ -206,25 +209,77 @@ class WebCore:
             is_prop = op in type(self).prop_ops()
             remote = self._remote_call(op, is_prop)
             return remote if is_prop else remote(*args, **kwargs)
-        address = self._record_address(op, args, kwargs) if op in _RECORDABLE_OPS else None
-        if address is not None:
-            return self._dispatch_recorded(address, op, args, kwargs)
+        rec = self._recorder() if (op in _RECORDABLE_OPS or op in READ_OPS) else None
+        if rec is not None:
+            # a READ of something the recording produced (its page, an element, a link read off it): a step of
+            # the recording's reads; else a navigation / interaction: a step of its journey
+            at = rec._read_tree().at(self) if op in READ_OPS else None
+            if at is not None:
+                return self._dispatch_read(rec, at, op, args, kwargs)
+            address = self._record_address(op, args, kwargs) if op in _RECORDABLE_OPS else None
+            if address is not None:
+                result = self._dispatch_recorded(address, op, args, kwargs)
+                if op in ("resolve", "fetch") and not hasattr(result, "__await__"):
+                    rec._read_tree().reset(result)  # a new journey page: nothing read of it yet
+                return result
         return self._dispatch(op, args, kwargs)
 
-    def _dispatch(self, op: str, args: Any, kwargs: Any) -> Any:
+    def _dispatch(self, op: str, args: Any, kwargs: Any, record: bool = True) -> Any:
         try:
             result = getattr(self.backing(op), op)(self, *args, **kwargs)
             if op in type(self).io_ops():
                 result = self._bridge_io(result)
-                if op in _RECORDABLE_OPS:
+                if record and op in _RECORDABLE_OPS:
                     self._maybe_record(op, args, kwargs)
                 return result
         except WebException as exc:  # the ledger: a raised error is published exactly once
             self._note_error(exc.error, op, raised=True)
             raise
-        if op in _RECORDABLE_OPS:
+        if record and op in _RECORDABLE_OPS:
             self._maybe_record(op, args, kwargs)
         return result
+
+    def _recorder(self) -> Any:
+        """The recording session this core's calls are recorded into (None off the recording path, and
+        inside a plan run -- a replay never records its own derived ops)."""
+        client = getattr(self, "_session", None) or getattr(self, "_client", None) or self
+        if not getattr(client, "_recording", False):
+            return None
+        from ..query.executor import _PLAN_LIVE
+
+        return None if _PLAN_LIVE.get() is not None else client
+
+    def _dispatch_read(self, rec: Any, at: "tuple[str | None, tuple[int, ...]]", op: str, args: Any, kwargs: Any) -> Any:
+        """Run a READ as its step in the recording's read tree (``recording.ReadTree``): stamped ``@<node>``
+        and with its item (a card of a loop over cards), publishing step / result like a plan step."""
+        import time
+
+        from ..events import CURRENT_ITEM, CURRENT_STEP
+
+        tree = rec._read_tree()
+        parent, item = at
+        node = tree.child(parent, op, args, kwargs)
+        engine = self._bound_engine()
+        bus = engine.bus if engine is not None else None
+        t_step, t_item = CURRENT_STEP.set((f"@{node}",)), CURRENT_ITEM.set(item)
+        t0 = time.perf_counter()
+        try:
+            if bus is not None:
+                from ..models import PlanEvent
+
+                sel = next((a for a in args if isinstance(a, str)), None)
+                bus.publish(PlanEvent(phase="step", document_id=getattr(self, "name", None) or None,
+                                      detail={"op": op, "selector": sel, "args": [a for a in args if isinstance(a, (str, int, float, bool))][:4], "recorded": True}))
+            try:
+                result = self._dispatch(op, args, kwargs, record=False)
+            except BaseException as exc:
+                self._note_recorded_result(bus, op, None, t0, exc)
+                raise
+            self._note_recorded_result(bus, op, result, t0)
+            tree.result(node, op, item, result)
+            return result
+        finally:
+            CURRENT_ITEM.reset(t_item); CURRENT_STEP.reset(t_step)
 
     def _record_address(self, op: str, args: Any, kwargs: Any) -> "str | None":
         """The address a RECORDED call takes in the recording's plan (``None`` off the recording

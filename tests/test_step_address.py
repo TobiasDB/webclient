@@ -117,3 +117,40 @@ def test_every_event_carries_the_plan_it_belongs_to(tmp_path):
     assert started["plan_id"] == pid and meta["plan_id"] == pid
     stepped = [e for e in events if e.get("step")]
     assert stepped and all(e.get("plan_id") == pid for e in stepped)  # the nested columns' too
+
+
+def test_an_imperative_loop_is_recorded_as_the_plan_that_does_it(tmp_path):
+    # everything is a plan: a script that loops over the cards reading each (and following each card's link)
+    # becomes select_all(...).extract(...).project(); the trace carries it, and every read is placed on it
+    from webclient import WebClient
+    from webclient.query.expr import from_blob
+    from webclient.trace import read
+
+    html = "<html><body>" + "".join(f'<li class="r"><b>{i}</b><a href="/d{i}">x</a></li>' for i in range(3)) + "</body></html>"
+    path = tmp_path / "rec.jsonl"
+    with HTTPServer() as srv:
+        srv.expect_request("/").respond_with_data(html, content_type="text/html")
+        for i in range(3):
+            srv.expect_request(f"/d{i}").respond_with_data(f"<p class='desc'>about {i}</p>", content_type="text/html")
+        with WebClient() as wc:
+            with wc.trace(path), wc.record() as rec:
+                page = rec.fetch(srv.url_for("/"))
+                seen = []
+                for card in page.select_all("li.r"):
+                    title = card.select("b").attr("text")
+                    about = card.select("a").attr("href").resolve().select("p.desc").attr("text")
+                    seen.append({"title": title, "about": about})
+                plan = rec.reads_plan
+            described = plan.describe()
+            assert ".select_all('li.r').extract(" in described and described.endswith(".project()")
+            rows = plan.collect()  # the plan does what the loop did
+            assert [{"t": r["b_text"], "a": r["p_desc_text"]} for r in rows] == [{"t": s["title"], "a": s["about"]} for s in seen]
+
+    reader = read(path)
+    assert from_blob(reader.plan_blob, None).describe() == described
+    steps = reader.plan_steps
+    reads = [e for e in reader.events if getattr(e, "phase", None) == "result" and (e.step or "").startswith("@")]
+    assert reads and all(e.step in steps for e in reads)
+    # item 2's detail page was opened by the resolve of the extract's column, for item 2
+    resolved = [e for e in reads if e.detail.get("op") == "resolve" and e.item == [2]]
+    assert resolved and steps[resolved[0].step].startswith("4/kw:p_desc_text/")

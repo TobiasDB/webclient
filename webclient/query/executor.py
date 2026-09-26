@@ -514,7 +514,7 @@ def _describe_value(value: Any) -> "dict[str, Any]":
     out: "dict[str, Any]" = {}
     cls = type(value).__name__
     if isinstance(value, Collection):
-        out.update(kind="Collection", n=len(value), document_id=None, parent=getattr(value, "root", None) or None)
+        out.update(kind="Collection", n=len(value), of=_member_kind(list(value)[:1]), document_id=None, parent=getattr(value, "root", None) or None)
     elif isinstance(value, Field):
         raw = value.get()
         out.update(kind="Field", preview=_preview(raw))
@@ -529,6 +529,10 @@ def _describe_value(value: Any) -> "dict[str, Any]":
             out["url"] = str(url)
     elif isinstance(value, dict):
         out.update(kind="Row", preview=_preview(value))
+    elif isinstance(value, (list, tuple)) and value and all(hasattr(v, "_client") and hasattr(v, "root") for v in value):
+        # a list of cores (an eager select_all's matches, before they are wrapped): a Collection
+        first = value[0]
+        out.update(kind="Collection", n=len(value), of=_member_kind([first]), document_id=None, parent=getattr(first, "root", None) or getattr(first, "name", None) or None)
     elif isinstance(value, (list, tuple)):
         out.update(kind="list", n=len(value), preview=_preview(list(value)[:5]))
     else:
@@ -538,6 +542,20 @@ def _describe_value(value: Any) -> "dict[str, Any]":
         err = getattr(value, "error", None)
         out.update(ok=False, error=getattr(err, "code", None) or "miss")
     return out
+
+
+def _member_kind(members: "list[Any]") -> "str | None":
+    """What a collection holds: ``Element`` (a select_all's matches -- parts of a page), ``Document`` (pages:
+    a paginate's), ``Reference`` (links), or a row / value."""
+    if not members:
+        return None
+    m = members[0]
+    cls = type(m).__name__
+    if cls == "Reference" or (hasattr(m, "url") and not hasattr(m, "content") and hasattr(m, "method")):
+        return "Reference"
+    if hasattr(m, "_client") and hasattr(m, "root"):
+        return "Document" if getattr(m, "name", "") else "Element"
+    return "Row" if isinstance(m, dict) else "Value"
 
 
 def _preview(v: Any) -> Any:

@@ -281,6 +281,7 @@ class WebClient(SessionCore, IWebClient):
     #: from the Plan so a portable recording never carries credentials. See ``record()``.
     _recording: bool = PrivateAttr(default=False)
     _record_chain: Any = PrivateAttr(default=None)
+    _reads: Any = PrivateAttr(default=None)  # the recording's READS (``recording.ReadTree``)
     _record_secrets: set[str] = PrivateAttr(default_factory=set)
     _scope: Any = PrivateAttr(default=None)  # the client's NameScope (000)
     _scope_counter: int = PrivateAttr(default=0)  # next session scope index
@@ -832,6 +833,35 @@ class WebClient(SessionCore, IWebClient):
         nothing has been recorded yet -- see :meth:`record`. Replay it with
         ``.collect()``, serialise it with ``.to_blob()``, read it with ``.describe()``."""
         return self._record_chain
+
+    def _read_tree(self) -> Any:
+        """This recording's reads (created on first use)."""
+        if self._reads is None:
+            from .recording import ReadTree
+
+            self._reads = ReadTree()
+        return self._reads
+
+    @property
+    def reads_plan(self) -> "Any":
+        """The recording as ONE plan: the journey (:attr:`plan`) plus everything READ off the page it reached --
+        a loop over ``select_all`` results becomes the fan-out that reads the same of each item
+        (``....select_all(sel).extract(...).project()``). ``None`` before anything is recorded; the journey
+        itself when nothing was read."""
+        if self._record_chain is None:
+            return None
+        if self._reads is None or self._reads.empty:
+            return self._record_chain
+        return self._reads.compile(self._record_chain)[0]
+
+    def _recorded(self) -> "tuple[Any, dict[str, str]]":
+        """The plan a trace of this recording carries, and where its recorded reads landed in it."""
+        if self._record_chain is None:
+            return None, {}
+        if self._reads is None or self._reads.empty:
+            return self._record_chain, {}
+        plan, steps = self._reads.compile(self._record_chain)
+        return plan, steps
 
     def _record_secret_values(self) -> "set[str]":
         """The values scrubbed from a recorded Plan: the caller's ``secrets`` plus this
@@ -1397,9 +1427,14 @@ class WebClient(SessionCore, IWebClient):
 
         def _close() -> None:
             engine.stop_trace(str(trace.path))
-            if trace.plan is None:  # the plan of this client's (latest) recording session
+            if trace.plan is None:  # the plan of this client's (latest) recording session: its journey + reads
                 rec = getattr(engine, "last_recorder", None) or self
-                trace.plan = getattr(rec, "_record_chain", None)
+                recorded = getattr(rec, "_recorded", None)
+                if callable(recorded):
+                    plan, steps = cast("tuple[Any, dict[str, str]]", recorded())
+                    trace.plan, trace.steps = plan, steps
+                else:
+                    trace.plan = getattr(rec, "_record_chain", None)
             original_close()
 
         trace.close = _close  # type: ignore[method-assign]
