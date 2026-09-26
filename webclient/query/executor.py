@@ -541,6 +541,9 @@ def _describe_value(value: Any) -> "dict[str, Any]":
         kept = getattr(value, "_kept", None)
         if kept is not None:  # a filter's: which of the collection it filtered it kept (by position)
             out["kept"] = list(kept)[:5000]
+        stop = getattr(value, "_stop", None)
+        if stop:  # a pager's pages: why the walk stopped (end / empty / repeat / until / exhausted / budget)
+            out.update(stop)
     elif isinstance(value, Field):
         raw = value.get()
         out.update(kind="Field", preview=_preview(raw))

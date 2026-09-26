@@ -312,3 +312,15 @@ def test_dataset_reads_the_listing_and_its_recipes(httpserver):
     assert ds.paginated is not None and ds.paginated.best.mode == "pages"
     assert ds.recipes["all"].endswith('.paginate(pages="page", start=1, step=1, stop=10)')
     assert "paginated" in ds.summary and ds.recipes["latest"]
+
+
+def test_paginate_result_says_why_it_stopped(httpserver):
+    # the run view reads the stop cause off the paginate step's result: a ?page= that re-serves page one
+    # is a REPEAT after one page -- the pager does not page this site
+    _html(httpserver, "/home", _page(["A"]))  # ?page=2 is ignored: the same page again
+    events = []
+    with WebClient() as wc:
+        wc.bus.subscribe("plan", events.append)
+        wc.execute(wq.reference(httpserver.url_for("/home")).resolve().paginate(pages="page"))
+    res = [e for e in events if getattr(e, "phase", "") == "result" and (e.detail or {}).get("op") == "paginate"]
+    assert res and res[-1].detail["stop"] == "repeat" and res[-1].detail["fetched"] == 1 and res[-1].detail["n"] == 1

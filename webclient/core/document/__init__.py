@@ -278,7 +278,9 @@ class Document(WebCore, IDocument):
             **({"scroll": True} if scroll else {}), "step": step, "max_pages": max_pages, **removed,
         })
         done = await walk(self, cfg, client=self._client)
-        return Collection(done.pages, client=self._client, root=self.name or self.root)
+        kept: Collection[Document] = Collection(done.pages, client=self._client, root=self.name or self.root)
+        kept._stop = {"stop": done.cause or "end", "fetched": done.fetched}  # why the walk stopped, for a run view
+        return kept
 
     def paginate(
         self,

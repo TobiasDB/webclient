@@ -470,7 +470,7 @@ class Collection(Generic[T]):
     """A set of results (elements or rows). Iterable/indexable; the row-shaping
     ops evaluate sub-expressions per element, and element ops fan out."""
 
-    __slots__ = ("_items", "_client", "name", "root", "_kept")
+    __slots__ = ("_items", "_client", "name", "root", "_kept", "_stop")
 
     def __init__(
         self, items: list[Any] | None = None, *, client: "WebClient | None" = None, root: str = ""
@@ -480,6 +480,8 @@ class Collection(Generic[T]):
         #: a filtered collection: the POSITIONS its items had in the collection they were filtered from (an item
         #: numbered after a filter is its position here -- this maps it back to the element it is)
         self._kept: "list[int] | None" = None
+        #: a pager's pages: why its walk stopped and how many pages it fetched (``{"stop", "fetched"}``)
+        self._stop: "dict[str, Any] | None" = None
         self.root = root
         self.name = f"col:{root}" if root else "col:"
 
