@@ -63,6 +63,13 @@ def evaluate_candidate(
     if flags["login_required"].present:
         return CandidateEval(url=candidate.url, verdict="login required",
                              flags=flag_map, flag_signals=flag_signals)
+    # a BINARY document (PDF / image / spreadsheet) IS the deliverable -- a download, not a page to
+    # scan for records. Accept it as the dataset (not queryable) without a skeleton or an LLM call.
+    if getattr(doc, "kind", "html") not in ("html", "xml", "json"):
+        return CandidateEval(url=candidate.url, dataset_present=True, is_queryable=False,
+                             completeness="full", scrapability=6,
+                             verdict=f"a {doc.kind} document (a download)",
+                             flags=flag_map, flag_signals=flag_signals)
     skeleton = _skeleton_for(doc)
     endpoints = [c.url for c in doc.xhr_endpoints()]
     interactive = flags["forms"].present or flags["buttons"].present

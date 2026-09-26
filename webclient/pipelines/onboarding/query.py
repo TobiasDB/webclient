@@ -8,7 +8,7 @@ tests that reach ``onboarding.query.<name>``) keeps resolving."""
 
 from typing import Any, Sequence
 
-from ...interface import WebClient
+from ...interface import WebClient, wq
 from ...query.expr import from_blob
 from ...core.document.models import DatasetHint, PaginationHint
 from ...policy import Resolve
@@ -258,6 +258,20 @@ def write_query(
     builds the selectors, so it never authors CSS); the test/validation is the same either way."""
     if doc is None:
         doc = wc.fetch(candidate_url, browser=browser, optional=True)
+    # a BINARY document (a PDF, an image, a spreadsheet) has nothing to EXTRACT into rows -- the
+    # deliverable IS the file. Author a download recipe deterministically (reference + resolve, no
+    # model call), so a "download this document" brief still onboards (genericity for odd shapes).
+    if doc.ok and getattr(doc, "kind", "html") not in ("html", "xml", "json"):
+        exe = _executable_query(wq.doc, candidate_url, resolve)  # reference + resolve, no extraction
+        return QueryArtifact(
+            blob=exe.to_blob(), describe=f"download the {doc.kind} document ({exe.describe()})",
+            plan=exe._plan.model_dump(mode="json"), tested=True, complete=True, row_count=1,
+            sample=[{"kind": doc.kind, "url": candidate_url}], mode="single",
+            resolve=(resolve.model_dump(mode="json") if resolve is not None else {}),
+            base_urls=[candidate_url, *extra_urls],
+            completeness="COMPLETENESS: a single binary document -- the whole file.", covers_all=True,
+            correctness=f"CORRECTNESS: a {doc.kind} document (not a record set) -- fetched as is.", correct=True,
+        )
     skeleton = _skeleton_for(doc) if doc.ok else ""
     dataset: "DatasetHint | None" = None  # what the page IS (pagination / filters / order), for the
     try:                                  # prompt (select the whole set) + the completeness/correctness notes.
