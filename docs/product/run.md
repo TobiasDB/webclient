@@ -133,6 +133,18 @@ The recorder publishes the same `step` and `result` events for recorded calls. A
    - in the Playground: `PageStage` (the existing `PageFrame` / `Player`, plus an event card) and `EventFeed`.
 5. **The Run scene**, which only wires things together: the source (a live run, a trace, or a plan alone), the cursor and play, and the selection.
 
+## Nested crawls: the chain of pages
+
+When a link read off a page is opened (a `resolve` of an `attr("href")`), up to n deep, the page area shows the item's **chain of pages** (`runLib.pageChain`), so it never swaps back and forth:
+
+- **The page it opened** is the main pane. It shows the step on screen, spotlit, with the event card and the page's requests.
+- **The page it came from** sits beside it, smaller, with **the link it followed** spotlit.
+- **An arrow** is drawn from that link to the page it opened, labelled with the step that opened it (`resolve()`). It draws itself in when the item moves on to a new link.
+- **Pages further back** fold into compact chips ("page 1 · ↓ ol.row li › h3 a"). There are never more than two panes.
+- **Space.** While a chain is open, the page area takes the wider share of the screen (the graph narrows).
+
+Frames and recordings report where their spotlight is on screen (`onSpot`), which is where the arrow starts. A `limit(n)` keeps its items' positions, so steps after `select_all(...).limit(n)` still run per item of the `select_all`, and their counts are capped at n.
+
 ## Recorded scripts are plans too
 
 Under `wc.record()`, what a script READS off the page it reached is recorded as well: `select`, `select_all`, `attr`, `text_content`, `links`, and a `resolve` of a link read off it. They form a tree over the journey's page.
