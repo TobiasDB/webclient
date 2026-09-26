@@ -470,13 +470,16 @@ class Collection(Generic[T]):
     """A set of results (elements or rows). Iterable/indexable; the row-shaping
     ops evaluate sub-expressions per element, and element ops fan out."""
 
-    __slots__ = ("_items", "_client", "name", "root")
+    __slots__ = ("_items", "_client", "name", "root", "_kept")
 
     def __init__(
         self, items: list[Any] | None = None, *, client: "WebClient | None" = None, root: str = ""
     ) -> None:
         self._items = items or []
         self._client = client
+        #: a filtered collection: the POSITIONS its items had in the collection they were filtered from (an item
+        #: numbered after a filter is its position here -- this maps it back to the element it is)
+        self._kept: "list[int] | None" = None
         self.root = root
         self.name = f"col:{root}" if root else "col:"
 
@@ -591,7 +594,9 @@ class Collection(Generic[T]):
 
         flags = await fan_out(list(self._items), keep, limit=self._limit(), bus=getattr(self._client, "bus", None))
         kept = [el for el, ok in zip(self._items, flags) if ok]
-        return self._derive(kept)
+        out = self._derive(kept)
+        out._kept = [i for i, ok in enumerate(flags) if ok]
+        return out
 
     def _limit(self) -> int:
         """The per-collection fan-out concurrency (the client's pool-portion), bounding how

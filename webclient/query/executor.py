@@ -529,6 +529,9 @@ def _describe_value(value: Any) -> "dict[str, Any]":
     cls = type(value).__name__
     if isinstance(value, Collection):
         out.update(kind="Collection", n=len(value), of=_member_kind(list(value)[:1]), document_id=None, parent=getattr(value, "root", None) or None)
+        kept = getattr(value, "_kept", None)
+        if kept is not None:  # a filter's: which of the collection it filtered it kept (by position)
+            out["kept"] = list(kept)[:5000]
     elif isinstance(value, Field):
         raw = value.get()
         out.update(kind="Field", preview=_preview(raw))

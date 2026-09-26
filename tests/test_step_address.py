@@ -154,3 +154,26 @@ def test_an_imperative_loop_is_recorded_as_the_plan_that_does_it(tmp_path):
     # item 2's detail page was opened by the resolve of the extract's column, for item 2
     resolved = [e for e in reads if e.detail.get("op") == "resolve" and e.item == [2]]
     assert resolved and steps[resolved[0].step].startswith("4/kw:p_desc_text/")
+
+
+def test_a_filter_says_which_items_it_kept(tmp_path):
+    # after a filter, items are numbered among the KEPT ones -- the filter's result maps them back to their
+    # positions in what it filtered (a run view finds item 1 as the 3rd match, not the 2nd)
+    def c(name, *args):
+        return [{"kind": "get", "name": name}, {"kind": "call", "name": name, "args": [{"value": a} for a in args], "kwargs": {}}]
+    cond = {"plan": {"root": "Document", "steps": [*c("attr", "class"), {"kind": "op", "name": "eq", "args": [{"value": "r keep"}]}]}}
+    plan = {"root": "Reference", "steps": [*c("resolve"), *c("select_all", "li"),
+            {"kind": "get", "name": "filter"}, {"kind": "call", "name": "filter", "args": [cond], "kwargs": {}},
+            {"kind": "get", "name": "extract"}, {"kind": "call", "name": "extract", "args": [], "kwargs": {"n": {"plan": {"root": "Document", "steps": c("attr", "text")}}}}]}
+    html = "".join(f'<li class="{"r keep" if i in (0, 2, 3) else "r"}">{i}</li>' for i in range(5))
+    with HTTPServer() as srv:
+        srv.expect_request("/").respond_with_data(f"<ul>{html}</ul>", content_type="text/html")
+        with TestClient(create_app(traces_dir=tmp_path)) as client:
+            rid = client.post("/runs", json={"plan": plan, "url": srv.url_for("/")}).json()["id"]
+            for _ in range(200):
+                if client.get(f"/runs/{rid}").json()["status"] != "running":
+                    break
+                time.sleep(0.05)
+            events = client.get(f"/traces/{rid}/events").json()
+    kept = next(e["detail"] for e in events if e.get("phase") == "result" and e.get("step") == "4")
+    assert kept["kind"] == "Collection" and kept["n"] == 3 and kept["kept"] == [0, 2, 3]
