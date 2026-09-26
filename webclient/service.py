@@ -1112,12 +1112,24 @@ def create_app(
         from .query.expr import from_blob
         from .trace import read as _read
 
-        blob = _read(f).plan_blob
+        reader = _reader(f)
+        blob = reader.plan_blob
+        # the plans that RAN in it (each announced itself): when the footer's plan is not one of them (a pipeline
+        # that ran a query it made), the one with the most events is the run's plan
+        import collections
+
+        counts = collections.Counter(getattr(e, "plan_id", None) for e in reader.events if getattr(e, "plan_id", None))
+        announced = {e.detail.get("plan_id"): e.detail.get("blob") for e in reader.events
+                     if getattr(e, "topic", "") == "plan" and getattr(e, "phase", "") == "plan" and isinstance(getattr(e, "detail", None), dict)}
+        footer_id = from_blob(blob, None)._plan.id if blob else None
+        if (footer_id is None or footer_id not in counts) and announced:
+            best = max(announced, key=lambda k: counts.get(k, 0))
+            if counts.get(best):
+                blob = announced[best]
         if blob is None:
             return _error(404, "InvalidRequest", f"trace {trace_id!r} recorded no plan")
         expr = from_blob(blob, None)
-        reader = _read(f)
-        return {"blob": blob, "describe": expr.describe(), "plan_id": expr._plan.id, "steps": reader.plan_steps}
+        return {"blob": blob, "describe": expr.describe(), "plan_id": expr._plan.id, "steps": reader.plan_steps if blob == reader.plan_blob else {}}
 
     @app.get("/events", response_model=None)
     def events_history(since: int = 0, topic: str = "", document_id: str | None = None, payload: bool = False,

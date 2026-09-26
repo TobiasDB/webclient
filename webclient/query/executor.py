@@ -209,7 +209,7 @@ async def aevaluate(expr: Any, context: Any = None, *, client: Any = None) -> An
                 context = await aevaluate(context, client=client)
         if log.isEnabledFor(logging.DEBUG):
             log.debug("evaluate %s", expr._plan.describe())
-        with _plan_at(_nested_address()), _plan_id(expr._plan):
+        with _plan_at(_nested_address()), _plan_id(expr._plan, client):
             value = _start(expr._plan, context, client)
             return await _arun(value, expr._plan.steps, 0, context, client)
 
@@ -233,14 +233,23 @@ def _nested_address() -> tuple[str, ...]:
 
 
 @contextmanager
-def _plan_id(plan: "Plan") -> Iterator[None]:
-    """The plan a TOP-LEVEL evaluation runs (a sub-plan's events belong to the plan it is part of)."""
+def _plan_id(plan: "Plan", client: Any = None) -> Iterator[None]:
+    """The plan a TOP-LEVEL evaluation runs (a sub-plan's events belong to the plan it is part of). It ANNOUNCES
+    itself -- ``PlanEvent(phase="plan")`` with its id and blob -- so a trace knows every plan that ran in it."""
     from ..events import CURRENT_PLAN
 
     if CURRENT_PLAN.get() is not None:
         yield
         return
     token = CURRENT_PLAN.set(plan.id)
+    bus = getattr(client, "bus", None) if client is not None else None
+    if bus is not None:
+        from ..models import PlanEvent
+
+        try:
+            bus.publish(PlanEvent(phase="plan", detail={"plan_id": plan.id, "blob": plan.to_blob()}))
+        except Exception:  # noqa: BLE001 - announcing is best-effort
+            pass
     try:
         yield
     finally:
@@ -753,7 +762,7 @@ async def astream(
             return
 
         head, shaping = steps[:tail], steps[tail:]
-        with _plan_at(_nested_address()), _plan_id(expr._plan):
+        with _plan_at(_nested_address()), _plan_id(expr._plan, client):
             base = await _arun(_start(expr._plan, context, client), head, 0, context, client)
             if not isinstance(base, Collection):  # head wasn't a collection -- finish eager
                 value = await _arun(base, shaping, 0, context, client, tail)

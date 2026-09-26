@@ -258,7 +258,10 @@ class WebCore:
 
         tree = rec._read_tree()
         parent, item = at
-        node = tree.child(parent, op, args, kwargs)
+        # where in the journey this read is made (after how many of its calls): the page's state it reads
+        chain = getattr(rec, "_record_chain", None)
+        stage = sum(1 for st in chain._plan.steps if st.kind == "get") if chain is not None else 0
+        node = tree.child(parent, op, args, kwargs, stage=stage)
         engine = self._bound_engine()
         bus = engine.bus if engine is not None else None
         t_step, t_item = CURRENT_STEP.set((f"@{node}",)), CURRENT_ITEM.set(item)

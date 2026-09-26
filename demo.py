@@ -717,13 +717,15 @@ def record_onboarding(lab: str) -> None:
         return "{}"
 
     path = Path("traces") / "onboarding.jsonl"
-    with WebClient(timeout=15.0) as wc, wc.trace(path):
+    with WebClient(timeout=15.0) as wc, wc.trace(path) as tr:
         result = onboard_company(
             "Roasters", Brief(description="the featured products with their prices", fields=["title", "price"], search="products"),
             wc=wc, llm=llm, search=search, browser=False, interactive=True,
         )
         if result.pending is not None:  # the confirm gate: a human says yes, once
             result = result.resume("yes")
+        if result.query is not None:  # the trace carries the plan it made (Run replays the query as that plan)
+            tr.plan = result.query.blob
     print("onboarding:    ", "ok" if result.ok else result.reason, "| trace:", path)
 
 

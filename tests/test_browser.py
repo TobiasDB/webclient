@@ -934,3 +934,21 @@ def test_back_goes_back_on_the_same_live_page(httpserver, wc):
     doc.back()  # nothing further back: stays
     assert doc.final_url.endswith("/b1")
     wc.release(doc)
+
+
+def test_reads_are_recorded_where_they_were_made_in_the_journey(httpserver, wc):
+    # a read before an interaction and one after it: the recorded plan reads each at its point of the journey --
+    # resolve().extract(<before>).step(write).extract(<after>).project() -- so replaying it reads the same
+    httpserver.expect_request("/app9").respond_with_data(APP, content_type="text/html")
+    with wc.record() as rec:
+        live = rec.ref(httpserver.url_for("/app9")).resolve(browser=True).collect()
+        before = live.select("#out").attr("text")
+        live.write("#name", "Bob")
+        after = live.select("#out").attr("text")
+        plan = rec.reads_plan
+    wc.release(live)
+    assert (before, after) == ("", "Bob")
+    described = plan.describe()
+    assert described.index(".extract(") < described.index(".step(") < described.rindex(".extract(")
+    row = plan.collect()
+    assert list(row.values()) == ["", "Bob"]
