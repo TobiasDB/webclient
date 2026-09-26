@@ -107,16 +107,13 @@ def _extraction_steps(doc_expr: Any) -> list[Any]:
 
 
 def _paginate_steps(max_pages: int = 50, hint: "PaginationHint | None" = None) -> list[Any]:
-    """The plan steps for the right ``.paginate(...)`` advance, spliced between the reference resolve
-    and the extraction so the shipped query walks the dataset's pages and the body extracts across
-    all of them. The detected :class:`PaginationHint` picks the advance: a ``param`` kind with a known
-    param name -> ``by="param", name=<param>`` (walk ``?page=`` / ``?offset=``); otherwise ``by="link"``
-    (follow ``rel=next`` / the HTTP Link header), which is also the safe default when the hint is absent
-    or path-based. Authoring still tests page one only."""
-    if hint is not None and hint.kind == "param" and hint.name:
-        plan = wq.doc.paginate(by="param", name=hint.name, max_pages=max_pages)
-    else:
-        plan = wq.doc.paginate(by="link", max_pages=max_pages)
+    """The plan steps for the ``.paginate(...)`` the detected :class:`PaginationHint` suggests (its
+    best mode: next link / page param / load-more), spliced between the reference resolve and the
+    extraction so the shipped query walks the dataset's pages and the body extracts across all of
+    them. No hint: follow ``rel=next`` / the HTTP Link header. Authoring still tests page one only."""
+    from ...core.document.paginate import pager_kwargs
+
+    plan = wq.doc.paginate(**pager_kwargs(hint.best if hint is not None else None), max_pages=max_pages)
     return list(plan._plan.steps)
 
 
@@ -130,7 +127,7 @@ def _executable_query(
     executable exactly as output. The model supplies only the extraction; this function
     (no LLM) supplies the reference + resolve. When the source needs proxy / antibot, the
     FULL policy is baked in (``resolve(policy=...)``) so the blob re-fetches with it; a
-    plain source just bakes the browser tier. ``paginate`` splices a ``.paginate(by="link")``
+    plain source just bakes the browser tier. ``paginate`` splices the hinted ``.paginate(...)``
     after the resolve, so a paginated source's blob pulls the WHOLE dataset (not page one)."""
     from ...query.expr import Expr
     from ...query.plan import Plan
@@ -691,15 +688,18 @@ def _short_fail_reason(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> 
 
 def _pager_confirmed(doc: Any, hint: "PaginationHint | None") -> bool:
     """Probe that the source REALLY paginates before baking a pager into the shipped blob: walk two
-    pages with the hint's advance (``by="param"`` + the param name when known, else ``by="link"``)
-    and confirm a genuine, DISTINCT second page exists. ``paginate``'s own clamp guard drops a
+    pages with the hint's best pager (:func:`~webclient.core.document.paginate.pager_kwargs`) and confirm a genuine, DISTINCT second page exists. ``paginate``'s own clamp guard drops a
     page-2 that merely re-serves page one (an out-of-range clamp) and it stops on an empty/404, so a
     length ``>= 2`` means a working pager. A single page -- mislabelled paginated, a clamp, or an
     unreachable page two -- returns False, so the blob is shipped page-one-only rather than paging
     into nothing or duplicates. One extra fetch; a probe failure never breaks authoring."""
-    by, name = ("param", hint.name) if (hint is not None and hint.kind == "param" and hint.name) else ("link", "page")
+    from ...core.document.paginate import pager_kwargs
+
     try:
-        return len(list(doc.paginate(by=by, name=name, max_pages=2))) >= 2
+        kwargs = pager_kwargs(hint.best if hint is not None else None)
+        if "click" in kwargs or "scroll" in kwargs:
+            return False  # a load-more pager needs a held browser page: not probed, not baked
+        return len(list(doc.paginate(**kwargs, max_pages=2))) >= 2
     except Exception:  # noqa: BLE001 - a probe must never break authoring
         return False
 

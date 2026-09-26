@@ -98,8 +98,14 @@ is the same wire shape. `type` is the legacy short kind kept stable for callers 
 #### `paginate.not_live` -- Interacted pager needs a live page
 
 - **type** `NotLive` · **remedy** `browser`
-- **hint**: paginate(by='click') drives a load-more / infinite-scroll pager on a HELD browser page; re-resolve with browser=True.
-- Raised by ``paginate(by='click')`` on a static document (no browser page is held).
+- **hint**: paginate(click=...) / paginate(scroll=True) load more on a HELD browser page; re-resolve with browser=True.
+- Raised by a click / scroll pager on a static document (no browser page is held).
+
+#### `paginate.invalid` -- Pager malformed
+
+- **type** `InvalidPager` · **remedy** `fix_plan` · status 422
+- **hint**: A pager is exactly ONE iterator -- next= / pages= / cursor= (+ param=) / click= / scroll=True -- plus optional until= / filter= / max_pages= / records=.
+- Raised by ``paginate(...)`` with no iterator, two iterators, a cursor without ``param=``, or a removed ``by=``-API kwarg (the message says what to write instead).
 
 ### `op.*`
 

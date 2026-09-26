@@ -1086,40 +1086,41 @@ class WebClient(SessionCore, IWebClient):
         source: Any,
         *,
         config: "PaginationConfig | None" = None,
-        by: str = "auto",
-        max_pages: int = 20,
-        max_rows: int = 0,
-        name: str = "page",
-        start: int = 1,
+        next: Any = None,
+        pages: str = "",
+        start: "int | None" = None,
         step: int = 1,
-        size: int = 0,
-        cursor: str = "",
-        cursor_attr: str = "text",
+        stop: Any = None,
+        cursor: Any = None,
+        param: str = "",
+        click: Any = None,
+        scroll: bool = False,
+        until: Any = None,
+        filter: Any = None,
+        max_pages: int = 20,
         records: str = "",
-        until: str = "",
-        until_before: str = "",
+        **removed: Any,
     ) -> "Pagination":
-        """A stateful walk over a paginated series sharing this engine (a :class:`Pagination`
-        core -- crawl's twin). Drive it with ``pg.run()`` (batch → read ``.pages``) or ``pg.step()``
-        (fetch one more page; inspect ``.pages`` / ``.verdict`` between rounds), or stream it
-        (``for page in pg.stream()``). Where ``doc.paginate(...)`` walks a series inside a query
-        plan, this is the MANUAL/agent surface an LLM driver can step page by page.
+        """A stateful pager over ``source`` sharing this engine (a :class:`Pagination` core -- crawl's
+        twin): the SAME pager as ``doc.paginate(...)`` (same kwargs, same BoundedLoop), as a session an
+        agent can drive. ``pg.run()`` walks it out (read ``.pages`` / ``.verdict``), ``pg.step()`` fetches
+        one more page, ``for page in pg.stream()`` streams them.
 
-        ``source`` is the first page: a URL / :class:`Reference` (page one is fetched on the first
-        step) or an already-fetched :class:`Document` (used directly, no re-fetch). ``by="auto"``
-        (default) reads the advance off page one's detected pagination hint (a ``?page=`` source
-        walks by that param, else the next link is followed); pass ``by="param"`` / ``"link"`` /
-        ``"cursor"`` to force it. The stop knobs (``max_pages`` / ``max_rows`` with ``records`` /
-        ``until`` + ``until_before``) mirror ``doc.paginate``; or pass a whole
-        :class:`PaginationConfig` (``config=`` then wins). Remotely the walk runs as one plan and
-        the pages ride back; interactive ``step`` stays local (like ``Crawl.step``)."""
-        from ..paginate import Pagination, PaginationConfig
+        ``source`` is page one: a URL / :class:`Reference` (fetched on the first step) or a fetched
+        :class:`Document`. The pager is ONE iterator -- ``next=`` / ``pages=`` / ``cursor=`` + ``param=`` /
+        ``click=`` / ``scroll=True`` -- plus ``until=`` / ``filter=`` / ``max_pages=`` / ``records=``
+        (see ``Document.apaginate``); or pass a whole :class:`PaginationConfig` (``config=`` then wins).
+        Remotely the walk runs as one plan and the pages ride back; ``step`` stays local."""
+        from ..document.paginate import config_of
+        from ..paginate import Pagination
 
-        cfg = config or PaginationConfig(
-            by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start, step=step,
-            size=size, cursor=cursor, cursor_attr=cursor_attr, records=records, until=until,
-            until_before=until_before,
-        )
+        cfg = config.check() if config is not None else config_of({
+            **{k: v for k, v in dict(
+                next=next, pages=pages, start=start, stop=stop, cursor=cursor, param=param,
+                click=click, until=until, filter=filter, records=records,
+            ).items() if v is not None and not (isinstance(v, str) and not v)},
+            **({"scroll": True} if scroll else {}), "step": step, "max_pages": max_pages, **removed,
+        })
         return Pagination(config=cfg).bind(self, source)
 
     # ``sitemap`` (hunt the sitemap.xml) and ``robots`` (hunt the robots.txt) are

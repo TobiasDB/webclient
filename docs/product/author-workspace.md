@@ -184,10 +184,11 @@ colour, outlined on the page on request). Tabs: Rows (local preview) · Server r
 · Markdown · Elements · As code. The event feed at the bottom of the Playground is off by
 default (an `events` chip in the header turns it on for debugging).
 
-**Pagination** (`paginate`): `by="link"` follows `rel=next` (or `next=<selector>` for a site
-without it), `by="param"` walks `?page=`, `by="cursor"` carries a token, and `by="click"`
-drives an interacted pager on the live page (click a load-more control, or scroll to the
-bottom, until `records` stops growing); the plan node edits all of it.
+**Pagination** (`paginate`, spec: [pagination.md](pagination.md)): one iterator --
+`next=` (a link Expr, or a selector whose href is followed), `pages=` (a URL-param integer
+iterator with `start` / `step` / `stop`), `cursor=` + `param=` (a token), `click=` / `scroll=True`
+(load more on the live page) -- plus `until=` / `filter=` / `max_pages=`. The page's hints
+(`doc.pagination()`) offer the iterators to pick from; the pager editor edits all of it.
 
 
 ## 9. The second review (2026-09-24, late): a card, per-op tabs, groups, names from the page
@@ -239,7 +240,7 @@ plan in place: add a `filter`, make a field optional, reorder, change a selector
 The same moves cover: a listing whose records nest a list (a `select_all` inside a record
 is a list column); a detail page that itself has records (a `select_all` on the followed
 page nests rows); a form filled then submitted before the records exist (`write`, `click`,
-`wait_for`, recorded at the page level); a load-more pager (`paginate(by="click")`); a
+`wait_for`, recorded at the page level); a load-more pager (`paginate(click="button.more")`); a
 definition list or a table of properties (`alias` + `merge`).
 
 Offline, the same plan is `tests/test_books_story.py` in the package.

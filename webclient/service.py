@@ -164,7 +164,7 @@ def op_catalogue() -> "dict[str, Any]":
         {"name": "download", "kind": "call", "io": False, "collection": False, "returns": "Value", "params": [],
          "doc": "The document's raw bytes as a file value: url, filename, content_type, size, sha256, base64 (a PDF, an image)."},
         {"name": "paginate", "kind": "call", "io": True, "collection": True, "bound": True,
-         "params": params_of(_Doc.apaginate), "doc": doc_of(_Doc.apaginate)},
+         "params": [p for p in params_of(_Doc.apaginate) if p["name"] != "**removed"], "doc": doc_of(_Doc.apaginate)},
         {"name": "limit", "kind": "call", "io": False, "collection": True, "params": [{"name": "n", "required": True, "kind": "positional", "type": "int"}], "doc": "The first n of a collection."},
         {"name": "count", "kind": "prop", "io": False, "collection": False, "params": [], "doc": "How many items a collection holds."},
     ]

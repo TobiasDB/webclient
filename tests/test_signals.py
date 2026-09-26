@@ -82,27 +82,57 @@ def test_page_param_link_detection_shares_the_canon_param_table():
     assert not any(s.name == "page_param_links" for s in post["pagination"].signals)  # ?p= is an id
 
 
-def test_pagination_hint_reads_kind_name_and_totals():
+def _hint(body: bytes, url: str = "https://x.test/list", headers: dict | None = None):
+    return flags(Context.from_response(200, headers or {"content-type": "text/html"}, {}, body, url=url))["pagination"].value
+
+
+def test_pagination_hint_lists_modes_with_code_and_totals():
     from webclient.core.document.models import PaginationHint
 
-    f = flags(Context.from_response(
-        200, {"content-type": "text/html"}, {},
-        b'<html><body><main><article>x</article><p>Showing 1-20 of 348</p>'
-        b'<a href="/list?page=2">next</a></main></body></html>',
-    ))
-    h = f["pagination"].value
+    h = _hint(b'<html><body><main><article>x</article><p>Showing 1-20 of 348</p>'
+              b'<a href="/list?page=2">2</a></main></body></html>')
     assert isinstance(h, PaginationHint)
-    assert h.kind == "param" and h.name == "page"  # a page-param advance
+    assert h.best is not None and h.best.mode == "pages" and h.best.param == "page"
+    assert (h.best.start, h.best.step) == (1, 1)
+    assert h.best.code == '.paginate(pages="page", start=1, step=1, stop=18)'  # 348 items / 20 per page
     assert h.total_items == 348 and h.page_size == 20  # from the "1-20 of 348" caption
 
 
+def test_pagination_hint_offset_steps_by_the_page_size():
+    # regression: ?offset= walked by 1 (0,1,2,…) -- it steps by the gap to the next link
+    h = _hint(b'<html><body><main><p>Showing 1-20 of 95</p><a href="/list?offset=20">next</a>'
+              b'<a href="/list?offset=40">3</a></main></body></html>')
+    assert h.best.mode == "pages" and (h.best.start, h.best.step) == (0, 20)
+    assert h.best.stop == 80  # the last offset from the total
+
+
+def test_pagination_hint_starts_from_the_current_page():
+    # regression: a walk started on ?page=3 went back to 2 -- start is the URL's value, the step forward
+    h = _hint(b'<html><body><main><a href="/list?page=2">prev</a><a href="/list?page=4">next</a></main></body></html>',
+              url="https://x.test/list?page=3")
+    assert (h.best.start, h.best.step) == (3, 1)
+
+
+def test_pagination_hint_next_link_modes_carry_a_selector():
+    h = _hint(b'<html><body><main><a rel="next" href="/p2">next</a></main></body></html>')
+    assert h.best.mode == "next" and h.best.selector == 'a[rel="next"]'
+    assert h.best.code == ".paginate(next=wq.doc.next_link())" and len(h.modes) == 1  # not also as a "next" text link
+    t = _hint(b'<html><body><main><ul class="pager"><li class="nx"><a href="/p2">Next \xc2\xbb</a></li></ul></main></body></html>')
+    assert [m.mode for m in t.modes] == ["next"] and t.best.selector == "li.nx a"
+    assert t.best.code == '.paginate(next=wq.doc.select("li.nx a").attr("href"))'
+    more = _hint(b'<html><body><main><button class="more">Load more</button></main></body></html>')
+    assert more.best.mode == "click" and more.best.browser and more.best.selector == "button.more"
+
+
 def test_pagination_hint_link_header_marks_an_api_listing():
-    # a JSON API paginated only via the HTTP Link header (no HTML pager) still detects, kind=link
+    # a JSON API paginated only via the HTTP Link header (no HTML pager) still detects, as next via header
     f = flags(Context.from_response(
         200, {"content-type": "application/json", "Link": '<https://api.x/items?page=2>; rel="next"'},
         {}, b"[]",
     ))
-    assert f["pagination"].present and f["pagination"].value.kind == "link"
+    assert f["pagination"].present
+    best = f["pagination"].value.best
+    assert best.mode == "next" and best.via == "header" and best.code == ".paginate(next=wq.doc.next_link())"
 
 
 def test_ordered_flag_reads_sort_direction_and_relevance():

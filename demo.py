@@ -328,16 +328,18 @@ def pagination(wc: WebClient, base: str) -> None:
     across ALL pages, not page one), and the manual/agent twin ``wc.paginate`` -- a stateful walk
     on a BoundedLoop with ``step``/``run`` and a precise stop ``verdict``."""
     _section("pagination (bound op + session)")
-    pages = wc.fetch(f"{base}/releases?p=1").paginate(by="link", max_pages=5)
+    first = wc.fetch(f"{base}/releases?p=1")
+    _show("pager hint", first.pagination().value.best.code if first.pagination().present else "none")
+    pages = first.paginate(next=wq.doc.next_link(), max_pages=5)
     _show("paginate", len(list(pages)), "pages walked")
     dataset = (
         wq.reference(f"{base}/releases?p=1").resolve()
-        .paginate(by="link", max_pages=5)
+        .paginate(next=wq.doc.next_link(), max_pages=5)
         .select_all("article.rel").extract(v=wq.doc.attr("text")).project()
     ).collect()
     _show("dataset", [r["v"] for r in dataset])
 
-    with wc.paginate(f"{base}/releases?p=1", max_pages=5) as pg:  # by="auto" reads the page hint
+    with wc.paginate(f"{base}/releases?p=1", next=wq.doc.next_link(), max_pages=5) as pg:
         pg.step()
         v = pg.run().verdict
         assert v is not None

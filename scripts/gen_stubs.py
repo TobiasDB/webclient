@@ -37,7 +37,7 @@ from webclient.core.document import Document, Element  # noqa: E402
 from webclient.core.reference import Reference  # noqa: E402
 from webclient.core.session import Session  # noqa: E402
 from webclient.errors import WebError  # noqa: E402
-from webclient.core.document.models import PatternHint  # noqa: E402
+from webclient.core.document.models import DatasetHint, PatternHint  # noqa: E402
 from webclient.core.document.models import (  # noqa: E402
     Flag,
     Metadata,
@@ -97,6 +97,7 @@ _NS = {
     "Element": Element,
     "WebError": WebError,
     "PatternHint": PatternHint,
+    "DatasetHint": DatasetHint,
     "Transport": Transport,
     "Metadata": Metadata,
     "Signal": Signal,
@@ -509,11 +510,8 @@ def _lazy_class(core: type) -> str:
             # the raw bytes as a JSON-ready file value (a PDF behind a link)
             'def download(self) -> "Lazy[dict[str, Any]]": ...',
             # pagination: a hand-written BOUND op on Document (not a backing), so its
-            # stop/key sub-plans are recorded and evaluated per page. Yields the pages.
-            'def paginate(self, *, by: str = ..., max_pages: int = ..., max_rows: int = ..., '
-            'name: str = ..., start: int = ..., step: int = ..., size: int = ..., cursor: str = ..., '
-            'cursor_attr: str = ..., records: str = ..., until: str = ..., until_before: str = ..., '
-            'total_pages: int = ..., action: Any = ..., partition_param: str = ..., partition_values: Any = ..., stop: Any = ..., key: Any = ...) -> "LazyCollection[LazyDocument]": ...',
+            # Exprs (next / cursor / stop / until / filter / click) are recorded and evaluated per page.
+            'def paginate(self, *, next: Any = ..., pages: str = ..., start: int | None = ..., step: int = ..., stop: Any = ..., cursor: Any = ..., param: str = ..., click: Any = ..., scroll: bool = ..., until: Any = ..., filter: Any = ..., max_pages: int = ..., records: str = ...) -> "LazyCollection[LazyDocument]": ...',
             'def field(self, name: str) -> "LazyField[Any]": ...',
             'def reference(self, name: str) -> "LazyReference": ...',
             # sequence authoring: .step(action) chains an ACTION (a wait_for/click/

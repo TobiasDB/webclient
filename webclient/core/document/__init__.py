@@ -227,98 +227,82 @@ class Document(WebCore, IDocument):
         }
 
     # -- pagination: walk this dataset's pages into a Collection --------------------
-    # A BOUND op (hand-written, like extract), so the executor hands ``stop``/``key``
-    # to it UNEVALUATED and the walk evaluates them per page -- a semantic stop the
-    # DSL expresses, not just a literal cutoff. The walk itself lives in ``.paginate``
-    # (the module); this is the thin method that runs it and lifts the pages to a
-    # Collection so ``select_all(...).extract(...).project()`` fans out across them.
+    # A BOUND op (hand-written, like extract), so the executor hands its Exprs (next / cursor /
+    # stop / until / filter / click) UNEVALUATED and the walk evaluates them per page. The walk
+    # lives in ``.paginate`` (the module); this is the thin method that runs it and lifts the kept
+    # pages to a Collection so ``select_all(...).extract(...).project()`` fans out across them.
     async def apaginate(
         self,
         *,
-        by: str = "auto",
-        max_pages: int = 20,
-        max_rows: int = 0,
-        name: str = "page",
-        start: int = 1,
+        next: Any = None,
+        pages: str = "",
+        start: "int | None" = None,
         step: int = 1,
-        size: int = 0,
-        cursor: str = "",
-        cursor_attr: str = "text",
-        records: str = "",
-        until: str = "",
-        until_before: str = "",
-        total_pages: int = 0,
-        action: Any = None,
-        partition_param: str = "",
-        partition_values: "list[str] | tuple[str, ...]" = (),
         stop: Any = None,
-        key: Any = None,
-        next: str = "",
+        cursor: Any = None,
+        param: str = "",
+        click: Any = None,
+        scroll: bool = False,
+        until: Any = None,
+        filter: Any = None,
+        max_pages: int = 20,
+        records: str = "",
+        **removed: Any,
     ) -> "Collection[Document]":
         """The pages of this dataset as a ``Collection[Document]``, page one first -- chain
-        ``select_all(...).extract(...).project()`` to extract the WHOLE dataset (the body runs
-        across every page, not page one only).
+        ``select_all(...).extract(...).project()`` to extract the WHOLE dataset. ``doc.pagination()``
+        hints which pager to write (each mode's ``code``); nothing is guessed here.
 
-        HOW TO ADVANCE (``by``): ``"auto"`` (default) picks the advance from the page's detected
-        ``pagination`` hint -- a ``?page=``/``?offset=`` source walks by that param, everything else
-        follows the next link -- so a bare ``doc.paginate()`` just works. ``"link"`` follows ``rel=next``
-        (an HTML ``a/link[rel=next]`` or an HTTP ``Link:`` header, so an API paginates); ``"param"``
-        walks ``?{name}=`` from ``start`` by ``step`` (or by ``size`` as an offset); ``"cursor"`` reads
-        a keyset token off each page (the ``cursor`` selector's ``cursor_attr`` -- ``cursor="a.next"`` +
-        ``cursor_attr="data-after"``, or a JSON path ``cursor="pageInfo.endCursor"``) and carries it in
-        ``?{name}=``.
-        ``next`` names the next link's selector when the site has no ``rel=next`` (``next="li.next a"``
-        -- its ``href`` is the next page); interacted pagers are ``by="action"`` with an ``action``.
+        ONE ITERATOR:
+          ``next=<Expr>`` -- each page's next-page link (``wq.doc.next_link()``: the HTTP Link header /
+          rel=next; ``wq.doc.select("li.next a").attr("href")``); a str is a selector whose href is
+          followed. ``pages="page"`` -- a URL-param integer iterator from ``start`` (default: the URL's
+          value, else 1 -- 0 for an offset) by ``step`` (an offset's page size) to ``stop`` (inclusive:
+          an int, or an Expr read off page one). ``cursor=<Expr>, param="after"`` -- a token off each
+          page carried in ``?after=``. ``click="button.more"`` (or an action Expr) / ``scroll=True`` --
+          load more on the held browser page.
 
-        WHERE TO STOP (all optional, so a long dataset isn't walked whole for a few rows): ``max_pages``
-        caps the page count; ``max_rows`` with ``records`` (the record selector) stops once that many
-        rows are collected; ``until`` (a per-record ordering field) with ``until_before`` stops after
-        the first page whose OLDEST value sorts below the cutoff (the recency case); ``stop`` is a
-        predicate expression evaluated against each page (``stop=wq.doc.select('.last').is_ok()`` --
-        truthy means this page is the last). ``key`` is an expression giving each page a dedup key
-        (``key=wq.doc.select('article', index=0).attr('text')``); a repeated key stops the walk (a
-        semantic clamp guard, for pages that repeat records but differ in chrome/timestamps)."""
+        THEN: ``until=<Expr>`` -- truthy on a page -> it is the last (kept); ``filter=<Expr>`` -- keep
+        only the pages where it is truthy (the walk goes on); ``max_pages`` (20) -- the budget;
+        ``records="<selector>"`` -- click/scroll progress and the repeat comparison. The walk stops on
+        end / empty / repeat (an out-of-range clamp) / until / exhausted / budget; later pages are
+        fetched on page one's tier."""
         from ...query.collection import Collection
-        from .paginate import walk
+        from .paginate import config_of, walk
 
-        pages = await walk(
-            self, by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start,
-            step=step, size=size, cursor=cursor, cursor_attr=cursor_attr, records=records,
-            until=until, until_before=until_before, total_pages=total_pages, action=action,
-            partition_param=partition_param, partition_values=partition_values,
-            stop=stop, key=key, next=next, client=self._client,
-        )
-        return Collection(pages, client=self._client, root=self.name or self.root)
+        cfg = config_of({
+            **{k: v for k, v in dict(
+                next=next, pages=pages, start=start, stop=stop, cursor=cursor, param=param,
+                click=click, until=until, filter=filter, records=records,
+            ).items() if v is not None and not (isinstance(v, str) and not v)},
+            **({"scroll": True} if scroll else {}), "step": step, "max_pages": max_pages, **removed,
+        })
+        done = await walk(self, cfg, client=self._client)
+        return Collection(done.pages, client=self._client, root=self.name or self.root)
 
     def paginate(
         self,
         *,
-        by: str = "auto",
-        max_pages: int = 20,
-        max_rows: int = 0,
-        name: str = "page",
-        start: int = 1,
+        next: Any = None,
+        pages: str = "",
+        start: "int | None" = None,
         step: int = 1,
-        size: int = 0,
-        cursor: str = "",
-        cursor_attr: str = "text",
-        records: str = "",
-        until: str = "",
-        until_before: str = "",
-        total_pages: int = 0,
-        action: Any = None,
-        partition_param: str = "",
-        partition_values: "list[str] | tuple[str, ...]" = (),
         stop: Any = None,
-        key: Any = None,
-        next: str = "",
+        cursor: Any = None,
+        param: str = "",
+        click: Any = None,
+        scroll: bool = False,
+        until: Any = None,
+        filter: Any = None,
+        max_pages: int = 20,
+        records: str = "",
+        **removed: Any,
     ) -> "Collection[Document]":
         """Eager form of :meth:`apaginate` (bridged onto the engine loop)."""
         return self._client.loop().run(self.apaginate(
-            by=by, max_pages=max_pages, max_rows=max_rows, name=name, start=start, step=step,
-            size=size, cursor=cursor, cursor_attr=cursor_attr, records=records, until=until,
-            until_before=until_before, total_pages=total_pages, action=action,
-            partition_param=partition_param, partition_values=partition_values, stop=stop, key=key, next=next,
+            next=next, pages=pages, start=start, step=step, stop=stop, cursor=cursor, param=param,
+            click=click, scroll=scroll, until=until, filter=filter, max_pages=max_pages, records=records,
+            **removed,
         ))
 
 

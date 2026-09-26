@@ -188,24 +188,42 @@ class Flag(BaseModel):
         return self.present
 
 
-class PaginationHint(BaseModel):
-    """The ``pagination`` flag's ``value``: a structured read of HOW a listing paginates, so a
-    caller (onboarding, or a no-arg ``paginate()``) can pick the right advance without guessing.
-    ``kind`` is how the next page is reached -- ``"link"`` (a discovered ``rel=next`` / HTTP
-    ``Link`` header -> ``paginate(by="link")``), ``"param"`` (a ``?page=``/``?offset=`` query
-    param -> ``paginate(by="param", name=...)``), ``"numbered"`` (only a ``1 2 3`` strip seen),
-    or ``"unknown"``. ``next`` is the resolved next-page URL when one was found; ``name`` the
-    pagination param for the computed case. ``total_pages`` / ``total_items`` / ``page_size`` come
-    from a "Page 1 of 18" / "Showing 1-20 of 348" caption or an ``X-Total-Count`` header when
-    present (0 = unknown). ``endpoint`` is a demoted XHR data endpoint (reserved; empty for now)."""
+class PagerHint(BaseModel):
+    """ONE way this page could be paged -- a hint, never run by itself. ``mode`` is the iterator
+    (``next`` / ``pages`` / ``cursor`` / ``click`` / ``scroll``, as ``paginate`` takes them); ``code`` the
+    ``.paginate(...)`` to write; the structured fields fill an editor: the ``selector`` (+ ``attr``) a
+    ``next`` / ``cursor`` / ``click`` reads, or the ``param`` / ``start`` / ``step`` / ``stop`` a ``pages``
+    iterator walks. ``evidence`` says what was seen; ``confidence`` how sure."""
 
-    kind: Literal["link", "param", "numbered", "unknown"] = "unknown"
-    next: str = ""  # resolved next-page URL (discovered case)
-    name: str = ""  # pagination param name (computed case)
-    page_size: int = 0  # records per page, if a caption reveals it
-    total_pages: int = 0  # from "Page X of Y"
-    total_items: int = 0  # from "Showing 1-N of M" / X-Total-Count
-    endpoint: str = ""  # a demoted XHR data endpoint (reserved)
+    mode: Literal["next", "pages", "cursor", "click", "scroll"]
+    code: str
+    evidence: str = ""
+    confidence: float = 0.5
+    selector: str = ""  # next / cursor / click: what to read or click ("" + via="header": the Link header)
+    attr: str = ""  # next / cursor: the attribute holding the link / token
+    via: str = ""  # next: "header" -- the HTTP Link header (next=wq.doc.next_link())
+    param: str = ""  # pages / cursor: the URL param
+    start: int | None = None  # pages: the first value (this page's)
+    step: int = 1  # pages: the increment (the gap to the next page's value: 20 for an offset)
+    stop: int = 0  # pages: the last value, when a caption / header reveals it (0 = unknown)
+    browser: bool = False  # click / scroll: needs the page held in a browser
+
+
+class PaginationHint(BaseModel):
+    """The ``pagination`` flag's value: the WAYS this listing could be paged (``modes``, best first --
+    each a :class:`PagerHint` with the ``.paginate(...)`` to write), and what a caption / header says
+    about its size (``total_pages`` from "Page 1 of 18", ``total_items`` / ``page_size`` from "Showing
+    1-20 of 348" or ``X-Total-Count``; 0 = unknown). Hints only: ``paginate`` never reads them itself."""
+
+    modes: list[PagerHint] = []
+    total_pages: int = 0
+    total_items: int = 0
+    page_size: int = 0
+
+    @property
+    def best(self) -> "PagerHint | None":
+        """The most likely way to page it (the first mode), if any."""
+        return self.modes[0] if self.modes else None
 
 
 class Ordering(BaseModel):
@@ -231,6 +249,21 @@ class Filtering(BaseModel):
 
     active: dict[str, str] = {}
     controls: list[str] = []
+
+
+class DatasetHint(BaseModel):
+    """WHAT THIS LISTING IS, for a reader (an LLM, a person) deciding how to query it -- the page's
+    facts in one place: is it ``paginated`` (and how), ``filtered`` (a subset: which filters are
+    active, what controls there are), ``ordered`` (by what, which way); and ``recipes`` -- copyable
+    plans for the whole dataset (``all``), just the newest (``latest``), without its filters
+    (``unfiltered``) and with one (``filtered``). ``summary`` says it in a few lines for a prompt."""
+
+    url: str = ""
+    paginated: "PaginationHint | None" = None
+    filtered: "Filtering | None" = None
+    ordered: "Ordering | None" = None
+    recipes: dict[str, str] = {}
+    summary: str = ""
 
 
 class PatternHint(BaseModel):
@@ -317,6 +350,7 @@ class IDocument(BaseModel):
         def content_elements(self) -> "list[IndexedElement]": ...
         def controls(self) -> "list[IndexedElement]": ...
         def cookie_banner(self) -> "Flag": ...
+        def dataset(self) -> "DatasetHint": ...
         def element_table(self, *, interactive: bool = ...) -> "str": ...
         def elements(self) -> "list[Element]": ...
         def evaluate(self, script: str, *, mutates: bool = ...) -> "Any": ...

@@ -20,7 +20,7 @@ from ...signals import patterns as _patterns  # noqa: F401  (registers the patte
 from ...signals import cookies as _cookies  # noqa: F401  (registers the cookie_banner detectors)
 from ..web_core import Backing
 from .html import tree
-from .models import Flag, PatternHint, XhrCall
+from .models import DatasetHint, Filtering, Flag, Ordering, PaginationHint, PatternHint, XhrCall
 
 if TYPE_CHECKING:
     from . import Document
@@ -36,7 +36,7 @@ class FlagsBacking(Backing):
         {"flags", "spa", "anti_bot_present", "anti_bot_triggered", "login_present",
          "login_required", "pagination", "ordered", "filtered", "live", "tabbed", "forms",
          "buttons", "shadow_dom", "iframe", "cookie_banner", "large_document", "framework", "xhr_endpoints",
-         "record_regions", "repeated_controls", "page_template", "patterns"}
+         "record_regions", "repeated_controls", "page_template", "patterns", "dataset"}
     )
     gate = "ok"
 
@@ -96,8 +96,25 @@ class FlagsBacking(Backing):
         return self._flags(core)["login_required"]
 
     def pagination(self, core: "Document") -> Flag:
-        """The dataset spans multiple pages. ``value`` notes the next-page pattern."""
+        """The dataset spans multiple pages. ``value`` is a :class:`PaginationHint`: the ways it could be
+        paged (``modes``, best first -- each with the ``.paginate(...)`` to write and its evidence) and
+        the totals a caption / header reveals. A hint only: nothing is walked."""
         return self._flags(core)["pagination"]
+
+    def dataset(self, core: "Document") -> DatasetHint:
+        """WHAT THIS LISTING IS, in one place, for deciding how to query it: is it paginated (and how),
+        filtered (a subset), ordered (by what) -- and copyable plans (``recipes``) for the whole dataset,
+        just the newest, without its filters and with one. ``summary`` says it in a few lines."""
+        f = self._flags(core)
+        pag = f["pagination"].value if f["pagination"].present else None
+        filt = f["filtered"].value if f["filtered"].present else None
+        order = f["ordered"].value if f["ordered"].present else None
+        return dataset_hint(
+            core.final_url or core.url,
+            pag if isinstance(pag, PaginationHint) else None,
+            filt if isinstance(filt, Filtering) else None,
+            order if isinstance(order, Ordering) else None,
+        )
 
     def ordered(self, core: "Document") -> Flag:
         """How the listing is SORTED (an :class:`~webclient.core.document.models.Ordering` value):
@@ -230,3 +247,52 @@ class FlagsBacking(Backing):
 
 
 __all__ = ["FlagsBacking"]
+
+
+def dataset_hint(
+    url: str, pag: "PaginationHint | None", filt: "Filtering | None", order: "Ordering | None"
+) -> DatasetHint:
+    """The :class:`DatasetHint` for a listing at ``url`` from its three flags' values: the facts, the
+    recipes (plans an LLM can copy -- ``<...>`` marks what it must fill in) and a prompt summary."""
+    from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+    import json
+
+    q = json.dumps
+    base = f"wq.reference({q(url)}).resolve()"
+    best = pag.best if pag is not None else None
+    pager = best.code if best is not None else ""
+    recipes: dict[str, str] = {"all": base + pager}
+    newest_first = order is not None and order.key == "date" and order.direction == "desc"
+    if newest_first or best is None:
+        recipes["latest"] = base  # newest-first: page one IS the latest
+    else:
+        until = ', until=wq.doc.select("<record date>").attr("text") < "<since>")'
+        recipes["latest"] = base + (pager[:-1] + until if pager.endswith(")") else pager)
+    if filt is not None and filt.active:
+        u = urlparse(url)
+        kept = [(k, v) for k, v in parse_qsl(u.query) if k not in filt.active]
+        recipes["unfiltered"] = f"wq.reference({q(urlunparse(u._replace(query=urlencode(kept))))}).resolve()" + pager
+    if filt is not None and filt.controls:
+        recipes["filtered"] = f'wq.reference({q(url)}).with_params({filt.controls[0]}="<value>").resolve()' + pager
+    lines = [f"listing: {url}"]
+    if best is not None and pag is not None:
+        size = ", ".join(x for x in (
+            f"{pag.total_pages} pages" if pag.total_pages else "", f"{pag.total_items} items" if pag.total_items else "",
+            f"{pag.page_size} per page" if pag.page_size else "") if x)
+        lines.append(f"paginated ({best.evidence}{'; ' + size if size else ''}): {best.code}")
+        lines += [f"  or: {m.code}  ({m.evidence})" for m in pag.modes[1:3]]
+    else:
+        lines.append("not paginated (one page)")
+    if filt is not None and (filt.active or filt.controls):
+        act = ", ".join(f"{k}={v}" for k, v in filt.active.items())
+        lines.append(f"filtered{': ' + act if act else ''} -- a SUBSET" + (f"; filters: {', '.join(filt.controls[:5])}" if filt.controls else ""))
+    else:
+        lines.append("not filtered")
+    if order is not None and order.key != "unknown":
+        lines.append(f"ordered by {order.key} {order.direction}" + (f" (set with ?{order.param}=)" if order.param else ""))
+    else:
+        lines.append("order unknown -- walk the whole dataset; an early stop is not safe")
+    return DatasetHint(
+        url=url, paginated=pag, filtered=filt, ordered=order, recipes=recipes, summary="\n".join(lines),
+    )

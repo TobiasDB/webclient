@@ -9,6 +9,7 @@ method on it -- so importing this module stays remote-safe.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import date, datetime, timezone
@@ -217,20 +218,6 @@ def _int(s: str) -> int:
         return 0
 
 
-def _param_name(url: str) -> str:
-    """The pagination param carried by ``url`` (``?page=`` / ``?offset=`` …, canon's table), else ""."""
-    if not url:
-        return ""
-    from ..core.crawl.canon import _PAGINATION_PARAMS
-
-    from urllib.parse import parse_qsl
-
-    for k, _ in parse_qsl(urlparse(url).query):
-        if k.lower() in _PAGINATION_PARAMS:
-            return k
-    return ""
-
-
 def _totals(ctx: Context) -> "tuple[int, int, int]":
     """``(total_pages, total_items, page_size)`` read from an ``X-Total-Count`` header and a
     "Page 1 of 18" / "Showing 1-20 of 348" caption -- each 0 when not found."""
@@ -250,45 +237,131 @@ def _totals(ctx: Context) -> "tuple[int, int, int]":
     return total_pages, total_items, page_size
 
 
+def _code_next(selector: str, attr: str = "href") -> str:
+    """The ``.paginate(next=...)`` that follows ``selector``'s ``attr``."""
+    return f".paginate(next=wq.doc.select({json.dumps(selector)}).attr({json.dumps(attr)}))"
+
+
 def _pagination_value(signals: "list[Signal]", ctx: Context) -> Any:
-    """A structured :class:`PaginationHint` (kind / next / name / totals) built from the pagination
-    signals + the page, so a caller can pick the advance without guessing. ``None`` when nothing fired."""
-    from ..core.document.models import PaginationHint
+    """A :class:`PaginationHint`: every WAY the page could be paged that the signals saw, as a
+    ranked list of :class:`PagerHint` modes -- each with the ``.paginate(...)`` to write and its
+    evidence -- plus the totals a caption / header reveals. Hints only: nothing here runs a walk.
+    ``None`` when nothing fired."""
+    from ..core.document.models import PagerHint, PaginationHint
 
     if not signals:
         return None
-    fired = {s.name for s in signals}
-    # a next URL a signal already resolved (page_param_links) -- tree-derived, so correct-case
-    next_url = next((s.value for s in signals if isinstance(s.value, str) and s.value), "")
-    kind: Literal["link", "param", "numbered", "unknown"]
-    if "rel_next_link" in fired or "link_header_next" in fired:
-        kind = "link"
-        if not next_url and ctx.tree is not None:  # fill next from the tree rel=next (correct case)
-            nodes = ctx.tree.cssselect('a[rel="next"], link[rel="next"]')
-            href = nodes[0].get("href") if nodes else None
-            if href:
-                next_url = urljoin(ctx.final_url or ctx.url, href)
-    elif "page_param_links" in fired:
-        kind = "param"
-    elif "numbered_sequence" in fired:
-        kind = "numbered"
-    else:
-        kind = "unknown"
+    by = {s.name: s for s in signals}
     total_pages, total_items, page_size = _totals(ctx)
-    return PaginationHint(
-        kind=kind, next=next_url, name=_param_name(next_url) if kind == "param" else "",
-        total_pages=total_pages, total_items=total_items, page_size=page_size,
-    )
+    modes: list[PagerHint] = []
+    if "link_header_next" in by:
+        modes.append(PagerHint(mode="next", via="header", code=".paginate(next=wq.doc.next_link())",
+                               evidence="an HTTP Link rel=next header", confidence=0.95))
+    if "rel_next_link" in by and not any(m.via == "header" for m in modes):
+        sel = str(by["rel_next_link"].value or 'a[rel="next"]')  # next_link() reads rel=next (and the header)
+        modes.append(PagerHint(mode="next", selector=sel, attr="href", code=".paginate(next=wq.doc.next_link())",
+                               evidence="a rel=next link", confidence=0.9))
+    if "page_param_links" in by and isinstance(by["page_param_links"].value, dict):
+        v = by["page_param_links"].value
+        param, start, step = str(v["param"]), int(v["start"]), max(1, int(v["step"]))
+        stop = 0
+        if v.get("offset"):
+            if total_items:
+                stop = ((total_items - 1) // step) * step  # the last page's offset
+        elif total_pages:
+            stop = total_pages
+        elif total_items and page_size:
+            stop = -(-total_items // page_size)
+        args = f'pages="{param}", start={start}, step={step}' + (f", stop={stop}" if stop else "")
+        modes.append(PagerHint(mode="pages", param=param, start=start, step=step, stop=stop,
+                               code=f".paginate({args})", confidence=0.75,
+                               evidence=f"links carry ?{param}= (this page {start}, the next {start + step})"))
+    if "next_text_link" in by:
+        sel = str(by["next_text_link"].value)
+        if not any(m.mode == "next" and m.selector == sel for m in modes):
+            modes.append(PagerHint(mode="next", selector=sel, attr="href", code=_code_next(sel),
+                                   evidence="a link labelled next", confidence=0.65))
+    if "load_more_control" in by:
+        sel = str(by["load_more_control"].value)
+        modes.append(PagerHint(mode="click", selector=sel, browser=True, confidence=0.55,
+                               code=f".paginate(click={json.dumps(sel)})", evidence="a load-more control (needs the page in a browser)"))
+    modes.sort(key=lambda m: -m.confidence)
+    return PaginationHint(modes=modes, total_pages=total_pages, total_items=total_items, page_size=page_size)
 
 
 flag("pagination", value=_pagination_value)
 
 
+_NEXTISH = re.compile(r"^\s*(next|next\s*page|older|older posts|more results|›|»|>|→)\s*[›»>→]?\s*$", re.I)
+_MOREISH = re.compile(r"^\s*(load|show|see|view)\s+more\b|^\s*more\s*(results|items|products)?\s*$", re.I)
+
+
+def _css_for(el: Any, root: Any) -> str:
+    """A short CSS selector that picks ``el`` on the page: its id, else its tag + classes, else scoped
+    under its parent's, else its aria-label -- the first that matches ONE element ("" when none does)."""
+    def own(e: Any) -> str:
+        if e.get("id"):
+            return f"#{e.get('id')}"
+        cls = [c for c in (e.get("class") or "").split() if c and not re.match(r"^(js-|is-|has-)", c)][:2]
+        return str(e.tag) + "".join(f".{c}" for c in cls)
+    mine = own(el)
+    cand = [mine] if mine != el.tag else []  # a bare tag is unique only by luck: scope it first
+    parent = el.getparent()
+    if parent is not None and parent.tag not in ("html", "body"):
+        cand.append(f"{own(parent)} {mine}")
+        if el.tag == "a" and el.get("rel"):
+            cand.append(f'{own(parent)} a[rel="{el.get("rel")}"]')
+    if el.get("aria-label"):
+        cand.append(f'{el.tag}[aria-label="{el.get("aria-label")}"]')
+    cand.append(mine)
+    for c in cand:
+        try:
+            if len(root.cssselect(c)) == 1:
+                return c
+        except Exception:  # noqa: BLE001 - a class that is not valid CSS
+            continue
+    return ""  # nothing picks it alone: no hint beats a wrong one
+
+
 @detector(flag="pagination", name="rel_next_link", stage="static")
 def _rel_next(ctx: Context) -> Hit | None:
-    """pagination evidence (strong): a ``rel="next"`` link/anchor -- the canonical next-page marker."""
-    if ctx.tree is not None and ctx.tree.cssselect('a[rel="next"], link[rel="next"]'):
-        return Hit(0.9, "a rel=next link")
+    """pagination evidence (strong): a ``rel="next"`` link/anchor -- the canonical next-page marker.
+    Its selector is the value (``a[rel="next"]``, or a ``<link>`` in the head)."""
+    if ctx.tree is None:
+        return None
+    if ctx.tree.cssselect('a[rel="next"]'):
+        return Hit(0.9, "a rel=next link", 'a[rel="next"]')
+    if ctx.tree.cssselect('link[rel="next"]'):
+        return Hit(0.9, "a rel=next link", 'link[rel="next"]')
+    return None
+
+
+@detector(flag="pagination", name="next_text_link", stage="static")
+def _next_text_link(ctx: Context) -> Hit | None:
+    """pagination evidence: a link LABELLED next (its text or aria-label: "Next", "›", "Older posts") --
+    a pager without rel=next. Its selector is the value."""
+    if ctx.tree is None:
+        return None
+    for el in ctx.tree.cssselect("a[href]"):
+        label = norm("".join(el.itertext())) or (el.get("aria-label") or el.get("title") or "")
+        if el.get("rel") == "next" or not (label and _NEXTISH.match(label)) or (el.get("href") or "").strip() in ("", "#"):
+            continue  # rel=next is its own (stronger) signal
+        sel = _css_for(el, ctx.tree)
+        if sel:
+            return Hit(0.6, f"a link labelled {label!r}", sel)
+    return None
+
+
+@detector(flag="pagination", name="load_more_control", stage="static")
+def _load_more_control(ctx: Context) -> Hit | None:
+    """pagination evidence: a LOAD MORE control ("Load more", "Show more results") -- a pager that
+    appends on click. Its selector is the value."""
+    if ctx.tree is None:
+        return None
+    for el in ctx.tree.cssselect('button, a, [role="button"]'):
+        label = norm("".join(el.itertext())) or (el.get("aria-label") or "")
+        if label and _MOREISH.match(label) and (sel := _css_for(el, ctx.tree)):
+            return Hit(0.55, f"a {label!r} control", sel)
     return None
 
 
@@ -304,22 +377,29 @@ def _pagination_ui(ctx: Context) -> Hit | None:
 
 @detector(flag="pagination", name="page_param_links", stage="static")
 def _page_param_links(ctx: Context) -> Hit | None:
-    """pagination evidence: a link whose query carries a pagination param (``?page=``, ``?offset=``,
-    …) or whose path is ``/page/N``; its resolved URL is the next-page value. Reads the SAME param
-    table crawl uses to collapse a series (``crawl.canon``), so detection and dedup never drift --
-    notably ``p`` is excluded (too often a post id, e.g. WordPress ``?p=123``, not a page number)."""
+    """pagination evidence: links whose query carries a pagination param (``?page=``, ``?offset=``, …;
+    ``p`` excluded -- too often a post id). The value says how to walk it: the ``param``, this page's
+    value (``start``: its URL's, else 1 -- or 0 for an offset) and the ``step`` to the NEXT page's value
+    (the smallest one after it among the links) -- so an ``?offset=20`` link walks by 20, and a walk
+    started on page 3 goes on to 4. Reads the same param table crawl uses (``crawl.canon``)."""
     if ctx.tree is None:
         return None
-    from ..core.crawl.canon import _PAGE_PATH_RE, _PAGINATION_PARAMS
+    from ..core.crawl.canon import _OFFSET_PARAMS, _PAGINATION_PARAMS
 
-    base = ctx.final_url or ctx.url
+    here = dict(parse_qsl(urlparse(ctx.final_url or ctx.url).query))
+    found: dict[str, list[int]] = {}
     for el in ctx.tree.cssselect("a[href]"):
-        h = el.get("href")
-        if not h:
+        for k, v in parse_qsl(urlparse(el.get("href") or "").query):
+            if k.lower() in _PAGINATION_PARAMS and v.isdigit():
+                found.setdefault(k, []).append(int(v))
+    for param, values in found.items():
+        offset = param.lower() in _OFFSET_PARAMS
+        cur = here.get(param)
+        start = int(cur) if cur and cur.isdigit() else (0 if offset else 1)
+        ahead = sorted(v for v in set(values) if v > start)
+        if not ahead:
             continue
-        parts = urlparse(h)
-        if any(k.lower() in _PAGINATION_PARAMS for k, _ in parse_qsl(parts.query)) or _PAGE_PATH_RE.search(parts.path):
-            return Hit(0.5, "links with a page parameter", urljoin(base, h))
+        return Hit(0.5, f"links with ?{param}=", {"param": param, "start": start, "step": ahead[0] - start, "offset": offset})
     return None
 
 

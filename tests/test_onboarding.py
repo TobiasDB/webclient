@@ -332,11 +332,11 @@ def test_write_query_paginates_a_paginated_source(httpserver):
 
 
 def test_write_query_bakes_param_advance_from_the_hint(httpserver):
-    # a computed (?page=N) source with NO rel=next link -- only a pagination widget. The detected
-    # PaginationHint(kind="param", name="page") makes write_query bake .paginate(by="param",
-    # name="page"), so run_query walks ?page=1,2. (A by="link" default could not reach page 2 here.)
+    # a computed (?page=N) source with NO rel=next link -- only a pagination widget. The hint's best
+    # mode (pages="page") makes write_query bake .paginate(pages="page", ...), so run_query walks
+    # ?page=1,2. (A next-link default could not reach page 2 here.)
     from webclient.pipelines.onboarding import run_query, write_query
-    from webclient.core.document.models import PaginationHint
+    from webclient.core.document.models import PagerHint, PaginationHint
 
     def _page(rows):
         arts = "".join(f'<article class="r"><span class="n">{n}</span></article>' for n in rows)
@@ -353,9 +353,9 @@ def test_write_query_bakes_param_advance_from_the_hint(httpserver):
         art = write_query(
             httpserver.url_for("/list") + "?page=1", Brief(description="items", fields=["n"]),
             wc=wc, llm=llm, browser="never", retries=0, paginated=True,
-            pagination_hint=PaginationHint(kind="param", name="page"),
+            pagination_hint=PaginationHint(modes=[PagerHint(mode="pages", param="page", start=1, code='.paginate(pages="page")')]),
         )
-        assert art is not None and "param" in art.describe  # the param advance was baked, not by=link
+        assert art is not None and "pages=" in art.describe  # the page-param pager was baked, not next=
         rows = run_query(art, wc=wc)
     assert [r["n"] for r in rows] == ["A", "B", "C"]  # walked ?page=1,2 then stopped at the 404
 

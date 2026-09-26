@@ -7,6 +7,8 @@ in-process ``webclient.lab`` (the default here) and the product website (``LAB_U
 runs this same file against it -- the website IS the lab)."""
 
 import json
+
+from webclient.interface import wq
 import os
 
 import pytest
@@ -79,12 +81,12 @@ def test_pagination_rel_next_and_cursor(lab, wc, index):
     first = wc.fetch(f"{lab}{index['paginated']['path']}")
     assert "pagination" in [f.name for f in first.flags()]
     assert first.next_link().url.replace(lab, "") == exp["next_of_1"]
-    pages = first.paginate(by="link", max_pages=10)
+    pages = first.paginate(next=wq.doc.next_link(), max_pages=10)
     total = sum(len(p.select_all(exp["record_selector"])) for p in pages)
     assert len(pages) == exp["pages"] and total == exp["total"]
     cur = expected(lab, wc, "cursor")
     api = wc.fetch(f"{lab}{index['cursor']['path']}")
-    pages = api.paginate(by="cursor", cursor=cur["cursor_path"], name="after", max_pages=10)
+    pages = api.paginate(cursor=cur["cursor_path"], param="after", max_pages=10)
     ids = [i for p in pages for i in json.loads(p.content)["items"]]
     assert len(ids) == cur["total"]
 
@@ -149,14 +151,14 @@ def test_sitemap_robots_and_a_crawl(lab, wc, index):
 
 
 def test_interacted_pagination_loads_all_records(lab, wc):
-    # by="action": drive a JS "load more" button (an interacted pager) until the list is exhausted,
+    # click=: drive a JS "load more" button (an interacted pager) until the list is exhausted,
     # then extract EVERY record from the one fully-loaded page (append / exhaust-then-extract).
     from webclient.interface import wq
 
     exp = expected(lab, wc, "loadmore")
     live = wc.ref(f"{lab}/lab/loadmore").resolve(browser=True).collect()
     assert len(live.select_all("li.item")) == exp["initial"]  # 3 to start
-    pages = list(live.paginate(by="action", action=wq.doc.click("#more"), records="li.item", max_pages=10))
+    pages = list(live.paginate(click="#more", records="li.item", max_pages=10))
     assert len(pages) == 1  # append mode -> one fully-loaded page
     assert len(pages[0].select_all("li.item")) == exp["total"]  # all 12 loaded
     wc.release(live)

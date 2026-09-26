@@ -12,7 +12,7 @@ def test_op_catalogue_lists_document_ops_with_params():
     assert doc["attr"]["params"][0]["name"] == "name"
     assert doc["title"]["kind"] == "prop"
     # the hand-written chain ops ride along, with paginate's real signature
-    assert doc["extract"]["bound"] and {p["name"] for p in doc["paginate"]["params"]} >= {"by", "max_pages", "next", "records"}
+    assert doc["extract"]["bound"] and {p["name"] for p in doc["paginate"]["params"]} >= {"next", "pages", "cursor", "click", "until", "filter", "max_pages", "records"}
     assert {o["name"] for o in cat["Reference"]} >= {"resolve", "with_params"}
     ref = {o["name"]: o for o in cat["Reference"]}
     assert ref["resolve"]["returns"] == "Document" and ref["with_params"]["returns"] == "Reference"

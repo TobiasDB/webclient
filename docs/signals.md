@@ -9,7 +9,7 @@ noisy-OR, contra signals scale it down, and it is *present* at confidence >= 0.5
 (`Settings.detection.present_threshold`). A present flag may carry a `remedy` (the transport
 escalation it calls for) and a `value` (the actionable payload).
 
-19 flags, 47 detectors.
+19 flags, 49 detectors.
 
 ## `spa`
 
@@ -101,14 +101,16 @@ escalation it calls for) and a `value` (the actionable payload).
 
 ## `pagination`
 
-- **remedy**: `none` · **value**: A structured :class:`PaginationHint` (kind / next / name / totals) built from the pagination
+- **remedy**: `none` · **value**: A :class:`PaginationHint`: every WAY the page could be paged that the signals saw, as a
 
 | detector | stage | contra | needs | evidence |
 |---|---|---|---|---|
 | `link_header_next` | request |  | — | pagination evidence (strong): an HTTP ``Link: <url>; rel="next"`` header (RFC 8288, as GitHub and many JSON APIs paginate) -- so a listing with NO HTML pager is still detected. Presence only: the actual next URL is re-read (with correct case) at run time by ``doc.next_link()``, since ``Context`` lowercases header values. |
-| `rel_next_link` | static |  | — | pagination evidence (strong): a ``rel="next"`` link/anchor -- the canonical next-page marker. |
+| `rel_next_link` | static |  | — | pagination evidence (strong): a ``rel="next"`` link/anchor -- the canonical next-page marker. Its selector is the value (``a[rel="next"]``, or a ``<link>`` in the head). |
+| `next_text_link` | static |  | — | pagination evidence: a link LABELLED next (its text or aria-label: "Next", "›", "Older posts") -- a pager without rel=next. Its selector is the value. |
+| `load_more_control` | static |  | — | pagination evidence: a LOAD MORE control ("Load more", "Show more results") -- a pager that appends on click. Its selector is the value. |
 | `pagination_ui` | static |  | — | pagination evidence: a pagination/pager widget (by class or aria-label). |
-| `page_param_links` | static |  | — | pagination evidence: a link whose query carries a pagination param (``?page=``, ``?offset=``, …) or whose path is ``/page/N``; its resolved URL is the next-page value. Reads the SAME param table crawl uses to collapse a series (``crawl.canon``), so detection and dedup never drift -- notably ``p`` is excluded (too often a post id, e.g. WordPress ``?p=123``, not a page number). |
+| `page_param_links` | static |  | — | pagination evidence: links whose query carries a pagination param (``?page=``, ``?offset=``, …; ``p`` excluded -- too often a post id). The value says how to walk it: the ``param``, this page's value (``start``: its URL's, else 1 -- or 0 for an offset) and the ``step`` to the NEXT page's value (the smallest one after it among the links) -- so an ``?offset=20`` link walks by 20, and a walk started on page 3 goes on to 4. Reads the same param table crawl uses (``crawl.canon``). |
 | `numbered_sequence` | static |  | — | pagination evidence: three or more purely-numeric links -- a ``1 2 3`` page-number strip. |
 
 ## `ordered`
