@@ -327,8 +327,14 @@ def test_write_query_paginates_a_paginated_source(httpserver):
         )
         assert art is not None and ".paginate(" in art.describe  # pagination baked into the blob
         assert art.row_count == 2  # authoring TESTED page one only (fast)
-        rows = run_query(art, wc=wc)  # the shipped query walks every page
+        # a paginated source gets BOTH queries: B/all (this artifact, pages walked) and A/latest.
+        assert art.mode == "all" and art.covers_all
+        assert art.latest is not None and art.latest.mode == "latest"
+        assert ".paginate(" not in art.latest.describe  # A is page one -- no backfill pager
+        rows = run_query(art, wc=wc)  # the shipped query (B) walks every page
+        latest_rows = run_query(art.latest, wc=wc)  # A pulls just page one (the newest)
     assert [r["n"] for r in rows] == ["A", "B", "C"]
+    assert [r["n"] for r in latest_rows] == ["A", "B"]
 
 
 def test_write_query_bakes_param_advance_from_the_hint(httpserver):
@@ -1784,7 +1790,7 @@ def test_write_query_rejects_a_query_with_no_selection(httpserver):
                           wc=wc, llm=llm, browser="never", retries=1)
     assert art is not None and art.row_count == 1  # accepted the projecting query
     assert ".select_all(" in art.describe  # the executable has the selection
-    assert "NO selection" in prompts[1]  # the model was told to add one
+    assert "does NOT extract anything" in prompts[1]  # the model was told to extract something
 
 
 def test_write_query_hint_names_a_wrong_record_selector(httpserver):
@@ -2116,3 +2122,24 @@ def test_query_assessments_from_dataset_shape():
     ordered = DatasetHint(url="http://x/list", ordered=Ordering(key="date", direction="desc"))
     rnote2, correct2 = correctness_note(ordered)
     assert correct2 is True and "newest-first" in rnote2
+
+
+def test_write_query_authors_a_single_value_dataset(httpserver):
+    # genericity: a dataset that is ONE value (a lone datum), not a repeating list -- a
+    # document-level read (.select(...).attr(...), no .select_all) is valid, not rejected as
+    # "extracts nothing". (A single multi-field RECORD uses .select_all on its one container.)
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/co").respond_with_data(
+        '<main><span class="founded">1998</span></main>', content_type="text/html",
+    )
+
+    def llm(prompt: str) -> str:
+        return 'wq.doc.select(".founded").attr("text")'
+
+    with WebClient() as wc:
+        art = write_query(
+            httpserver.url_for("/co"), Brief(description="the founding year", fields=["founded"]),
+            wc=wc, llm=llm, browser="never", retries=0,
+        )
+    assert art is not None and art.tested and art.row_count == 1 and art.sample == ["1998"]

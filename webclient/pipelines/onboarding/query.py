@@ -275,8 +275,18 @@ def write_query(
     follow_up: "str | None" = None
     tries = retries + 1
 
-    def _with_attempts(art: QueryArtifact) -> QueryArtifact:
+    def _finalize(art: QueryArtifact, expr: Any = None) -> QueryArtifact:
         art.attempts = list(attempts)  # attach the rejection trail to the query we return
+        # the A companion: when the shipped query walks pages (mode "all"), also author the LATEST
+        # (page one, no backfill) from the same extraction -- a cheap incremental poll of the newest
+        # rows. Only for a paginated single-section source (latest == all otherwise).
+        if expr is not None and art.mode == "all" and not art.parts and doc.ok:
+            try:
+                latest, _ = _artifact_from(expr, doc, brief, candidate_url, resolve, bases,
+                                           paginate=False, dataset=dataset, mode="latest")
+                art.latest = latest
+            except Exception:  # noqa: BLE001 - the companion is best-effort, never a blocker
+                pass
         return art
     for attempt in range(tries):
         tag = f"    query {attempt + 1}/{tries}"
@@ -320,7 +330,7 @@ def write_query(
                 note = f" (STALE: {art.timeliness})" if art.stale else ""
                 log.info("%s: ✓ complete split query%s — %d row(s) across %d section(s)",
                          tag, note, art.row_count, len(exprs))
-                return _with_attempts(art)
+                return _finalize(art)
             best = best or art  # keep the first rebuildable split as a fallback (NOT complete)
             reason = (f"split query section(s) {', '.join(map(str, empties))} matched 0 records"
                       if empties else f"split query {_short_fail_reason(exprs[0], rows, brief, doc)}")
@@ -334,7 +344,7 @@ def write_query(
             if not _should_retry_for_recency(art, attempt, tries):
                 note = f" (STALE flag: {art.timeliness})" if art.stale else ""
                 log.info("%s: ✓ complete%s — %d row(s)", tag, note, art.row_count)
-                return _with_attempts(art)
+                return _finalize(art, expr)
             best_complete = art  # complete but stale: keep it, but push for the most recent data
             attempts.append(f"attempt {attempt + 1}: complete but stale — {art.timeliness}")
             log.info("%s: complete but STALE — retrying for the most recent data (%s)",
@@ -350,7 +360,7 @@ def write_query(
                 note = f" (STALE flag: {rart.timeliness})" if rart.stale else ""
                 log.info("%s: ✓ complete after auto-repairing a selector%s — %d row(s)",
                          tag, note, rart.row_count)
-                return _with_attempts(rart)
+                return _finalize(rart, repaired)
             if rart.complete and rart.stale:  # repaired but stale -> keep as fallback, push recency
                 best_complete = rart
                 attempts.append(f"attempt {attempt + 1}: repaired + complete but stale — {rart.timeliness}")
@@ -374,8 +384,8 @@ def write_query(
     # one: it's a working query, and staleness is a FLAG for the human review, not a blocker.
     if best_complete is not None:
         log.info("    keeping the complete query with a STALE flag (%s)", best_complete.timeliness)
-        return _with_attempts(best_complete)
+        return _finalize(best_complete)
     if best is None:  # every attempt failed to author a usable query -- say so loudly
         log.warning("    could not author a working query in %d attempt(s)", tries)
         return None
-    return _with_attempts(best)
+    return _finalize(best)

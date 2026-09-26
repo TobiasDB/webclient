@@ -278,22 +278,27 @@ def _resolve_on_non_link(expr: Any) -> "str | None":
     return scan(list(getattr(expr._plan, "steps", [])))
 
 def _precheck_sections(exprs: "list[Any]") -> "tuple[str, str] | None":
-    """The pre-test guards applied to EVERY section query before it's run: each must select
-    its records (a query with no ``select``/``select_all`` extracts nothing) and none may call
-    ``.resolve()`` on a value instead of a link. Returns ``(reason, follow_up)`` for the FIRST
-    offending section (the reason names the section when there is more than one), or ``None``
-    when every section passes."""
+    """The pre-test guards applied to EVERY section query before it's run: each must actually
+    EXTRACT something and none may call ``.resolve()`` on a value instead of a link. A repeating
+    dataset selects rows with ``.select_all(...).extract(...).project()``; but a GENERIC dataset need
+    not be a repeating list -- a SINGLE record (``wq.doc.extract(...).project()``, one row) or a lone
+    value (``wq.doc.select(...).attr(...)``) is valid too. So the guard rejects only a query that
+    extracts NOTHING (no ``select``/``select_all``, and no ``extract``/``project``/value read).
+    Returns ``(reason, follow_up)`` for the FIRST offending section, or ``None`` when all pass."""
+    #: ops that read a value out (so the query yields data even without a repeating .select_all).
+    reads = {"extract", "project", "attr", "text", "markdown", "html", "links", "table", "download"}
     multi = len(exprs) > 1
     for i, expr in enumerate(exprs):
         where = f"section {i + 1} " if multi else ""
         ops = {s.name for s in expr._plan.steps if s.kind == "get"}
-        if not ({"select", "select_all"} & ops):
+        if not (({"select", "select_all"} & ops) or (reads & ops)):
             return (
-                f"{where}has no record selection (.select_all missing)".strip(),
-                f"{'Section ' + str(i + 1) + ' of your reply' if multi else 'Your query'} had NO"
-                " selection so it extracts nothing. Every section MUST select the repeating record"
-                " with .select_all(...), pull each field with .extract(col=...), and END with"
-                " .project(). Re-write it.",
+                f"{where}extracts nothing (no selection or field read)".strip(),
+                f"{'Section ' + str(i + 1) + ' of your reply' if multi else 'Your query'} does NOT"
+                " extract anything. For a REPEATING dataset select the record with .select_all(...),"
+                " pull each field with .extract(col=...), and END with .project(). For a SINGLE record"
+                " or a lone value, wq.doc.extract(col=...).project() (one row) or wq.doc.select(...)"
+                ".attr(...) is fine. Re-write it.",
             )
         bad = _resolve_on_non_link(expr)
         if bad is not None:

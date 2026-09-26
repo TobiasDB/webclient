@@ -360,6 +360,10 @@ class QueryArtifact(BaseModel):
     #: describe the FIRST section and ``row_count``/``sample``/``complete``/``timeliness`` are
     #: the COMBINED verdict over every section's rows.
     parts: list[QueryPart] = []
+    #: the companion "latest" (A) query, present only when THIS artifact is the "all" (B, paginated)
+    #: query for a paginated source: the same extraction WITHOUT the backfill pager -- page one, the
+    #: newest rows, for a cheap incremental poll. ``None`` for an unpaged source (latest == all).
+    latest: "QueryArtifact | None" = None
 
 
 class Review(BaseModel):
@@ -390,7 +394,12 @@ class OnboardingResult(BaseModel):
     evaluation: CandidateEval | None = None
     reference: Any = None  # the lazy Reference (a core; not re-validated by pydantic)
     resolve: Resolve | None = None
-    query: QueryArtifact | None = None
+    query: QueryArtifact | None = None  # the primary shipped query (the "all" one when paginated)
+    #: the two dataset queries authored for the source: ``query_latest`` (A -- the newest rows, a
+    #: cheap incremental poll) and ``query_all`` (B -- the whole dataset, pagination walked). For an
+    #: unpaged source the two are the same query. Both default to ``query`` when only one was built.
+    query_latest: QueryArtifact | None = None
+    query_all: QueryArtifact | None = None
     steps: list[str] = []  # a human-readable trace of the run (also logged)
     reviews: list[Review] = []  # LLM meta-reviews grading the run's choices (opt-in)
     cost_usd: float = 0.0  # LLM spend for this company (when an LlmClient was used)
@@ -550,6 +559,13 @@ def _summarize(result: OnboardingResult) -> None:
                     if q.stale and ev is not None
                     and (tabbed or ev.has_filters or ev.has_pagination or ev.interactive) else "")
             lines.append(f"  timeliness:{' ⚠️ STALE —' if q.stale else ' ✓'} {q.timeliness}{hint}")
+        if q.completeness:  # does the query cover the WHOLE dataset? (pagination / filters)
+            lines.append(f"  complete:  {'✓' if q.covers_all else '⚠️ subset —'} {q.completeness}")
+        if q.correctness:  # is it the RIGHT set? (unfiltered, order known)
+            lines.append(f"  correct:   {'✓' if q.correct else '⚠️'} {q.correctness}")
+        if q.latest is not None:  # a distinct A (latest) companion for a paginated source
+            lines.append(f"  queries:   A/latest — {q.latest.row_count} row(s), page one (a cheap "
+                         f"incremental poll)  ·  B/all — {q.row_count} row(s), pagination walked")
         lines.append("  sample:")
         lines += _render_table(q.sample)
         if q.attempts:  # the rejection trail: why each earlier authoring attempt was rejected

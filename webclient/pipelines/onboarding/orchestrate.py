@@ -287,6 +287,11 @@ def _build_pipeline(
             author_engine=author_engine,  # "text" (write query code) | "index" (pick indexes -> build_query)
         )
         result.query = q
+        if q is not None:
+            # A (latest -- newest rows) and B (all -- whole dataset). For an unpaged source the
+            # two are the same query; for a paginated one, q is B and q.latest is A.
+            result.query_all = q
+            result.query_latest = q.latest or q
         if isinstance(llm, LlmClient):
             result.cost_usd = llm.spent_usd
         # a real success EXTRACTS data with every required field: a query that ran but produced
