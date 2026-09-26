@@ -418,6 +418,22 @@ def test_auto_escalates_js_injected_content(httpserver, wc):
     assert doc.transport().final_tier == "browser"
 
 
+def test_browser_inlines_a_cross_origin_iframe_that_renders_late(httpserver, wc):
+    # an embedded job board: the posting lives in a CROSS-origin iframe that renders it from script
+    # after load. The page script cannot read it (same-origin rule); the browser client folds it in
+    # through Playwright's frames, waiting for the frame to render, so the snapshot has the posting.
+    httpserver.expect_request("/embed").respond_with_data(
+        """<html><body><div id="job">loading…</div><script>
+        setTimeout(() => { document.getElementById('job').innerHTML = '<h2>Desk Quant</h2><p class="desc">EMBED-DESCRIPTION</p>'; }, 400);
+        </script></body></html>""", content_type="text/html")
+    other = httpserver.url_for("/embed").replace("localhost", "127.0.0.1")  # another origin, same server
+    httpserver.expect_request("/job").respond_with_data(
+        f'<html><body><main><h1>Opening</h1><iframe src="{other}"></iframe></main></body></html>', content_type="text/html")
+    doc = wc.fetch(httpserver.url_for("/job"), browser="always")
+    assert "EMBED-DESCRIPTION" in doc.attr("text")
+    assert doc.select("[data-wc-frame] p.desc").attr("text") == "EMBED-DESCRIPTION"
+
+
 def test_browser_inlines_shadow_dom_and_same_origin_iframe(httpserver, wc):
     # content hidden in shadow DOM or a same-origin iframe is invisible to a plain HTML
     # snapshot. The render inlines both into the light DOM so the captured content (and the

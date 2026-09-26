@@ -167,6 +167,51 @@ class PageResult:
     dom_stats: dict[str, Any] = field(default_factory=dict)
 
 
+#: the most frame HTML folded into one page (a page of ad / tracking frames never bloats the snapshot)
+_FRAME_FOLD_MAX = 2_000_000
+#: a frame's rendered body, its own shadow roots / same-origin frames folded first (when the page script is there)
+_FRAME_BODY_JS = """() => {
+  try { if (window.__wc_inline) window.__wc_inline(); } catch (e) {}
+  const b = document.body; if (!b || !(b.innerText || '').trim()) return '';
+  const c = b.cloneNode(true);  // what it shows, not its code
+  c.querySelectorAll('script,style,noscript,template,link').forEach((e) => e.remove());
+  return c.innerHTML;
+}"""
+#: put a frame's HTML beside its <iframe>, as the same-origin fold does
+_FRAME_FOLD_JS = """(f, [html, url]) => {
+  const h = document.createElement('div');
+  h.setAttribute('data-wc-frame', url || f.getAttribute('src') || '');
+  h.innerHTML = html;
+  f.parentNode.insertBefore(h, f.nextSibling);
+}"""
+
+
+def _frame_depth(frame: Any) -> int:
+    """How deep ``frame`` sits under the page (a direct child is 1)."""
+    n, f = 0, frame
+    while getattr(f, "parent_frame", None) is not None:
+        n, f = n + 1, f.parent_frame
+    return n
+
+
+async def _frame_quiet(frame: Any, budget: float, poll: float = 0.25) -> None:
+    """Wait (up to ``budget`` s) until the frame's element count stops changing: a widget that
+    renders after its ``load`` (a job board fetching its posting) is read once it has."""
+    import asyncio
+    import time as _time
+
+    end, prev = _time.monotonic() + budget, -1
+    while _time.monotonic() < end:
+        try:
+            n = await frame.evaluate("() => document.getElementsByTagName('*').length")
+        except Exception:  # noqa: BLE001 - navigating: try again
+            n = -2
+        if n == prev:
+            return
+        prev = n
+        await asyncio.sleep(poll)
+
+
 class BrowserClient(Client):
     """One browser page (the leased unit for live documents) -- it owns the actual
     browser driving; the live document ops (``LiveBacking``) then interact with
@@ -360,6 +405,43 @@ class BrowserClient(Client):
             page.remove_listener("request", _on_request)
             page.remove_listener("response", _on_response)
 
+    async def _inline_cross_origin_frames(self, page: Any, *, settle: float = 6.0) -> int:
+        """Fold CROSS-ORIGIN iframe content into the light DOM beside its ``<iframe>`` (a
+        ``data-wc-frame`` holder, as the page script does for same-origin frames) -- an embedded
+        job board / widget whose content IS the page's data. The page script cannot read them
+        (the browser's same-origin rule); Playwright reaches every frame. Each frame is waited on
+        (its ``load``, bounded by ``settle`` seconds in all) and read deepest first, so a nested
+        frame's content is inside its parent's copy. Frames already folded (same-origin), without
+        text, or not http(s) are skipped; the fold is capped in total size. Returns how many."""
+        import time as _time
+
+        main = page.main_frame
+        deadline = _time.monotonic() + settle
+        frames = [f for f in page.frames if f is not main and str(f.url).startswith("http")]
+        depth = {f: _frame_depth(f) for f in frames}
+        done, budget = 0, _FRAME_FOLD_MAX
+        for f in sorted(frames, key=lambda x: -depth[x]):
+            left = deadline - _time.monotonic()
+            try:
+                if left > 0:
+                    await f.wait_for_load_state("load", timeout=left * 1000)
+                    await _frame_quiet(f, min(1.5, max(0.0, deadline - _time.monotonic())))
+                el = await f.frame_element()
+                box = await el.bounding_box()
+                if box is None or box["width"] * box["height"] < 400:
+                    continue  # a hidden / pixel frame (a tracker, a sync iframe): not the page's content
+                if await el.evaluate("(e) => !!(e.nextElementSibling && e.nextElementSibling.hasAttribute('data-wc-frame'))"):
+                    continue  # the page script folded it (same-origin)
+                html = await f.evaluate(_FRAME_BODY_JS)
+                if not html or len(html) > budget:
+                    continue
+                await el.evaluate(_FRAME_FOLD_JS, [html, f.url])
+                budget -= len(html)
+                done += 1
+            except Exception as exc:  # noqa: BLE001 - a detached / navigating / blocked frame: leave it
+                log.debug("browser: frame %s not folded (%s)", getattr(f, "url", "?"), exc)
+        return done
+
     async def _read_bodies(self, responses: list[Any]) -> dict[str, list[str]]:
         """Read the captured XHR/fetch response bodies (url -> bodies in RESPONSE ORDER),
         bounded and text/JSON only, swallowing every error. Keyed to a LIST so two requests to
@@ -404,6 +486,8 @@ class BrowserClient(Client):
                 got = await self._run(s, "inline")
                 if isinstance(got, dict):
                     inline_stats.update(got)
+        if any(s.phase == "inline" for s in scripts):  # the same fold, for frames the page script cannot read
+            inline_stats["xframes"] = await self._inline_cross_origin_frames(page)
         status: int = 0
         headers: dict[str, str] = {}
         if response is not None:
