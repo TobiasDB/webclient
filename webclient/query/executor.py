@@ -596,6 +596,17 @@ def _note_result(step: Step, value: Any, t0: float, client: Any, exc: "BaseExcep
         except Exception:  # noqa: BLE001 - describing is best-effort; the run goes on
             pass
     detail.setdefault("ok", True)
+    # an eager project's rows, one per item (a streamed project publishes each as its item finishes): which item
+    # each row came from -- in order, the rows ARE the items (a filter drops before the fan-out's indices are given)
+    if exc is None and step.name == "project" and isinstance(value, list) and value and all(isinstance(r, dict) for r in value):
+        from ..events import CURRENT_ITEM
+
+        for k, row in enumerate(value):
+            token = CURRENT_ITEM.set((*CURRENT_ITEM.get(), k))
+            try:
+                bus.publish(PlanEvent(phase="result", detail={"op": "project", "kind": "Row", "preview": _preview(row), "ok": True, "ms": 0}))
+            finally:
+                CURRENT_ITEM.reset(token)
     doc = detail.get("document_id") or detail.get("parent")
     bus.publish(PlanEvent(phase="result", document_id=doc if isinstance(doc, str) and doc.startswith("doc:") else None, detail=detail))
 
