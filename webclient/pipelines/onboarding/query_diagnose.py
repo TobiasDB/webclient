@@ -336,8 +336,10 @@ def _recency_follow_up(art: QueryArtifact) -> str:
         "the current/latest tab). Is there more recent data than what you selected?"
     )
 
-def _should_retry_for_recency(art: QueryArtifact, attempt: int, tries: int) -> bool:
-    """A COMPLETE query whose newest data looks stale is probably scoped to an ARCHIVED
-    period (a hidden year tab, an old paginated page). Worth one more try for the most
-    recent data -- but never a ship blocker, so only while attempts remain."""
-    return art.stale and attempt < tries - 1
+def _should_retry_for_recency(art: QueryArtifact, attempt: int, tries: int, already_tried: bool = False) -> bool:
+    """A COMPLETE query whose newest data looks stale MIGHT be scoped to an ARCHIVED period (a
+    hidden year tab, an old paginated page) -- worth ONE more try for fresher data. But stale is a
+    FLAG, not a ship blocker: when the retry didn't find anything newer (``already_tried``), or the
+    dataset simply IS older than its cadence (a low-frequency or fixed feed), we keep the working
+    query. So: retry at most once, and only while attempts remain."""
+    return art.stale and not already_tried and attempt < tries - 1

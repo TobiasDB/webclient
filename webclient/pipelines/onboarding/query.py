@@ -285,6 +285,7 @@ def write_query(
     best_complete: QueryArtifact | None = None  # a complete-but-STALE fallback (recency retries)
     attempts: list[str] = []  # why each rejected attempt was rejected, for the onboard output
     nudged_empty = False  # a split query with an empty section is nudged ONCE, then accepted
+    nudged_recency = False  # a stale-but-complete query is pushed for fresher data ONCE, then kept
     author: Author = _make_author(llm, prompt, doc, brief, engine=author_engine)  # text | index (build_query)
     follow_up: "str | None" = None
     tries = retries + 1
@@ -328,8 +329,8 @@ def write_query(
             art, rows, counts = _combined_artifact(exprs, doc, brief, candidate_url, resolve, bases, dataset=dataset)
             empties = [i + 1 for i, c in enumerate(counts) if c == 0]
             if art.complete:
-                if _should_retry_for_recency(art, attempt, tries):  # stale union -> push for recent
-                    best_complete = art
+                if _should_retry_for_recency(art, attempt, tries, nudged_recency):  # stale union -> push for recent (ONCE)
+                    nudged_recency, best_complete = True, art
                     attempts.append(f"attempt {attempt + 1}: split query complete but stale — {art.timeliness}")
                     log.info("%s: split query complete but STALE — retrying (%s)", tag, art.timeliness)
                     follow_up = _recency_follow_up(art)
@@ -355,11 +356,11 @@ def write_query(
         expr = exprs[0]
         art, rows = _artifact_from(expr, doc, brief, candidate_url, resolve, bases, paginate=paginated, hint=pagination_hint, dataset=dataset)
         if art.complete:
-            if not _should_retry_for_recency(art, attempt, tries):
+            if not _should_retry_for_recency(art, attempt, tries, nudged_recency):
                 note = f" (STALE flag: {art.timeliness})" if art.stale else ""
                 log.info("%s: ✓ complete%s — %d row(s)", tag, note, art.row_count)
                 return _finalize(art, expr)
-            best_complete = art  # complete but stale: keep it, but push for the most recent data
+            nudged_recency, best_complete = True, art  # complete but stale: push for fresher data ONCE, else keep
             attempts.append(f"attempt {attempt + 1}: complete but stale — {art.timeliness}")
             log.info("%s: complete but STALE — retrying for the most recent data (%s)",
                      tag, art.timeliness)
@@ -370,13 +371,13 @@ def write_query(
         repaired = _repair_query(expr, doc)
         if repaired is not None:
             rart, _rrows = _artifact_from(repaired, doc, brief, candidate_url, resolve, bases, paginate=paginated, hint=pagination_hint, dataset=dataset)
-            if rart.complete and not _should_retry_for_recency(rart, attempt, tries):
+            if rart.complete and not _should_retry_for_recency(rart, attempt, tries, nudged_recency):
                 note = f" (STALE flag: {rart.timeliness})" if rart.stale else ""
                 log.info("%s: ✓ complete after auto-repairing a selector%s — %d row(s)",
                          tag, note, rart.row_count)
                 return _finalize(rart, repaired)
-            if rart.complete and rart.stale:  # repaired but stale -> keep as fallback, push recency
-                best_complete = rart
+            if rart.complete and rart.stale and not nudged_recency:  # repaired + stale -> push recency ONCE
+                nudged_recency, best_complete = True, rart
                 attempts.append(f"attempt {attempt + 1}: repaired + complete but stale — {rart.timeliness}")
                 log.info("%s: repaired + complete but STALE — retrying for recent (%s)",
                          tag, rart.timeliness)

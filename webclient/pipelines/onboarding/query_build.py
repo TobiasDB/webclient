@@ -13,10 +13,19 @@ from ...policy import Resolve
 from .llm import _strip_fences, _json_blob
 
 
+#: typographic characters a model sometimes emits INSTEAD of the ASCII code punctuation, which
+#: then breaks ``ast.parse`` (e.g. a smart quote in a selector, an em-dash in a range). Query code
+#: only ever wants the ASCII forms, so normalising these is safe and stops a needless retry.
+_SMART_PUNCT = {"“": '"', "”": '"', "‘": "'", "’": "'",
+                "–": "-", "—": "-", "…": "...", " ": " "}
+
+
 def _query_code(reply: str) -> str:
     """The query EXPRESSION from the model's reply: strip any code fence / prose and start
-    at the first ``wq.`` so a leading ``query =`` assignment or preamble is dropped, and cut
-    a trailing code fence (a model that wraps the code in ``` despite the ask)."""
+    at the first ``wq.`` so a leading ``query =`` assignment or preamble is dropped, cut a
+    trailing code fence (a model that wraps the code in ``` despite the ask), and normalise the
+    typographic punctuation a model sometimes emits (smart quotes / em-dash) to the ASCII forms
+    the query wants, so a stray “ or — doesn't fail parsing and burn a retry."""
     t = _strip_fences(reply)
     i = t.find("wq.")
     if i != -1:
@@ -24,6 +33,9 @@ def _query_code(reply: str) -> str:
     fence = t.find("```")  # a trailing fence when prose preceded the opening one
     if fence != -1:
         t = t[:fence]
+    for bad, good in _SMART_PUNCT.items():
+        if bad in t:
+            t = t.replace(bad, good)
     return t.strip()
 
 #: constant literals a query may contain (selectors, group indices, flags).

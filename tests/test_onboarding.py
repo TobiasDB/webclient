@@ -2159,3 +2159,43 @@ def test_a_raising_stage_surfaces_its_reason():
             wc=wc, llm=lambda p: "{}", search=bad_search, browser=False,
         )
     assert not r.ok and r.reason.startswith("RuntimeError") and "ddgs" in r.reason
+
+
+def test_recency_retry_is_capped_to_one(httpserver):
+    # a COMPLETE-but-STALE query (fixed old dates) must not loop chasing fresher data that isn't
+    # there -- pushed for recency ONCE, then the working query is kept. (The "struggling to write
+    # the query" bug: a correct query was being rejected and retried 4x.)
+    from webclient.pipelines import Brief
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/f").respond_with_data(
+        '<ul><li class="i"><h3>A</h3><time datetime="2020-01-01">x</time></li>'
+        '<li class="i"><h3>B</h3><time datetime="2020-01-02">y</time></li>'
+        '<li class="i"><h3>C</h3><time datetime="2020-01-03">z</time></li></ul>', content_type="text/html")
+    calls: list[str] = []
+
+    def llm(prompt: str) -> str:
+        calls.append(prompt)
+        return ('wq.doc.select_all("li.i").extract(title=wq.doc.select("h3").attr("text"), '
+                'date=wq.doc.select("time").attr("datetime")).project()')
+
+    with WebClient() as wc:
+        q = write_query(httpserver.url_for("/f"), Brief(description="news", fields=["title", "date"]),
+                        wc=wc, llm=llm, browser="never", retries=4)
+    assert q is not None and q.complete and q.stale  # a working query is kept, flagged stale
+    assert len(calls) == 2  # authored once, pushed for recency ONCE, then kept -- not 5
+
+
+def test_typographic_punctuation_in_a_query_parses(httpserver):
+    # a reply with smart quotes / an em-dash must not fail parsing (it was burning a retry).
+    from webclient.pipelines import Brief
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/p").respond_with_data('<div class="r"><span class="n">A</span></div>', content_type="text/html")
+
+    def llm(prompt: str) -> str:  # smart quotes around the selectors
+        return 'wq.doc.select_all(“div.r”).extract(n=wq.doc.select(“.n”).attr(“text”)).project()'
+
+    with WebClient() as wc:
+        q = write_query(httpserver.url_for("/p"), Brief(description="rows", fields=["n"]), wc=wc, llm=llm, browser="never", retries=0)
+    assert q is not None and q.complete and q.row_count == 1
