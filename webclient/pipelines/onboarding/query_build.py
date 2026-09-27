@@ -219,14 +219,21 @@ def _extraction_steps(doc_expr: Any) -> list[Any]:
             return steps[i:]
     return steps
 
-def _paginate_steps(max_pages: int = 50, hint: "PaginationHint | None" = None) -> list[Any]:
+def _paginate_steps(max_pages: int = 50, hint: "PaginationHint | None" = None, records: str = "") -> list[Any]:
     """The plan steps for the ``.paginate(...)`` the detected :class:`PaginationHint` suggests (its
     best mode: next link / page param / load-more), spliced between the reference resolve and the
     extraction so the shipped query walks the dataset's pages and the body extracts across all of
-    them. No hint: follow ``rel=next`` / the HTTP Link header. Authoring still tests page one only."""
+    them. No hint: follow ``rel=next`` / the HTTP Link header. Authoring still tests page one only.
+    ``records`` (the query's record selector) is passed to ``paginate`` so a repeated page is
+    recognised by its RECORD texts, not a content hash: a ``?offset=``/``?page=`` param the server
+    IGNORES on this URL (every page re-serves the same records under a slightly different URL/nonce)
+    is then detected as a repeat and the walk stops, instead of emitting the same rows on every page."""
     from ...core.document.paginate import pager_kwargs
 
-    plan = wq.doc.paginate(**pager_kwargs(hint.best if hint is not None else None), max_pages=max_pages)
+    kwargs = pager_kwargs(hint.best if hint is not None else None)
+    if records:
+        kwargs["records"] = records
+    plan = wq.doc.paginate(**kwargs, max_pages=max_pages)
     return list(plan._plan.steps)
 
 def _executable_query(
@@ -250,7 +257,11 @@ def _executable_query(
     else:
         tier = resolve.browser.when if (resolve is not None and resolve.browser is not None) else None
         rooted = ref.resolve(browser=tier) if tier else ref.resolve()
-    pag = _paginate_steps(max_pages, hint) if paginate else []
+    records = ""
+    if paginate:  # tell paginate the RECORD selector so it dedups by records, not a content hash
+        from .query_diagnose import _row_selector
+        records = _row_selector(doc_expr) or ""
+    pag = _paginate_steps(max_pages, hint, records) if paginate else []
     steps = [*rooted._plan.steps, *pag, *_extraction_steps(doc_expr)]
     return Expr(Plan(root="Reference", source=rooted._plan.source, steps=steps), doc_expr._client)
 

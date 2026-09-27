@@ -26,7 +26,7 @@ from .query_build import _executable_query, _reroot
 from .query_diagnose import (
     _data_rows, _test_query, _populated_rows, _empty_required_fields, _content_hint,
     _short_fail_reason, _precheck_sections, _split_section_follow_up, _recency_follow_up,
-    _should_retry_for_recency,
+    _should_retry_for_recency, _row_selector,
 )
 from .query_repair import _repair_query
 from .query_assess import completeness_note, correctness_note
@@ -92,19 +92,25 @@ def run_query(artifact: QueryArtifact, *, wc: WebClient) -> list[Any]:
             out.extend(_data_rows(result))  # extracted data rows, not selected elements
     return out
 
-def _pager_confirmed(doc: Any, hint: "PaginationHint | None") -> bool:
+def _pager_confirmed(doc: Any, hint: "PaginationHint | None", records: str = "") -> bool:
     """Probe that the source REALLY paginates before baking a pager into the shipped blob: walk two
     pages with the hint's best pager (:func:`~webclient.core.document.paginate.pager_kwargs`) and confirm a genuine, DISTINCT second page exists. ``paginate``'s own clamp guard drops a
     page-2 that merely re-serves page one (an out-of-range clamp) and it stops on an empty/404, so a
-    length ``>= 2`` means a working pager. A single page -- mislabelled paginated, a clamp, or an
-    unreachable page two -- returns False, so the blob is shipped page-one-only rather than paging
-    into nothing or duplicates. One extra fetch; a probe failure never breaks authoring."""
+    length ``>= 2`` means a working pager. Passing ``records`` (the query's record selector) makes the
+    repeat check compare RECORD texts, so a ``?offset=``/``?page=`` param the server IGNORES on this
+    URL -- page two re-serves the SAME records under a different URL/nonce -- is recognised as a repeat
+    (page two is dropped, ``len == 1``) and the pager is NOT baked. A single page -- mislabelled
+    paginated, a clamp, an ignored param, or an unreachable page two -- returns False, so the blob is
+    shipped page-one-only rather than paging into duplicates. One extra fetch; a probe failure never
+    breaks authoring."""
     from ...core.document.paginate import pager_kwargs
 
     try:
         kwargs = pager_kwargs(hint.best if hint is not None else None)
         if "click" in kwargs or "scroll" in kwargs:
             return False  # a load-more pager needs a held browser page: not probed, not baked
+        if records:
+            kwargs["records"] = records  # a repeat is judged by the RECORDS, not a content hash
         return len(list(doc.paginate(**kwargs, max_pages=2))) >= 2
     except Exception:  # noqa: BLE001 - a probe must never break authoring
         return False
@@ -128,7 +134,7 @@ def _artifact_from(
     missing = _empty_required_fields(good, brief)  # required leaves empty on every row
     tnote, stale = _timeliness(good, brief)  # over ALL rows; a FLAG, never a ship blocker
     pager_unconfirmed = False
-    if paginate and doc.ok and not _pager_confirmed(doc, hint):
+    if paginate and doc.ok and not _pager_confirmed(doc, hint, _row_selector(expr) or ""):
         log.info("    pagination probe: no distinct second page -> shipping page one only")
         paginate = False  # don't bake a pager that pages into nothing / a clamp
         pager_unconfirmed = True  # but pagination WAS expected -- be honest it may be a subset

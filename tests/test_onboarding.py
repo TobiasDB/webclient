@@ -173,6 +173,41 @@ def test_reference_prefers_the_page_over_an_xhr_unless_the_page_is_a_spa_shell()
         assert str(write_reference(scrapable, wc=wc).url) == page
 
 
+def test_pagination_ignored_param_does_not_duplicate_rows(httpserver):
+    # the LWN bug: the model bakes an offset pager (?offset=0,10,20,...) but the server IGNORES the
+    # param on THIS url -- every "page" re-serves the SAME records under a slightly different URL
+    # (the offset echoed in a canonical link), so a content-hash repeat check is fooled and the walk
+    # emits the same rows on every page. Passing the RECORD selector to paginate makes the repeat be
+    # judged by the records, so page two is a repeat -> the pager is not confirmed / the walk stops.
+    from webclient.core.document.models import PagerHint, PaginationHint
+    from webclient.pipelines.onboarding.query import _pager_confirmed
+    from webclient.pipelines.onboarding.query_build import _executable_query
+    from webclient.interface import wq
+
+    def handler(req):  # every offset returns the SAME 3 records; only the canonical URL echoes offset
+        from werkzeug.wrappers import Response
+        off = req.args.get("offset", "0")
+        rows = "".join(f'<article class="row"><span class="t">Item {i}</span></article>' for i in range(3))
+        html = (f'<html><head><link rel="canonical" href="/list?offset={off}"></head>'
+                f'<body><main>{rows}</main></body></html>')
+        return Response(html, content_type="text/html")
+
+    httpserver.expect_request("/list").respond_with_handler(handler)
+    url = httpserver.url_for("/list")
+    hint = PaginationHint(modes=[PagerHint(mode="pages", code="", param="offset", start=0, step=10)])
+
+    with WebClient() as wc:
+        doc = wc.fetch(url, browser="never")
+        # the content-hash probe is FOOLED (offset echoed -> page 2 looks distinct); the record probe is not
+        assert _pager_confirmed(doc, hint, records="") is True          # old behaviour: bakes a bad pager
+        assert _pager_confirmed(doc, hint, records="article.row") is False  # fixed: records repeat -> not confirmed
+        # and the shipped executable query dedups by records -> no duplicate rows across offsets
+        expr = wq.doc.select_all("article.row").extract(t=wq.doc.select(".t").attr("text")).project()
+        exe = _executable_query(expr, url, None, paginate=True, hint=hint, max_pages=6)
+        rows = exe.collect()
+    assert len(rows) == 3, f"expected 3 unique rows, got {len(rows)} (duplicated across ignored offsets)"
+
+
 def test_write_query_auto_repairs_a_near_miss_field_selector(httpserver):
     # the model writes an almost-correct query but mistypes a high-entropy class (widget vs
     # widgets); the pipeline swaps the mistyped class for the nearest real one in the record and
