@@ -309,6 +309,29 @@ def _error(
     return JSONResponse(status_code=http_status, content={"error": body})
 
 
+def _onboard_llm(model: str, budget: Any) -> "Any | None":
+    """The LLM for a ``POST /onboard`` run. ``model="shim"`` routes the Messages API through the
+    local ``claude -p`` CLI in process (``scripts/claude_llm_adapter``) -- no API key, so onboarding
+    works from the UI out of the box; any other value builds a real :class:`LlmClient` (needs
+    ``ANTHROPIC_API_KEY`` / ``WEBCLIENT_LLM__*``). Returns ``None`` when no model is available (the
+    shim is missing, or no key), so the caller can 400 with the right hint."""
+    from .clients.llm import LlmClient, cheapest_model
+
+    if model == "shim":
+        import sys
+        from pathlib import Path
+        scripts = Path(__file__).resolve().parents[1] / "scripts"  # a dev/testing tool, kept out of the package
+        if scripts.is_dir() and str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        try:
+            from claude_llm_adapter import claude_shim_client  # type: ignore[import-not-found]
+        except Exception:  # noqa: BLE001 - the local claude CLI / adapter is not available here
+            return None
+        return claude_shim_client(budget=budget)
+    llm = LlmClient(budget=budget, model=model or cheapest_model())
+    return llm if llm.auth else None
+
+
 def create_app(
     wc: WebClient | None = None,
     token: str | None = None,
@@ -715,7 +738,7 @@ def create_app(
         ``{description, fields, search?}``; ``url`` seeds the crawl at a known page (else web search).
         Needs a model configured on the API (``ANTHROPIC_API_KEY`` / ``WEBCLIENT_LLM__*``)."""
         _auth(authorization)
-        from .clients.llm import Budget, LlmClient, cheapest_model
+        from .clients.llm import Budget
         from .pipelines.onboarding import Brief, SearchHit, ddg_search, onboard_company
 
         company = str(body.get("company") or "").strip()
@@ -736,10 +759,11 @@ def create_app(
         else:
             return _error(400, "InvalidRequest", "brief is required (a packaged name or {description, fields})")
         budget = Budget(max_usd=body.get("budget"))
-        llm = LlmClient(budget=budget, model=str(body.get("model") or cheapest_model()))
-        if not llm.auth:
-            return _error(400, "InvalidRequest", "no model configured on the API",
-                          hint="set ANTHROPIC_API_KEY (or WEBCLIENT_LLM__*) to run onboarding; the EXAMPLES need no model")
+        llm = _onboard_llm(str(body.get("model") or "").strip(), budget)
+        if llm is None:
+            return _error(400, "InvalidRequest", "no model available on the API",
+                          hint='pass model="shim" to route through the local `claude` CLI (no key), or '
+                               "set ANTHROPIC_API_KEY (or WEBCLIENT_LLM__*); the EXAMPLES need no model")
         seed = body.get("url")
         search = ((lambda q, k: [SearchHit(url=str(seed), title=company, snippet="")]) if seed else ddg_search)
         wc_: WebClient = app.state.wc

@@ -84,3 +84,17 @@ def test_service_examples_and_onboard_endpoints():
         # POST /onboard validates its input before any model call (company + brief required).
         assert api.post("/onboard", json={}).status_code == 400
         assert api.post("/onboard", json={"company": "Acme"}).status_code == 400
+
+
+def test_onboard_llm_shim_builds_without_a_key():
+    # the /onboard endpoint can route through the local `claude` CLI (model="shim") so the UI can
+    # run onboarding with no API key. Building the client makes no call, so this is fast.
+    import os
+
+    from webclient.clients.llm import Budget
+    from webclient.service import _onboard_llm
+
+    shim = _onboard_llm("shim", Budget())
+    assert shim is not None and shim.auth == "shim"
+    if not os.environ.get("ANTHROPIC_API_KEY"):  # no key + no shim -> None (the endpoint 400s)
+        assert _onboard_llm("", Budget()) is None
