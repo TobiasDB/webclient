@@ -48,6 +48,26 @@ def brand(tag: str = "") -> str:
     return f'<span class="brand">{BRAND_MARK}<span class="brand-word">webclient</span>{suffix}</span>'
 
 
+def decoys(related: str = "") -> str:
+    """Realistic page CHROME whose elements SHARE the record/field CSS classes -- a nav, a sidebar and
+    a footer carrying ``.name`` / ``.price`` / ``.title`` / ``.date`` (and, when ``related`` is given,
+    a "Related" panel of full record-shaped elements). It adds NOISE to the skeleton and would fool a
+    naive TOP-LEVEL field selector, so a correct query must SELECT its records by a record wrapper
+    inside the MAIN container and read fields RELATIVE to each record. A production page always has
+    this; the fixtures include it so the model is tested against the same red herrings a real site has."""
+    return (
+        '<nav class="nav"><a class="name" href="#">Home</a> <a class="name" href="#">Deals</a>'
+        ' <span class="title">Menu</span></nav>'
+        '<aside class="sidebar"><h3 class="title">Recently viewed</h3>'
+        '<ul><li><span class="name">Sponsored pick</span> <span class="price">$0</span></li>'
+        '<li><span class="name">Gift cards</span> <span class="price">$25</span></li></ul>'
+        '<div class="promo"><span class="title">Newsletter</span> <time class="date">today</time></div>'
+        + related + '</aside>'
+        '<footer class="foot"><a class="name" href="#">Careers</a> <span class="price">© 2026</span>'
+        ' <span class="title">Privacy</span></footer>'
+    )
+
+
 # A shared, eye-friendly theme injected into every fixture page. It uses the SAME semantic tokens
 # and values as the webclient-ui design system (surface / ink / line / accent / muted), so the two
 # sites are one brand. It styles the markup the fixtures already use and adds NO DOM, no anchors and
@@ -247,7 +267,156 @@ def _store(method: str, path: str, query: Query, headers: dict[str, str], body: 
         + ('<span class="sold-out">Sold out</span>' if sold else '') + '</li>'
         for n, p, sold in STORE
     )
-    return html(page("Store", f'<main><h1>Coffee store</h1><ul class="catalogue">{rows}</ul></main>'))
+    return html(page("Store", f'<main><h1>Coffee store</h1><ul class="catalogue">{rows}</ul></main>{decoys()}'))
+
+
+# --------------------------------------------------------------------------- #
+# a realistic multi-section site with RED HERRINGS -- the crawl/select must navigate decoy nav
+# links (about/login), decoy DATASETS (careers, blog), a FEATURED teaser (a subset of the real
+# listing), and per-item JSON endpoints (a queryable DRILL-DOWN that must not be chosen as the
+# dataset). The real dataset is the paginated products listing; SKU/stock are on each item's page.
+# --------------------------------------------------------------------------- #
+
+ACME = [("Aeropress", "39", False), ("Grinder", "129", False), ("Kettle", "59", True),
+        ("Scale", "49", False), ("Filters", "12", False), ("Carafe", "35", True)]  # 6 products, 2 sold out
+ACME_PER = 3
+ACME_JOBS = [("Barista", "London"), ("Head Roaster", "Berlin")]          # careers: a DECOY dataset
+ACME_POSTS = [("How we roast", "2026-09-10"), ("Water chemistry", "2026-09-12")]  # blog: another decoy
+
+
+def _acme_nav() -> str:
+    return ('<nav><a href="/lab/acme">home</a> <a href="/lab/acme/about">about</a> '
+            '<a href="/lab/acme/careers">careers</a> <a href="/lab/acme/login">sign in</a> '
+            '<a href="/lab/acme/blog">blog</a></nav>')
+
+
+@fixture("acme", "A realistic multi-section site with red herrings (decoys, a subset teaser, drill-downs)",
+         "crawl:complex",
+         expected={"listing": "/lab/acme/products", "record_selector": "section.catalogue article.product",
+                   "products": len(ACME), "per_page": ACME_PER, "in_stock": sum(1 for _, _, s in ACME if not s),
+                   "detail_link": "a.detail", "api_link": "a.data", "teaser_selector": "article.teaser",
+                   "decoys": ["/lab/acme/about", "/lab/acme/careers", "/lab/acme/login", "/lab/acme/blog"],
+                   "sku_of_1": "ACME-001"})
+def _acme(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """A small but REALISTIC company site. Only ``/lab/acme/products`` is the dataset; everything else
+    is a red herring: the nav decoys (about/login), two DECOY datasets that also look scrapeable
+    (careers = roles, blog = posts), a FEATURED teaser on the landing (a 2-item SUBSET of the catalogue),
+    and per-item ``/lab/acme/api/products/{id}`` JSON endpoints (queryable, but ONE record each -- a
+    drill-down, not the dataset). The products listing is paginated; each product's SKU + stock live on
+    its own detail page (HTML) and data endpoint (JSON)."""
+    if path.startswith("/lab/acme/products/"):  # an item's HTML detail page (SKU in a spec table)
+        k = int(path.rsplit("/", 1)[1])
+        n, p, _s = ACME[k - 1]
+        return html(page(n, f'{_acme_nav()}<main><h1>{n}</h1><table class="spec">'
+                            f'<tr><th>SKU</th><td>ACME-{k:03d}</td></tr>'
+                            f'<tr><th>Price</th><td>${p}</td></tr></table></main>{decoys()}'))
+    if path.startswith("/lab/acme/api/products/"):  # an item's JSON endpoint (a single record -- a decoy)
+        k = int(path.rsplit("/", 1)[1])
+        _n, _p, sold = ACME[k - 1]
+        return as_json({"id": k, "sku": f"ACME-{k:03d}", "stock": {"count": 0 if sold else 7 * k}})
+    if path == "/lab/acme/about":
+        return html(page("About Acme", f'{_acme_nav()}<main><h1>About</h1><p>We sell coffee gear.</p></main>'))
+    if path == "/lab/acme/login":
+        return html(page("Sign in", f'{_acme_nav()}<main><h1>Sign in</h1>'
+                                    '<form><input name="email"><input type="password"></form></main>'))
+    if path == "/lab/acme/careers":  # a DECOY dataset: roles, not products
+        jobs = "".join(f'<li class="job"><span class="role">{r}</span> <span class="loc">{loc}</span></li>'
+                       for r, loc in ACME_JOBS)
+        return html(page("Careers", f'{_acme_nav()}<main><h1>Open roles</h1><ul>{jobs}</ul></main>{decoys()}'))
+    if path == "/lab/acme/blog":  # another DECOY dataset: posts
+        posts = "".join(f'<article class="post"><h3 class="title">{t}</h3><time>{d}</time></article>'
+                        for t, d in ACME_POSTS)
+        return html(page("Blog", f'{_acme_nav()}<main><h1>From the blog</h1>{posts}</main>{decoys()}'))
+    if path == "/lab/acme/products":  # THE dataset: a paginated product listing
+        pageno = int((query.get("page") or ["1"])[0])
+        pages = (len(ACME) + ACME_PER - 1) // ACME_PER
+        if pageno < 1 or pageno > pages:
+            return html(page("Not found", f"{_acme_nav()}<h1>No such page</h1>"), status=404)
+        start = (pageno - 1) * ACME_PER
+        cards = "".join(
+            f'<article class="product"><span class="name">{n}</span> <span class="price">${p}</span>'
+            f'<a class="detail" href="/lab/acme/products/{start + i + 1}">details</a>'
+            f'<a class="data" href="/lab/acme/api/products/{start + i + 1}">json</a>'
+            + ('<span class="sold-out">Sold out</span>' if sold else '') + '</article>'
+            for i, (n, p, sold) in enumerate(ACME[start:start + ACME_PER])
+        )
+        nxt = f'<a rel="next" href="/lab/acme/products?page={pageno + 1}">next</a>' if pageno < pages else ""
+        link = {"Link": f'</lab/acme/products?page={pageno + 1}>; rel="next"'} if pageno < pages else {}
+        # a "Related" side panel of FULL record-shaped decoys (article.product) -- so a bare
+        # select_all("article.product") also grabs these; the query must SCOPE to section.catalogue.
+        related = "".join(f'<article class="product"><span class="name">You may also like {n}</span>'
+                          f'<span class="price">$—</span></article>' for n, _p, _s in ACME[:2])
+        return html(page(f"Products p{pageno}", f'{_acme_nav()}<main><h1>Shop all</h1>'
+                         f'<section class="catalogue">{cards}</section>'
+                         f'<nav class="pagination">{nxt}</nav></main>{decoys(related=related)}'), headers=link)
+    # the LANDING page: nav decoys + a FEATURED teaser (a 2-item SUBSET) + a link to the full listing
+    feat = "".join(f'<article class="teaser"><span class="name">{n}</span></article>' for n, _p, _s in ACME[:2])
+    return html(page("Acme Coffee", f'{_acme_nav()}<main><h1>Acme Coffee</h1>'
+                     f'<section class="featured"><h2>Featured</h2>{feat}</section>'
+                     f'<p><a href="/lab/acme/products">Shop all products →</a></p></main>{decoys()}'))
+
+
+# --------------------------------------------------------------------------- #
+# focused SCENARIO fixtures -- each reproduces ONE onboarding bug through the whole pipeline
+# --------------------------------------------------------------------------- #
+
+WALLED = [("Alpha", "10"), ("Bravo", "20"), ("Charlie", "30")]
+
+
+@fixture("walled", "A browser-only site: a non-browser UA is blocked (403), a browser gets 200",
+         "transport:browser_only", browser=True,
+         expected={"record_selector": "li.row", "records": len(WALLED), "static_status": 403})
+def _walled(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """A site that BLOCKS a plain (non-browser) fetch with a 403 -- as Wikipedia does to a bare UA --
+    but serves the dataset to a real browser. ``browser="auto"`` does NOT escalate on a bare 403, so
+    onboarding must retry with the browser (``_fetch``) AND bake the browser tier into the blob."""
+    ua = (headers.get("user-agent") or headers.get("User-Agent") or "").lower()
+    if "chrome" not in ua and "firefox" not in ua:  # a static/httpx UA -> blocked
+        return html(page("Blocked", "<main><h1>403 — access denied</h1><p>Enable JavaScript.</p></main>"), status=403)
+    rows = "".join(f'<li class="row"><span class="name">{n}</span> <span class="qty">{q}</span></li>' for n, q in WALLED)
+    return html(page("Inventory", f'<main><h1>Inventory</h1><ul>{rows}</ul></main>{decoys()}'))
+
+
+RANKING = [("China", "1412"), ("India", "1409"), ("United States", "339")]
+
+
+@fixture("ranking", "A ranked table with a leading TOTAL row (a required field is absent on it)",
+         "extract:total_row",
+         expected={"record_selector": "table.rank tbody tr", "rows_total": len(RANKING) + 1,
+                   "data_rows": len(RANKING), "total_row_label": "World", "link_selector": "td a"})
+def _ranking(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """A ranked table whose first ``tbody`` row is a WORLD/TOTAL summary that -- unlike the data rows --
+    has NO link. A query that reads the name with a non-optional ``select("td a")`` RAISES on that row
+    and zeroes the whole result; the fix guides the model to make the field optional (the row yields
+    null there). The data rows link to per-country detail pages."""
+    head = "<tr><th>Rank</th><th>Country</th><th>Population</th></tr>"
+    total = '<tr class="total"><td>—</td><td>World</td><td>3160</td></tr>'  # NO link -> the trap
+    body_rows = "".join(
+        f'<tr><td>{i + 1}</td><td><a href="/lab/ranking/{i + 1}">{n}</a></td><td>{p}</td></tr>'
+        for i, (n, p) in enumerate(RANKING)
+    )
+    return html(page("Population", f'<main><h1>Countries by population</h1>'
+                     f'<table class="rank"><thead>{head}</thead><tbody>{total}{body_rows}</tbody></table></main>'
+                     f'{decoys()}'))
+
+
+FROZEN = ["Row A", "Row B", "Row C"]
+
+
+@fixture("frozen", "A listing whose ?page= param is IGNORED (every page re-serves the same rows)",
+         "pagination:ignored_param",
+         expected={"record_selector": "article.item", "records": len(FROZEN)})
+def _frozen(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """A page that ADVERTISES pagination (a rel=next link) but IGNORES ``?page=`` -- every page returns
+    the SAME records. The page number is echoed in a canonical link, so a content-hash repeat check is
+    fooled (each page's bytes differ) while the RECORDS are identical. Passing the record selector to
+    paginate catches the repeat and stops, so the shipped query does not emit duplicate rows."""
+    pageno = (query.get("page") or ["1"])[0]
+    rows = "".join(f'<article class="item"><span class="name">{n}</span></article>' for n in FROZEN)
+    nxt = f'<a rel="next" href="/lab/frozen?page={int(pageno) + 1}">next</a>'  # always offers a next page
+    head = f'<link rel="canonical" href="/lab/frozen?page={pageno}">'  # echoes the page -> bytes differ
+    return html(page("Frozen list", f'<main><h1>Listing</h1>{rows}'
+                     f'<nav class="pagination">{nxt}</nav></main>{decoys()}', head=head))
 
 
 # --------------------------------------------------------------------------- #
@@ -416,7 +585,7 @@ def _deep(method: str, path: str, query: Query, headers: dict[str, str], body: b
     nxt = f'<a rel="next" href="/lab/deep?page={pageno + 1}">next</a>' if pageno < DEEP_PAGES else ""
     link = {"Link": f'</lab/deep?page={pageno + 1}>; rel="next"'} if pageno < DEEP_PAGES else {}
     return html(page(f"Catalog p{pageno}", f'<main><h1>Catalog</h1>{items}'
-                     f'<nav class="pagination">{nxt}</nav></main>'), headers=link)
+                     f'<nav class="pagination">{nxt}</nav></main>{decoys()}'), headers=link)
 
 
 @fixture("cursor", "A keyset-paginated JSON API (?after=)", "pagination:cursor",
