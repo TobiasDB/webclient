@@ -73,6 +73,7 @@ def evaluate_candidate(
     skeleton = _skeleton_for(doc)
     endpoints = [c.url for c in doc.xhr_endpoints()]
     interactive = flags["forms"].present or flags["buttons"].present
+    errs: list[str] = []  # records an LlmError so a model OUTAGE isn't read as "no dataset here"
     parsed = _ask_json(
         llm,
         render_prompt(
@@ -88,7 +89,11 @@ def evaluate_candidate(
                             "the pipeline will then stop cleanly WITHOUT authoring a query.\n"
                             if brief.exit_when else ""),
         ),
+        errors=errs,
     )
+    if parsed is None and errs:  # the MODEL was unavailable -- a retry, NOT a judged-empty source
+        return CandidateEval(url=candidate.url, verdict="the model was unavailable — page not assessed",
+                             flags=flag_map, flag_signals=flag_signals, llm_unavailable=True)
     data: dict[str, Any] = dict(parsed) if isinstance(parsed, dict) else {"verdict": "could not evaluate"}
     # the flags are ground truth for structure -> they win over the model's guesses.
     data["has_pagination"] = bool(data.get("has_pagination")) or flags["pagination"].present

@@ -287,6 +287,10 @@ class CandidateEval(BaseModel):
     #: pipeline stops cleanly (a defined exit, not a failure) instead of authoring a query.
     exit_when_met: bool = False
     exit_reason: str = ""  # the one-line reason, when exit_when_met
+    #: the page could NOT be assessed because the MODEL was unavailable (the LLM call errored --
+    #: rate limit / quota / transport), NOT because the page was judged to lack a dataset. Keeps a
+    #: transient model outage from being reported as "no data here" (a retry, not a dead source).
+    llm_unavailable: bool = False
 
     @property
     def usable(self) -> bool:

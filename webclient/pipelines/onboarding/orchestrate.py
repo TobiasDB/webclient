@@ -222,6 +222,10 @@ def _build_pipeline(
         return evaluation
 
     def evaluate_gate(ctx: _Ctx, evaluation: Any) -> "bool | str":
+        if evaluation is not None and evaluation.llm_unavailable and not evaluation.dataset_present:
+            # the source was never actually assessed -- the MODEL was down (rate limit / quota /
+            # transport). Say so, so a transient outage reads as "retry", not "this source has no data".
+            return stop("the model was unavailable — the source could not be assessed (retry)")
         if evaluation is None or not evaluation.dataset_present:
             return stop("no usable source found")
         if evaluation.exit_when_met:

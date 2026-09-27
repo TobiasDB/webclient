@@ -889,6 +889,35 @@ def test_evaluate_drops_a_login_walled_candidate(httpserver):
     assert "login_required" in ev.flags
 
 
+def test_evaluate_reports_a_model_outage_distinctly_from_an_empty_source(httpserver):
+    # a transient MODEL outage (rate limit / quota -> LlmError on every call) must NOT be reported as
+    # "this source has no dataset". The eval is flagged llm_unavailable so the run says RETRY, not
+    # "no usable source found" -- otherwise a throttled model looks like a dead site.
+    from webclient.clients.llm import LlmError
+
+    httpserver.expect_request("/list").respond_with_data(
+        "<main>" + "".join(f'<article class="row"><span class="t">R{i}</span></article>' for i in range(5))
+        + "</main>", content_type="text/html",
+    )
+
+    def throttled(prompt):  # the shim/API is rate-limited: every call errors
+        raise LlmError(1, "rate limited")
+
+    with WebClient() as wc:
+        ev = evaluate_candidate(Candidate(url=httpserver.url_for("/list")),
+                                Brief(description="rows", fields=["t"]), wc=wc, llm=throttled, browser="never")
+    assert ev.llm_unavailable and not ev.dataset_present  # the page was NOT judged empty -- it was never assessed
+    assert "unavailable" in ev.verdict
+    # and the whole pipeline: a throttled evaluate ends with a RETRY reason, not "no usable source found"
+    with WebClient() as wc2:
+        result = onboard_company(
+            "Co", Brief(description="rows", fields=["t"]), wc=wc2, llm=throttled,
+            search=lambda q, k: [SearchHit(url=httpserver.url_for("/list"), title="Co", snippet="")],
+            browser=False,
+        )
+    assert not result.ok and "unavailable" in result.reason and "no usable source" not in result.reason
+
+
 def test_evaluate_honours_a_brief_exit_condition(httpserver):
     # a brief-level exit_when is passed to the evaluator; when the model says it holds, the
     # eval carries exit_when_met so the pipeline can stop cleanly (never authoring a query).

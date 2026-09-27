@@ -80,16 +80,21 @@ def _json_blob(text: str) -> str:
     return t[start:]
 
 
-def _ask_json(llm: LLM, prompt: str, *, retries: int = 1) -> Any:
+def _ask_json(llm: LLM, prompt: str, *, retries: int = 1, errors: "list[str] | None" = None) -> Any:
     """Run ``llm`` and parse a JSON value from its reply. On a decode error, retry --
     handing the model its own bad output + the parser error so it can fix it -- up to
-    ``retries`` times. ``None`` if it still can't produce valid JSON."""
+    ``retries`` times. ``None`` if it still can't produce valid JSON. A caller that needs to
+    distinguish "the MODEL was unavailable" (an :class:`LlmError` -- rate limit / quota /
+    transport) from "the model answered but not as JSON" passes ``errors``: the LlmError string
+    is appended to it, so a transient outage is not misread as a genuine negative verdict."""
     ask = prompt
     for attempt in range(retries + 1):
         try:
             reply = llm(ask)
         except LlmError as exc:  # a bad-request / exhausted-retry API error -- don't crash
             log.warning("LLM call failed: %s -- skipping this step", exc)
+            if errors is not None:
+                errors.append(str(exc))
             return None
         try:
             return json.loads(_json_blob(reply))
