@@ -9,7 +9,7 @@ noisy-OR, contra signals scale it down, and it is *present* at confidence >= 0.5
 (`Settings.detection.present_threshold`). A present flag may carry a `remedy` (the transport
 escalation it calls for) and a `value` (the actionable payload).
 
-19 flags, 49 detectors.
+19 flags, 50 detectors.
 
 ## `spa`
 
@@ -106,6 +106,7 @@ escalation it calls for) and a `value` (the actionable payload).
 | detector | stage | contra | needs | evidence |
 |---|---|---|---|---|
 | `link_header_next` | request |  | — | pagination evidence (strong): an HTTP ``Link: <url>; rel="next"`` header (RFC 8288, as GitHub and many JSON APIs paginate) -- so a listing with NO HTML pager is still detected. Presence only: the actual next URL is re-read (with correct case) at run time by ``doc.next_link()``, since ``Context`` lowercases header values. |
+| `json_cursor` | static |  | — | pagination evidence: a native JSON response that is KEYSET (cursor) paginated -- a records list plus a live continuation token (``pageInfo.endCursor`` + ``hasNextPage``, ``next_cursor``, ``nextPageToken``). The value is the token's dotted PATH + key; ``_pagination_value`` turns it into ``cursor=`` pager modes with candidate request params (the response names the token, not the param it rides in), which the authoring probe then confirms by walking to a distinct second page. |
 | `rel_next_link` | static |  | — | pagination evidence (strong): a ``rel="next"`` link/anchor -- the canonical next-page marker. Its selector is the value (``a[rel="next"]``, or a ``<link>`` in the head). |
 | `next_text_link` | static |  | — | pagination evidence: a link LABELLED next (its text or aria-label: "Next", "›", "Older posts") -- a pager without rel=next. Its selector is the value. |
 | `load_more_control` | static |  | — | pagination evidence: a LOAD MORE control ("Load more", "Show more results") -- a pager that appends on click. Its selector is the value. |

@@ -242,6 +242,112 @@ def _code_next(selector: str, attr: str = "href") -> str:
     return f".paginate(next=wq.doc.select({json.dumps(selector)}).attr({json.dumps(attr)}))"
 
 
+#: keys whose value is a KEYSET / continuation cursor (the token carried into the next request).
+_CURSOR_KEY = re.compile(
+    r"^(end_?cursor|next_?cursor|next_?page_?token|next_?token|continuation(_?token)?|"
+    r"page_?token|next_?page|after|cursor|next)$", re.I)
+#: keys that a JSON API uses to say a further page EXISTS (a truthy value confirms the cursor).
+_HAS_NEXT_KEY = re.compile(r"^(has_?next(_?page)?|has_?more(_?(items|results|pages))?|more(_?results)?)$", re.I)
+
+
+def _json_body(ctx: Context) -> Any:
+    """The response parsed as JSON, or ``None`` -- for a native JSON API response (an XHR/data
+    endpoint), NOT an HTML page. Cheap and total: a non-JSON or oversized body just yields ``None``."""
+    ct = ctx.headers.get("content-type", "")
+    head = ctx.text.lstrip()[:1]
+    if ctx.is_html or (("json" not in ct) and head not in ("{", "[")):
+        return None
+    try:
+        return json.loads(ctx.text)
+    except (ValueError, TypeError, RecursionError):
+        return None
+
+
+def _longest_list(obj: Any, path: str = "", best: "tuple[int, str] | None" = None) -> "tuple[int, str] | None":
+    """``(len, dotted-path)`` of the longest LIST-OF-OBJECTS anywhere in ``obj`` -- the records list a
+    keyset API pages through (``items`` / ``data`` / ``results`` / ``edges``). ``None`` when none."""
+    if isinstance(obj, list):
+        if obj and sum(isinstance(x, dict) for x in obj) >= max(1, len(obj) // 2):
+            if best is None or len(obj) > best[0]:
+                best = (len(obj), path)
+        for i, x in enumerate(obj[:3]):  # a records list may be nested under a wrapper object
+            best = _longest_list(x, f"{path}.{i}" if path else str(i), best)
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            best = _longest_list(v, f"{path}.{k}" if path else str(k), best)
+    return best
+
+
+def _find_cursor(obj: Any, path: str = "", depth: int = 0) -> "tuple[str, str] | None":
+    """``(dotted-path, key)`` of the first KEYSET cursor token in ``obj``: a cursor-named key
+    (``endCursor`` / ``next_cursor`` / ``nextPageToken`` / ``after``) whose value is a NON-EMPTY
+    scalar (a real token, not ``null`` = the last page). Cursors live in the paging OBJECT, so this
+    walks dicts (not the records list) to a shallow depth. ``None`` when no live cursor is present."""
+    if depth > 4 or not isinstance(obj, dict):
+        return None
+    for k, v in obj.items():
+        if _CURSOR_KEY.match(str(k)) and isinstance(v, (str, int)) and not isinstance(v, bool) and str(v).strip():
+            return (f"{path}.{k}" if path else str(k)), str(k)
+    for k, v in obj.items():  # descend into nested paging objects (pageInfo / meta / paging)
+        if isinstance(v, dict) and (hit := _find_cursor(v, f"{path}.{k}" if path else str(k), depth + 1)):
+            return hit
+    return None
+
+
+def _has_next(obj: Any, depth: int = 0) -> bool:
+    """Whether a ``hasNextPage`` / ``has_more`` style boolean anywhere in the paging object is truthy."""
+    if depth > 4 or not isinstance(obj, dict):
+        return False
+    for k, v in obj.items():
+        if _HAS_NEXT_KEY.match(str(k)) and v is True:
+            return True
+    return any(_has_next(v, depth + 1) for v in obj.values() if isinstance(v, dict))
+
+
+@detector(flag="pagination", name="json_cursor", stage="static")
+def _json_cursor(ctx: Context) -> "Hit | None":
+    """pagination evidence: a native JSON response that is KEYSET (cursor) paginated -- a records list
+    plus a live continuation token (``pageInfo.endCursor`` + ``hasNextPage``, ``next_cursor``,
+    ``nextPageToken``). The value is the token's dotted PATH + key; ``_pagination_value`` turns it into
+    ``cursor=`` pager modes with candidate request params (the response names the token, not the param
+    it rides in), which the authoring probe then confirms by walking to a distinct second page."""
+    body = _json_body(ctx)
+    if body is None:
+        return None
+    records = _longest_list(body)
+    cursor = _find_cursor(body) if isinstance(body, dict) else None
+    if not records or records[0] < 1 or cursor is None:
+        return None
+    path, key = cursor
+    conf = 0.7 if _has_next(body) else 0.6
+    return Hit(conf, f"a JSON keyset cursor ({path})", {"path": path, "key": key, "records": records[1]})
+
+
+def _cursor_params(key: str) -> "list[str]":
+    """Candidate REQUEST params a keyset token rides in, best-first -- the response names the TOKEN
+    (``endCursor``) but not the URL param (``?after=``), so we emit a few by convention and let the
+    authoring probe keep the one that actually advances a page. Relay: ``endCursor`` -> ``after``;
+    Google-style ``nextPageToken`` -> ``pageToken``; otherwise the field name itself, then ``cursor``."""
+    k = key.lower()
+    if "endcursor" in k:
+        order = ["after", "cursor", key]
+    elif "token" in k:
+        order = ["pageToken", "cursor", key]
+    elif k in ("next", "nextcursor", "nextpage"):
+        order = ["cursor", "after", "next"]
+    elif k == "after":
+        order = ["after", "cursor"]
+    elif k == "cursor":
+        order = ["cursor", "after"]
+    else:
+        order = [key, "after", "cursor"]
+    out: list[str] = []
+    for p in order:
+        if p not in out:
+            out.append(p)
+    return out[:3]
+
+
 def _pagination_value(signals: "list[Signal]", ctx: Context) -> Any:
     """A :class:`PaginationHint`: every WAY the page could be paged that the signals saw, as a
     ranked list of :class:`PagerHint` modes -- each with the ``.paginate(...)`` to write and its
@@ -285,6 +391,15 @@ def _pagination_value(signals: "list[Signal]", ctx: Context) -> Any:
         sel = str(by["load_more_control"].value)
         modes.append(PagerHint(mode="click", selector=sel, browser=True, confidence=0.55,
                                code=f".paginate(click={json.dumps(sel)})", evidence="a load-more control (needs the page in a browser)"))
+    if "json_cursor" in by and isinstance(by["json_cursor"].value, dict):
+        v = by["json_cursor"].value
+        path, key = str(v["path"]), str(v["key"])
+        base = by["json_cursor"].confidence  # candidate request params, best-first (the probe confirms one)
+        for i, param in enumerate(_cursor_params(key)):
+            code = f'.paginate(cursor=wq.doc.select({json.dumps(path)}), param={json.dumps(param)})'
+            modes.append(PagerHint(mode="cursor", selector=path, param=param, code=code,
+                                   evidence=f"a JSON keyset cursor ({path}) carried in ?{param}=",
+                                   confidence=round(base - i * 0.05, 3)))
     modes.sort(key=lambda m: -m.confidence)
     return PaginationHint(modes=modes, total_pages=total_pages, total_items=total_items, page_size=page_size)
 

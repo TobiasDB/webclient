@@ -89,6 +89,15 @@ def test_pagination_rel_next_and_cursor(lab, wc, index):
     pages = api.paginate(cursor=cur["cursor_path"], param="after", max_pages=10)
     ids = [i for p in pages for i in json.loads(p.content)["items"]]
     assert len(ids) == cur["total"]
+    # the pagination SIGNAL detects a native JSON keyset API (not just DOM pagers): it emits cursor
+    # modes with the token PATH and candidate request params, and the authoring probe confirms the
+    # one that actually advances -- "after" (the response names endCursor, not the ?after= it rides in).
+    from webclient.pipelines.onboarding.query import _confirmed_mode
+
+    pg = api.pagination()
+    assert pg.present and any(m.mode == "cursor" and m.selector == cur["cursor_path"] for m in pg.value.modes)
+    confirmed = _confirmed_mode(api, pg.value, "")
+    assert confirmed is not None and confirmed.mode == "cursor" and confirmed.param == "after"
 
 
 def test_tabs_forms_login_antibot_signals(lab, wc, index):
