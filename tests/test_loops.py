@@ -225,7 +225,7 @@ def test_pipeline_runs_gates_reviews_and_checkpoints():
 
     pipe = Pipeline("demo", [
         Stage("collect", run=collect, gate=lambda c, out: bool(out) or "nothing collected",
-              review=lambda c, out: {"count": len(out)}),
+              review=lambda c, out: {"count": len(out)}, detail=lambda c, out: {"count": len(out), "first": out[0]}),
         Stage("confirm", run=confirm),
         Stage("author", run=author),
     ], bus=bus)
@@ -238,6 +238,9 @@ def test_pipeline_runs_gates_reviews_and_checkpoints():
     phases = [(e.stage, e.phase) for e in seen if isinstance(e, PipelineEvent)]
     assert phases[:4] == [("collect", "enter"), ("collect", "review"), ("collect", "gate"), ("collect", "exit")]
     assert ("confirm", "gate") in phases and phases[-1] == ("author", "exit")
+    # a stage's OUTPUT summary rides its exit event (for a live watcher / the UI)
+    collect_exit = next(e for e in seen if isinstance(e, PipelineEvent) and e.stage == "collect" and e.phase == "exit")
+    assert collect_exit.detail == {"count": 3, "first": 1}
     # a failing gate stops the run (unless optional); a raising stage is recorded
     fail = Pipeline("f", [Stage("a", run=lambda c: 0, gate=lambda c, o: o > 0 or "zero"),
                           Stage("b", run=lambda c: 1)]).run({})

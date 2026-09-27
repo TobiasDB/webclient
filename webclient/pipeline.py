@@ -44,6 +44,10 @@ class Stage:
     review: "Callable[[Any, Any], Any] | None" = None
     optional: bool = False
     description: str = ""
+    #: a summary of the stage's OUTPUT for the live event -- ``detail(ctx, out) -> dict`` -- so a
+    #: watcher (a UI, a trace) sees WHAT each stage produced the moment it finishes, not just that
+    #: it did. Kept small + JSON-safe (urls, counts, key fields); rides the ``exit`` event.
+    detail: "Callable[[Any, Any], dict[str, Any]] | None" = None
 
 
 class PipelineRun(BaseModel):
@@ -90,6 +94,16 @@ class Pipeline:
         from .models import PipelineEvent
 
         self.bus.publish(PipelineEvent(pipeline=self.name, stage=stage, phase=phase, detail=detail))  # type: ignore[arg-type]
+
+    def _stage_detail(self, stage: "Stage", ctx: Any, out: Any) -> "dict[str, Any]":
+        """The stage's OUTPUT summary for its exit event (empty when it has no ``detail`` hook or
+        the hook raises -- a summary must never break the run)."""
+        if stage.detail is None:
+            return {}
+        try:
+            return stage.detail(ctx, out) or {}
+        except Exception:  # noqa: BLE001
+            return {}
 
     def run(self, ctx: Any) -> PipelineRun:
         """Run every stage in order over ``ctx``. Stops at the first failing gate (unless the
@@ -152,12 +166,12 @@ class Pipeline:
                     self._emit(stage.name, "gate", passed=False, reason=reason, optional=stage.optional)
                     if not stage.optional:
                         run.stopped_at, run.reason = stage.name, reason
-                        self._emit(stage.name, "exit", stopped=True)
+                        self._emit(stage.name, "exit", stopped=True, **self._stage_detail(stage, ctx, out))
                         return run
                 else:
                     self._emit(stage.name, "gate", passed=True)
             run.completed.append(stage.name)
-            self._emit(stage.name, "exit")
+            self._emit(stage.name, "exit", **self._stage_detail(stage, ctx, out))  # the stage's output, for the live watcher
             self._index += 1
         run.ok = True
         return run

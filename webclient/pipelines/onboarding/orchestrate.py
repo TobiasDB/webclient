@@ -336,14 +336,47 @@ def _build_pipeline(
             _note_review(result, review_query_exit(result, artifacts, brief, llm=llm))
         return r
 
+    # per-stage detail for the LIVE view: a small, JSON-safe summary of each stage's output, so a
+    # watcher (the UI) sees WHAT each step produced the moment it finishes.
+    def d_search(c: _Ctx, seeds: Any) -> "dict[str, Any]":
+        return {"seeds": [s.url for s in seeds if s.url][:12], "count": len(seeds)}
+
+    def d_crawl(c: _Ctx, crawl: Any) -> "dict[str, Any]":
+        return {"pages": [{"url": p.final_url or p.url, "title": p.title, "tier": getattr(p, "final_tier", None),
+                           "flags": list(getattr(p, "flags", []) or [])} for p in crawl.pages][:25],
+                "fetched": len(crawl.pages), "failed": len(crawl.failures)}
+
+    def d_select(c: _Ctx, cands: Any) -> "dict[str, Any]":
+        return {"candidates": [{"url": x.url, "tier": x.tier, "note": x.note} for x in cands][:15]}
+
+    def d_evaluate(c: _Ctx, ev: Any) -> "dict[str, Any]":
+        if ev is None:
+            return {}
+        return {"url": ev.url, "queryable": ev.is_queryable, "scrapability": ev.scrapability,
+                "paginated": ev.has_pagination, "filtered": ev.has_filters, "subset": ev.dataset_is_subset,
+                "interactive": ev.interactive, "sort": ev.sort_order, "flags": dict(ev.flags),
+                "flag_signals": {k: v for k, v in ev.flag_signals.items()}, "api": ev.api_endpoint,
+                "verdict": ev.verdict, "present": ev.dataset_present}
+
+    def d_source(c: _Ctx, src: Any) -> "dict[str, Any]":
+        return {"url": src.get("url"), "flags": [n for n, f in src.get("flags", {}).items() if f.present],
+                "resolve": (result.resolve.model_dump(mode="json") if result.resolve is not None else {})}
+
+    def d_query(c: _Ctx, q: Any) -> "dict[str, Any]":
+        if q is None:
+            return {"authored": False, "reason": result.reason}
+        return {"authored": True, "describe": q.describe, "row_count": q.row_count, "complete": q.complete,
+                "mode": q.mode, "attempts": len(q.attempts), "timeliness": q.timeliness,
+                "completeness": q.completeness, "correctness": q.correctness}
+
     stages = [
-        Stage("search", run=run_search, gate=lambda c, seeds: bool(seeds) or stop("no search seeds")),
-        Stage("crawl", run=run_crawl, review=crawl_review),
-        Stage("select", run=run_select, gate=lambda c, cands: bool(cands) or stop("no candidate pages")),
-        Stage("evaluate", run=run_evaluate, gate=evaluate_gate, review=select_review),
+        Stage("search", run=run_search, gate=lambda c, seeds: bool(seeds) or stop("no search seeds"), detail=d_search),
+        Stage("crawl", run=run_crawl, review=crawl_review, detail=d_crawl),
+        Stage("select", run=run_select, gate=lambda c, cands: bool(cands) or stop("no candidate pages"), detail=d_select),
+        Stage("evaluate", run=run_evaluate, gate=evaluate_gate, review=select_review, detail=d_evaluate),
         *([Stage("confirm", run=run_confirm, gate=confirm_gate)] if interactive else []),
-        Stage("source", run=run_source, gate=source_gate),
-        Stage("query", run=run_query, review=query_review),
+        Stage("source", run=run_source, gate=source_gate, detail=d_source),
+        Stage("query", run=run_query, review=query_review, detail=d_query),
     ]
     return Pipeline("onboarding", stages, bus=getattr(wc, "bus", None), propagate=(BudgetExceeded,))
 
