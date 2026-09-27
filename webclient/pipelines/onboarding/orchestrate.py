@@ -350,13 +350,9 @@ def _build_pipeline(
         return {"candidates": [{"url": x.url, "tier": x.tier, "note": x.note} for x in cands][:15]}
 
     def d_evaluate(c: _Ctx, ev: Any) -> "dict[str, Any]":
-        if ev is None:
-            return {}
-        return {"url": ev.url, "queryable": ev.is_queryable, "scrapability": ev.scrapability,
-                "paginated": ev.has_pagination, "filtered": ev.has_filters, "subset": ev.dataset_is_subset,
-                "interactive": ev.interactive, "sort": ev.sort_order, "flags": dict(ev.flags),
-                "flag_signals": {k: v for k, v in ev.flag_signals.items()}, "api": ev.api_endpoint,
-                "verdict": ev.verdict, "present": ev.dataset_present}
+        # the full evaluation (the UI renders its queryable/scrapability/pagination/filters, its
+        # signal flags + evidence, and the verdict) -- the same shape as result.evaluation.
+        return ev.model_dump(mode="json") if ev is not None else {}
 
     def d_source(c: _Ctx, src: Any) -> "dict[str, Any]":
         return {"url": src.get("url"), "flags": [n for n, f in src.get("flags", {}).items() if f.present],
