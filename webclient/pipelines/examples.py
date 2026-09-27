@@ -124,6 +124,43 @@ SPECS: "list[dict[str, Any]]" = [
               'user=wq.doc.select(":scope + tr.subtext a.hnuser").attr("text"), '
               'age=wq.doc.select(":scope + tr.subtext .age").attr("text")).project()',
          latest_rows=6, all_rows=6, browser=False),
+    dict(name="json-cursor-pagination", title="A keyset (cursor) JSON API", path="/lab/cursor",
+         description="every record the JSON API returns, across all its cursor pages", fields=["id", "name"],
+         # a native JSON keyset API: the pipeline DETECTS the cursor (pageInfo.endCursor) and, without
+         # being told which request param it rides in, confirms ?after= by walking to a distinct page.
+         code='wq.doc.select_all("items").extract('
+              'id=wq.doc.attr("id"), name=wq.doc.attr("name")).project()',
+         latest_rows=4, all_rows=10, browser=False),  # A = page one (4); B = all keyset pages (10)
+    dict(name="a-merged-table", title="A table with merged (rowspan) cells", path="/lab/merged",
+         description="each item with its category and price (the category is a merged cell spanning rows)",
+         fields=["category", "item", "price"],
+         # .table() expands the rowspan so every item row carries its category (a per-<tr> query can't).
+         code='wq.doc.table("table.catalogue").extract('
+              'category=wq.doc.attr("Category"), item=wq.doc.attr("Item"), price=wq.doc.attr("Price")).project()',
+         latest_rows=5, all_rows=5, browser=False),
+    dict(name="a-transposed-table", title="A transposed feature matrix (records are columns)", path="/lab/pivot",
+         description="each plan with its price, users and storage (the plans run ACROSS as columns)",
+         fields=["plan", "price", "users", "storage"],
+         # a feature-comparison matrix: .table(transpose=True) reads each COLUMN as a record.
+         code='wq.doc.table("table.compare", transpose=True).extract('
+              'plan=wq.doc.attr("Plan"), price=wq.doc.attr("Price"), '
+              'users=wq.doc.attr("Users"), storage=wq.doc.attr("Storage")).project()',
+         latest_rows=3, all_rows=3, browser=False),
+    dict(name="json-island-vs-teaser", title="A JSON island richer than the DOM", path="/lab/twoface",
+         description="every product -- the DOM shows only a few teasers, the whole list is in a JSON-LD island",
+         fields=["name", "price"],
+         # the DOM renders 3 teaser cards but the ld+json ItemList carries all 12: select the script,
+         # .as_json() into it, then select_all the list. A DOM query would ship a 3-row SUBSET as 'complete'.
+         code='wq.doc.select(\'script[type="application/ld+json"]\').as_json().select_all("itemListElement")'
+              '.extract(name=wq.doc.attr("name"), price=wq.doc.select("offers").attr("price")).project()',
+         latest_rows=12, all_rows=12, browser=False),
+    dict(name="cross-page-dedup", title="Overlapping pages + a sticky row (dedup)", path="/lab/overlap",
+         description="every DISTINCT feed record across the pages (the page windows overlap and a sponsored row repeats)",
+         fields=["name"],
+         # the pages overlap and a 'Sponsored' row rides on every page; the pipeline bakes project(distinct=True)
+         # on the paginated union so each record appears once (page-level dedup can't -- the pages ARE distinct).
+         code='wq.doc.select_all("li.item").extract(name=wq.doc.select(".name").attr("text")).project()',
+         latest_rows=5, all_rows=9, browser=False),  # A = page one (sponsored + 4); B = 8 items + 1 sponsored
 ]
 
 
