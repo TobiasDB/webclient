@@ -190,6 +190,28 @@ def test_pipeline_prefers_the_listing_over_a_queryable_drilldown(lab):
 
 
 # --------------------------------------------------------------------------- #
+# 4b. the visible DOM is a TEASER; a JSON-LD island holds the whole dataset -> extract from the island
+# --------------------------------------------------------------------------- #
+
+def test_pipeline_prefers_a_richer_json_island_over_a_dom_teaser(lab):
+    # the DOM shows 3 teaser cards but a <script type="application/ld+json"> ItemList holds 12. A query
+    # over the visible cards extracts 3 rows and LOOKS complete; it must be rejected as a subset and the
+    # retry hint must point at the island, where the whole dataset lives.
+    dom = ('wq.doc.select_all("article.card").extract(name=wq.doc.select(".name").attr("text"), '
+           'price=wq.doc.select(".price").attr("text")).project()')                    # the teaser subset
+    island = ('wq.doc.select("script[type=\'application/ld+json\']").as_json().select_all("itemListElement")'
+              '.extract(name=wq.doc.attr("name"), price=wq.doc.select("offers").attr("price")).project()')  # the whole set
+    with WebClient(timeout=25.0) as wc:
+        r = run(wc, lab, "/lab/twoface",
+                Brief(description="every product with its name and price", fields=["name", "price"]),
+                scripted(code=[dom, island]))
+        assert r.ok and r.query is not None and r.query.complete
+        assert any("JSON island" in a or "island holds" in a for a in r.query.attempts)  # the subset was caught
+        rows = run_query(r.query_all, wc=wc)
+    assert len(rows) == 12 and rows[-1]["name"] == "Beans"                              # the whole dataset
+
+
+# --------------------------------------------------------------------------- #
 # 5. a field that resolves to a JSON detail page and grabs the whole object -> rejected, drill in
 # --------------------------------------------------------------------------- #
 

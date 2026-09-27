@@ -269,6 +269,66 @@ def _blob_valued_fields(rows: "list[Any]", brief: Brief) -> "list[str]":
         return []
     return [p for p in req if any(_is_container_leaf(_dig(r, p)) for r in dict_rows)]
 
+def _longest_record_list(obj: Any, path: str = "") -> "tuple[int, str]":
+    """The longest LIST-OF-OBJECTS inside a parsed JSON value, as ``(length, dotted_path)`` -- the
+    records of a JSON island. Descends dict keys only (so the path is a clean ``a.b.items`` the DSL's
+    ``select_all`` takes); a list at least half objects counts as records."""
+    best = (0, "")
+    if isinstance(obj, list):
+        if obj and sum(isinstance(x, dict) for x in obj) >= len(obj) / 2:
+            best = (len(obj), path)
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            cand = _longest_record_list(v, f"{path}.{k}" if path else k)
+            if cand[0] > best[0]:
+                best = cand
+    return best
+
+def _uses_json_island(expr: Any) -> bool:
+    """Whether the query already reads a JSON island (has an ``as_json`` step) -- if so, it is not a
+    DOM-only query and the subset check below does not apply."""
+    return any(s.kind == "get" and s.name == "as_json" for s in expr._plan.steps)
+
+def _json_island(doc: Any) -> "tuple[int, str, str] | None":
+    """The richest JSON ISLAND in the page as ``(record_count, array_path, script_selector)`` -- the
+    longest list-of-objects inside a ``<script type="application/ld+json">`` or ``__NEXT_DATA__`` blob,
+    with the EXACT script selector that holds it (so a hint can hand the model a working selector).
+    ``None`` if the page has no such island."""
+    if not getattr(doc, "ok", False) or getattr(doc, "kind", "html") not in ("html", "xml"):
+        return None
+    best: "tuple[int, str, str]" = (0, "", "")
+    for sel in ('script[type="application/ld+json"]', "script#__NEXT_DATA__"):
+        try:
+            for el in doc.select_all(sel):
+                text = el.attr("text", optional=True)
+                if not text:
+                    continue
+                try:
+                    obj = json.loads(text)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                count, path = _longest_record_list(obj)
+                if count > best[0]:
+                    best = (count, path, sel)
+        except Exception:  # noqa: BLE001 - island detection must never break authoring
+            continue
+    return best if best[0] > 0 else None
+
+def _richer_json_island(expr: Any, doc: Any, dom_count: int) -> "tuple[int, str, str] | None":
+    """When a JSON ISLAND holds the WHOLE dataset the query missed -- returns ``(count, path,
+    script_selector)`` for the retry hint, else ``None``. Fires in two cases: (a) the query read the
+    VISIBLE DOM (no ``.as_json()``) and the island holds MATERIALLY MORE than ``dom_count`` -- the DOM
+    is a teaser subset (Next.js / schema.org); or (b) the query DID try the island (``.as_json()``) but
+    extracted 0 rows -- usually a wrong script selector (``application/json`` for ``application/ld+json``)
+    -- so the hint hands it the EXACT selector + path that work."""
+    island = _json_island(doc)
+    if island is None:
+        return None
+    count, _path, _sel = island
+    if _uses_json_island(expr):
+        return island if dom_count == 0 else None          # botched island query -> correct the selector
+    return island if count > max(dom_count * 2, dom_count + 3) else None  # DOM teaser subset
+
 def _content_hint(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> str:
     """The retry hint when a query RAN but did not truly extract the dataset -- naming the
     specific validation that failed (record selector matched nothing / matched but fields
@@ -287,9 +347,21 @@ def _content_hint(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> str:
         f"add fields that are genuinely absent here.\n{sample}"
         if sample else ""
     )
-    if not _populated_rows(rows):  # matched a container but every field is empty (or 0 rows)
+    good_rows = _populated_rows(rows)
+    island = _richer_json_island(expr, doc, len(good_rows))  # the visible DOM is a SUBSET of a JSON island
+    if island is not None:
+        count, path, sel = island
+        return (
+            f"Your query got {len(good_rows)} record(s), but a JSON ISLAND in this page holds {count} -- the "
+            "visible cards are only a TEASER; the whole dataset is in the island. Extract from the island "
+            f"with EXACTLY this script selector (copy it verbatim -- it is application/ld+json, NOT "
+            f"application/json): wq.doc.select('{sel}').as_json().select_all('{path}')"
+            ".extract(<field>=wq.doc.attr('<key>'), ...).project()  -- JSON uses dotted paths + .attr(key), "
+            "never .attr('text'); a nested object is .select('<obj>').attr('<key>')."
+        )
+    if not good_rows:  # matched a container but every field is empty (or 0 rows)
         return _no_rows_hint(expr, doc) + shown + caveat
-    blobs = _blob_valued_fields(_populated_rows(rows), brief)  # a field grabbed a whole object, not a leaf
+    blobs = _blob_valued_fields(good_rows, brief)  # a field grabbed a whole object, not a leaf
     if blobs:
         cols = ", ".join(f'"{c}"' for c in blobs)
         return (
@@ -347,6 +419,9 @@ def _short_fail_reason(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> 
     """A ONE-LINE reason a query didn't extract cleanly -- for the log (the full, multi-line
     hint goes to the model, not the console). Keeps the retry trace legible."""
     good = _populated_rows(rows)
+    island = _richer_json_island(expr, doc, len(good))
+    if island is not None:
+        return f"{len(good)} DOM record(s) but a JSON island holds {island[0]} -- extract from the island"
     if not good:
         n = _selector_match_count(_row_selector(expr), doc)
         if n and _required_field_raises(expr, doc) is not None:  # a required field misses on some rows -> raises

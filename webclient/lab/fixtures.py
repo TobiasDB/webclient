@@ -419,6 +419,31 @@ def _frozen(method: str, path: str, query: Query, headers: dict[str, str], body:
                      f'<nav class="pagination">{nxt}</nav></main>{decoys()}', head=head))
 
 
+#: the visible DOM shows only a few TEASER cards, but a JSON-LD island in the page holds the WHOLE
+#: dataset -- a query over the visible cards is a silent SUBSET.
+_TWOFACE = [("Aeropress", "39"), ("Grinder", "129"), ("Kettle", "59"), ("Scale", "49"),
+            ("Filters", "12"), ("Carafe", "35"), ("Tamper", "22"), ("Funnel", "9"),
+            ("Jug", "18"), ("Timer", "27"), ("Brush", "7"), ("Beans", "15")]  # 12 in the island, 3 shown
+
+
+@fixture("twoface", "A few DOM teasers, but a JSON-LD island holds the WHOLE dataset", "extract:json_island",
+         expected={"teaser_selector": "article.card", "shown": 3, "total": len(_TWOFACE),
+                   "island_selector": "script[type=\"application/ld+json\"]", "array_path": "itemListElement"})
+def _twoface(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """The Next.js / schema.org shape: the DOM renders only 3 FEATURED cards, but a
+    ``<script type="application/ld+json">`` ItemList carries all 12 products. A query over the visible
+    ``article.card`` extracts 3 rows and looks 'complete'; the whole dataset is in the island
+    (``select the script -> .as_json() -> select_all('itemListElement')``). Both carry name + price."""
+    island = json.dumps({"@context": "https://schema.org", "@type": "ItemList",
+                         "itemListElement": [{"@type": "Product", "name": n, "offers": {"price": p}}
+                                             for n, p in _TWOFACE]})
+    cards = "".join(f'<article class="card"><span class="name">{n}</span> <span class="price">${p}</span></article>'
+                    for n, p in _TWOFACE[:3])  # only the first 3 are rendered
+    head = f'<script type="application/ld+json">{island}</script>'
+    return html(page("Shop", f'<main><h1>Featured</h1><section class="featured">{cards}</section>'
+                     f'<p>See all {len(_TWOFACE)} products in the app.</p></main>{decoys()}', head=head))
+
+
 #: overlapping page windows: page N shows items [2N-1 .. 2N+2] so consecutive pages SHARE two items,
 #: and a fixed "Sponsored" record rides on EVERY page -- so the flat union has duplicate records that
 #: only a per-record dedup removes.

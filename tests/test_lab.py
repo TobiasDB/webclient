@@ -296,6 +296,23 @@ def test_store_filter_drops_sold_out_rows(lab, wc, index):
     assert len(rows) == sx["in_stock"] and len(rows) < sx["records"]  # the filter genuinely dropped rows
 
 
+def test_twoface_json_island_holds_the_whole_dataset(lab, wc, index):
+    # the DOM shows a few teaser cards, but a ld+json ItemList carries the whole dataset -- the
+    # pipeline must recognise the DOM query as a subset of the richer island.
+    tx = expected(lab, wc, "twoface")
+    from webclient.pipelines.onboarding.query_diagnose import _richer_json_island
+
+    doc = wc.fetch(f"{lab}{index['twoface']['path']}")
+    assert len(doc.select_all(tx["teaser_selector"])) == tx["shown"]     # only the teasers are in the DOM
+    dom = wq.doc.select_all(tx["teaser_selector"]).extract(name=wq.doc.select(".name").attr("text")).project()
+    found = _richer_json_island(dom, doc, tx["shown"])
+    assert found == (tx["total"], tx["array_path"], tx["island_selector"])  # count, path, the exact script selector
+    # extracting from the island yields the whole dataset
+    rows = (wq.doc.select(tx["island_selector"]).as_json().select_all(tx["array_path"])
+            .extract(name=wq.doc.attr("name"), price=wq.doc.select("offers").attr("price")).project().collect(doc))
+    assert len(rows) == tx["total"] and rows[0]["name"] == "Aeropress"
+
+
 def test_overlap_pages_dedup_with_distinct(lab, wc, index):
     # consecutive pages share two items and a "Sponsored" row rides every page: a plain paginated walk
     # yields duplicate records; the record-level distinct on project drops them to the unique set.
