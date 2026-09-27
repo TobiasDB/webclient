@@ -769,6 +769,86 @@ def _news(method: str, path: str, query: Query, headers: dict[str, str], body: b
 
 
 # --------------------------------------------------------------------------- #
+# a LIST-valued field (rebuilt from quotes.toscrape.com): each record carries a field
+# that is MANY values, not one -- a quote's tags. The tags are BOTH a repeating
+# `<a class="tag">` list AND mirrored in a `<meta class="keywords" content="a,b,c">`, so a
+# field can be captured as a nested list (select_all inside extract) or split from the attr.
+# --------------------------------------------------------------------------- #
+
+QUOTES = [  # (text, author, [tags])
+    ("The world as we have created it is a process of our thinking.", "Albert Einstein",
+     ["change", "deep-thoughts", "thinking", "world"]),
+    ("It is our choices that show what we truly are, far more than our abilities.", "J.K. Rowling",
+     ["abilities", "choices"]),
+    ("There are only two ways to live your life.", "Albert Einstein", ["inspirational", "life", "live", "miracle"]),
+    ("A woman is like a tea bag; you never know how strong it is until it's in hot water.", "Eleanor Roosevelt",
+     ["misattributed-eleanor-roosevelt"]),
+    ("Imperfection is beauty, madness is genius.", "Marilyn Monroe", ["be-yourself", "inspirational"]),
+    ("Try not to become a man of success. Rather become a man of value.", "Albert Einstein",
+     ["adulthood", "success", "value"]),
+]
+
+
+@fixture("quotes", "Records with a LIST-valued field (a quote's many tags)", "extract:list_field",
+         expected={"record_selector": "div.quote", "records": len(QUOTES), "list_field": "tags",
+                   "tags_selector": "a.tag", "keywords_attr": "content", "first_tags": QUOTES[0][2]})
+def _quotes(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """Rebuilt from quotes.toscrape.com: a field that is a LIST, not a scalar -- each quote has
+    several tags. Captured either as a nested list (``tags=wq.doc.select_all('a.tag').attr('text')``)
+    or by splitting the mirrored ``<meta class='keywords' content='a,b,c'>`` attribute. The point is
+    that ``extract`` handles a many-valued field, not just one-value-per-column."""
+    quotes = "".join(
+        f'<div class="quote"><span class="text">“{t}”</span>'
+        f'<span>by <small class="author">{a}</small></span>'
+        f'<div class="tags">Tags: <meta class="keywords" content="{",".join(tags)}">'
+        + "".join(f'<a class="tag" href="/lab/quotes/tag/{g}">{g}</a>' for g in tags)
+        + "</div></div>"
+        for t, a, tags in QUOTES
+    )
+    return html(page("Quotes", f'<main><h1>Quotes to scrape</h1>{quotes}</main>'))
+
+
+# --------------------------------------------------------------------------- #
+# a value encoded in a CLASS TOKEN + the full value in a title ATTRIBUTE (rebuilt from
+# books.toscrape.com): the star rating is the word in `class="star-rating Three"` (not text,
+# not a clean data- attr), and the full product title is in the anchor's `title=` while the
+# visible link text is truncated. Both need reading an attribute, then picking a token out of it.
+# --------------------------------------------------------------------------- #
+
+CATALOG = [  # (full title, rating word, price)
+    ("A Light in the Attic", "Three", "51.77"),
+    ("Tipping the Velvet", "One", "53.74"),
+    ("Soumission", "One", "50.10"),
+    ("Sharp Objects", "Four", "47.82"),
+    ("Sapiens: A Brief History of Humankind", "Five", "54.23"),
+    ("The Requiem Red", "One", "22.65"),
+]
+
+
+@fixture("catalog", "A value in a CLASS TOKEN + the full title in an attribute", "extract:class_token",
+         expected={"record_selector": "article.product_pod", "records": len(CATALOG),
+                   "rating_from": "class", "rating_token_of": "star-rating <word>",
+                   "title_attr": "title", "price_selector": "p.price_color", "first_rating": CATALOG[0][1]})
+def _catalog(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """Rebuilt from books.toscrape.com: the star rating is encoded as the SECOND class token
+    (``class="star-rating Three"`` -- read ``.attr('class')`` and take the word after
+    'star-rating'), and the FULL product title lives in the anchor's ``title`` attribute while the
+    visible text is truncated with an ellipsis. Both defeat a naive ``.attr('text')``; the value is
+    in an attribute, and the rating needs a token pulled out of the class string."""
+    pods = "".join(
+        f'<article class="product_pod">'
+        f'<div class="image_container"><a href="catalogue/book_{i}/index.html">'
+        f'<img class="thumbnail" alt="{title}"></a></div>'
+        f'<p class="star-rating {rating}"><i class="icon-star"></i><i class="icon-star"></i></p>'
+        f'<h3><a href="catalogue/book_{i}/index.html" title="{title}">{title[:20]}{"…" if len(title) > 20 else ""}</a></h3>'
+        f'<div class="product_price"><p class="price_color">£{price}</p>'
+        f'<p class="instock availability">In stock</p></div></article>'
+        for i, (title, rating, price) in enumerate(CATALOG)
+    )
+    return html(page("Catalog", f'<main><h1>Books</h1><section class="products">{pods}</section></main>'))
+
+
+# --------------------------------------------------------------------------- #
 # a small linked site to crawl (scope, dedup across cross-links / cycles)
 # --------------------------------------------------------------------------- #
 

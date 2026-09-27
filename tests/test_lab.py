@@ -241,6 +241,48 @@ def test_news_record_spans_two_sibling_rows(lab, wc, index):
     assert rows[0]["age"].startswith("20") and "T" in rows[0]["age"]     # the ISO timestamp, from the attr
 
 
+def test_quotes_record_has_a_list_valued_field(lab, wc, index):
+    # rebuilt from quotes.toscrape.com: a field that is a LIST (a quote's many tags), not a scalar.
+    # extract handles a many-valued column -- captured as a nested select_all, or by splitting the
+    # mirrored <meta class="keywords" content="a,b,c"> attribute.
+    qx = expected(lab, wc, "quotes")
+    doc = wc.fetch(f"{lab}{index['quotes']['path']}")
+    quotes = doc.select_all(qx["record_selector"])
+    assert len(quotes) == qx["records"]
+    rows = wq.doc.select_all(qx["record_selector"]).extract(
+        text=wq.doc.select(".text").attr("text"),
+        author=wq.doc.select(".author").attr("text"),
+        tags=wq.doc.select_all(qx["tags_selector"]).attr("text"),
+    ).project().collect(doc)
+    assert isinstance(rows[0]["tags"], list) and rows[0]["tags"] == qx["first_tags"]
+    # the same list is mirrored in the meta keywords attribute (comma-joined) -- an alternate path
+    kw = quotes[0].select("meta.keywords").attr(qx["keywords_attr"])
+    assert kw.split(",") == qx["first_tags"]
+
+
+def test_catalog_value_in_a_class_token_and_a_title_attr(lab, wc, index):
+    # rebuilt from books.toscrape.com: the star rating is the SECOND class token
+    # (class="star-rating Three"), and the full title is in the anchor's title attribute while the
+    # visible text is truncated. Both defeat a naive .attr("text").
+    cx = expected(lab, wc, "catalog")
+    doc = wc.fetch(f"{lab}{index['catalog']['path']}")
+    pods = doc.select_all(cx["record_selector"])
+    assert len(pods) == cx["records"]
+    rows = wq.doc.select_all(cx["record_selector"]).extract(
+        title=wq.doc.select("h3 a").attr(cx["title_attr"]),
+        rating=wq.doc.select("p.star-rating").attr("class", r"star-rating\s+(\w+)", group=1),
+        price=wq.doc.select(cx["price_selector"]).attr("text"),
+    ).project().collect(doc)
+    assert rows[0]["rating"] == cx["first_rating"]          # the token pulled out of the class string
+    assert rows[0]["title"] == "A Light in the Attic" and rows[0]["price"].startswith("£")
+    # a LONG title: the attr holds the full value while the visible link TEXT is truncated with an
+    # ellipsis -- proving the attribute (not .attr("text")) was the right source.
+    sapiens = "Sapiens: A Brief History of Humankind"
+    idx = next(i for i, r in enumerate(rows) if r["title"] == sapiens)
+    assert "…" not in rows[idx]["title"]                    # full title, from the attr
+    assert pods[idx].select("h3 a").attr("text").endswith("…")  # visible text truncated
+
+
 def test_crawl_mini_site_scopes_and_dedups(lab, wc, index):
     # a small linked site with cross-links, cycles and one off-site link: every in-scope page is
     # reached exactly once (dedup), and the off-site link stays out of scope (same_origin).

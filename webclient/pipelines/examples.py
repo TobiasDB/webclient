@@ -78,6 +78,25 @@ SPECS: "list[dict[str, Any]]" = [
     dict(name="a-pdf-download", title="A PDF download", path="/lab/pdf",
          description="the PDF document", fields=["document"], code="",
          latest_rows=None, all_rows=None, browser=False, binary=True),
+    dict(name="a-list-valued-field", title="A record with a list-valued field", path="/lab/quotes",
+         description="each quote with its text, its author, and the full list of its tags",
+         fields=["text", "author", "tags"],
+         # tags is MANY values per record -- a nested select_all inside extract yields a list column.
+         code='wq.doc.select_all("div.quote").extract('
+              'text=wq.doc.select("span.text").attr("text"), '
+              'author=wq.doc.select("small.author").attr("text"), '
+              'tags=wq.doc.select_all("a.tag").attr("text")).project()',
+         latest_rows=6, all_rows=6, browser=False),
+    dict(name="value-in-a-class-token", title="A value in a class token", path="/lab/catalog",
+         description="each book with its full title, its star rating, and its price",
+         fields=["title", "rating", "price"],
+         # the rating is the word in class="star-rating Three" (regex a token out of the class attr);
+         # the full title is in the anchor's title attr (the visible text is truncated).
+         code='wq.doc.select_all("article.product_pod").extract('
+              'title=wq.doc.select("h3 a").attr("title"), '
+              'rating=wq.doc.select("p.star-rating").attr("class", "star-rating ([A-Za-z]+)", group=1), '
+              'price=wq.doc.select("p.price_color").attr("text")).project()',
+         latest_rows=6, all_rows=6, browser=False),
     dict(name="sibling-row-records", title="Records split across sibling rows", path="/lab/news",
          description="the ranked stories with each story's title, points, author and age",
          fields=["title", "points", "user", "age"],
