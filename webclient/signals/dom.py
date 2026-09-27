@@ -287,6 +287,9 @@ def _find_cursor(obj: Any, path: str = "", depth: int = 0) -> "tuple[str, str] |
         return None
     for k, v in obj.items():
         if _CURSOR_KEY.match(str(k)) and isinstance(v, (str, int)) and not isinstance(v, bool) and str(v).strip():
+            s = str(v).strip()
+            if s.startswith(("http://", "https://", "//", "/")) or "://" in s:
+                continue  # a URL is a next-LINK (follow it), not a keyset token carried in a param
             return (f"{path}.{k}" if path else str(k)), str(k)
     for k, v in obj.items():  # descend into nested paging objects (pageInfo / meta / paging)
         if isinstance(v, dict) and (hit := _find_cursor(v, f"{path}.{k}" if path else str(k), depth + 1)):
