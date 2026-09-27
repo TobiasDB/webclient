@@ -24,7 +24,7 @@ from .llm import _fields_line
 # the moved logic this stage drives -- parse/wrap, run/assess/feedback, selector repair, the author seam.
 from .query_build import _executable_query, _reroot
 from .query_diagnose import (
-    _data_rows, _test_query, _populated_rows, _empty_required_fields, _content_hint,
+    _data_rows, _test_query, _populated_rows, _empty_required_fields, _blob_valued_fields, _content_hint,
     _short_fail_reason, _precheck_sections, _split_section_follow_up, _recency_follow_up,
     _should_retry_for_recency, _row_selector,
 )
@@ -132,6 +132,7 @@ def _artifact_from(
     tested, rows = _test_query(expr, doc) if doc.ok else (False, [])
     good = _populated_rows(rows)
     missing = _empty_required_fields(good, brief)  # required leaves empty on every row
+    blobs = _blob_valued_fields(good, brief)  # a field grabbed a whole JSON object, not a leaf value
     tnote, stale = _timeliness(good, brief)  # over ALL rows; a FLAG, never a ship blocker
     pager_unconfirmed = False
     if paginate and doc.ok and not _pager_confirmed(doc, hint, _row_selector(expr) or ""):
@@ -152,7 +153,7 @@ def _artifact_from(
         explain=explain,
         plan=exe._plan.model_dump(mode="json"),
         tested=tested,
-        complete=bool(tested and good and not missing),  # every required leaf populated
+        complete=bool(tested and good and not missing and not blobs),  # every required leaf is a real VALUE
         row_count=len(good),
         sample=list(good[:5]),
         resolve=(resolve.model_dump(mode="json") if resolve is not None else {}),
@@ -210,6 +211,7 @@ def _combined_artifact(
         part_goods.append(good)
     combined_good = [r for good in part_goods for r in good]
     missing = _empty_required_fields(combined_good, brief)  # required leaves empty across the union
+    blobs = _blob_valued_fields(combined_good, brief)  # a field grabbed a whole JSON object, not a leaf
     tnote, stale = _timeliness(combined_good, brief)  # over the union; a FLAG, never a blocker
     compl, covers_all = completeness_note(dataset, paginated=False)  # a split query is not paged
     corr, correct = correctness_note(dataset)
@@ -220,7 +222,7 @@ def _combined_artifact(
         explain=first.explain,
         plan={},  # a combined query has no single plan; each section's plan lives in its blob
         tested=all_tested,
-        complete=bool(all_tested and combined_good and not missing),  # every required leaf populated
+        complete=bool(all_tested and combined_good and not missing and not blobs),  # every leaf a real VALUE
         row_count=len(combined_good),
         sample=_representative_sample(part_goods),
         resolve=(resolve.model_dump(mode="json") if resolve is not None else {}),

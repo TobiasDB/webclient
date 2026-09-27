@@ -173,6 +173,51 @@ def test_reference_prefers_the_page_over_an_xhr_unless_the_page_is_a_spa_shell()
         assert str(write_reference(scrapable, wc=wc).url) == page
 
 
+def test_flags_a_field_that_grabbed_a_whole_json_object(httpserver):
+    # deep-query anomaly (found with the cheapest model on a 2nd-level resolve): a field resolved to
+    # a JSON detail page but read the whole object -- stock = '{"count": 7}' instead of "7". The value
+    # is non-empty, so the empty-field check misses it; a dedicated check flags it and the retry hint
+    # tells the model to drill into the key. The query must NOT ship as complete.
+    from webclient.pipelines.onboarding.query_diagnose import _blob_valued_fields, _looks_like_json_blob
+    from webclient.pipelines.onboarding.query import write_query
+
+    assert _looks_like_json_blob('{"count": 7}') and _looks_like_json_blob("[1, 2]")
+    assert not _looks_like_json_blob("7") and not _looks_like_json_blob("SKU-2") and not _looks_like_json_blob("")
+
+    brief = Brief(description="products", fields=["title", "stock"])
+    # both forms of the container-grabbed anomaly: a stringified object, AND a real dict (.attr on JSON)
+    assert _blob_valued_fields([{"title": "A", "stock": '{"count": 7}'}], brief) == ["stock"]
+    assert _blob_valued_fields([{"title": "A", "stock": {"count": 7}}], brief) == ["stock"]
+    # a list-valued LEAF of scalars is a valid multi-value field (tags), NOT a container
+    tags_brief = Brief(description="quotes", fields=["text", "tags"])
+    assert _blob_valued_fields([{"text": "q", "tags": ["a", "b"]}], tags_brief) == []
+    # a field declared as a BRANCH (sub-fields) with a real nested dict is fine -- only its scalar leaves count
+    branch_brief = Brief(description="p", fields=["title", "price.amount", "price.currency"])
+    assert _blob_valued_fields([{"title": "x", "price": {"amount": "39", "currency": "USD"}}], branch_brief) == []
+
+    # end-to-end: a query that reads the whole JSON object for `stock` is rejected + retried with the
+    # drill-into-the-key hint, not accepted as complete.
+    httpserver.expect_request("/it").respond_with_json({"stock": {"count": 7}, "sku": "SKU-9"})
+    httpserver.expect_request("/list").respond_with_data(
+        '<div class="card"><span class="t">Widget</span><a class="link" href="/it">view</a></div>',
+        content_type="text/html")
+    seen: list[str] = []
+
+    def llm(prompt: str) -> str:
+        seen.append(prompt)
+        if len(seen) == 1:  # first: grab the whole object (the bug)
+            return ('wq.doc.select_all("div.card").extract(title=wq.doc.select(".t").attr("text"),'
+                    ' stock=wq.doc.select("a.link").attr("href").resolve().select("stock").attr("text")).project()')
+        return ('wq.doc.select_all("div.card").extract(title=wq.doc.select(".t").attr("text"),'  # then drill in
+                ' stock=wq.doc.select("a.link").attr("href").resolve().select("stock.count").attr("text")).project()')
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/list"), Brief(description="products", fields=["title", "stock"]),
+                          wc=wc, llm=llm, browser="never", retries=3)
+    assert art is not None and art.complete and art.sample[0]["stock"] == "7"  # the drilled-in value
+    assert len(seen) >= 2 and "DRILL INTO the key" in seen[1]  # the retry carried the targeted hint
+
+
 def test_diagnoses_a_required_field_that_raises_on_some_rows(httpserver):
     # the Wikipedia bug: the record selector matches every row, the field selectors work on MOST
     # rows, but a leading summary/total row ("World") lacks the link the country rows have -- so a

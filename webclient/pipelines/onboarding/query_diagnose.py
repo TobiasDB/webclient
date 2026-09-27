@@ -4,6 +4,7 @@ Interpret a collect() result into data rows, run the query under a hard timeout,
 required fields, and turn a miss into an actionable, targeted retry hint (wrong record selector /
 empty fields / a value that lives in an attribute / a section that matched nothing / stale data)."""
 
+import json
 from typing import Any
 
 from ...interface import wq
@@ -227,6 +228,47 @@ def _empty_required_fields(rows: "list[Any]", brief: Brief) -> "list[str]":
         return []
     return [p for p in req if not any(_nonempty(_dig(r, p)) for r in dict_rows)]
 
+def _looks_like_json_blob(v: Any) -> bool:
+    """A value that is a STRING holding a whole JSON object/array (e.g. ``'{"count": 7}'``) -- almost
+    always a WRONG extraction: the query read ``.attr("text")`` on a JSON container (a resolve to a
+    JSON detail page, an inlined JSON island) instead of drilling into its key. A GENUINE nested
+    field is a real ``dict`` built by ``.extract(...).project()`` -- never a JSON string -- so this
+    only ever flags a container grabbed by mistake, not a legitimate structured field."""
+    if not isinstance(v, str):
+        return False
+    s = v.strip()
+    if not ((s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]"))):
+        return False
+    try:
+        return isinstance(json.loads(s), (dict, list))
+    except (json.JSONDecodeError, ValueError):
+        return False
+
+def _is_container_leaf(v: Any) -> bool:
+    """A LEAF value that is actually a CONTAINER -- a whole object grabbed instead of a scalar. A
+    non-empty ``dict`` (``.resolve().attr("stock")`` returned the ``{"count": 7}`` object), a list that
+    holds dicts/lists, or a stringified JSON object/array (``.attr("text")`` on JSON). A list of
+    SCALARS is NOT a container -- it is a valid multi-value field (a record's tags), so it is spared."""
+    if isinstance(v, dict):
+        return len(v) > 0
+    if isinstance(v, list):
+        return any(isinstance(x, (dict, list)) for x in v)
+    return _looks_like_json_blob(v)
+
+def _blob_valued_fields(rows: "list[Any]", brief: Brief) -> "list[str]":
+    """Required LEAF fields whose value is a CONTAINER (a whole object/array) on some row instead of a
+    scalar -- typically ``.resolve()`` to a JSON detail page then reading the object (``.attr("text")``
+    -> a JSON string, or ``.attr("stock")`` -> the ``dict``) rather than drilling to the key. The value
+    is non-empty, so the empty-field check misses it, yet it is not real data: the query must select the
+    specific key (``.select("stock.count").attr("text")`` / ``.select("stock").attr("count")``). A leaf
+    is judged by the BRIEF's schema -- a field declared with sub-fields is a branch (its leaves are the
+    scalars) and never flagged; only a field the brief asked for as ONE value that came back a container is."""
+    req = _required_leaf_paths(brief)
+    dict_rows = [r for r in rows if isinstance(r, dict)]
+    if not req or not dict_rows:
+        return []
+    return [p for p in req if any(_is_container_leaf(_dig(r, p)) for r in dict_rows)]
+
 def _content_hint(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> str:
     """The retry hint when a query RAN but did not truly extract the dataset -- naming the
     specific validation that failed (record selector matched nothing / matched but fields
@@ -247,6 +289,17 @@ def _content_hint(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> str:
     )
     if not _populated_rows(rows):  # matched a container but every field is empty (or 0 rows)
         return _no_rows_hint(expr, doc) + shown + caveat
+    blobs = _blob_valued_fields(_populated_rows(rows), brief)  # a field grabbed a whole object, not a leaf
+    if blobs:
+        cols = ", ".join(f'"{c}"' for c in blobs)
+        return (
+            f"The field(s) {cols} came back as a WHOLE OBJECT (e.g. {{\"count\": 7}}) instead of a single "
+            "value. This happens when you .resolve() to a JSON detail page (or an inlined JSON island) "
+            "and read the CONTAINER -- .attr(\"text\") on the object gives its JSON string, and "
+            ".attr(\"stock\") gives the whole {\"count\": ...} object. JSON is not HTML: DRILL INTO the "
+            'key -- use a dotted path .select("stock.count").attr("text"), or select the object and read '
+            'its key with .select("stock").attr("count"). Return the leaf VALUE, not the object.'
+        )
     empty = _empty_required_fields(rows, brief)  # some required field never came out
     cols = ", ".join(f'"{c}"' for c in empty)
     return (
@@ -302,6 +355,9 @@ def _short_fail_reason(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> 
     empty = _empty_required_fields(good, brief)
     if empty:
         return f"required field(s) {', '.join(empty)} empty on every row"
+    blobs = _blob_valued_fields(good, brief)
+    if blobs:
+        return f"field(s) {', '.join(blobs)} grabbed a whole JSON object, not a value (drill into the key)"
     return f"{len(good)} row(s) but incomplete"
 
 def _resolve_on_non_link(expr: Any) -> "str | None":

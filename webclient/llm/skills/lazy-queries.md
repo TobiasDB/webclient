@@ -364,6 +364,24 @@ Chain another `.resolve()` for a field two pages deep (listing → detail → sp
 end with `.regex(...)` if the value is buried in prose:
 `...attr("href").resolve().select("a.spec").attr("href").resolve().select(".body").regex(r"ID:\s*([A-Z0-9-]+)", group=1)`.
 
+**When the detail page is JSON** (an item link that returns an API/JSON document, not HTML),
+the resolved page is JSON — so read it the JSON way (§3): a **dotted path** and `.attr("<key>")`,
+NOT an HTML `.select(".stock")`. Drill down to the LEAF; do not stop on the object.
+```
+listing:  <a class="link" href="/items/2">view</a>        ← detail is JSON, not HTML
+/items/2: {"id": 2, "stock": {"count": 14}, "sku": "SKU-2"}
+```
+```python
+wq.doc.select_all("div.card").extract(
+    title=wq.doc.select("h2.title").attr("text"),
+    stock=wq.doc.select("a.link").attr("href").resolve().select("stock.count").attr("text"),  # → "14", the leaf
+    sku=wq.doc.select("a.link").attr("href").resolve().attr("sku"),                             # → "SKU-2"
+).project()
+```
+A field must come out as a single VALUE, never a whole object: `stock` must be `"14"`, not
+`'{"count": 14}'`. If you find yourself returning a `{...}` blob, you stopped one step short —
+add the key (`.select("stock.count")` or `.attr("count")`).
+
 **`.resolve()` follows a LINK — only ever on `.attr("href")` / `.attr("src")` (a Reference).**
 NEVER call `.resolve()` on `.attr("text")` or on a value: text is not a URL, and resolving it
 fails. To *read* a value, `.attr("text")` is the whole answer — stop there. To *follow* a link,
