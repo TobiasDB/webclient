@@ -755,6 +755,33 @@ def create_app(
             _examples_cache.extend(build_examples(wc_, serve_lab()))
         return _examples_cache
 
+    @app.get("/briefs", response_model=None)
+    def briefs(authorization: str | None = Header(default=None)) -> "list[dict[str, Any]] | JSONResponse":
+        """The packaged reusable BRIEFS (``webclient/pipelines/briefs/*.md``), each parsed to its
+        full frontmatter -- the schema (fields + per-field descriptions + optional flags, as a nested
+        ``schema_tree``), ``look`` / ``ignore`` guides, ``exit_when``, ``hints``, ``crawl`` overrides,
+        ``search`` / ``start_url``, ``name`` / ``title`` and ``description``. Briefs are the SOURCE OF
+        TRUTH for onboarding; this is what the UI renders and edits, then POSTs back to ``/onboard``."""
+        _auth(authorization)
+        from importlib.resources import files
+
+        from .pipelines.onboarding import Brief
+
+        out: "list[dict[str, Any]]" = []
+        root = files("webclient.pipelines").joinpath("briefs")
+        try:
+            entries = sorted((p for p in root.iterdir() if p.name.endswith(".md")), key=lambda x: x.name)
+        except (FileNotFoundError, NotADirectoryError):
+            entries = []
+        for p in entries:
+            brief = Brief.from_markdown(p.read_text(encoding="utf-8"))
+            if not brief.name:
+                brief.name = p.name[:-3].replace("_", "-")
+            view = brief.model_dump(mode="json")
+            view["schema_tree"] = [f.model_dump(mode="json") for f in brief.schema_tree()]
+            out.append(view)
+        return out
+
     @app.post("/onboard", response_model=None)
     def onboard_ep(
         body: dict[str, Any], authorization: str | None = Header(default=None)
@@ -780,18 +807,17 @@ def create_app(
             if hit is None:
                 return _error(400, "InvalidRequest", f"no packaged brief {spec!r}")
             brief = Brief.from_markdown(hit.read_text(encoding="utf-8"))
-        elif isinstance(spec, dict) and spec.get("description"):
-            brief = Brief(description=str(spec["description"]), fields=list(spec.get("fields") or []),
-                          search=str(spec.get("search") or ""), hints=str(spec.get("hints") or ""))
+        elif isinstance(spec, dict) and (spec.get("description") or spec.get("schema") or spec.get("fields")):
+            brief = Brief.from_front(spec)  # a full frontmatter-shaped brief (schema/look/crawl/start_url/…)
         else:
-            return _error(400, "InvalidRequest", "brief is required (a packaged name or {description, fields})")
+            return _error(400, "InvalidRequest", "brief is required (a packaged name or a frontmatter object)")
         budget = Budget(max_usd=body.get("budget"))
         llm = _onboard_llm(str(body.get("model") or "").strip(), budget)
         if llm is None:
             return _error(400, "InvalidRequest", "no model available on the API",
                           hint='pass model="shim" to route through the local `claude` CLI (no key), or '
                                "set ANTHROPIC_API_KEY (or WEBCLIENT_LLM__*); the EXAMPLES need no model")
-        seed = body.get("url")
+        seed = body.get("url") or brief.start_url  # a top-level url, else the brief's own start_url
         search = ((lambda q, k: [SearchHit(url=str(seed), title=company, snippet="")]) if seed else ddg_search)
         bopts = body.get("browser") if isinstance(body.get("browser"), dict) else None
         if bopts:  # a per-run browser: a real Chrome over CDP, a headed/hardened/proxied launch, ...

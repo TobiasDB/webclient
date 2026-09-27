@@ -184,8 +184,15 @@ def _build_pipeline(
 
     # -- 1. search -------------------------------------------------------------
     def run_search(ctx: _Ctx) -> Any:
-        note("searching the web for seeds")
-        seeds = search_web(brief, company, search=search, llm=llm)
+        if brief.start_url:  # a KNOWN source: seed the crawl directly, skip web search
+            from .artifacts import Seed
+            from .search import _apply_search_term
+            url = _apply_search_term(company, brief.start_url) if "{company}" in brief.start_url else brief.start_url
+            note("using the brief's start_url: %s", url)
+            seeds = [Seed(url=url, title=brief.title or company, why="the brief's start_url")]
+        else:
+            note("searching the web for seeds")
+            seeds = search_web(brief, company, search=search, llm=llm)
         artifacts.seeds = list(seeds)
         return seeds
 

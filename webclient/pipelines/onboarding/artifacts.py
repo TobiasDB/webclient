@@ -118,6 +118,10 @@ class Brief(BaseModel):
     title: str = ""  # a human title
     search: str = ""  # deterministic web-search qualifier: "<company> <search>" (e.g.
     # "investor relations news"); a literal "{company}" in it is substituted instead of prepended
+    #: a KNOWN source URL to crawl from directly, INSTEAD of web search -- when the dataset always
+    #: lives at one address. Seeds the crawl with this page (a literal "{company}" is substituted),
+    #: so ``search`` is skipped. The crawl still navigates from here (a listing link, pagination).
+    start_url: str = ""
     look: list[str] = []  # natural-language guides: what kinds of pages to head for
     ignore: list[str] = []  # natural-language guides: what kinds of pages to skip
     #: a brief-level EXIT CONDITION -- a natural-language check evaluated on the chosen source;
@@ -162,11 +166,25 @@ class Brief(BaseModel):
         ``crawl`` (a mapping of pipeline crawl overrides -- ``max_pages`` / ``depth``
         / ``rounds`` / ``browser``); ``description`` (else the body)."""
         front, body = _parse_frontmatter(text)
+        return cls.from_front(front, body)
+
+    @classmethod
+    def from_front(cls, front: "dict[str, Any]", body: str = "") -> "Brief":
+        """Build a :class:`Brief` from a frontmatter-shaped mapping (the parsed YAML of
+        :meth:`from_markdown`, or a JSON body the UI POSTs). Same keys as ``from_markdown``:
+        ``schema`` (dotted ``path: description`` items), ``look`` / ``ignore``, ``exit_when``,
+        ``hints``, ``crawl``, ``search`` / ``start_url`` (or ``url``), ``name`` / ``title``, and
+        ``description`` (else ``body``). A pre-parsed ``descriptions`` / ``optional`` mapping is
+        honoured too, so a Brief's own ``model_dump()`` round-trips."""
 
         def as_list(v: Any) -> list[str]:
             return [str(x) for x in v] if isinstance(v, list) else ([str(v)] if v else [])
 
         fields, descriptions, optional = _parse_schema(front.get("schema") or front.get("fields"))
+        if not descriptions and isinstance(front.get("descriptions"), dict):
+            descriptions = {str(k): str(v) for k, v in front["descriptions"].items()}
+        if not optional and front.get("optional"):
+            optional = as_list(front.get("optional"))
         crawl = front.get("crawl")
         return cls(
             description=str(front.get("description") or body).strip(),
@@ -176,6 +194,7 @@ class Brief(BaseModel):
             name=str(front.get("name") or ""),
             title=str(front.get("title") or ""),
             search=str(front.get("search") or ""),
+            start_url=str(front.get("start_url") or front.get("url") or ""),
             exit_when=str(front.get("exit_when") or ""),
             hints=str(front.get("hints") or ""),
             look=as_list(front.get("look")),

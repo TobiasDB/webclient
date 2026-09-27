@@ -129,6 +129,41 @@ def test_onboard_company_finds_and_queries_the_dataset(site):
     assert result.cost_usd == 0.0  # the stub llm carries no cost
 
 
+def test_start_url_seeds_the_crawl_directly_and_skips_web_search(site):
+    # a brief that carries a start_url onboards from that page WITHOUT calling web search --
+    # for a dataset that always lives at one known address (the "OR a start url" brief option).
+    products_url = site.url_for("/products")
+    code = ('wq.doc.select_all(".product").extract('
+            'name=wq.doc.select(".name").attr("text"), price=wq.doc.select(".price").attr("text")).project()')
+
+    def search(query, k):  # must NOT be called when start_url is set
+        raise AssertionError("web search should be skipped when the brief has a start_url")
+
+    def llm(prompt: str) -> str:
+        if "frontier links" in prompt:
+            return "[]"  # no navigation needed -- the start_url IS the dataset
+        if "crawled pages" in prompt:
+            return json.dumps([{"url": products_url, "kind": "page", "tier": "must", "note": "list"}])
+        if "Assess this page" in prompt:
+            return json.dumps({"dataset_present": True, "is_queryable": True, "completeness": "full",
+                               "has_pagination": False, "scrapability": 9, "verdict": "products"})
+        if "query code" in prompt or "write a query" in prompt:
+            return code
+        return "{}"
+
+    with WebClient() as wc:
+        result = onboard_company(
+            "Acme",
+            Brief(description="the products", fields=["name", "price"], start_url=products_url),
+            wc=wc, llm=llm, search=search, browser=False,
+        )
+    assert result.ok, result.reason
+    assert result.seeds == [products_url]  # seeded straight from the brief, no search
+    assert result.evaluation is not None and result.evaluation.url == products_url
+    assert result.query is not None and result.query.row_count == 3
+    assert any("start_url" in s for s in result.steps)
+
+
 def test_onboard_company_reports_when_no_seeds(site):
     def search(query, k):
         return []

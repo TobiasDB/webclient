@@ -503,3 +503,23 @@ def test_events_ws_resumes_from_a_cursor_and_replays_a_trace(httpserver, tmp_pat
         assert snap["topic"] == "snapshot" and "content" not in snap and snap["document_id"]
         assert ws.receive_json()["topic"] == "trace.end"
     wc.close()
+
+
+def test_briefs_endpoint_returns_packaged_briefs_with_full_frontmatter():
+    """GET /briefs parses every packaged brief to its full frontmatter -- the schema (as a nested
+    schema_tree with per-field descriptions + optional flags), look/ignore, exit_when, hints, crawl,
+    search/start_url, name/title -- so the UI can represent and edit briefs (the source of truth)."""
+    wc = WebClient()
+    app = create_app(wc, token="secret")
+    with TestClient(app) as api:
+        r = api.get("/briefs", headers=AUTH)
+        assert r.status_code == 200
+        briefs = r.json()
+        assert briefs and all(b["name"] for b in briefs)  # every brief has a slug name
+        keys = set(briefs[0])
+        assert {"schema_tree", "look", "ignore", "exit_when", "crawl", "search",
+                "start_url", "title", "fields", "descriptions"} <= keys
+        # the schema_tree is nested SchemaField dicts (name/description/optional/children)
+        node = briefs[0]["schema_tree"][0]
+        assert set(node) == {"name", "description", "optional", "children"}
+    wc.close()
