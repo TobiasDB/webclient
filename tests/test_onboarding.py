@@ -1017,6 +1017,25 @@ def test_onboarding_fetch_escalates_to_browser_when_static_is_blocked():
     assert not doc2.ok and wc2.calls == ["never"]  # never escalated -- a static-only run stays static
 
 
+def test_candidate_scoring_prefers_the_listing_over_a_queryable_drilldown():
+    # a listing whose rows link to per-item JSON endpoints (/api/{id}): the crawl surfaces those
+    # endpoints as candidates, and one -- a SINGLE record -- can look "queryable". The model tiers the
+    # listing MUST and the per-record endpoint SHOULD; the listing must WIN, so a drill-down endpoint
+    # that merely happens to be queryable isn't mis-chosen as the dataset (which yields 1 row, not all).
+    from webclient.pipelines.onboarding.evaluate import _candidate_score
+    from webclient.pipelines.onboarding import CandidateEval
+
+    listing = CandidateEval(url="/list", dataset_present=True, is_queryable=False, scrapability=6)
+    drilldown = CandidateEval(url="/api/1", dataset_present=True, is_queryable=True, scrapability=8)
+    # tier dominates: the MUST listing beats a SHOULD queryable drill-down with higher scrapability
+    assert _candidate_score(listing, "must") > _candidate_score(drilldown, "should")
+    # within the SAME tier, a queryable source is still preferred, and scrapability breaks ties
+    assert _candidate_score(drilldown, "must") > _candidate_score(listing, "must")
+    # a source without the dataset is never preferred over one that has it, regardless of tier
+    empty = CandidateEval(url="/x", dataset_present=False, is_queryable=True, scrapability=9)
+    assert _candidate_score(empty, "must") < _candidate_score(listing, "could")
+
+
 def test_evaluate_drops_a_login_walled_candidate(httpserver):
     # a login wall blocks the dataset -> the candidate is dropped BEFORE the model is
     # asked (the flag short-circuits), so no query is ever attempted against it.

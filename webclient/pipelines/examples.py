@@ -97,6 +97,14 @@ SPECS: "list[dict[str, Any]]" = [
               'rating=wq.doc.select("p.star-rating").attr("class", "star-rating ([A-Za-z]+)", group=1), '
               'price=wq.doc.select("p.price_color").attr("text")).project()',
          latest_rows=6, all_rows=6, browser=False),
+    dict(name="paginate-and-resolve", title="Pagination + a per-record detail resolve", path="/lab/deep",
+         description="every item across all pages, each with its name and its SKU (on the item's own page)",
+         fields=["name", "sku"],
+         # the deepest shape: the pipeline walks the pages AND each record resolves its link for the SKU.
+         code='wq.doc.select_all("article.item").extract('
+              'name=wq.doc.select(".name").attr("text"), '
+              'sku=wq.doc.select("a.more").attr("href").resolve().select(".sku").attr("text")).project()',
+         latest_rows=4, all_rows=12, browser=False),  # A = page one (4); B = all 3 pages resolved (12)
     dict(name="sibling-row-records", title="Records split across sibling rows", path="/lab/news",
          description="the ranked stories with each story's title, points, author and age",
          fields=["title", "points", "user", "age"],

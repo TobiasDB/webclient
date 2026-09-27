@@ -133,24 +133,31 @@ def evaluate_candidates(
 ) -> CandidateEval | None:
     """Evaluate candidates best-tier-first until a usable source is found (returns
     it) or the options run out (returns the best-scoring evaluation seen, or None).
-    Prefers a queryable source, but by a WEIGHTED score -- a much cleaner scrapeable page
-    can still beat a marginally-queryable messy one (see :func:`_candidate_score`)."""
+    Prefers a queryable source, but by a TIER-weighted score -- the model's ranking of which
+    page IS the dataset (``must`` > ``should`` > ``could``) dominates, so a per-record DRILL-DOWN
+    endpoint (a listing links to per-item ``/api/{id}`` JSON) that merely happens to be queryable
+    cannot outrank the listing itself (see :func:`_candidate_score`)."""
     best: CandidateEval | None = None
+    best_tier = ""
     for c in candidates:
         ev = evaluate_candidate(c, brief, wc=wc, llm=llm, browser=browser)
-        if best is None or _candidate_score(ev) > _candidate_score(best):
-            best = ev
-        if ev.usable and ev.is_queryable:
-            return ev  # a queryable source clean enough to scrape -- stop early
+        if best is None or _candidate_score(ev, c.tier) > _candidate_score(best, best_tier):
+            best, best_tier = ev, c.tier
+        # early exit only for the IDEAL case: the TOP-ranked (must) page is itself a queryable
+        # dataset. A lower-tier queryable candidate must NOT preempt -- it may be a drill-down.
+        if ev.usable and ev.is_queryable and c.tier == "must":
+            return ev
     return best
 
 
-def _candidate_score(ev: CandidateEval) -> float:
-    """Rank a candidate: scrapability (0-10) plus a queryable BONUS -- so a queryable source
-    is preferred, but not absolutely (a scrapability-10 page beats a scrapability-1 API). A
-    source without the dataset is never preferred over one that has it."""
+def _candidate_score(ev: CandidateEval, tier: str = "") -> float:
+    """Rank a candidate. The model's TIER (its judgement of which page IS the dataset) is the
+    PRIMARY signal, so a per-record drill-down endpoint that merely happens to be queryable can't
+    outrank the listing the model marked ``must``. Within a tier: a queryable source is preferred,
+    then scrapability. A source without the dataset is never preferred over one that has it."""
     if not ev.dataset_present:
         return -1.0
-    return ev.scrapability + (4 if ev.is_queryable else 0)
+    tier_rank = {"must": 2, "should": 1}.get(tier, 0)  # could / unknown -> 0 (e.g. the fail-open picks)
+    return tier_rank * 100 + (4 if ev.is_queryable else 0) + ev.scrapability
 
 

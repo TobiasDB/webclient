@@ -283,6 +283,24 @@ def test_catalog_value_in_a_class_token_and_a_title_attr(lab, wc, index):
     assert pods[idx].select("h3 a").attr("text").endswith("…")  # visible text truncated
 
 
+def test_deep_paginate_plus_per_record_resolve(lab, wc, index):
+    # the deepest shape: the dataset spans PAGES, and a required field (SKU) is only on each item's
+    # OWN detail page -- so a correct query must BOTH walk the pagination AND, per record, follow the
+    # item's link and .resolve() it to read the field.
+    dx = expected(lab, wc, "deep")
+    rows = (
+        wq.reference(f"{lab}{index['deep']['path']}").resolve()
+        .paginate(next=wq.doc.next_link(), records=dx["record_selector"], max_pages=10)
+        .select_all(dx["record_selector"]).extract(
+            name=wq.doc.select(".name").attr("text"),
+            sku=wq.doc.select(dx["detail_link"]).attr("href").resolve().select(".sku").attr("text"),
+        ).project().collect()
+    )
+    assert len(rows) == dx["total"] and len({r["name"] for r in rows}) == dx["total"]  # all pages, no dupes
+    assert rows[0]["sku"] == dx["sku_of_1"]                                             # from the detail page
+    assert all(r["sku"] == f"SKU-{i + 1}" for i, r in enumerate(rows))                  # each record's own detail
+
+
 def test_crawl_mini_site_scopes_and_dedups(lab, wc, index):
     # a small linked site with cross-links, cycles and one off-site link: every in-scope page is
     # reached exactly once (dedup), and the off-site link stays out of scope (same_origin).

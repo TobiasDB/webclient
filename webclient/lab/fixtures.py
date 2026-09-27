@@ -360,6 +360,42 @@ def _paginated(method: str, path: str, query: Query, headers: dict[str, str], bo
 <nav class="pagination">{prev} <span class="current">{pageno}</span> {nxt}</nav></main>"""), headers=link)
 
 
+DEEP_PAGES = 3
+DEEP_PER_PAGE = 4
+
+
+@fixture("deep", "Pagination + a per-record 2nd-level resolve (detail page holds a field)", "extract:paginate_resolve",
+         expected={"pages": DEEP_PAGES, "per_page": DEEP_PER_PAGE, "total": DEEP_PAGES * DEEP_PER_PAGE,
+                   "record_selector": "article.item", "detail_link": "a.more", "sku_of_1": "SKU-1",
+                   "flags": ["pagination"]})
+def _deep(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """The DEEPEST shape: the dataset spans PAGES, and a required field (SKU) is not on the listing at
+    all -- it lives on each item's own detail page. A correct query must BOTH walk the pagination AND,
+    per record, follow the item's link and ``.resolve()`` it to read the field. Detail pages are HTML
+    (``span.sku``); the listing rows carry only name + the detail link."""
+    if path.startswith("/lab/deep/api/"):  # a JSON detail page (drill into the nested key after resolve)
+        k = int(path.rsplit("/", 1)[1])
+        return as_json({"id": k, "sku": f"SKU-{k}", "stock": {"count": 5 * k}})
+    if path.startswith("/lab/deep/item/"):
+        k = int(path.rsplit("/", 1)[1])
+        return html(page(f"Item {k}", f'<main><h1>Item {k}</h1>'
+                         f'<span class="sku">SKU-{k}</span> <span class="weight">{k}00g</span></main>'))
+    pageno = int((query.get("page") or ["1"])[0])
+    if pageno < 1 or pageno > DEEP_PAGES:
+        return html(page("Not found", "<h1>No such page</h1>"), status=404)
+    start = (pageno - 1) * DEEP_PER_PAGE
+    items = "".join(
+        f'<article class="item"><span class="name">Item {start + i + 1}</span>'
+        f'<a class="more" href="/lab/deep/item/{start + i + 1}">details</a>'
+        f'<a class="data" href="/lab/deep/api/{start + i + 1}">data</a></article>'
+        for i in range(DEEP_PER_PAGE)
+    )
+    nxt = f'<a rel="next" href="/lab/deep?page={pageno + 1}">next</a>' if pageno < DEEP_PAGES else ""
+    link = {"Link": f'</lab/deep?page={pageno + 1}>; rel="next"'} if pageno < DEEP_PAGES else {}
+    return html(page(f"Catalog p{pageno}", f'<main><h1>Catalog</h1>{items}'
+                     f'<nav class="pagination">{nxt}</nav></main>'), headers=link)
+
+
 @fixture("cursor", "A keyset-paginated JSON API (?after=)", "pagination:cursor",
          expected={"total": 10, "page_size": 4, "cursor_path": "pageInfo.endCursor"})
 def _cursor(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
