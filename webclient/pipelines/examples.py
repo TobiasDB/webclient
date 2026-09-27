@@ -78,6 +78,17 @@ SPECS: "list[dict[str, Any]]" = [
     dict(name="a-pdf-download", title="A PDF download", path="/lab/pdf",
          description="the PDF document", fields=["document"], code="",
          latest_rows=None, all_rows=None, browser=False, binary=True),
+    dict(name="sibling-row-records", title="Records split across sibling rows", path="/lab/news",
+         description="the ranked stories with each story's title, points, author and age",
+         fields=["title", "points", "user", "age"],
+         # rebuilt from the live Hacker News front page: the record is the title row (tr.athing) but
+         # points/user/age live in the NEXT sibling row -- reached with a ":scope + tr.subtext" hop.
+         code='wq.doc.select_all("tr.athing").extract('
+              'title=wq.doc.select(".titleline a").attr("text"), '
+              'points=wq.doc.select(":scope + tr.subtext .score").attr("text"), '
+              'user=wq.doc.select(":scope + tr.subtext a.hnuser").attr("text"), '
+              'age=wq.doc.select(":scope + tr.subtext .age").attr("text")).project()',
+         latest_rows=6, all_rows=6, browser=False),
 ]
 
 

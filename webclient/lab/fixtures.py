@@ -711,6 +711,64 @@ def _board(method: str, path: str, query: Query, headers: dict[str, str], body: 
 
 
 # --------------------------------------------------------------------------- #
+# a two-sibling-row record (rebuilt from the LIVE Hacker News front page): each logical
+# story is SPLIT across two adjacent <tr> rows with no wrapper -- the title/site in a
+# `tr.athing`, then the points/user/age in the very NEXT unwrapped <tr class="subtext">.
+# The record's own subtree (the athing row) does NOT contain points/user/age; reaching them
+# needs a following-sibling hop (XPath `./following-sibling::tr[1]//...`). The real timestamp
+# lives in a `title=` ATTRIBUTE, not the visible "N hours ago" text.
+# --------------------------------------------------------------------------- #
+
+NEWS = [  # (title, domain, points, user, hours-ago)
+    ("A tiny CPU emulator written over a weekend", "github.com", 412, "hexdump", 1),
+    ("Why we moved our fleet off Kubernetes", "eng.example.com", 388, "sre_anna", 3),
+    ("The surprising math of coffee extraction", "brewnotes.io", 274, "roaster", 5),
+    ("Show HN: a spreadsheet that runs SQL", "gridql.dev", 201, "cellsmith", 8),
+    ("An oral history of the 1kB demo scene", "demozoo.org", 165, "scener", 12),
+    ("Ask HN: what killed your side project?", "", 143, "builder", 20),
+]
+
+
+@fixture("news", "A ranked news list where each record spans TWO sibling <tr> rows", "extract:sibling_row",
+         expected={"record_selector": "tr.athing", "subtext_hop": "./following-sibling::tr[1]",
+                   "records": len(NEWS), "fields": ["title", "points", "user", "age"],
+                   "timestamp_attr": "title", "order_direction": "desc"})
+def _news(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """Rebuilt from the real Hacker News front page: the shape where a single logical record is
+    NOT one element but two adjacent sibling rows -- a naive ``select_all('tr.athing')`` captures
+    the title yet leaves points/user/age EMPTY, because they live in the following sibling. The
+    honest ways to extract it: a following-sibling XPath hop per field, or two section queries the
+    pipeline aligns. Dates are relative to today (newest-first) so timeliness stays live; the exact
+    time is in the age span's ``title`` attribute, the visible text is only 'N hours ago'."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    rows = []
+    for i, (title, domain, points, user, hrs) in enumerate(NEWS):
+        iso = (now - timedelta(hours=hrs)).replace(microsecond=0).isoformat()
+        sid = 40000 + i
+        site = (f'<span class="sitebit comhead"> (<a href="from?site={domain}">'
+                f'<span class="sitestr">{domain}</span></a>)</span>') if domain else ""
+        rows.append(
+            f'<tr class="athing submission" id="{sid}">'
+            f'<td align="right" valign="top" class="title"><span class="rank">{i + 1}.</span></td>'
+            f'<td valign="top" class="votelinks"><center><a href="vote?id={sid}">'
+            f'<div class="votearrow" title="upvote"></div></a></center></td>'
+            f'<td class="title"><span class="titleline">'
+            f'<a href="item?id={sid}">{title}</a>{site}</span></td></tr>'
+            f'<tr class="subtext"><td colspan="2"></td><td class="subtext"><span class="subline">'
+            f'<span class="score" id="score_{sid}">{points} points</span> by '
+            f'<a href="user?id={user}" class="hnuser">{user}</a> '
+            f'<span class="age" title="{iso}"><a href="item?id={sid}">{hrs} hours ago</a></span>'
+            f'</span></td></tr>'
+        )
+    return html(page("Hacker Lab", f"""
+<main><h1>Top stories</h1>
+<table class="itemlist" border="0" cellpadding="0" cellspacing="0">
+<tbody>{''.join(rows)}</tbody></table></main>"""))
+
+
+# --------------------------------------------------------------------------- #
 # a small linked site to crawl (scope, dedup across cross-links / cycles)
 # --------------------------------------------------------------------------- #
 

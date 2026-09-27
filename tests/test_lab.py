@@ -217,6 +217,30 @@ def test_board_ordered_filtered_live_signals(lab, wc, index):
     assert doc.ordered().value.direction == bx["order_direction"]
 
 
+def test_news_record_spans_two_sibling_rows(lab, wc, index):
+    # rebuilt from the LIVE Hacker News front page: each story is TWO adjacent sibling <tr> rows
+    # (title in tr.athing, then points/user/age in the next tr.subtext). A record selector that
+    # points at the title row does NOT contain the subtext fields -- they are reached with an
+    # adjacent-sibling hop (CSS ":scope + tr.subtext ..." or XPath "./following-sibling::tr[1]").
+    nx = expected(lab, wc, "news")
+    doc = wc.fetch(f"{lab}{index['news']['path']}")
+    athings = doc.select_all(nx["record_selector"])
+    assert len(athings) == nx["records"]
+    # the subtext fields are NOT inside the athing record subtree (the naive read is empty)
+    assert athings[0].select(".score", optional=True, error=RETURN).attr("text", optional=True) in (None, "")
+    # the correct extraction: a following-sibling hop reaches the paired subtext row per field
+    rows = wq.doc.select_all("tr.athing").extract(
+        title=wq.doc.select(".titleline a").attr("text"),
+        points=wq.doc.select(f'{nx["subtext_hop"]}//span[@class="score"]').attr("text", r"(\d+)", group=1),
+        user=wq.doc.select(f'{nx["subtext_hop"]}//a[@class="hnuser"]').attr("text"),
+        age=wq.doc.select(f'{nx["subtext_hop"]}//span[@class="age"]').attr(nx["timestamp_attr"]),
+    ).project().collect(doc)
+    assert len(rows) == nx["records"]
+    assert [f in rows[0] for f in nx["fields"]] == [True] * len(nx["fields"])
+    assert rows[0]["points"] == "412" and rows[0]["user"] == "hexdump"  # cleaned + from the sibling row
+    assert rows[0]["age"].startswith("20") and "T" in rows[0]["age"]     # the ISO timestamp, from the attr
+
+
 def test_crawl_mini_site_scopes_and_dedups(lab, wc, index):
     # a small linked site with cross-links, cycles and one off-site link: every in-scope page is
     # reached exactly once (dedup), and the off-site link stays out of scope (same_origin).
