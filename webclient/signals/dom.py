@@ -329,26 +329,27 @@ def _json_cursor(ctx: Context) -> "Hit | None":
 def _cursor_params(key: str) -> "list[str]":
     """Candidate REQUEST params a keyset token rides in, best-first -- the response names the TOKEN
     (``endCursor``) but not the URL param (``?after=``), so we emit a few by convention and let the
-    authoring probe keep the one that actually advances a page. Relay: ``endCursor`` -> ``after``;
-    Google-style ``nextPageToken`` -> ``pageToken``; otherwise the field name itself, then ``cursor``."""
+    authoring probe keep the one that actually advances a page. Covers the real conventions: Relay
+    ``endCursor`` -> ``after``; Google ``nextPageToken`` -> ``pageToken``; Slack ``next_cursor`` ->
+    ``cursor``; Notion ``next_cursor`` -> ``start_cursor``; X ``next_token`` -> ``pagination_token``."""
     k = key.lower()
-    if "endcursor" in k:
-        order = ["after", "cursor", key]
-    elif "token" in k:
-        order = ["pageToken", "cursor", key]
-    elif k in ("next", "nextcursor", "nextpage"):
+    if "endcursor" in k:                       # Relay/GraphQL: the param is `after`, never `endCursor`
+        order = ["after", "cursor", "start_cursor"]
+    elif "token" in k:                         # Google `pageToken`, X `pagination_token`, else the key
+        order = ["pageToken", "page_token", "pagination_token", key]
+    elif "cursor" in k:                        # Slack `cursor`, Notion `start_cursor`, or the key itself
+        order = [key, "cursor", "after", "start_cursor"]
+    elif k in ("next", "nextpage"):
         order = ["cursor", "after", "next"]
     elif k == "after":
         order = ["after", "cursor"]
-    elif k == "cursor":
-        order = ["cursor", "after"]
     else:
         order = [key, "after", "cursor"]
     out: list[str] = []
     for p in order:
         if p not in out:
             out.append(p)
-    return out[:3]
+    return out[:4]  # the probe stops at the first that advances; extra candidates only cost a probe fetch
 
 
 def _pagination_value(signals: "list[Signal]", ctx: Context) -> Any:
