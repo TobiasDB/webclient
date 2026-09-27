@@ -292,6 +292,26 @@ def _project_row(row: dict[str, Any]) -> dict[str, Any]:
     return {k: _project_value(v) for k, v in row.items()}
 
 
+def _distinct_rows(rows: "list[Any]") -> "list[Any]":
+    """``rows`` with DUPLICATES dropped, keeping the FIRST occurrence and preserving order. Two rows
+    are the same when their data is equal -- compared by a stable JSON key so nested dicts / lists
+    compare structurally. This is what makes a paginated query robust to OVERLAPPING pages and a
+    sticky/sponsored record repeated on every page: each distinct record appears exactly once."""
+    import json
+
+    seen: set[str] = set()
+    out: list[Any] = []
+    for r in rows:
+        try:
+            key = json.dumps(r, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            key = repr(r)
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
+
+
 def flatten_row(row: dict[str, Any], flatten: "bool | Iterable[str] | None", sep: str = ".") -> dict[str, Any]:
     """Merge NESTED dict columns into the row: ``flatten=True`` flattens every nested dict
     (recursively), a list of names only those columns (a dotted name reaches deeper:
@@ -639,25 +659,33 @@ class Collection(Generic[T]):
         return self._derive(self._items[:n])
 
     @overload
-    def project(self, *, flatten: "bool | list[str] | None" = None, sep: str = ".") -> list[dict[str, Any]]:
+    def project(self, *, flatten: "bool | list[str] | None" = None, sep: str = ".",
+                distinct: bool = False) -> list[dict[str, Any]]:
         """Project each element's row to a plain ``dict``."""
         ...
     @overload
-    def project(self, model: type[M], *, flatten: "bool | list[str] | None" = None, sep: str = ".") -> list[M]:
+    def project(self, model: type[M], *, flatten: "bool | list[str] | None" = None, sep: str = ".",
+                distinct: bool = False) -> list[M]:
         """Project each element's row validated into ``model``."""
         ...
 
-    def project(self, model: type[M] | None = None, *, flatten: "bool | list[str] | None" = None, sep: str = ".") -> list[Any]:
+    def project(self, model: type[M] | None = None, *, flatten: "bool | list[str] | None" = None,
+                sep: str = ".", distinct: bool = False) -> list[Any]:
         """Materialise as a plain list: each element's extracted row (cleaned to
         plain data -- a ``Reference`` column becomes its URL string, a ``Field`` its
         value), or the element itself if it has no row. ``model`` validates each row
         into it. Eager only -- a model class isn't part of the serialisable plan, so
         call this on a materialised Collection (``...extract(...).collect().project(Model)``).
-        ``flatten`` merges nested dict columns into each row (see :func:`flatten_row`)."""
+        ``flatten`` merges nested dict columns into each row (see :func:`flatten_row`).
+        ``distinct`` drops DUPLICATE rows (keeping the first, order preserved) -- so a
+        paginated walk whose pages OVERLAP, or that repeats a sticky/sponsored record on
+        every page, yields each record once instead of many times."""
         out: list[Any] = []
         for el in self._items:
             row = _row_of(el, create=False)
             out.append(flatten_row(_project_row(row), flatten, sep) if row is not None else el)
+        if distinct:
+            out = _distinct_rows(out)
         if model is None:
             return out
         validate = getattr(model, "model_validate", None)

@@ -419,6 +419,35 @@ def _frozen(method: str, path: str, query: Query, headers: dict[str, str], body:
                      f'<nav class="pagination">{nxt}</nav></main>{decoys()}', head=head))
 
 
+#: overlapping page windows: page N shows items [2N-1 .. 2N+2] so consecutive pages SHARE two items,
+#: and a fixed "Sponsored" record rides on EVERY page -- so the flat union has duplicate records that
+#: only a per-record dedup removes.
+_OVERLAP_ITEMS = ["Item 1", "Item 2", "Item 3", "Item 4", "Item 5", "Item 6", "Item 7", "Item 8"]
+_OVERLAP_PAGES = 3
+
+
+@fixture("overlap", "Overlapping pages + a sticky sponsored row (cross-page duplicates)",
+         "pagination:overlap",
+         expected={"record_selector": "li.item", "pages": _OVERLAP_PAGES, "unique": len(_OVERLAP_ITEMS) + 1,
+                   "sticky": "Sponsored"})
+def _overlap(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """Pagination whose page WINDOWS OVERLAP (consecutive pages share two items) AND that repeats a
+    STICKY 'Sponsored' record on every page. Page-level dedup can't fix this -- the pages are all
+    distinct -- so the flat union has duplicate records; only a per-record ``distinct`` on the project
+    yields each record once. Unique = the 8 items + the 1 sponsored row."""
+    pageno = int((query.get("page") or ["1"])[0])
+    if pageno < 1 or pageno > _OVERLAP_PAGES:
+        return html(page("Not found", "<h1>No such page</h1>"), status=404)
+    start = (pageno - 1) * 2  # windows overlap by 2: page1=items0..3, page2=items2..5, page3=items4..7
+    window = _OVERLAP_ITEMS[start:start + 4]
+    sticky = '<li class="item sponsored"><span class="name">Sponsored</span></li>'  # on EVERY page
+    rows = sticky + "".join(f'<li class="item"><span class="name">{n}</span></li>' for n in window)
+    nxt = f'<a rel="next" href="/lab/overlap?page={pageno + 1}">next</a>' if pageno < _OVERLAP_PAGES else ""
+    link = {"Link": f'</lab/overlap?page={pageno + 1}>; rel="next"'} if pageno < _OVERLAP_PAGES else {}
+    return html(page(f"Overlap p{pageno}", f'<main><h1>Feed</h1><ul class="feed">{rows}</ul>'
+                     f'<nav class="pagination">{nxt}</nav></main>{decoys()}'), headers=link)
+
+
 LOOP_PAGES = 3
 LOOP_PER = 4
 

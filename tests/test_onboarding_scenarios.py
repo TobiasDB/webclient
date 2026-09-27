@@ -146,6 +146,24 @@ def test_pipeline_falls_back_from_a_looping_next_pager(lab):
 
 
 # --------------------------------------------------------------------------- #
+# 3c. OVERLAPPING pages + a sticky sponsored row -> the shipped query dedups the union
+# --------------------------------------------------------------------------- #
+
+def test_pipeline_dedups_overlapping_pages_and_sticky_rows(lab):
+    code = 'wq.doc.select_all("li.item").extract(name=wq.doc.select(".name").attr("text")).project()'
+    with WebClient(timeout=25.0) as wc:
+        r = run(wc, lab, "/lab/overlap", Brief(description="the feed items", fields=["name"]),
+                scripted(code=code, default_eval={"dataset_present": True, "is_queryable": False,
+                                                  "has_pagination": True, "completeness": "full",
+                                                  "scrapability": 8, "verdict": "a paginated feed"}))
+        assert r.ok and r.query is not None and "distinct=True" in r.query.describe  # dedup baked into the blob
+        names = [row["name"] for row in run_query(r.query_all, wc=wc)]
+    assert names.count("Sponsored") == 1                       # the sticky row (on every page) appears once
+    assert len(names) == len(set(names)) == 9                  # 8 items + 1 sponsored, no cross-page duplicates
+    assert set(names) == {"Sponsored", *(f"Item {i}" for i in range(1, 9))}
+
+
+# --------------------------------------------------------------------------- #
 # 4. a listing that links to per-item queryable JSON endpoints -> pick the LISTING, not a drill-down
 # --------------------------------------------------------------------------- #
 

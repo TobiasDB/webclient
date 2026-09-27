@@ -296,6 +296,22 @@ def test_store_filter_drops_sold_out_rows(lab, wc, index):
     assert len(rows) == sx["in_stock"] and len(rows) < sx["records"]  # the filter genuinely dropped rows
 
 
+def test_overlap_pages_dedup_with_distinct(lab, wc, index):
+    # consecutive pages share two items and a "Sponsored" row rides every page: a plain paginated walk
+    # yields duplicate records; the record-level distinct on project drops them to the unique set.
+    ox = expected(lab, wc, "overlap")
+    from webclient.pipelines.onboarding.query_build import _executable_query
+
+    expr = wq.doc.select_all(ox["record_selector"]).extract(name=wq.doc.select(".name").attr("text")).project()
+    url = f"{lab}{index['overlap']['path']}"
+    dupey = _executable_query(expr, url, None, paginate=False).collect()  # page one only (a reference point)
+    deduped = _executable_query(expr, url, None, paginate=True, max_pages=5).collect()  # paginated -> distinct baked
+    names = [r["name"] for r in deduped]
+    assert names.count(ox["sticky"]) == 1                          # the sticky row appears once, not per page
+    assert len(names) == len(set(names)) == ox["unique"]           # every record once (8 items + 1 sponsored)
+    assert len(dupey) < len(deduped)                               # page one alone had fewer than the full union
+
+
 def test_looppager_falls_back_to_the_page_param(lab, wc, index):
     # the '»' Next link loops back to page one, but the ?page_num= param walks all pages: the pager
     # probe rejects the looping next (a repeat) and the page-param mode carries the walk.

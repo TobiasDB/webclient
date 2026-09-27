@@ -219,6 +219,21 @@ def _extraction_steps(doc_expr: Any) -> list[Any]:
             return steps[i:]
     return steps
 
+def _mark_project_distinct(steps: list[Any]) -> list[Any]:
+    """Set ``distinct=True`` on the query's TOP-LEVEL ``.project()`` so the shipped blob dedups the
+    flattened rows. Baked only when the source is PAGINATED: the union of pages can OVERLAP (a record
+    on two pages) or repeat a STICKY/sponsored record on every page -- ``distinct`` drops those exact
+    duplicates (first kept, order preserved), while a clean paginated dataset is unchanged."""
+    from ...query.plan import Arg
+
+    out = list(steps)
+    last = next((i for i in range(len(out) - 1, -1, -1)
+                 if out[i].kind == "get" and out[i].name == "project"), None)
+    if last is not None and last + 1 < len(out) and out[last + 1].kind == "call":
+        call = out[last + 1]
+        out[last + 1] = call.model_copy(update={"kwargs": {**call.kwargs, "distinct": Arg(value=True)}})
+    return out
+
 def _paginate_steps(max_pages: int = 50, mode: Any = None, records: str = "") -> list[Any]:
     """The plan steps for the ``.paginate(...)`` a single confirmed pager ``mode`` (a
     :class:`~.models.PagerHint`: next link / page param / load-more) describes, spliced between the
@@ -257,11 +272,13 @@ def _executable_query(
         tier = resolve.browser.when if (resolve is not None and resolve.browser is not None) else None
         rooted = ref.resolve(browser=tier) if tier else ref.resolve()
     records = ""
+    extraction = _extraction_steps(doc_expr)
     if paginate:  # tell paginate the RECORD selector so it dedups by records, not a content hash
         from .query_diagnose import _row_selector
         records = _row_selector(doc_expr) or ""
+        extraction = _mark_project_distinct(extraction)  # dedup the paginated union (overlaps / sticky rows)
     pag = _paginate_steps(max_pages, mode, records) if paginate else []
-    steps = [*rooted._plan.steps, *pag, *_extraction_steps(doc_expr)]
+    steps = [*rooted._plan.steps, *pag, *extraction]
     return Expr(Plan(root="Reference", source=rooted._plan.source, steps=steps), doc_expr._client)
 
 def _reroot(expr: Any, url: str) -> Any:

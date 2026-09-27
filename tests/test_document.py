@@ -231,6 +231,24 @@ def test_list_valued_field_projects_to_a_list():
     ]
 
 
+def test_project_distinct_drops_duplicate_rows_preserving_order():
+    # project(distinct=True) keeps each distinct row once, first occurrence, order preserved -- so a
+    # paginated union with overlapping pages / a sticky record isn't emitted many times.
+    from webclient import wq
+    from webclient.query.expr import from_blob
+
+    html = b"<ul>" + b"".join(b"<li class='x'><span class='n'>%s</span></li>" % n
+                              for n in (b"A", b"B", b"A", b"C", b"B", b"A")) + b"</ul>"
+    doc = make_doc(content=html)
+    q = wq.doc.select_all("li.x").extract(n=wq.doc.select(".n").attr("text")).project(distinct=True)
+    assert list(q.collect(doc)) == [{"n": "A"}, {"n": "B"}, {"n": "C"}]  # deduped, order preserved
+    # without distinct: every row (the reference behaviour)
+    plain = wq.doc.select_all("li.x").extract(n=wq.doc.select(".n").attr("text")).project()
+    assert len(list(plain.collect(doc))) == 6
+    # distinct round-trips through the serialised blob
+    assert list(from_blob(q.to_blob(), doc._client).collect(doc)) == [{"n": "A"}, {"n": "B"}, {"n": "C"}]
+
+
 def test_rss_item_fields_extract_from_a_real_world_feed_shape():
     # a real-world RSS shape (à la neon.com/blog/rss.xml): namespaced siblings, a CDATA
     # description, two <category>s, and the URL cleanly in <guid>. title/description/category/
