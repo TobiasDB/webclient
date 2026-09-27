@@ -26,7 +26,7 @@ from .query_build import _executable_query, _reroot
 from .query_diagnose import (
     _data_rows, _test_query, _populated_rows, _empty_required_fields, _blob_valued_fields, _content_hint,
     _short_fail_reason, _precheck_sections, _split_section_follow_up, _recency_follow_up,
-    _should_retry_for_recency, _row_selector, _richer_json_island,
+    _should_retry_for_recency, _row_selector, _richer_json_island, _first_row_is_header,
 )
 from .query_repair import _repair_query
 from .query_assess import completeness_note, correctness_note
@@ -146,6 +146,7 @@ def _artifact_from(
     missing = _empty_required_fields(good, brief)  # required leaves empty on every row
     blobs = _blob_valued_fields(good, brief)  # a field grabbed a whole JSON object, not a leaf value
     island = _richer_json_island(expr, doc, len(good))  # the DOM query is a SUBSET of a richer JSON island
+    header_echo = _first_row_is_header(good, brief)  # the first record is a HEADER row echoed as data
     tnote, stale = _timeliness(good, brief)  # over ALL rows; a FLAG, never a ship blocker
     pager_unconfirmed = False
     confirmed = _confirmed_mode(doc, hint, _row_selector(expr) or "") if (paginate and doc.ok) else None
@@ -168,8 +169,9 @@ def _artifact_from(
         explain=explain,
         plan=exe._plan.model_dump(mode="json"),
         tested=tested,
-        # complete = real rows, every required leaf a VALUE, and NOT a teaser subset of a richer JSON island
-        complete=bool(tested and good and not missing and not blobs and island is None),
+        # complete = real rows, every required leaf a VALUE, not a teaser subset of a richer JSON island,
+        # and the first record is not a HEADER row echoed as data
+        complete=bool(tested and good and not missing and not blobs and island is None and not header_echo),
         row_count=len(good),
         sample=list(good[:5]),
         resolve=(resolve.model_dump(mode="json") if resolve is not None else {}),

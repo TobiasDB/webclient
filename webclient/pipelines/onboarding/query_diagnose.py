@@ -269,6 +269,19 @@ def _blob_valued_fields(rows: "list[Any]", brief: Brief) -> "list[str]":
         return []
     return [p for p in req if any(_is_container_leaf(_dig(r, p)) for r in dict_rows)]
 
+def _first_row_is_header(good: "list[Any]", brief: Brief) -> bool:
+    """The FIRST extracted record looks like the table's HEADER echoed as DATA -- its cell values equal
+    the column/field NAMES (``{name:'Name', price:'Price'}``). Happens when ``select_all('tbody tr')``
+    catches a header row built from ``<td>`` (not ``<th>``): the phantom row is non-empty, so the
+    empty-field check misses it and it ships as a bogus record. Conservative (values must literally
+    equal the field keys, >= 2 of them), so real data never trips it."""
+    if not good or not isinstance(good[0], dict):
+        return False
+    r = good[0]
+    hits = sum(1 for k, v in r.items()
+               if isinstance(v, str) and v.strip() and v.strip().lower() == str(k).strip().lower())
+    return hits >= 2 and hits >= max(1, len(r) // 2)
+
 def _longest_record_list(obj: Any, path: str = "") -> "tuple[int, str]":
     """The longest LIST-OF-OBJECTS inside a parsed JSON value, as ``(length, dotted_path)`` -- the
     records of a JSON island. Descends dict keys only (so the path is a clean ``a.b.items`` the DSL's
@@ -359,6 +372,13 @@ def _content_hint(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> str:
             ".extract(<field>=wq.doc.attr('<key>'), ...).project()  -- JSON uses dotted paths + .attr(key), "
             "never .attr('text'); a nested object is .select('<obj>').attr('<key>')."
         )
+    if _first_row_is_header(good_rows, brief):  # a header row extracted as a phantom data record
+        return (
+            f"Your FIRST record is the table's HEADER row echoed as data (its values are the column "
+            f"names, e.g. {good_rows[0]}) -- your record selector matched a header <tr> built from <td>. "
+            "Exclude it: use .table() (it reads the header row as the keys, not a record), or select only "
+            "DATA rows (a header-aware selector like 'tbody tr:not(:first-child)', or the rows' own class)."
+        )
     if not good_rows:  # matched a container but every field is empty (or 0 rows)
         return _no_rows_hint(expr, doc) + shown + caveat
     blobs = _blob_valued_fields(good_rows, brief)  # a field grabbed a whole object, not a leaf
@@ -422,6 +442,8 @@ def _short_fail_reason(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> 
     island = _richer_json_island(expr, doc, len(good))
     if island is not None:
         return f"{len(good)} DOM record(s) but a JSON island holds {island[0]} -- extract from the island"
+    if _first_row_is_header(good, brief):
+        return "the first record is the table's HEADER row (values = column names) -- exclude it / use .table()"
     if not good:
         n = _selector_match_count(_row_selector(expr), doc)
         if n and _required_field_raises(expr, doc) is not None:  # a required field misses on some rows -> raises

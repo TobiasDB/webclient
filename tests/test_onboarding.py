@@ -218,6 +218,39 @@ def test_flags_a_field_that_grabbed_a_whole_json_object(httpserver):
     assert len(seen) >= 2 and "DRILL INTO the key" in seen[1]  # the retry carried the targeted hint
 
 
+def test_rejects_a_header_row_extracted_as_data(httpserver):
+    # a <td>-built header row inside <tbody> gets extracted as a phantom {name:'Name', price:'Price'}
+    # record (non-empty, so the empty-field check misses it). It must be rejected, not shipped as
+    # complete; the retry hint points at .table() / a data-row selector.
+    from webclient.pipelines.onboarding.query_diagnose import _first_row_is_header
+    from webclient.pipelines.onboarding.query import write_query
+
+    brief = Brief(description="products", fields=["name", "price"])
+    assert _first_row_is_header([{"name": "Name", "price": "Price"}], brief)          # values == column names
+    assert not _first_row_is_header([{"name": "Widget", "price": "10"}], brief)       # real data is not flagged
+
+    httpserver.expect_request("/t").respond_with_data(
+        "<table><tbody><tr><td>Name</td><td>Price</td></tr>"                          # header built from <td>
+        "<tr><td>Widget</td><td>10</td></tr><tr><td>Cog</td><td>20</td></tr></tbody></table>",
+        content_type="text/html")
+    calls = {"n": 0}
+
+    def llm(prompt: str) -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:  # first: the naive selector that catches the header row
+            return ('wq.doc.select_all("tbody tr").extract(name=wq.doc.select("td:nth-of-type(1)").attr("text"),'
+                    ' price=wq.doc.select("td:nth-of-type(2)").attr("text")).project()')
+        return ('wq.doc.select_all("tbody tr:not(:first-child)").extract('  # then: exclude the header row
+                'name=wq.doc.select("td:nth-of-type(1)").attr("text"),'
+                ' price=wq.doc.select("td:nth-of-type(2)").attr("text")).project()')
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/t"), brief, wc=wc, llm=llm, browser="never", retries=3)
+    assert art is not None and art.complete and art.row_count == 2       # the two real products, header gone
+    assert art.sample[0]["name"] == "Widget"
+    assert any("HEADER row" in a for a in art.attempts)                   # the header echo was diagnosed
+
+
 def test_diagnoses_a_required_field_that_raises_on_some_rows(httpserver):
     # the Wikipedia bug: the record selector matches every row, the field selectors work on MOST
     # rows, but a leading summary/total row ("World") lacks the link the country rows have -- so a
