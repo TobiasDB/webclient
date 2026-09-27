@@ -110,6 +110,20 @@ def _mode(browser: bool) -> BrowserMode:
     return "auto" if browser else "never"
 
 
+def _fetch(wc: Any, url: str, browser: "BrowserMode", **kw: Any) -> Any:
+    """Fetch a page for onboarding, escalating to the full browser when a browser IS allowed but
+    the ``auto`` fetch was BLOCKED. ``auto`` tries static first and only escalates on recognised
+    SPA/anti-bot signals -- a bare 403 from a browser-only site (e.g. Wikipedia blocks the static
+    UA) is NOT one of them, so ``auto`` returns not-ok and a candidate the crawl already reached
+    via a browser would be rejected as "fetch failed". A single retry with ``always`` fixes that:
+    the browser tier gets the page. ``never`` (the user opted out of a browser) is never escalated,
+    and a site that fetches fine on ``auto`` (the common case) never pays the retry."""
+    doc = wc.fetch(url, browser=browser, **kw)
+    if not doc.ok and browser == "auto":  # blocked on static -> a browser-only site: use the browser
+        doc = wc.fetch(url, browser="always", **kw)
+    return doc
+
+
 #: the skeleton line budget for evaluation + query authoring -- generous enough to be
 #: the WHOLE structure of essentially any real page (the model needs every record /
 #: field), while staying well inside the model's context so an enormous page can't blow

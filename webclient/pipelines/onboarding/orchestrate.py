@@ -40,7 +40,7 @@ from ...llm.prompts import render_prompt
 
 from ...loop import Ask
 from ...pipeline import Pipeline, PipelineRun, Stage
-from .common import LLM, SearchFn, _mode
+from .common import LLM, SearchFn, _fetch, _mode
 from .artifacts import Brief, OnboardingResult, _RunArtifacts, _ensure_logging, _trace, _summarize
 from .llm import _read_flags
 from .search import search_web
@@ -273,18 +273,22 @@ def _build_pipeline(
         # page is an SPA shell backed by it, otherwise the page itself (see _source_url).
         result.reference = write_reference(evaluation, wc=wc)
         query_url = _source_url(evaluation)
-        doc = wc.fetch(query_url, browser=_mode(browser), optional=True)
+        doc = _fetch(wc, query_url, _mode(browser), optional=True)  # escalate auto->browser if blocked
         artifacts.query_doc = doc
         flags = _read_flags(doc) if doc.ok else {}
-        return {"url": query_url, "doc": doc, "flags": flags}
+        # did the source REQUIRE a browser to fetch (static was blocked -> escalated)? Then the
+        # browser tier must be baked into the blob, or the shipped query re-fetches statically.
+        needs_browser = bool(doc.ok and getattr(doc.transport(), "final_tier", "") == "browser")
+        return {"url": query_url, "doc": doc, "flags": flags, "needs_browser": needs_browser}
 
     def source_gate(ctx: _Ctx, src: Any) -> "bool | str":
         flags = src["flags"]
         # (2) a login wall on the source itself -> no query reaches the data; stop.
         if flags.get("login_required") is not None and flags["login_required"].present:
             return stop("the source requires login")
-        # (3) resolve policy: spa -> browser, anti_bot_triggered -> proxy/stealth.
-        result.resolve = write_resolve(list(flags.values()))
+        # (3) resolve policy: spa -> browser, anti_bot_triggered -> proxy/stealth, a browser-only
+        # fetch (a static UA blocked, e.g. a 403) -> also browser, so the blob re-fetches correctly.
+        result.resolve = write_resolve(list(flags.values()), needs_browser=src.get("needs_browser", False))
         fired = [n for n, f in flags.items() if f.present]
         note("flags fired: %s; authoring the query", ", ".join(fired) or "none")
         return True

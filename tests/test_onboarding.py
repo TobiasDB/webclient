@@ -173,6 +173,44 @@ def test_reference_prefers_the_page_over_an_xhr_unless_the_page_is_a_spa_shell()
         assert str(write_reference(scrapable, wc=wc).url) == page
 
 
+def test_diagnoses_a_required_field_that_raises_on_some_rows(httpserver):
+    # the Wikipedia bug: the record selector matches every row, the field selectors work on MOST
+    # rows, but a leading summary/total row ("World") lacks the link the country rows have -- so a
+    # NON-optional field selector raises and zeroes the WHOLE query. The old diagnostic said only
+    # "0 rows (record selector matched N)", which misled the model into re-picking the record
+    # selector; now it names the real fix: make the field optional.
+    from webclient.pipelines.onboarding.query_diagnose import (
+        _no_rows_hint, _short_fail_reason, _required_field_raises, _force_fields_optional, _test_query,
+    )
+    from webclient.pipelines.onboarding.artifacts import Brief
+
+    rows_html = (
+        '<tr><th>Rank</th><th>Country</th><th>Population</th></tr>'
+        '<tr><td>–</td><td>World</td><td>8,000,000,000</td></tr>'          # summary row: NO country link
+        '<tr><td>1</td><td><a title="India">India</a></td><td>1,400,000,000</td></tr>'
+        '<tr><td>2</td><td><a title="China">China</a></td><td>1,410,000,000</td></tr>'
+    )
+    httpserver.expect_request("/pop").respond_with_data(
+        f'<table class="wikitable"><tbody>{rows_html}</tbody></table>', content_type="text/html")
+
+    with WebClient() as wc:
+        doc = wc.fetch(httpserver.url_for("/pop"), browser="never")
+        # the model's shape: country is NOT optional and misses on the "World" row -> the query raises
+        expr = wq.doc.select_all("table.wikitable tbody tr:has(td)").extract(
+            country=wq.doc.select("td a[title]").attr("text"),
+            population=wq.doc.select("td:nth-of-type(3)").attr("text"),
+        ).project()
+        # the raise is detected, and forcing fields optional recovers real rows
+        assert _required_field_raises(expr, doc) is not None
+        opt = _force_fields_optional(expr)
+        ok, orows = _test_query(opt, doc)
+        assert ok and len([r for r in orows if r.get("country")]) == 2  # India + China (World has null country)
+        # the diagnostics now point at the real fix, not the record selector
+        hint = _no_rows_hint(expr, doc)
+        assert "optional=True" in hint and "summary/total" in hint
+        assert "make it optional" in _short_fail_reason(expr, [], Brief(description="d", fields=["country"]), doc)
+
+
 def test_pagination_ignored_param_does_not_duplicate_rows(httpserver):
     # the LWN bug: the model bakes an offset pager (?offset=0,10,20,...) but the server IGNORES the
     # param on THIS url -- every "page" re-serves the SAME records under a slightly different URL
@@ -902,6 +940,36 @@ def test_write_resolve_maps_flags_to_policy():
     assert proxy.proxy is not None and proxy.browser is None and proxy.antibot is None
 
     assert write_resolve([]).browser is None  # a plain source needs nothing
+    # a browser-only source (a static UA is BLOCKED with no SPA/anti-bot flag, e.g. Wikipedia 403):
+    # the browser tier is baked in even with no render flag, so the shipped blob re-fetches via the
+    # browser instead of statically (which would 403 -> 0 rows).
+    assert write_resolve([]).browser is None
+    only_browser = write_resolve([], needs_browser=True)
+    assert only_browser.browser is not None and only_browser.browser.when == "always"
+
+
+def test_onboarding_fetch_escalates_to_browser_when_static_is_blocked():
+    # the Wikipedia bug: a browser-only site 403s on the static/auto fetch (auto does NOT escalate
+    # on a bare 403), so evaluate/source would reject a candidate the crawl already reached via a
+    # browser as "fetch failed". _fetch retries once with the full browser when a browser IS allowed.
+    from webclient.pipelines.onboarding.common import _fetch
+
+    class _Doc:
+        def __init__(self, ok): self.ok = ok
+
+    class _WC:  # records the browser modes it was asked for; static/auto is blocked, browser works
+        def __init__(self): self.calls = []
+        def fetch(self, url, *, browser, **kw):
+            self.calls.append(browser)
+            return _Doc(browser == "always")  # only the full browser gets the page
+
+    wc = _WC()
+    doc = _fetch(wc, "http://blocked/", "auto", optional=True)
+    assert doc.ok and wc.calls == ["auto", "always"]  # tried auto, then escalated to the browser
+
+    wc2 = _WC()
+    doc2 = _fetch(wc2, "http://blocked/", "never", optional=True)  # user opted OUT of a browser
+    assert not doc2.ok and wc2.calls == ["never"]  # never escalated -- a static-only run stays static
 
 
 def test_evaluate_drops_a_login_walled_candidate(httpserver):

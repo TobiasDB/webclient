@@ -28,7 +28,7 @@ from ...interface import Reference, WebClient, wq
 from ...clients.llm import Budget, BudgetExceeded, LlmClient, LlmError
 from ...llm.prompts import render_prompt
 
-from .common import LLM, BrowserMode, _skeleton_for, log
+from .common import LLM, BrowserMode, _fetch, _skeleton_for, log
 from .artifacts import Brief, Candidate, CandidateEval
 from .llm import _ask_json, _fields_line, _read_flags
 
@@ -49,7 +49,7 @@ def evaluate_candidate(
     """Fetch the candidate, read its skeleton + signals, and have the model judge the
     dataset (present, sorted, complete, paginated, filtered, a subset, unstructured,
     drill-down)."""
-    doc = wc.fetch(candidate.url, browser=browser, optional=True)
+    doc = _fetch(wc, candidate.url, browser, optional=True)  # escalate auto->browser if blocked
     if not doc.ok:
         return CandidateEval(url=candidate.url, verdict="fetch failed")
     flags = _read_flags(doc)  # the detected conclusions (spa / pagination / login / ...)

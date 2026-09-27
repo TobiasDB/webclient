@@ -17,7 +17,7 @@ from ...llm.prompts import render_prompt
 from ...clients.llm import LlmError
 
 from .dates import _timeliness
-from .common import LLM, BrowserMode, _skeleton_for, log
+from .common import LLM, BrowserMode, _fetch, _skeleton_for, log
 from .artifacts import Brief, CandidateEval, QueryPart, QueryArtifact
 from .llm import _fields_line
 
@@ -266,7 +266,7 @@ def write_query(
     it writes query code) or ``"index"`` (it picks record/field indexes and ``build_query``
     builds the selectors, so it never authors CSS); the test/validation is the same either way."""
     if doc is None:
-        doc = wc.fetch(candidate_url, browser=browser, optional=True)
+        doc = _fetch(wc, candidate_url, browser, optional=True)  # escalate auto->browser if blocked
     # a BINARY document (a PDF, an image, a spreadsheet) has nothing to EXTRACT into rows -- the
     # deliverable IS the file. Author a download recipe deterministically (reference + resolve, no
     # model call), so a "download this document" brief still onboards (genericity for odd shapes).

@@ -54,6 +54,58 @@ def _selector_match_count(sel: "str | None", doc: Any) -> "int | None":
     except Exception:  # noqa: BLE001 - a selector the engine can't run -> unknown
         return None
 
+def _force_fields_optional(expr: Any) -> "Any | None":
+    """A copy of the query with every FIELD ``select``/``select_all`` made ``optional=True`` -- so a
+    field selector that MISSES on some records yields null there instead of RAISING (a non-optional
+    miss in a fan-out zeroes the WHOLE query). Returns None if there is nothing to relax."""
+    import copy
+
+    from ...query.expr import Expr
+    from ...query.plan import Plan
+
+    plan = copy.deepcopy(expr._plan.model_dump(mode="json"))
+    changed = [False]
+
+    def walk(p: "dict[str, Any]", *, in_field: bool) -> None:
+        steps = p.get("steps", [])
+        for i, s in enumerate(steps):
+            if in_field and s.get("kind") == "get" and s.get("name") in ("select", "select_all"):
+                nxt = steps[i + 1] if i + 1 < len(steps) else None
+                if nxt is not None and nxt.get("kind") == "call":
+                    kw = nxt.setdefault("kwargs", {})
+                    if "optional" not in kw:
+                        kw["optional"] = {"value": True}
+                        changed[0] = True
+            if s.get("kind") == "call":  # descend into the field sub-plans
+                for v in list(s.get("kwargs", {}).values()) + list(s.get("args", [])):
+                    if isinstance(v, dict) and isinstance(v.get("plan"), dict):
+                        walk(v["plan"], in_field=True)
+
+    walk(plan, in_field=False)
+    if not changed[0]:
+        return None
+    return Expr(Plan.model_validate(plan), expr._client)
+
+def _required_field_raises(expr: Any, doc: Any) -> "str | None":
+    """Detect the case where the RECORD selector matches records and the field selectors work on
+    MOST of them, but one field selector matches nothing on SOME record (a leading summary/total
+    row, a header row) and -- not being optional -- RAISES, zeroing the whole query. Returns the
+    failing selector's message (for the hint) when that is what happened, else None. Confirmed by
+    re-testing with every field forced optional: if THAT extracts rows, a required field was the
+    culprit."""
+    if not doc.ok:
+        return None
+    try:
+        expr.collect(doc)
+        return None  # it did not raise -> this is not the missing-required-field case
+    except Exception as exc:  # noqa: BLE001 - we only want the message, and only if optional fixes it
+        msg = str(exc).splitlines()[0][:160]
+    opt = _force_fields_optional(expr)
+    if opt is None:
+        return None
+    ok, rows = _test_query(opt, doc)
+    return msg if (ok and _populated_rows(rows)) else None
+
 def _no_rows_hint(expr: Any, doc: Any) -> str:
     """A human-readable, actionable hint for why a query extracted 0 rows: either the ROW
     selector matched nothing (wrong record selector) or it matched records but no fields
@@ -62,6 +114,17 @@ def _no_rows_hint(expr: Any, doc: Any) -> str:
     n = _selector_match_count(sel, doc)
     ops = {s.name for s in expr._plan.steps if s.kind == "get"}
     projected = "project" in ops  # did the query actually extract+project fields?
+    raised = _required_field_raises(expr, doc)  # a required field missing on SOME rows -> whole query raises
+    if raised is not None:
+        return (
+            f'Your record selector "{sel}" matched {n} records and your field selectors DO work on '
+            "MOST of them -- but at least one field selector matches NOTHING on SOME record (a "
+            'leading summary/total row like "World", a section header, an ad row), and because that '
+            f"field is NOT optional the WHOLE query raises ({raised}) and returns 0 rows. Add "
+            'optional=True to the field selector(s) that can be absent on some records: '
+            'wq.doc.select("<selector>", optional=True).attr("text"). An optional field yields null '
+            "on the rows that lack it instead of failing the entire query."
+        )
     if n == 0:
         return (
             f'Your record selector "{sel}" matched NO elements on this page, so nothing was'
@@ -233,6 +296,8 @@ def _short_fail_reason(expr: Any, rows: "list[Any]", brief: Brief, doc: Any) -> 
     good = _populated_rows(rows)
     if not good:
         n = _selector_match_count(_row_selector(expr), doc)
+        if n and _required_field_raises(expr, doc) is not None:  # a required field misses on some rows -> raises
+            return f"{n} records matched but a required field is absent on some rows (make it optional)"
         return f"0 rows (record selector matched {n if n is not None else '?'})"
     empty = _empty_required_fields(good, brief)
     if empty:
