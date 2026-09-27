@@ -19,16 +19,25 @@ if TYPE_CHECKING:
     from ...core.document.models import DatasetHint
 
 
-def completeness_note(dataset: "DatasetHint | None", *, paginated: bool) -> "tuple[str, bool]":
+def completeness_note(
+    dataset: "DatasetHint | None", *, paginated: bool, pager_unconfirmed: bool = False
+) -> "tuple[str, bool]":
     """Does the shipped query cover the whole dataset? ``paginated`` is whether it actually walks the
-    pages (a confirmed pager was baked). Returns ``(note, covers_all)``. A single-page listing is
+    pages (a confirmed pager was baked). ``pager_unconfirmed`` is set when a pager WAS expected (the
+    source looked paginated) but a distinct next page could not be confirmed, so the blob ships page
+    one only -- an honest POSSIBLE subset, not a single-page dataset (this is what a JSON cursor/keyset
+    API the pager can't yet walk looks like). Returns ``(note, covers_all)``. A single-page listing is
     complete; a paginated one is complete only when the query walks it; an active filter narrows it."""
-    if dataset is None:
-        return "", True
-    if dataset.filtered is not None and dataset.filtered.active:
+    if dataset is not None and dataset.filtered is not None and dataset.filtered.active:
         act = ", ".join(f"{k}={v}" for k, v in dataset.filtered.active.items())
         return (f"COMPLETENESS: the listing is FILTERED ({act}) -- a SUBSET, so this is not the whole "
                 "dataset; drop the filter (the unfiltered recipe) to backfill everything.", False)
+    if pager_unconfirmed:  # pagination expected, but no distinct next page could be confirmed
+        return ("COMPLETENESS: pagination was expected but a distinct next page could NOT be confirmed "
+                "-- this query captures the FIRST page only; verify whether more records exist behind a "
+                "cursor/keyset or interaction the pager cannot yet walk.", False)
+    if dataset is None:
+        return "", True
     if dataset.paginated is None:
         return "COMPLETENESS: one page -- the whole dataset is on a single page.", True
     best = dataset.paginated.best

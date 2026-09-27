@@ -201,6 +201,39 @@ def test_write_query_auto_repairs_a_near_miss_field_selector(httpserver):
     assert art.sample[0]["name"] == "W0"
 
 
+def test_write_query_stops_early_when_a_required_field_is_absent(httpserver):
+    # a required field the model can NEVER populate because it is genuinely NOT on the page: after a
+    # couple of targeted retries the pipeline concludes the field is ABSENT, STOPS re-authoring it
+    # (instead of burning every retry), and returns the best PARTIAL with the absent field named --
+    # so onboarding fails FAST with a precise reason rather than looping on a field that isn't there.
+    from webclient.pipelines.onboarding import write_query
+
+    httpserver.expect_request("/p").respond_with_data(
+        "<ul>" + "".join(
+            f'<li class="post"><span class="title">T{i}</span><span class="loc">L{i}</span></li>'
+            for i in range(3)
+        ) + "</ul>",
+        content_type="text/html",
+    )
+    calls = {"n": 0}
+
+    def llm(prompt: str) -> str:  # always a VALID query, but 'team' lives nowhere on the page
+        calls["n"] += 1
+        sel = [".team", ".squad", ".group", ".unit", ".org"][min(calls["n"] - 1, 4)]
+        return ('wq.doc.select_all("li.post").extract('
+                'title=wq.doc.select(".title").attr("text"),'
+                f' team=wq.doc.select("{sel}", optional=True).attr("text")).project()')
+
+    with WebClient() as wc:
+        art = write_query(httpserver.url_for("/p"),
+                          Brief(description="posts", fields=["title", "team"]),
+                          wc=wc, llm=llm, browser="never", retries=4)
+    assert art is not None
+    assert not art.complete and art.absent == ["team"]         # the absent field is named
+    assert art.row_count == 3 and art.sample[0]["title"] == "T0"  # the partial keeps the other field
+    assert calls["n"] == 2  # stopped after the 2nd attempt, NOT all 5 tries (retries=4 -> 5)
+
+
 def test_write_query_uses_a_swappable_author_seam(httpserver, monkeypatch):
     # the authoring ENGINE is a swappable seam (_make_author): write_query owns the test/repair/
     # artifact orchestration and asks the Author only for the candidate query exprs. Phase 6 swaps
@@ -2122,6 +2155,13 @@ def test_query_assessments_from_dataset_shape():
     ordered = DatasetHint(url="http://x/list", ordered=Ordering(key="date", direction="desc"))
     rnote2, correct2 = correctness_note(ordered)
     assert correct2 is True and "newest-first" in rnote2
+
+    # a pager was EXPECTED but a distinct next page could not be confirmed (a JSON cursor/keyset the
+    # pager can't yet walk): be HONEST it is a possible subset, not "the whole dataset on one page".
+    cnote3, covers3 = completeness_note(plain, paginated=False, pager_unconfirmed=True)
+    assert covers3 is False and "could NOT be confirmed" in cnote3 and "FIRST page only" in cnote3
+    # confirmed-and-walked stays complete; the unconfirmed flag only fires when NOT paginated
+    assert completeness_note(plain, paginated=True)[1] is True
 
 
 def test_write_query_authors_a_single_value_dataset(httpserver):

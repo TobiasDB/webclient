@@ -127,10 +127,13 @@ def _artifact_from(
     good = _populated_rows(rows)
     missing = _empty_required_fields(good, brief)  # required leaves empty on every row
     tnote, stale = _timeliness(good, brief)  # over ALL rows; a FLAG, never a ship blocker
+    pager_unconfirmed = False
     if paginate and doc.ok and not _pager_confirmed(doc, hint):
         log.info("    pagination probe: no distinct second page -> shipping page one only")
         paginate = False  # don't bake a pager that pages into nothing / a clamp
-    compl, covers_all = completeness_note(dataset, paginated=paginate)  # whole dataset? (pagination / filter)
+        pager_unconfirmed = True  # but pagination WAS expected -- be honest it may be a subset
+    compl, covers_all = completeness_note(dataset, paginated=paginate,  # whole dataset? (pagination / filter)
+                                          pager_unconfirmed=pager_unconfirmed)
     corr, correct = correctness_note(dataset)  # the right set? (unfiltered, order known)
     exe = _executable_query(expr, candidate_url, resolve, paginate=paginate, hint=hint)  # self-contained + runnable
     try:  # the visual step tree, from the VALID parsed plan (before/independent of testing)
@@ -286,6 +289,8 @@ def write_query(
     attempts: list[str] = []  # why each rejected attempt was rejected, for the onboard output
     nudged_empty = False  # a split query with an empty section is nudged ONCE, then accepted
     nudged_recency = False  # a stale-but-complete query is pushed for fresher data ONCE, then kept
+    prev_missing: set[str] = set()  # required field(s) left empty by the PREVIOUS attempt (records matched)
+    absent: set[str] = set()  # required field(s) found to be genuinely absent from the source (early-stop)
     author: Author = _make_author(llm, prompt, doc, brief, engine=author_engine)  # text | index (build_query)
     follow_up: "str | None" = None
     tries = retries + 1
@@ -384,6 +389,21 @@ def write_query(
                 follow_up = _recency_follow_up(rart)
                 continue
             art = rart if rart.row_count > art.row_count else art  # keep the better fallback
+        # a required field the model CANNOT populate is either a wrong selector or a field that is
+        # genuinely not on the page. We can't know on the first miss, so we retry with a targeted
+        # hint; but if the SAME required field(s) stay empty on the NEXT attempt (records matched and
+        # the other fields came out), the field is absent from the source -- stop re-authoring it and
+        # keep the best partial, rather than burning every retry on a field that isn't there.
+        good = _populated_rows(rows)
+        missing = set(_empty_required_fields(good, brief)) if good else set()
+        if good and missing and missing <= prev_missing:
+            absent |= missing
+            best = art if (best is None or art.row_count > best.row_count) else best
+            attempts.append(f"attempt {attempt + 1}: field(s) {', '.join(sorted(missing))} absent from the source")
+            log.info("%s: field(s) %s absent from the source (records + other fields extract cleanly) "
+                     "— keeping the partial, no more retries", tag, ", ".join(sorted(missing)))
+            break
+        prev_missing = missing
         best = best or art  # keep the first rebuildable one as a fallback (NOT complete)
         # a concise reason on the console; the full, multi-line diagnostic hint goes to the model.
         reason = _short_fail_reason(expr, rows, brief, doc)
@@ -403,4 +423,6 @@ def write_query(
     if best is None:  # every attempt failed to author a usable query -- say so loudly
         log.warning("    could not author a working query in %d attempt(s)", tries)
         return None
+    if absent:  # record the genuinely-absent required field(s) on the partial we return
+        best.absent = sorted(absent)
     return _finalize(best)

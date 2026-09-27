@@ -354,6 +354,11 @@ class QueryArtifact(BaseModel):
     #: why each EARLIER authoring attempt was rejected (one short line each, in order), so the
     #: onboard output shows the path to this query -- empty when the first attempt succeeded.
     attempts: list[str] = []
+    #: required field(s) the model could NOT populate from the source across repeated, targeted
+    #: retries -- i.e. genuinely ABSENT from the page (the records and the OTHER fields extracted
+    #: cleanly). Set when authoring stops early on a persistently-empty field instead of burning
+    #: every retry; names exactly what a human must add to the source or drop from the brief.
+    absent: list[str] = []
     #: the SECTION sub-queries of a split dataset, run and CONCATENATED by :func:`run_query`
     #: into one flat result. ``[]`` for a plain single-section query (the common case, run via
     #: ``blob``); length >= 2 for a concat-join, where ``blob``/``describe``/``explain`` above

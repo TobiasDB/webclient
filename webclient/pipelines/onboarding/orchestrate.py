@@ -313,6 +313,9 @@ def _build_pipeline(
         result.ok = q is not None and q.complete and q.row_count > 0
         if result.ok:
             result.reason = ""
+        elif q is not None and q.absent:  # a required field is genuinely not on the source
+            result.reason = (f"required field(s) {', '.join(q.absent)} are not present on the source "
+                             f"(the records and the other fields extracted cleanly)")
         elif q is not None and q.row_count > 0:
             result.reason = "authored query is missing required field(s)"
         elif q is not None:
