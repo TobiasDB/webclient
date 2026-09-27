@@ -283,6 +283,19 @@ def test_catalog_value_in_a_class_token_and_a_title_attr(lab, wc, index):
     assert pods[idx].select("h3 a").attr("text").endswith("…")  # visible text truncated
 
 
+def test_store_filter_drops_sold_out_rows(lab, wc, index):
+    # a listing where only SOME rows carry a sold-out badge: an "in-stock only" answer needs a
+    # .filter() (a row-level predicate), not just a selector -- the sold-out rows are dropped.
+    sx = expected(lab, wc, "store")
+    doc = wc.fetch(f"{lab}{index['store']['path']}")
+    assert len(doc.select_all(sx["record_selector"])) == sx["records"]  # every row is present in the HTML
+    rows = wq.doc.select_all(sx["record_selector"]).filter(
+        ~wq.doc.select(sx["sold_out_selector"], optional=True).is_ok()
+    ).extract(name=wq.doc.select(".name").attr("text")).project().collect(doc)
+    assert [r["name"] for r in rows] == sx["in_stock_names"]  # only the in-stock rows, in order
+    assert len(rows) == sx["in_stock"] and len(rows) < sx["records"]  # the filter genuinely dropped rows
+
+
 def test_deep_paginate_plus_per_record_resolve(lab, wc, index):
     # the deepest shape: the dataset spans PAGES, and a required field (SKU) is only on each item's
     # OWN detail page -- so a correct query must BOTH walk the pagination AND, per record, follow the

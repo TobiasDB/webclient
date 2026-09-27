@@ -97,6 +97,14 @@ SPECS: "list[dict[str, Any]]" = [
               'rating=wq.doc.select("p.star-rating").attr("class", "star-rating ([A-Za-z]+)", group=1), '
               'price=wq.doc.select("p.price_color").attr("text")).project()',
          latest_rows=6, all_rows=6, browser=False),
+    dict(name="filter-sold-out", title="A filtered listing (drop sold-out rows)", path="/lab/store",
+         description="the IN-STOCK products only (exclude anything sold out), with name and price",
+         fields=["name", "price"],
+         # a row-level .filter() drops the sold-out rows -- the answer's correctness is the filter.
+         code='wq.doc.select_all("li.product").filter(~wq.doc.select("span.sold-out", optional=True).is_ok())'
+              '.extract(name=wq.doc.select(".name").attr("text"), '
+              'price=wq.doc.select(".price").attr("text")).project()',
+         latest_rows=3, all_rows=3, browser=False),  # 3 in-stock; the 2 sold-out rows are filtered out
     dict(name="paginate-and-resolve", title="Pagination + a per-record detail resolve", path="/lab/deep",
          description="every item across all pages, each with its name and its SKU (on the item's own page)",
          fields=["name", "sku"],

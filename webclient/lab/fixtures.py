@@ -227,6 +227,29 @@ def _about(method: str, path: str, query: Query, headers: dict[str, str], body: 
     return html(page("About", "<main><h1>About</h1><p>We roast.</p></main>"))
 
 
+# a listing where SOME rows carry a sold-out badge -- a brief for "in-stock only" needs a .filter()
+STORE = [  # (name, price, sold_out)
+    ("Ethiopia Yirgacheffe", "18", False), ("Colombia Huila", "16", True),
+    ("Kenya AA", "20", False), ("Sumatra Mandheling", "17", True), ("Guatemala Antigua", "19", False),
+]
+
+
+@fixture("store", "A listing where some rows are sold out (needs a filter)", "extract:filter",
+         expected={"record_selector": "li.product", "records": len(STORE),
+                   "in_stock": sum(1 for _, _, s in STORE if not s), "sold_out_selector": "span.sold-out",
+                   "in_stock_names": [n for n, _, s in STORE if not s]})
+def _store(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """A catalogue where only SOME rows carry a ``sold-out`` badge. A brief for the IN-STOCK products
+    must ``.filter()`` the sold-out rows out (``~wq.doc.select("span.sold-out", optional=True).is_ok()``),
+    not just extract every row -- the completeness of the answer depends on the filter, not the selector."""
+    rows = "".join(
+        f'<li class="product"><span class="name">{n}</span> <span class="price">${p}</span>'
+        + ('<span class="sold-out">Sold out</span>' if sold else '') + '</li>'
+        for n, p, sold in STORE
+    )
+    return html(page("Store", f'<main><h1>Coffee store</h1><ul class="catalogue">{rows}</ul></main>'))
+
+
 # --------------------------------------------------------------------------- #
 # JS-gated SPA (auto escalation), XHR-backed feed (SPA + data API)
 # --------------------------------------------------------------------------- #
