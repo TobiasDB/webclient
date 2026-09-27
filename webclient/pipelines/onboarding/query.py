@@ -92,21 +92,17 @@ def run_query(artifact: QueryArtifact, *, wc: WebClient) -> list[Any]:
             out.extend(_data_rows(result))  # extracted data rows, not selected elements
     return out
 
-def _pager_confirmed(doc: Any, hint: "PaginationHint | None", records: str = "") -> bool:
-    """Probe that the source REALLY paginates before baking a pager into the shipped blob: walk two
-    pages with the hint's best pager (:func:`~webclient.core.document.paginate.pager_kwargs`) and confirm a genuine, DISTINCT second page exists. ``paginate``'s own clamp guard drops a
-    page-2 that merely re-serves page one (an out-of-range clamp) and it stops on an empty/404, so a
-    length ``>= 2`` means a working pager. Passing ``records`` (the query's record selector) makes the
-    repeat check compare RECORD texts, so a ``?offset=``/``?page=`` param the server IGNORES on this
-    URL -- page two re-serves the SAME records under a different URL/nonce -- is recognised as a repeat
-    (page two is dropped, ``len == 1``) and the pager is NOT baked. A single page -- mislabelled
-    paginated, a clamp, an ignored param, or an unreachable page two -- returns False, so the blob is
-    shipped page-one-only rather than paging into duplicates. One extra fetch; a probe failure never
-    breaks authoring."""
+def _mode_confirms(doc: Any, mode: Any, records: str) -> bool:
+    """Walk two pages with ONE pager mode and confirm a genuine, DISTINCT second page exists.
+    ``paginate``'s clamp/repeat guard drops a page-2 that re-serves page one; passing ``records``
+    (the record selector) makes the repeat check compare RECORD texts, so an IGNORED ``?page=`` /
+    ``?offset=`` param, or a Next link that POINTS BACK to page one (a broken/self-referential
+    pager, as some sites' first-page '»' does), is recognised as a repeat -> ``len == 1`` -> not
+    confirmed. ``len >= 2`` means a working pager."""
     from ...core.document.paginate import pager_kwargs
 
     try:
-        kwargs = pager_kwargs(hint.best if hint is not None else None)
+        kwargs = pager_kwargs(mode)
         if "click" in kwargs or "scroll" in kwargs:
             return False  # a load-more pager needs a held browser page: not probed, not baked
         if records:
@@ -114,6 +110,23 @@ def _pager_confirmed(doc: Any, hint: "PaginationHint | None", records: str = "")
         return len(list(doc.paginate(**kwargs, max_pages=2))) >= 2
     except Exception:  # noqa: BLE001 - a probe must never break authoring
         return False
+
+def _confirmed_mode(doc: Any, hint: "PaginationHint | None", records: str = "") -> Any:
+    """The FIRST detected pager mode (best-first) that actually walks to a distinct second page, or
+    ``None`` if none do. Trying every mode -- not just the best -- means a site whose top-ranked pager
+    is broken (a '»' Next link that loops to page one) but which ALSO exposes a working ``?page=`` /
+    numbered pager still paginates: the broken mode fails the probe and the page-param mode is used.
+    ``None`` -> ship page one (mislabelled / clamped / genuinely single page). One fetch per mode tried."""
+    if hint is None or not hint.modes:
+        # no structured modes -> fall back to the header/rel=next default and confirm it
+        return None if not _mode_confirms(doc, None, records) else _DEFAULT_NEXT
+    for mode in hint.modes:
+        if _mode_confirms(doc, mode, records):
+            return mode
+    return None
+
+#: the implicit "no hint" pager (rel=next / the Link header), as a sentinel confirmed mode.
+_DEFAULT_NEXT = object()
 
 def _artifact_from(
     expr: Any, doc: Any, brief: Brief, candidate_url: str,
@@ -124,25 +137,26 @@ def _artifact_from(
     self-contained, runnable blob + validation verdict + the three assessments: timeliness,
     completeness, correctness). Shared by the one-shot and staged authors. The extraction is TESTED
     on the fetched page one only (fast); ``paginate`` bakes a ``.paginate(...)`` into the SHIPPED
-    blob (its advance chosen from ``hint``) -- but only after :func:`_pager_confirmed` verifies a
-    real second page, so a mislabelled or clamped source ships page one instead of paging into
-    nothing. ``dataset`` (from ``doc.dataset()``) supplies the shape the completeness/correctness
-    notes read; ``mode`` tags the artifact (``"latest"`` / ``"all"`` / ``"single"``). Returns
-    ``(artifact, extracted_rows)``."""
+    blob (the FIRST pager mode :func:`_confirmed_mode` verifies reaches a distinct second page), so a
+    mislabelled / clamped / broken-pager source ships page one instead of paging into nothing.
+    ``dataset`` (from ``doc.dataset()``) supplies the shape the completeness/correctness notes read;
+    ``mode`` tags the artifact (``"latest"`` / ``"all"`` / ``"single"``). Returns ``(artifact, rows)``."""
     tested, rows = _test_query(expr, doc) if doc.ok else (False, [])
     good = _populated_rows(rows)
     missing = _empty_required_fields(good, brief)  # required leaves empty on every row
     blobs = _blob_valued_fields(good, brief)  # a field grabbed a whole JSON object, not a leaf value
     tnote, stale = _timeliness(good, brief)  # over ALL rows; a FLAG, never a ship blocker
     pager_unconfirmed = False
-    if paginate and doc.ok and not _pager_confirmed(doc, hint, _row_selector(expr) or ""):
+    confirmed = _confirmed_mode(doc, hint, _row_selector(expr) or "") if (paginate and doc.ok) else None
+    if paginate and confirmed is None:
         log.info("    pagination probe: no distinct second page -> shipping page one only")
-        paginate = False  # don't bake a pager that pages into nothing / a clamp
+        paginate = False  # don't bake a pager that pages into nothing / a clamp / a loop
         pager_unconfirmed = True  # but pagination WAS expected -- be honest it may be a subset
     compl, covers_all = completeness_note(dataset, paginated=paginate,  # whole dataset? (pagination / filter)
                                           pager_unconfirmed=pager_unconfirmed)
     corr, correct = correctness_note(dataset)  # the right set? (unfiltered, order known)
-    exe = _executable_query(expr, candidate_url, resolve, paginate=paginate, hint=hint)  # self-contained + runnable
+    pager_mode = None if confirmed is _DEFAULT_NEXT else confirmed  # the CONFIRMED mode (None = rel=next default)
+    exe = _executable_query(expr, candidate_url, resolve, paginate=paginate, mode=pager_mode)  # runnable
     try:  # the visual step tree, from the VALID parsed plan (before/independent of testing)
         explain = exe.explain()
     except Exception:  # noqa: BLE001 - never let rendering the explain break authoring

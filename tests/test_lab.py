@@ -296,6 +296,24 @@ def test_store_filter_drops_sold_out_rows(lab, wc, index):
     assert len(rows) == sx["in_stock"] and len(rows) < sx["records"]  # the filter genuinely dropped rows
 
 
+def test_looppager_falls_back_to_the_page_param(lab, wc, index):
+    # the '»' Next link loops back to page one, but the ?page_num= param walks all pages: the pager
+    # probe rejects the looping next (a repeat) and the page-param mode carries the walk.
+    lx = expected(lab, wc, "looppager")
+    from webclient.pipelines.onboarding.query import _confirmed_mode, _DEFAULT_NEXT
+    from webclient.pipelines.onboarding.query_build import _executable_query
+
+    doc = wc.fetch(f"{lab}{index['looppager']['path']}")
+    hint = doc.pagination().value
+    assert any(m.mode == "pages" and m.param == lx["param"] for m in hint.modes)   # ?page_num= is recognised
+    cm = _confirmed_mode(doc, hint, lx["record_selector"])
+    assert cm not in (None, _DEFAULT_NEXT) and cm.mode == "pages"                   # the working pager, not the loop
+    expr = wq.doc.select_all(lx["record_selector"]).extract(name=wq.doc.select(".name").attr("text")).project()
+    rows = _executable_query(expr, f"{lab}{index['looppager']['path']}", None, paginate=True, mode=cm,
+                             max_pages=10).collect()
+    assert len(rows) == lx["total"] and len({r["name"] for r in rows}) == lx["total"]  # all pages, no loop
+
+
 def test_deep_paginate_plus_per_record_resolve(lab, wc, index):
     # the deepest shape: the dataset spans PAGES, and a required field (SKU) is only on each item's
     # OWN detail page -- so a correct query must BOTH walk the pagination AND, per record, follow the

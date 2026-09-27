@@ -263,7 +263,7 @@ def test_pagination_ignored_param_does_not_duplicate_rows(httpserver):
     # emits the same rows on every page. Passing the RECORD selector to paginate makes the repeat be
     # judged by the records, so page two is a repeat -> the pager is not confirmed / the walk stops.
     from webclient.core.document.models import PagerHint, PaginationHint
-    from webclient.pipelines.onboarding.query import _pager_confirmed
+    from webclient.pipelines.onboarding.query import _confirmed_mode, _mode_confirms
     from webclient.pipelines.onboarding.query_build import _executable_query
     from webclient.interface import wq
 
@@ -282,11 +282,12 @@ def test_pagination_ignored_param_does_not_duplicate_rows(httpserver):
     with WebClient() as wc:
         doc = wc.fetch(url, browser="never")
         # the content-hash probe is FOOLED (offset echoed -> page 2 looks distinct); the record probe is not
-        assert _pager_confirmed(doc, hint, records="") is True          # old behaviour: bakes a bad pager
-        assert _pager_confirmed(doc, hint, records="article.row") is False  # fixed: records repeat -> not confirmed
-        # and the shipped executable query dedups by records -> no duplicate rows across offsets
+        assert _mode_confirms(doc, hint.best, records="") is True             # fooled: bakes a bad pager
+        assert _mode_confirms(doc, hint.best, records="article.row") is False  # records repeat -> not confirmed
+        assert _confirmed_mode(doc, hint, records="article.row") is None       # so NO mode is confirmed
+        # and even if the pager IS baked, the record dedup stops the walk -> no duplicate rows across offsets
         expr = wq.doc.select_all("article.row").extract(t=wq.doc.select(".t").attr("text")).project()
-        exe = _executable_query(expr, url, None, paginate=True, hint=hint, max_pages=6)
+        exe = _executable_query(expr, url, None, paginate=True, mode=hint.best, max_pages=6)
         rows = exe.collect()
     assert len(rows) == 3, f"expected 3 unique rows, got {len(rows)} (duplicated across ignored offsets)"
 
@@ -876,6 +877,36 @@ def test_timeliness_gate_uses_the_inter_row_interval():
 
     # no date field -> nothing to judge
     assert _timeliness([{"name": "a"}], Brief(description="p", fields=["name"])) == ("", False)
+
+
+def test_parse_date_delegates_to_dateutil_across_formats_and_locales():
+    # date parsing is delegated to python-dateutil (not a hand-rolled format list): ISO, RFC 822,
+    # month names (both orders / abbreviated), and localised forms all parse. The DOT vs SLASH
+    # separator disambiguates day/month order (European dot = day-first, US slash = month-first).
+    import datetime
+
+    from webclient.pipelines.onboarding import _parse_date, _timeliness
+
+    D = datetime.date
+    assert _parse_date("2025-12-18") == D(2025, 12, 18)                 # ISO
+    assert _parse_date("Tue, 09 Sep 2026 13:00:00 GMT") == D(2026, 9, 9)  # RFC 822 (RSS pubDate)
+    assert _parse_date("December 18, 2025") == D(2025, 12, 18)          # month name
+    assert _parse_date("18 Dec 2025") == D(2025, 12, 18)               # day-first month name
+    assert _parse_date("Sept. 5, 2026") == D(2026, 9, 5)               # abbreviated with a dot
+    assert _parse_date("31.12.2026") == D(2026, 12, 31)                # EU dot
+    assert _parse_date("01.03.2026") == D(2026, 3, 1)                  # EU dot, AMBIGUOUS -> day-first (1 Mar)
+    assert _parse_date("12/18/2025") == D(2025, 12, 18)               # US slash -> month-first
+    # a non-date / bare number is refused (not coerced to today), so a stray value isn't a date
+    assert _parse_date("5") is None and _parse_date("TBA") is None and _parse_date("2 days ago") is None
+
+    news = Brief(description="ir news", fields=["title", "date"])
+    today = datetime.date.today()
+
+    def de(days_ago: int) -> str:  # DE-dot dates now drive timeliness (they parse via dateutil)
+        return (today - datetime.timedelta(days=days_ago)).strftime("%d.%m.%Y")
+
+    assert not _timeliness([{"date": de(2)}, {"date": de(12)}, {"date": de(22)}], news)[1]  # recent -> timely
+    assert _timeliness([{"date": de(200)}, {"date": de(210)}, {"date": de(220)}], news)[1]  # old -> STALE
 
 
 def test_timeliness_reads_a_nested_date_field_and_ignores_lookalike_names():

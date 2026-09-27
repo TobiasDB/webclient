@@ -33,39 +33,30 @@ _COMPLETENESS_OFF = (
 
 
 def _parse_date(s: str) -> "Any":
-    """A ``date`` from a human/ISO date string, or ``None``. Handles the common shapes
-    (``December 18, 2025`` / ``Dec 18, 2025`` / ``2025-12-18`` / ``12/18/2025`` / ...)."""
-    import datetime
-    import re
+    """A ``date`` from a human/ISO/localised date string, or ``None``. Parsing is delegated to
+    ``python-dateutil`` (a declared dependency, the same parser ``Field.date()`` uses) rather than a
+    hand-rolled format list -- so ISO, RFC 822 (RSS ``pubDate``), month names, and localised forms
+    (``31.12.2026`` DE dot, ``18/12/2025`` etc.) all parse without us enumerating each. ``dayfirst``
+    stays False (US-style) for an AMBIGUOUS slash date, and ``fuzzy`` is off so a non-date string is
+    rejected (``None``) instead of being coerced. A value that carries NO year is refused, so a bare
+    number/day isn't silently completed to today's month/year."""
+    from dateutil import parser as _du
 
     s = s.strip()
-    for fmt in ("%B %d, %Y", "%b %d, %Y", "%B %d %Y", "%b %d %Y", "%b. %d, %Y",
-                "%Y-%m-%d", "%m/%d/%Y", "%d %B %Y", "%d %b %Y", "%Y/%m/%d"):
-        try:
-            return datetime.datetime.strptime(s, fmt).date()
-        except ValueError:
-            pass
-    # RFC 822 (RSS <pubDate>: "Tue, 09 Sep 2026 13:00:00 GMT") -- a primary onboarding target.
+    if not s or not any(c.isdigit() for c in s):
+        return None
+    # dateutil fills a missing field from today's date, so a BARE number would become a date -- reject
+    # a plain integer unless it is a plausible 4-digit YEAR (so "1990" parses, but "5"/"42" do not).
+    if s.isdigit() and not (1000 <= int(s) <= 9999):
+        return None
+    # DOT-separated dates are the European convention and are DAY-first (31.12.2026, 01.03.2026 = 1 Mar);
+    # SLASH dates are US month-first (12/18/2025). This separator cue is all dateutil needs to
+    # disambiguate the day/month order -- everything else (ISO, RFC 822, month names) it handles itself.
+    dayfirst = "." in s and "/" not in s
     try:
-        from email.utils import parsedate_to_datetime
-
-        dt = parsedate_to_datetime(s)
-        if dt is not None:
-            return dt.date()
-    except (TypeError, ValueError):
-        pass
-    # ISO 8601 with a time / offset (Atom <updated>: "2026-09-14T10:30:00Z").
-    try:
-        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).date()
-    except ValueError:
-        pass
-    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", s)
-    if m:
-        try:
-            return datetime.date(int(m[1]), int(m[2]), int(m[3]))
-        except ValueError:
-            pass
-    return None
+        return _du.parse(s, dayfirst=dayfirst, fuzzy=False).date()
+    except (ValueError, OverflowError, TypeError):
+        return None
 
 
 #: leaf field names (or suffixes) that denote a date/time -- matched on the LAST dotted

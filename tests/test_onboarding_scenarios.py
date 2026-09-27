@@ -128,6 +128,24 @@ def test_pipeline_ignored_pager_does_not_duplicate_rows(lab):
 
 
 # --------------------------------------------------------------------------- #
+# 3b. a ?page_num= pager whose '»' Next link LOOPS to page one -> fall back to the param pager
+# --------------------------------------------------------------------------- #
+
+def test_pipeline_falls_back_from_a_looping_next_pager(lab):
+    code = 'wq.doc.select_all("article.row").extract(name=wq.doc.select(".name").attr("text")).project()'
+    with WebClient(timeout=25.0) as wc:
+        r = run(wc, lab, "/lab/looppager", Brief(description="the records", fields=["name"]),
+                scripted(code=code, default_eval={"dataset_present": True, "is_queryable": False,
+                                                  "has_pagination": True, "completeness": "full",
+                                                  "scrapability": 8, "verdict": "a paginated listing"}))
+        assert r.ok and r.query is not None
+        rows = run_query(r.query_all, wc=wc)
+    names = [row["name"] for row in rows]
+    assert len(names) == 12 and len(set(names)) == 12          # all 3 pages walked via ?page_num=, no loop
+    assert names[0] == "Item 1" and names[-1] == "Item 12"
+
+
+# --------------------------------------------------------------------------- #
 # 4. a listing that links to per-item queryable JSON endpoints -> pick the LISTING, not a drill-down
 # --------------------------------------------------------------------------- #
 

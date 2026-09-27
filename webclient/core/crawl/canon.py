@@ -28,7 +28,7 @@ _TRACKING = frozenset(
 #: been seen, all the other pages of that series dedup (rather than flooding the
 #: frontier with ``?page=2``, ``?page=3``, …). ``p`` is deliberately excluded -- it is
 #: too often a post/id param (``?p=123``), not a page number.
-_PAGE_NUM_PARAMS = frozenset({"page", "pg", "pagenum", "paged", "pagina", "pn"})
+_PAGE_NUM_PARAMS = frozenset({"page", "pg", "pagenum", "page_num", "pagenumber", "paged", "pagina", "pn"})
 _OFFSET_PARAMS = frozenset({"offset", "start", "skip"})
 _PAGINATION_PARAMS = _PAGE_NUM_PARAMS | _OFFSET_PARAMS
 

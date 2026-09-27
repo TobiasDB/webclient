@@ -219,18 +219,17 @@ def _extraction_steps(doc_expr: Any) -> list[Any]:
             return steps[i:]
     return steps
 
-def _paginate_steps(max_pages: int = 50, hint: "PaginationHint | None" = None, records: str = "") -> list[Any]:
-    """The plan steps for the ``.paginate(...)`` the detected :class:`PaginationHint` suggests (its
-    best mode: next link / page param / load-more), spliced between the reference resolve and the
-    extraction so the shipped query walks the dataset's pages and the body extracts across all of
-    them. No hint: follow ``rel=next`` / the HTTP Link header. Authoring still tests page one only.
-    ``records`` (the query's record selector) is passed to ``paginate`` so a repeated page is
-    recognised by its RECORD texts, not a content hash: a ``?offset=``/``?page=`` param the server
-    IGNORES on this URL (every page re-serves the same records under a slightly different URL/nonce)
-    is then detected as a repeat and the walk stops, instead of emitting the same rows on every page."""
+def _paginate_steps(max_pages: int = 50, mode: Any = None, records: str = "") -> list[Any]:
+    """The plan steps for the ``.paginate(...)`` a single confirmed pager ``mode`` (a
+    :class:`~.models.PagerHint`: next link / page param / load-more) describes, spliced between the
+    reference resolve and the extraction so the shipped query walks the dataset's pages and the body
+    extracts across all of them. ``mode`` None: follow ``rel=next`` / the HTTP Link header. Authoring
+    still tests page one only. ``records`` (the record selector) is passed to ``paginate`` so a
+    repeated page is recognised by its RECORD texts, not a content hash: a ``?page=`` param the server
+    IGNORES, or a Next link that loops back to page one, is detected as a repeat and the walk stops."""
     from ...core.document.paginate import pager_kwargs
 
-    kwargs = pager_kwargs(hint.best if hint is not None else None)
+    kwargs = pager_kwargs(mode)
     if records:
         kwargs["records"] = records
     plan = wq.doc.paginate(**kwargs, max_pages=max_pages)
@@ -238,7 +237,7 @@ def _paginate_steps(max_pages: int = 50, hint: "PaginationHint | None" = None, r
 
 def _executable_query(
     doc_expr: Any, url: str, resolve: "Resolve | None", *, paginate: bool = False, max_pages: int = 50,
-    hint: "PaginationHint | None" = None,
+    mode: Any = None,
 ) -> Any:
     """DETERMINISTICALLY wrap the model's DOCUMENT-level extraction into a SELF-CONTAINED
     query rooted at the source reference with a ``resolve`` step baked in, so
@@ -246,8 +245,8 @@ def _executable_query(
     executable exactly as output. The model supplies only the extraction; this function
     (no LLM) supplies the reference + resolve. When the source needs proxy / antibot, the
     FULL policy is baked in (``resolve(policy=...)``) so the blob re-fetches with it; a
-    plain source just bakes the browser tier. ``paginate`` splices the hinted ``.paginate(...)``
-    after the resolve, so a paginated source's blob pulls the WHOLE dataset (not page one)."""
+    plain source just bakes the browser tier. ``paginate`` splices the CONFIRMED pager ``mode``'s
+    ``.paginate(...)`` after the resolve, so a paginated source's blob pulls the WHOLE dataset."""
     from ...query.expr import Expr
     from ...query.plan import Plan
 
@@ -261,7 +260,7 @@ def _executable_query(
     if paginate:  # tell paginate the RECORD selector so it dedups by records, not a content hash
         from .query_diagnose import _row_selector
         records = _row_selector(doc_expr) or ""
-    pag = _paginate_steps(max_pages, hint, records) if paginate else []
+    pag = _paginate_steps(max_pages, mode, records) if paginate else []
     steps = [*rooted._plan.steps, *pag, *_extraction_steps(doc_expr)]
     return Expr(Plan(root="Reference", source=rooted._plan.source, steps=steps), doc_expr._client)
 

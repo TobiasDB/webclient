@@ -419,6 +419,32 @@ def _frozen(method: str, path: str, query: Query, headers: dict[str, str], body:
                      f'<nav class="pagination">{nxt}</nav></main>{decoys()}', head=head))
 
 
+LOOP_PAGES = 3
+LOOP_PER = 4
+
+
+@fixture("looppager", "A ?page_num= listing whose '»' Next link LOOPS back to page one", "pagination:loop_next",
+         expected={"record_selector": "article.row", "pages": LOOP_PAGES, "per_page": LOOP_PER,
+                   "total": LOOP_PAGES * LOOP_PER, "param": "page_num"})
+def _looppager(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """Rebuilt from scrapethissite's hockey table: pagination is by ``?page_num=`` (a param that used
+    to be UNRECOGNISED -- ``pagenum`` was, ``page_num`` was not), and the ``»`` Next link on every
+    page points BACK to ``page_num=1`` (a broken/self-referential next). So the top-ranked ``next``
+    pager LOOPS (repeats page one -> not confirmed) and the pipeline must FALL BACK to the working
+    ``page_num`` param pager to walk the whole dataset. Numbered page links expose the param."""
+    pageno = int((query.get("page_num") or ["1"])[0])
+    if pageno < 1 or pageno > LOOP_PAGES:
+        return html(page("Not found", "<h1>No such page</h1>"), status=404)
+    start = (pageno - 1) * LOOP_PER
+    rows = "".join(f'<article class="row"><span class="name">Item {start + i + 1}</span></article>'
+                   for i in range(LOOP_PER))
+    nums = "".join(f'<a href="/lab/looppager?page_num={p}">{p}</a> ' for p in range(1, LOOP_PAGES + 1))
+    # the '»' Next link ALWAYS points at page 1 -- the broken pager the walk must NOT follow
+    loop_next = '<a href="/lab/looppager?page_num=1" aria-label="Next">»</a>'
+    return html(page(f"Loop p{pageno}", f'<main><h1>Records</h1>{rows}'
+                     f'<nav class="pagination">{nums}{loop_next}</nav></main>{decoys()}'))
+
+
 # --------------------------------------------------------------------------- #
 # JS-gated SPA (auto escalation), XHR-backed feed (SPA + data API)
 # --------------------------------------------------------------------------- #
