@@ -296,6 +296,27 @@ def test_store_filter_drops_sold_out_rows(lab, wc, index):
     assert len(rows) == sx["in_stock"] and len(rows) < sx["records"]  # the filter genuinely dropped rows
 
 
+def test_merged_and_pivot_tables_via_table_op(lab, wc, index):
+    # a rowspan category table and a transposed feature matrix -- both need .table() (rowspan expansion
+    # / transpose), not select_all("tr").
+    mx = expected(lab, wc, "merged")
+    dm = wc.fetch(f"{lab}{index['merged']['path']}")
+    rows = (wq.doc.table("table.catalogue")
+            .extract(cat=wq.doc.attr("Category"), item=wq.doc.attr("Item"), price=wq.doc.attr("Price"))
+            .project().collect(dm))
+    assert len(rows) == mx["rows"]
+    assert rows[0] == {"cat": mx["first_category"], "item": "Apple", "price": "$1"}
+    assert all(r["cat"] for r in rows)                                   # every item row got its category
+
+    px = expected(lab, wc, "pivot")
+    dp = wc.fetch(f"{lab}{index['pivot']['path']}")
+    plans = (wq.doc.table("table.compare", transpose=True)
+             .extract(plan=wq.doc.attr("Plan"), price=wq.doc.attr("Price"), users=wq.doc.attr("Users"))
+             .project().collect(dp))
+    assert [p["plan"] for p in plans] == px["plans"]                     # the PLANS are the records
+    assert plans[0]["price"] == px["starter_price"]
+
+
 def test_twoface_json_island_holds_the_whole_dataset(lab, wc, index):
     # the DOM shows a few teaser cards, but a ld+json ItemList carries the whole dataset -- the
     # pipeline must recognise the DOM query as a subset of the richer island.

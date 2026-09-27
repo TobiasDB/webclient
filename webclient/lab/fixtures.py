@@ -473,6 +473,50 @@ def _overlap(method: str, path: str, query: Query, headers: dict[str, str], body
                      f'<nav class="pagination">{nxt}</nav></main>{decoys()}'), headers=link)
 
 
+#: a category table where the category cell SPANS its items (rowspan) -- item rows omit the category.
+_MERGED = [("Fruit", [("Apple", "1"), ("Pear", "2")]), ("Veg", [("Kale", "3"), ("Leek", "4"), ("Yam", "5")])]
+
+
+@fixture("merged", "A table with a rowspan category cell (merged cells)", "extract:rowspan",
+         expected={"header": ["Category", "Item", "Price"], "rows": sum(len(v) for _, v in _MERGED),
+                   "first_category": "Fruit"})
+def _merged(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """A category -> items table where the CATEGORY cell uses ``rowspan`` and the item rows below it
+    omit it. A per-row query mis-assigns the category (or leaves it null on the spanned rows); the
+    fix is ``.table()``, which expands the rowspan so every item row carries its category."""
+    head = "<tr><th>Category</th><th>Item</th><th>Price</th></tr>"
+    body_rows = ""
+    for cat, items in _MERGED:
+        for i, (name, price) in enumerate(items):
+            cell = f'<td rowspan="{len(items)}">{cat}</td>' if i == 0 else ""  # only the first row has it
+            body_rows += f'<tr>{cell}<td>{name}</td><td>${price}</td></tr>'
+    return html(page("Catalogue", f'<main><h1>Catalogue</h1>'
+                     f'<table class="catalogue"><thead>{head}</thead><tbody>{body_rows}</tbody></table></main>'
+                     f'{decoys()}'))
+
+
+#: a feature-comparison matrix: the PLANS are the columns, the features are the rows (a transposed
+#: layout -- the records run across, not down).
+_PIVOT_HEAD = ["Plan", "Starter", "Pro", "Enterprise"]
+_PIVOT_ROWS = [("Price", ["$9", "$29", "$99"]), ("Users", ["5", "50", "Unlimited"]),
+               ("Storage", ["1GB", "10GB", "1TB"])]
+
+
+@fixture("pivot", "A transposed feature-comparison table (records are COLUMNS)", "extract:transpose",
+         expected={"plans": ["Starter", "Pro", "Enterprise"], "features": ["Price", "Users", "Storage"],
+                   "starter_price": "$9"})
+def _pivot(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
+    """A pricing/feature matrix laid out TRANSPOSED: each PLAN is a column and each FEATURE is a row, so
+    the records run ACROSS. A normal per-row query extracts features (Price/Users) as records -- the
+    WRONG axis. ``.table(transpose=True)`` reads each column as a record keyed by the first column."""
+    head = "<tr>" + "".join(f"<th>{h}</th>" for h in _PIVOT_HEAD) + "</tr>"
+    rows = "".join("<tr><td>" + feat + "</td>" + "".join(f"<td>{v}</td>" for v in vals) + "</tr>"
+                   for feat, vals in _PIVOT_ROWS)
+    return html(page("Pricing", f'<main><h1>Compare plans</h1>'
+                     f'<table class="compare"><thead>{head}</thead><tbody>{rows}</tbody></table></main>'
+                     f'{decoys()}'))
+
+
 LOOP_PAGES = 3
 LOOP_PER = 4
 

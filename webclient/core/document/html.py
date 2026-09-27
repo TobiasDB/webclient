@@ -206,10 +206,10 @@ class HtmlBacking(Backing):
     in."""
 
     provides = frozenset(
-        {"select", "select_all", "attr", "render", "as_json",
+        {"select", "select_all", "attr", "render", "as_json", "table",
          "markdown", "text", "html", "links", "elements", "skeleton"}
     )
-    collections = frozenset({"select_all", "links"})  # return a Collection of cores
+    collections = frozenset({"select_all", "links", "table"})  # return a Collection of cores
     props = frozenset({"title", "region"})
     gate = "tree"
 
@@ -265,6 +265,40 @@ class HtmlBacking(Backing):
         doc._client = core._client
         doc._events = core._events
         return doc
+
+    def table(self, core: "Document", selector: "str | None" = None, *, transpose: bool = False) -> "list[Document]":
+        """The rows of an HTML TABLE as records, with ``rowspan`` / ``colspan`` EXPANDED so a merged
+        category cell is carried down into the rows it covers -- something ``select_all`` on ``<tr>``
+        cannot do (it reads within one row). EXPLICIT: nothing here happens unless you call ``.table()``.
+        Each record is a JSON row keyed by the HEADER cells, read with ``.attr("<Header>")`` (JSON ops,
+        not ``.attr("text")``). ``selector`` picks the table (else the largest one in this element/doc);
+        ``transpose=True`` makes each COLUMN a record keyed by the first column -- for a
+        feature-comparison / named-feature matrix whose records are columns, not rows."""
+        import json
+
+        from . import Document
+        from ...dom.table import table_records
+
+        base = core._element if core._element is not None else self._tree(core)
+        if base is None:
+            return []
+        if selector:
+            els = self._find(core, selector)
+            base = next((e for e in els if _tag(e) == "table"), els[0] if els else base)
+        table_el = base if _tag(base) == "table" else max(
+            (e for e in base.iter() if _tag(e) == "table"),
+            key=lambda t: sum(1 for n in t.iter() if _tag(n) == "tr"), default=None)
+        if table_el is None:
+            return []
+        out: list[Document] = []
+        for rec in table_records(table_el, transpose=transpose):
+            doc = Document(url=core.url, final_url=core.final_url, kind="json",
+                           status_code=core.status_code, content=json.dumps(rec).encode("utf-8"))
+            doc.root = core.name or core.root
+            doc._client = core._client
+            doc._events = core._events
+            out.append(doc)
+        return out
 
     def skeleton(
         self,

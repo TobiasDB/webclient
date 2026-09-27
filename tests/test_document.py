@@ -231,6 +231,31 @@ def test_list_valued_field_projects_to_a_list():
     ]
 
 
+def test_table_op_expands_rowspan_and_transposes():
+    # .table() reads an HTML table as records with rowspan/colspan EXPANDED and rows keyed by the
+    # header (read with .attr("<Header>")); transpose=True makes each COLUMN a record.
+    from webclient import wq
+    from webclient.query.expr import from_blob
+
+    merged = make_doc(content=(
+        b'<table class="t"><tr><th>Cat</th><th>Item</th></tr>'
+        b'<tr><td rowspan="2">Fruit</td><td>Apple</td></tr><tr><td>Pear</td></tr>'
+        b'<tr><td>Veg</td><td>Kale</td></tr></table>'))
+    q = wq.doc.table("table.t").extract(cat=wq.doc.attr("Cat"), item=wq.doc.attr("Item")).project()
+    assert list(q.collect(merged)) == [                                  # the rowspan cell is carried down
+        {"cat": "Fruit", "item": "Apple"}, {"cat": "Fruit", "item": "Pear"}, {"cat": "Veg", "item": "Kale"}]
+    assert list(from_blob(q.to_blob(), merged._client).collect(merged))[0] == {"cat": "Fruit", "item": "Apple"}
+
+    matrix = make_doc(content=(
+        b'<table><tr><th>Plan</th><th>Starter</th><th>Pro</th></tr>'
+        b'<tr><td>Price</td><td>$9</td><td>$29</td></tr><tr><td>Users</td><td>5</td><td>50</td></tr></table>'))
+    rows = list(wq.doc.table(transpose=True)
+                .extract(plan=wq.doc.attr("Plan"), price=wq.doc.attr("Price"), users=wq.doc.attr("Users"))
+                .project().collect(matrix))
+    assert rows == [{"plan": "Starter", "price": "$9", "users": "5"},    # records are the COLUMNS
+                    {"plan": "Pro", "price": "$29", "users": "50"}]
+
+
 def test_project_distinct_drops_duplicate_rows_preserving_order():
     # project(distinct=True) keeps each distinct row once, first occurrence, order preserved -- so a
     # paginated union with overlapping pages / a sticky record isn't emitted many times.

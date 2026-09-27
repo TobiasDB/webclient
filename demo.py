@@ -47,6 +47,9 @@ PAGE = b"""
     <a class="link" href="/items/2">view</a><span class="price">$129</span></div>
   <div class="card"><h2 class="title">Kettle</h2>
     <a class="link" href="/items/3">view</a><span class="price">$79</span></div>
+  <table class="stock"><thead><tr><th>Origin</th><th>Bean</th><th>Bags</th></tr></thead>
+    <tbody><tr><td rowspan="2">Ethiopia</td><td>Yirgacheffe</td><td>12</td></tr>
+    <tr><td>Sidamo</td><td>7</td></tr><tr><td>Kenya</td><td>AA</td><td>9</td></tr></tbody></table>
 </main>
 <footer>fine print</footer>
 </body></html>
@@ -223,6 +226,10 @@ def selection_and_render(wc: WebClient, shop: Any) -> None:
         item = card.select("a").attr("href").resolve()  # href -> Reference -> json doc
         _show("card", f"{title} {price} -> {item.select('name').attr('text')}"
                       f" (stock {item.select('stock.count').attr('text')})")
+
+    # .table() reads a table as records, expanding a rowspan (Ethiopia spans its two beans)
+    _show("table", [f"{r.attr('Origin')}/{r.attr('Bean')}:{r.attr('Bags')}"
+                    for r in shop.table("table.stock")][:3])
 
     _show("title", shop.title)
     _show("markdown", shop.markdown().splitlines()[0])

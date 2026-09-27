@@ -403,3 +403,35 @@ wq.doc.select_all(".product").filter(
     name=wq.doc.select(".name").attr("text"),
 ).project()
 ```
+
+### 6. A messy HTML table — `.table()` (merged cells, or a transposed matrix)
+
+For a real `<table>`, prefer **`.table()`** over `select_all("tr")`: it expands `rowspan`/`colspan`
+and keys each row by its HEADER, so you read cells with **`.attr("<Header>")`** (JSON keys, not
+`.attr("text")`). Use it when a `select_all("tr")` query would break:
+
+- **Merged cells (a `rowspan` category).** The category cell spans several rows and the rows below
+  omit it, so a positional `td:nth-of-type(1)` mis-reads it. `.table()` carries it down.
+  ```
+  <tr><td rowspan="2">Fruit</td><td>Apple</td><td>$1</td></tr>
+  <tr>                          <td>Pear</td> <td>$2</td></tr>
+  ```
+  ```python
+  wq.doc.table("table.catalogue").extract(
+      category=wq.doc.attr("Category"), item=wq.doc.attr("Item"), price=wq.doc.attr("Price"),
+  ).project()
+  ```
+- **Transposed matrix (records are COLUMNS).** A pricing/feature table where each PLAN is a column and
+  each feature is a row. Reading rows gives the WRONG records (Price/Users). `.table(transpose=True)`
+  reads each column as a record, keyed by the first column.
+  ```
+  <tr><th>Plan</th><th>Starter</th><th>Pro</th></tr>
+  <tr><td>Price</td><td>$9</td><td>$29</td></tr>
+  ```
+  ```python
+  wq.doc.table("table.compare", transpose=True).extract(
+      plan=wq.doc.attr("Plan"), price=wq.doc.attr("Price"), users=wq.doc.attr("Users"),
+  ).project()
+  ```
+`.table()` is EXPLICIT — a plain `select_all("tbody tr")` still works for a simple table; reach for
+`.table()` only when cells are merged or the layout is transposed.
