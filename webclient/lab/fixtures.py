@@ -282,28 +282,46 @@ ACME = [("Aeropress", "39", False), ("Grinder", "129", False), ("Kettle", "59", 
 ACME_PER = 3
 ACME_JOBS = [("Barista", "London"), ("Head Roaster", "Berlin")]          # careers: a DECOY dataset
 ACME_POSTS = [("How we roast", "2026-09-10"), ("Water chemistry", "2026-09-12")]  # blog: another decoy
+#: a TRANSPOSED plans/feature matrix on /lab/acme/pricing -- the plans are the COLUMNS, so records
+#: run across (needs .table(transpose=True)). A realistic pricing page a brief might target.
+ACME_PLAN_HEAD = ["Plan", "Home", "Cafe", "Roastery"]
+ACME_PLAN_ROWS = [("Price", ["$0", "$29", "$99"]), ("Seats", ["1", "5", "Unlimited"]),
+                  ("Support", ["Community", "Email", "Dedicated"])]
+#: the reviews dataset behind a native JSON KEYSET (cursor) API -- /lab/acme/api/reviews?after= walks
+#: it (pageInfo.endCursor + hasNextPage), the /lab/acme/reviews page just renders the first window.
+ACME_REVIEWS = [(f"Reviewer {i}", 1 + (i % 5), f"Review body {i}") for i in range(1, 12)]  # 11, page size 4
+ACME_REVIEW_PER = 4
 
 
 def _acme_nav() -> str:
     return ('<nav><a href="/lab/acme">home</a> <a href="/lab/acme/about">about</a> '
             '<a href="/lab/acme/careers">careers</a> <a href="/lab/acme/login">sign in</a> '
-            '<a href="/lab/acme/blog">blog</a></nav>')
+            '<a href="/lab/acme/blog">blog</a> <a href="/lab/acme/pricing">pricing</a> '
+            '<a href="/lab/acme/reviews">reviews</a></nav>')
 
 
-@fixture("acme", "A realistic multi-section site with red herrings (decoys, a subset teaser, drill-downs)",
+@fixture("acme", "A realistic multi-section company site: paginated catalogue + drill-downs, a "
+                 "transposed pricing table, a JSON keyset reviews API, and red-herring decoys",
          "crawl:complex",
          expected={"listing": "/lab/acme/products", "record_selector": "section.catalogue article.product",
                    "products": len(ACME), "per_page": ACME_PER, "in_stock": sum(1 for _, _, s in ACME if not s),
                    "detail_link": "a.detail", "api_link": "a.data", "teaser_selector": "article.teaser",
                    "decoys": ["/lab/acme/about", "/lab/acme/careers", "/lab/acme/login", "/lab/acme/blog"],
-                   "sku_of_1": "ACME-001"})
+                   "sku_of_1": "ACME-001",
+                   "pricing": "/lab/acme/pricing", "pricing_table": "table.plans", "plans": ACME_PLAN_HEAD[1:],
+                   "reviews": "/lab/acme/reviews", "reviews_api": "/lab/acme/api/reviews",
+                   "reviews_total": len(ACME_REVIEWS), "reviews_page_size": ACME_REVIEW_PER,
+                   "reviews_cursor_path": "pageInfo.endCursor"})
 def _acme(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
-    """A small but REALISTIC company site. Only ``/lab/acme/products`` is the dataset; everything else
-    is a red herring: the nav decoys (about/login), two DECOY datasets that also look scrapeable
+    """A small but REALISTIC company site -- the lab's FLAGSHIP, combining many hard shapes on one site.
+    Real datasets a brief might target: ``/lab/acme/products`` (a paginated catalogue; each item's SKU +
+    stock on its own HTML detail page and JSON endpoint), ``/lab/acme/pricing`` (a TRANSPOSED plans matrix
+    -- plans are columns, needs ``.table(transpose=True)``), and ``/lab/acme/reviews`` (rendered from a
+    native JSON KEYSET API ``/lab/acme/api/reviews?after=`` -- pageInfo.endCursor + hasNextPage). Red
+    herrings throughout: the nav decoys (about/login), two DECOY datasets that also look scrapeable
     (careers = roles, blog = posts), a FEATURED teaser on the landing (a 2-item SUBSET of the catalogue),
-    and per-item ``/lab/acme/api/products/{id}`` JSON endpoints (queryable, but ONE record each -- a
-    drill-down, not the dataset). The products listing is paginated; each product's SKU + stock live on
-    its own detail page (HTML) and data endpoint (JSON)."""
+    per-item ``/lab/acme/api/products/{id}`` JSON endpoints (queryable, but ONE record each -- a drill-down,
+    not the dataset), and a "Related" side panel sharing the record class (scope to ``section.catalogue``)."""
     if path.startswith("/lab/acme/products/"):  # an item's HTML detail page (SKU in a spec table)
         k = int(path.rsplit("/", 1)[1])
         n, p, _s = ACME[k - 1]
@@ -327,6 +345,28 @@ def _acme(method: str, path: str, query: Query, headers: dict[str, str], body: b
         posts = "".join(f'<article class="post"><h3 class="title">{t}</h3><time>{d}</time></article>'
                         for t, d in ACME_POSTS)
         return html(page("Blog", f'{_acme_nav()}<main><h1>From the blog</h1>{posts}</main>{decoys()}'))
+    if path == "/lab/acme/pricing":  # a TRANSPOSED plans matrix: plans are COLUMNS (needs .table(transpose=True))
+        head = "<tr>" + "".join(f"<th>{h}</th>" for h in ACME_PLAN_HEAD) + "</tr>"
+        rows = "".join("<tr><td>" + feat + "</td>" + "".join(f"<td>{v}</td>" for v in vals) + "</tr>"
+                       for feat, vals in ACME_PLAN_ROWS)
+        return html(page("Pricing", f'{_acme_nav()}<main><h1>Plans &amp; pricing</h1>'
+                         f'<table class="plans"><thead>{head}</thead><tbody>{rows}</tbody></table></main>{decoys()}'))
+    if path == "/lab/acme/api/reviews":  # a native JSON KEYSET (cursor) API: ?after=<id>, pageInfo.endCursor
+        after = int((query.get("after") or ["0"])[0])
+        window = [r for r in ACME_REVIEWS if int(r[0].split()[-1]) > after][:ACME_REVIEW_PER]
+        items = [{"id": int(n.split()[-1]), "reviewer": n, "rating": stars, "body": b} for n, stars, b in window]
+        last = int(window[-1][0].split()[-1]) if window else None  # the last id in this window (typed int)
+        more = last is not None and any(int(r[0].split()[-1]) > last for r in ACME_REVIEWS)
+        return as_json({"reviews": items, "pageInfo": {"endCursor": last if more else None, "hasNextPage": more}})
+    if path == "/lab/acme/reviews":  # the reviews PAGE: renders the first window, links the cursor API
+        first = ACME_REVIEWS[:ACME_REVIEW_PER]
+        cards = "".join(f'<article class="review"><span class="who">{n}</span>'
+                        f'<span class="stars">{"★" * stars}</span><p class="body">{b}</p></article>'
+                        for n, stars, b in first)
+        return html(page("Reviews", f'{_acme_nav()}<main><h1>Customer reviews</h1>'
+                         f'<section class="reviews">{cards}</section>'
+                         f'<p>Loaded from our API. <a class="data" href="/lab/acme/api/reviews">reviews.json</a></p>'
+                         f'</main>{decoys()}'))
     if path == "/lab/acme/products":  # THE dataset: a paginated product listing
         pageno = int((query.get("page") or ["1"])[0])
         pages = (len(ACME) + ACME_PER - 1) // ACME_PER

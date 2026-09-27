@@ -343,6 +343,24 @@ def test_twoface_json_island_holds_the_whole_dataset(lab, wc, index):
     assert len(rows) == tx["total"] and rows[0]["name"] == "Aeropress"
 
 
+def test_acme_flagship_pricing_table_and_reviews_cursor(lab, wc, index):
+    # the flagship site carries more than the catalogue: a TRANSPOSED pricing matrix (plans are columns,
+    # needs .table(transpose=True)) and a native JSON KEYSET reviews API the pagination signal detects.
+    ax = expected(lab, wc, "acme")
+    from webclient.pipelines.onboarding.query import _confirmed_mode
+
+    pricing = wc.fetch(f"{lab}{ax['pricing']}")
+    plans = (wq.doc.table(ax["pricing_table"], transpose=True)
+             .extract(plan=wq.doc.attr("Plan"), price=wq.doc.attr("Price")).project().collect(pricing))
+    assert [p["plan"] for p in plans] == ax["plans"]                     # the PLANS are the records (columns)
+
+    api = wc.fetch(f"{lab}{ax['reviews_api']}")
+    pg = api.pagination()
+    assert pg.present and any(m.mode == "cursor" and m.selector == ax["reviews_cursor_path"] for m in pg.value.modes)
+    confirmed = _confirmed_mode(api, pg.value, "")
+    assert confirmed is not None and confirmed.mode == "cursor" and confirmed.param == "after"
+
+
 def test_overlap_pages_dedup_with_distinct(lab, wc, index):
     # consecutive pages share two items and a "Sponsored" row rides every page: a plain paginated walk
     # yields duplicate records; the record-level distinct on project drops them to the unique set.

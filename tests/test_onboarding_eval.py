@@ -28,7 +28,9 @@ def lab():
 
 @pytest.mark.parametrize("spec", SPECS, ids=[s["name"] for s in SPECS])
 def test_onboarding_eval(lab, spec):
-    url = f"{lab}{spec['path']}"
+    # a navigating example (dataset_path) SEEDS one page and the crawl drills to the dataset page;
+    # the evaluation lands on the dataset page, not the seed.
+    url = f"{lab}{spec.get('dataset_path', spec['path'])}"
     with WebClient(timeout=25.0) as wc:
         result = build_example(wc, lab, spec)
         assert result.ok, f"{spec['name']}: {result.reason}"

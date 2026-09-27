@@ -20,17 +20,25 @@ class Shim:
     STRUCTURE (pagination / filters / the XHR API / the kind) comes from the real signals -- the
     shim only plays the model's part, so an example is a genuine pipeline run, not a canned blob."""
 
-    def __init__(self, url: str, code: str, *, queryable: bool = False) -> None:
+    def __init__(self, url: str, code: str, *, queryable: bool = False, dataset_url: "str | None" = None) -> None:
         self.url, self.code, self.queryable = url, code, queryable
+        #: the page that IS the dataset -- when it differs from the seed, the crawl NAVIGATES there
+        #: (the shim picks its frontier link), so an example can start at a landing page and drill in.
+        self.dataset_url = dataset_url or url
 
     def search(self, query: str, k: int) -> "list[SearchHit]":
         return [SearchHit(url=self.url, title="source", snippet="the dataset")]
 
     def llm(self, prompt: str) -> str:
-        if "frontier links" in prompt:  # pick nothing -> the crawl fetches the seed directly
+        if "frontier links" in prompt:  # navigate to the dataset page (pick its link), else fetch the seed
+            if self.dataset_url != self.url:
+                for line in prompt.splitlines():
+                    s = line.strip()
+                    if s[:1].isdigit() and self.dataset_url in s:
+                        return f"[{s.split('.', 1)[0]}]"
             return "[]"
         if "crawled pages" in prompt:
-            return json.dumps([{"url": self.url, "kind": "page", "tier": "must", "note": "the dataset"}])
+            return json.dumps([{"url": self.dataset_url, "kind": "page", "tier": "must", "note": "the dataset"}])
         if "Assess this page" in prompt:
             return json.dumps({"dataset_present": True, "is_queryable": self.queryable,
                                "completeness": "full", "scrapability": 9, "verdict": "the dataset"})
@@ -161,6 +169,16 @@ SPECS: "list[dict[str, Any]]" = [
          # on the paginated union so each record appears once (page-level dedup can't -- the pages ARE distinct).
          code='wq.doc.select_all("li.item").extract(name=wq.doc.select(".name").attr("text")).project()',
          latest_rows=5, all_rows=9, browser=False),  # A = page one (sponsored + 4); B = 8 items + 1 sponsored
+    dict(name="complex-site", title="A realistic company site (crawl past decoys)", path="/lab/acme",
+         dataset_path="/lab/acme/products",  # SEED the landing; the crawl navigates to the real listing
+         description="the product catalogue -- each product's name and price, across all pages",
+         fields=["name", "price"],
+         # the flagship: start at the LANDING (nav decoys, a featured teaser that's a SUBSET, decoy
+         # careers/blog datasets), navigate to /products, SCOPE past a shared-class "Related" panel to
+         # section.catalogue, and walk the pagination. A/latest = page one (3); B/all = all (6).
+         code='wq.doc.select_all("section.catalogue article.product").extract('
+              'name=wq.doc.select(".name").attr("text"), price=wq.doc.select(".price").attr("text")).project()',
+         latest_rows=3, all_rows=6, browser=False),
 ]
 
 
@@ -197,7 +215,8 @@ def result_view(result: "OnboardingResult", spec: "dict[str, Any]") -> "dict[str
 def build_example(wc: WebClient, base: str, spec: "dict[str, Any]") -> "OnboardingResult":
     """Run the whole pipeline for one example against the lab at ``base`` with the shim."""
     url = f"{base}{spec['path']}"
-    shim = Shim(url, spec["code"])
+    dataset_url = f"{base}{spec['dataset_path']}" if spec.get("dataset_path") else None
+    shim = Shim(url, spec["code"], dataset_url=dataset_url)
     brief = Brief(description=spec["description"], fields=list(spec["fields"]), search="data")
     return onboard_company("Example", brief, wc=wc, llm=shim.llm, search=shim.search,
                            browser=spec["browser"])
