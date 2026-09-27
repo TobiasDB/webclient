@@ -2143,3 +2143,19 @@ def test_write_query_authors_a_single_value_dataset(httpserver):
             wc=wc, llm=llm, browser="never", retries=0,
         )
     assert art is not None and art.tested and art.row_count == 1 and art.sample == ["1998"]
+
+
+def test_a_raising_stage_surfaces_its_reason():
+    # a stage that RAISES (a missing dep, a network hiccup) must not leave a bare "failed" --
+    # its reason is surfaced on the result so the UI can show WHY (regression for the empty reason).
+    from webclient.pipelines import Brief, onboard_company
+
+    def bad_search(query, k):
+        raise RuntimeError("web search needs the 'ddgs' package (pip install ddgs)")
+
+    with WebClient() as wc:
+        r = onboard_company(
+            "Acme", Brief(description="the blog posts", fields=["title"], search="blog"),
+            wc=wc, llm=lambda p: "{}", search=bad_search, browser=False,
+        )
+    assert not r.ok and r.reason.startswith("RuntimeError") and "ddgs" in r.reason

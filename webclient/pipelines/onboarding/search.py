@@ -43,7 +43,7 @@ def ddg_search(query: str, k: int = 6) -> "list[SearchHit]":
     friends). Optional dependency -- raises a clear error if it is not installed;
     inject your own ``search`` callable to avoid it."""
     try:
-        from ddgs import DDGS  # type: ignore[import-not-found]
+        from ddgs import DDGS  # type: ignore[import-not-found, unused-ignore]  # optional dep
     except ImportError as exc:  # pragma: no cover - exercised only without the dep
         raise RuntimeError(
             "web search needs the 'ddgs' package (pip install ddgs), or pass your "

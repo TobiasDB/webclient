@@ -103,6 +103,10 @@ def onboard_company(
             result.pending = run.ask
             return result
         result.pending = None
+        # a stage that RAISED (a missing dep, a network error) records its reason on the run, not
+        # via a gate's stop() -- surface it so a failure is never a bare "failed".
+        if run.reason and not result.reason and not result.ok:
+            result.reason = run.reason
         if review and not result.ok and not result.exited:  # diagnose WHY it failed
             diagnose_failure(result, artifacts, brief=brief, llm=llm)
         if isinstance(llm, LlmClient):
