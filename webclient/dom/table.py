@@ -19,12 +19,31 @@ def _cells(tr: Any) -> "list[Any]":
     return [c for c in tr if tag(c) in ("td", "th")]
 
 
+def _own_rows(table: Any) -> "list[Any]":
+    """The ``<tr>`` rows that belong to THIS table, in document order -- rows inside a NESTED
+    table (a table within a cell) belong to that inner table, not this one, so their subtree is
+    pruned. ``table.iter()`` would wrongly count a nested table's rows as rows of the outer one."""
+    out: list[Any] = []
+
+    def walk(el: Any) -> None:
+        for child in el:
+            t = tag(child)
+            if t == "table" and child is not table:  # a nested table: its rows are its own
+                continue
+            if t == "tr":
+                out.append(child)
+            walk(child)
+
+    walk(table)
+    return out
+
+
 def dense_grid(table: Any) -> "list[list[str]]":
     """The table as a DENSE rectangular grid of cell texts, with ``rowspan`` / ``colspan`` EXPANDED:
     a cell that spans N rows / M columns fills all N x M grid positions with its text, so every logical
     row has a value in every column (a merged category cell is carried DOWN into the rows it covers).
     Rows are every ``<tr>`` under the table (``thead`` + ``tbody``), in order."""
-    rows = [tr for tr in table.iter() if tag(tr) == "tr"]
+    rows = _own_rows(table)
     grid: list[list[str]] = []
     # cells still spanning DOWN into later rows: col -> [text, rows_remaining]
     pending: dict[int, list[Any]] = {}
@@ -76,17 +95,29 @@ def _uniq_headers(labels: "list[str]") -> "list[str]":
     return out
 
 
+def _header_row(grid: "list[list[str]]") -> int:
+    """Index of the row to read as the column header. A leading row whose cells are ALL identical is
+    a full-width spanning title / navbar / section-caption row (one cell with ``colspan`` = the whole
+    width), not the column header -- skip such rows until one with distinct cells is found. Falls back
+    to row 0 (e.g. a genuinely single-column table, where every row is trivially 'all identical')."""
+    for i, row in enumerate(grid):
+        if row and len(set(row)) > 1:
+            return i
+    return 0
+
+
 def table_records(table: Any, *, transpose: bool = False) -> "list[dict[str, str]]":
-    """The dense grid read as records. Normal: the FIRST row is the header and each later row is a record
-    ``{header: cell}``. ``transpose``: the FIRST column is the header (its labels are the keys) and each
-    later COLUMN is a record -- for a feature-comparison / named-feature matrix whose records are columns.
-    Empty when the table has no data rows/columns beyond the header."""
+    """The dense grid read as records. Normal: the header row (the first non-spanning row) keys each
+    later row as a record ``{header: cell}``. ``transpose``: the FIRST column is the header (its labels
+    are the keys) and each later COLUMN is a record -- for a feature-comparison / named-feature matrix
+    whose records are columns. Empty when the table has no data rows/columns beyond the header."""
     grid = dense_grid(table)
     if len(grid) < 2 or not grid[0]:
         return []
     if not transpose:
-        headers = _uniq_headers(grid[0])
-        return [{headers[j]: (r[j] if j < len(r) else "") for j in range(len(headers))} for r in grid[1:]]
+        h = _header_row(grid)
+        headers = _uniq_headers(grid[h])
+        return [{headers[j]: (r[j] if j < len(r) else "") for j in range(len(headers))} for r in grid[h + 1:]]
     # transpose: labels are column 0; each further column is a record keyed by those labels
     labels = _uniq_headers([r[0] if r else "" for r in grid])
     ncols = max(len(r) for r in grid)

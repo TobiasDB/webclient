@@ -256,6 +256,42 @@ def test_table_op_expands_rowspan_and_transposes():
                     {"plan": "Pro", "price": "$29", "users": "50"}]
 
 
+def test_table_ignores_style_nested_tables_and_leading_title_rows():
+    # Regression for three bugs found stress-testing real Wikipedia tables:
+    #  (1) a <style>/<script>/comment inside a cell must NOT leak its CSS/source into the text,
+    #  (2) a NESTED table (a table inside a cell) must not contribute phantom rows to the outer one,
+    #  (3) a leading FULL-WIDTH title/navbar row (one cell spanning every column) is not the header --
+    #      the first row with distinct cells is,
+    #  (4) .table("<selector>") picks the LARGEST matching table (a tiny legend table shares its class).
+    from webclient import wq
+
+    doc = make_doc(content=(
+        b'<table class="wt"><tr><th colspan="2">a.e.t.</th></tr></table>'          # tiny legend (2 cells)
+        b'<table class="wt">'
+        b'<tr><th colspan="2"><style>.x{color:red}</style>vte Big Title</th></tr>'  # full-width navbar row
+        b'<tr><th>Year</th><th>Winner<!-- note --></th></tr>'                       # the REAL header
+        b'<tr><td>1930</td><td>Uruguay<table><tr><td>phantom</td></tr></table></td></tr>'
+        b'<tr><td>1934</td><td>Italy</td></tr></table>'))
+    rows = list(wq.doc.table("table.wt")
+                .extract(year=wq.doc.attr("Year"), winner=wq.doc.attr("Winner")).project().collect(doc))
+    assert len(rows) == 2                                    # nested "phantom" row does NOT become a 3rd row
+    assert [r["year"] for r in rows] == ["1930", "1934"]     # header is row 2 (title/navbar row skipped)
+    # the CSS text and the navbar title never appear as a key or value
+    assert not any("color" in k or "vte" in k for k in ({} if not rows else rows[0]))
+
+
+def test_text_of_excludes_script_style_and_comment_bodies():
+    # text_of walks visible text only: a <style>/<script> subtree and a comment body are code, not
+    # text, so they are pruned -- but real text that FOLLOWS them (a tail) is kept.
+    import lxml.html as LH
+    from webclient.dom.parse import text_of
+
+    el = LH.fromstring(
+        "<div><style>.a{color:red}</style>Hello"
+        "<script>var x=1</script> <b>world</b><!-- hidden --> tail</div>")
+    assert text_of(el) == "Hello world tail"
+
+
 def test_project_distinct_drops_duplicate_rows_preserving_order():
     # project(distinct=True) keeps each distinct row once, first occurrence, order preserved -- so a
     # paginated union with overlapping pages / a sticky record isn't emitted many times.

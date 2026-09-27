@@ -282,12 +282,15 @@ class HtmlBacking(Backing):
         base = core._element if core._element is not None else self._tree(core)
         if base is None:
             return []
-        if selector:
-            els = self._find(core, selector)
-            base = next((e for e in els if _tag(e) == "table"), els[0] if els else base)
-        table_el = base if _tag(base) == "table" else max(
-            (e for e in base.iter() if _tag(e) == "table"),
-            key=lambda t: sum(1 for n in t.iter() if _tag(n) == "tr"), default=None)
+        bases = [b for b in self._find(core, selector) if b is not None] if selector else [base]
+        rows_of = lambda t: sum(1 for n in t.iter() if _tag(n) == "tr")
+        # every candidate table under the base(s): a table match itself, else the tables in its subtree.
+        # A selector often matches SEVERAL tables (a page has a legend + the data table) -- pick the one
+        # with the most rows, so a small legend/sidebar table never wins over the real dataset.
+        candidates: list[Any] = []
+        for b in bases:
+            candidates += [b] if _tag(b) == "table" else [e for e in b.iter() if _tag(e) == "table"]
+        table_el = max(candidates, key=rows_of, default=None)
         if table_el is None:
             return []
         out: list[Document] = []

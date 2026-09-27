@@ -46,14 +46,35 @@ def local_name(el: Any) -> str:
     return tag(el).rsplit("}", 1)[-1]
 
 
+#: subtrees whose text is never visible page content -- their character data is code or
+#: markup, not text a reader sees, so it must not leak into an element's extracted text.
+_NON_TEXT_TAGS = frozenset({"script", "style", "template", "noscript"})
+
+
+def _visible_itertext(el: Any) -> "Any":
+    """Yield the visible text pieces of ``el`` in document order, pruning whole
+    ``<script>``/``<style>``/``<template>``/``<noscript>`` subtrees and comment/PI bodies
+    (their tails -- real text that follows them -- are kept). Unlike ``lxml``'s ``itertext``,
+    which slurps a stylesheet's CSS or a script's source into the surrounding element."""
+    if el.text:
+        yield el.text
+    for child in el:
+        if isinstance(getattr(child, "tag", None), str):  # a real element, not a comment/PI
+            if child.tag.lower() not in _NON_TEXT_TAGS:
+                yield from _visible_itertext(child)
+        if child.tail:                                     # text AFTER a pruned/comment node
+            yield child.tail
+
+
 def text_of(el: Any, *, own: bool = False) -> str:
     """The element's visible text, whitespace-normalised. ``own`` restricts it to the node's
     DIRECT text (its own text plus its children's tails), excluding descendant elements'
-    text; otherwise all descendant text is included."""
+    text; otherwise all descendant text is included. Text inside ``<script>``/``<style>`` and
+    similar non-text subtrees, and comment bodies, is never included (it is code, not text)."""
     if own:
         parts = [el.text or ""] + [c.tail or "" for c in el]
         return norm("".join(parts))
-    return norm("".join(el.itertext()))
+    return norm("".join(_visible_itertext(el)))
 
 
 # --------------------------------------------------------------------------- #
