@@ -107,6 +107,15 @@ def onboard_company(
         # via a gate's stop() -- surface it so a failure is never a bare "failed".
         if run.reason and not result.reason and not result.ok:
             result.reason = run.reason
+        # the per-stage products, so the run can be visualised/debugged step by step (best-effort).
+        result.seeds = [s.url for s in artifacts.seeds if s.url]
+        if artifacts.crawl is not None:
+            result.crawl_pages = [
+                {"url": p.final_url or p.url, "title": p.title, "kind": getattr(p, "kind", None),
+                 "tier": getattr(p, "final_tier", None), "flags": list(getattr(p, "flags", []) or [])}
+                for p in artifacts.crawl.pages
+            ]
+        result.candidates = [{"url": c.url, "tier": c.tier, "note": c.note} for c in artifacts.candidates]
         if review and not result.ok and not result.exited:  # diagnose WHY it failed
             diagnose_failure(result, artifacts, brief=brief, llm=llm)
         if isinstance(llm, LlmClient):

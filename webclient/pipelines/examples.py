@@ -103,6 +103,9 @@ def result_view(result: "OnboardingResult", spec: "dict[str, Any]") -> "dict[str
         "ok": result.ok, "reason": result.reason, "binary": bool(spec.get("binary")),
         "brief": {"description": spec["description"], "fields": list(spec["fields"])},
         "resolve": (result.resolve.model_dump(mode="json") if result.resolve is not None else {}),
+        "seeds": list(result.seeds), "crawl_pages": list(result.crawl_pages), "candidates": list(result.candidates),
+        "steps": list(result.steps),
+        "evaluation": (result.evaluation.model_dump(mode="json") if result.evaluation is not None else None),
         "latest": _artifact_view(result.query_latest),
         "all": _artifact_view(result.query_all),
     }

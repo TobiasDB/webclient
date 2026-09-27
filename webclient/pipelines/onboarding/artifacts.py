@@ -400,6 +400,12 @@ class OnboardingResult(BaseModel):
     #: unpaged source the two are the same query. Both default to ``query`` when only one was built.
     query_latest: QueryArtifact | None = None
     query_all: QueryArtifact | None = None
+    #: the per-stage products, so the run can be VISUALISED and debugged step by step: the search
+    #: seeds, the crawled pages (url/title/tier/flags), and the ranked candidates. Filled by
+    #: onboard_company from the run's artifacts (best-effort; empty when a stage didn't run).
+    seeds: list[str] = []
+    crawl_pages: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     steps: list[str] = []  # a human-readable trace of the run (also logged)
     reviews: list[Review] = []  # LLM meta-reviews grading the run's choices (opt-in)
     cost_usd: float = 0.0  # LLM spend for this company (when an LlmClient was used)

@@ -332,6 +332,33 @@ def _onboard_llm(model: str, budget: Any) -> "Any | None":
     return llm if llm.auth else None
 
 
+_display_started = False
+
+
+def _ensure_display() -> None:
+    """Start a virtual X display (Xvfb) for a HEADED browser on a headless server -- once per
+    process, best-effort. A headed browser defeats headless-specific anti-bot detection, but on a
+    server it needs a display; we start one if none is set. Silent if Xvfb is unavailable (the
+    browser launch then fails with a clear error, which the run's reason surfaces)."""
+    global _display_started
+    import os
+    if os.environ.get("DISPLAY") or _display_started:
+        return
+    import shutil
+    import subprocess
+    import time
+    if shutil.which("Xvfb") is None:
+        return
+    try:
+        subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1440x900x24"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.environ["DISPLAY"] = ":99"
+        _display_started = True
+        time.sleep(1.0)  # let the display come up before a browser attaches
+    except Exception:  # noqa: BLE001 - a headed launch will fail clearly if this could not start
+        pass
+
+
 def create_app(
     wc: WebClient | None = None,
     token: str | None = None,
@@ -766,9 +793,22 @@ def create_app(
                                "set ANTHROPIC_API_KEY (or WEBCLIENT_LLM__*); the EXAMPLES need no model")
         seed = body.get("url")
         search = ((lambda q, k: [SearchHit(url=str(seed), title=company, snippet="")]) if seed else ddg_search)
-        wc_: WebClient = app.state.wc
-        result = onboard_company(company, brief, wc=wc_, llm=llm, search=search,
-                                 browser=bool(body.get("browser", True)), budget=budget)
+        bopts = body.get("browser") if isinstance(body.get("browser"), dict) else None
+        if bopts:  # a per-run browser: a real Chrome over CDP, a headed/hardened/proxied launch, ...
+            from .policy import BrowserConfig
+            headless = bool(bopts.get("headless", True))
+            if not headless:
+                _ensure_display()  # a virtual display so a HEADED browser can run on this server
+            cfg = BrowserConfig(
+                channel=(bopts.get("channel") or None), cdp_endpoint=(bopts.get("cdp_endpoint") or None),
+                ws_endpoint=(bopts.get("ws_endpoint") or None), headless=headless,
+                fingerprint=bool(bopts.get("fingerprint", False)), proxy=(bopts.get("proxy") or None),
+            )
+            with WebClient(browser_config=cfg) as run_wc:
+                result = onboard_company(company, brief, wc=run_wc, llm=llm, search=search, browser=True, budget=budget)
+        else:
+            wc_: WebClient = app.state.wc
+            result = onboard_company(company, brief, wc=wc_, llm=llm, search=search, browser=True, budget=budget)
         return result.model_dump(mode="json")
 
     @app.post("/tools/{name}", response_model=None)
