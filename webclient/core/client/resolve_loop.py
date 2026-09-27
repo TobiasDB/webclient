@@ -34,6 +34,11 @@ __all__ = ["ResolveState", "ResolveObservation", "ResolveDriver", "ResolveLoop",
 Tier = Literal["proxy", "browser", "login"]
 TIERS: tuple[str, ...] = ("proxy", "browser")
 _BOT_BLOCK_HINTS = ("protocol_error", "http2", "connection reset", "reset by peer", "remote protocol")
+#: HTTP statuses where a static fetch was BLOCKED but a real browser (a genuine UA + JS + cookies)
+#: plausibly gets through -- a browser-only site (403, e.g. Wikipedia / investor.nvidia.com), a
+#: throttle or a challenge. Escalated to the browser tier under ``auto``; a 404/410 (genuinely
+#: absent) or a 5xx server error is NOT here (a browser would not help).
+_BLOCK_STATUSES = frozenset({403, 429, 451, 503})
 
 
 class ResolveObservation(BaseModel):
@@ -46,6 +51,7 @@ class ResolveObservation(BaseModel):
     antibot_remedy: str | None = None
     error: str | None = None  # the current hop's error type, if not ok
     bot_block: bool = False  # the error looks like a protocol-level anti-bot block
+    blocked: bool = False  # a blocking HTTP status (403/429/…) -- a browser-only site may still serve it
 
 
 ResolveDriver = Callable[[ResolveObservation], "Tier | None | Ask"]
@@ -70,8 +76,8 @@ class ResolveState:
 
 def default_resolve_driver(obs: ResolveObservation) -> "Tier | None | Ask":
     """The built-in flag-driven ladder (see the module docstring)."""
-    if obs.bot_block and "browser" not in obs.tiers:
-        return "browser"
+    if (obs.bot_block or obs.blocked) and "browser" not in obs.tiers:
+        return "browser"  # a protocol block or a blocking status (403/429/…): a real browser may pass
     if obs.error is not None or (not obs.present and obs.antibot_remedy is None):
         return None  # a failed hop (not a bot block) or a plain page: the current doc is the answer
     if "login_required" in obs.present:
@@ -111,11 +117,13 @@ class ResolveLoop:
         antibot = (state.flags or {}).get("anti_bot_triggered")
         err = doc.error
         msg = (getattr(err, "message", "") or "").lower()
+        status = getattr(doc, "status_code", None)
         return ResolveObservation(
             url=doc.url, tiers=list(state.tiers), present=present,
             antibot_remedy=antibot.remedy if antibot is not None and antibot.present else None,
             error=err.type if err is not None else None,
             bot_block=err is not None and any(h in msg for h in _BOT_BLOCK_HINTS),
+            blocked=err is not None and status in _BLOCK_STATUSES,
         )
 
     def decide(self, obs: ResolveObservation) -> Any:

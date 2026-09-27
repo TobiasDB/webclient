@@ -651,6 +651,25 @@ def test_browser_crawl_releases_every_page(httpserver, wc):
     assert after.pages_free == before.pages_free  # no leaked page lease
 
 
+def test_crawl_escalates_a_blocked_static_fetch_to_the_browser(httpserver, wc):
+    # a browser-only page (403 to a static UA, 200 to a real browser -- e.g. investor.nvidia.com,
+    # which 403s a bare UA) must NOT be dropped as a crawl failure: browser="auto" retries the
+    # blocked fetch with the browser, exactly like the onboarding _fetch helper, so a good seed
+    # the crawl would otherwise lose is fetched. Regression for a real NVIDIA ir-news onboarding.
+    from werkzeug.wrappers import Response
+
+    def handler(req):
+        ua = (req.headers.get("User-Agent") or "").lower()
+        if "chrome" not in ua and "firefox" not in ua:  # a static/httpx UA -> blocked, like the real site
+            return Response("<h1>403 — access denied</h1>", status=403, content_type="text/html")
+        return Response('<html><body><ul><li class="row">A</li></ul></body></html>', content_type="text/html")
+
+    httpserver.expect_request("/gated").respond_with_handler(handler)
+    with wc.crawl(httpserver.url_for("/gated"), auto=False, browser="auto", max_pages=1, obey_robots=False) as crawl:
+        crawl.step([httpserver.url_for("/gated")])
+    assert len(crawl.pages) == 1 and not crawl.failures  # escalated past the 403 to the browser
+
+
 def test_crawl_survives_an_error_while_reading_a_live_page(wc, httpserver, monkeypatch):
     # a transport error can surface not only from the fetch but while reading a live page
     # (expanding its links, projecting its card). None of those may abort the crawl: the

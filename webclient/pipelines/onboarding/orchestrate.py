@@ -280,7 +280,7 @@ def _build_pipeline(
         # page is an SPA shell backed by it, otherwise the page itself (see _source_url).
         result.reference = write_reference(evaluation, wc=wc)
         query_url = _source_url(evaluation)
-        doc = _fetch(wc, query_url, _mode(browser), optional=True)  # escalate auto->browser if blocked
+        doc = _fetch(wc, query_url, _mode(browser), optional=True)  # auto escalates a blocked (403) fetch to the browser
         artifacts.query_doc = doc
         flags = _read_flags(doc) if doc.ok else {}
         # did the source REQUIRE a browser to fetch (static was blocked -> escalated)? Then the

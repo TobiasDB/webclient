@@ -80,6 +80,30 @@ def test_fetch_non_2xx_optional_returns_document(httpserver, wc):
     assert doc.error.retriable is False  # a 404 will not succeed on retry
 
 
+def test_auto_escalates_a_blocking_403_to_the_browser_but_not_a_404(httpserver, wc):
+    # the ONE fetch mechanism (webclient.core.client.resolve_loop): browser="auto" tries static first
+    # and escalates a BLOCKING status (403 -- a browser-only site like investor.nvidia.com blocks a
+    # bare UA) to a real browser, so callers (a plain fetch, the crawl, onboarding) never hand-roll a
+    # "retry with the browser" step. A genuine 404 is NOT escalated (a browser would not help).
+    from werkzeug.wrappers import Response
+
+    def gated(req):
+        ua = (req.headers.get("User-Agent") or "").lower()
+        if "chrome" not in ua and "firefox" not in ua:  # a static/httpx UA -> blocked
+            return Response("<h1>403 — forbidden</h1>", status=403, content_type="text/html")
+        return Response("<html><body><h1>Members</h1></body></html>", content_type="text/html")
+
+    httpserver.expect_request("/gated").respond_with_handler(gated)
+    doc = wc.fetch(httpserver.url_for("/gated"), browser="auto")
+    assert doc.ok and doc.status_code == 200                       # escalated past the 403
+    assert "browser" in doc.transport().escalation                 # ...via the browser tier
+
+    httpserver.expect_request("/missing").respond_with_data("nope", status=404)
+    d404 = wc.fetch(httpserver.url_for("/missing"), browser="auto", optional=True)
+    assert not d404.ok and d404.status_code == 404                 # a 404 is genuine-absent
+    assert "browser" not in d404.transport().escalation            # ...so it is NOT escalated
+
+
 def test_fetch_transport_error(wc):
     ref = from_url("http://127.0.0.1:1/nothing")  # port 1: refused
     with pytest.raises(FetchError):

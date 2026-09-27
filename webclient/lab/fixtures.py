@@ -408,8 +408,9 @@ WALLED = [("Alpha", "10"), ("Bravo", "20"), ("Charlie", "30")]
          expected={"record_selector": "li.row", "records": len(WALLED), "static_status": 403})
 def _walled(method: str, path: str, query: Query, headers: dict[str, str], body: bytes) -> Any:
     """A site that BLOCKS a plain (non-browser) fetch with a 403 -- as Wikipedia does to a bare UA --
-    but serves the dataset to a real browser. ``browser="auto"`` does NOT escalate on a bare 403, so
-    onboarding must retry with the browser (``_fetch``) AND bake the browser tier into the blob."""
+    but serves the dataset to a real browser. ``browser="auto"`` escalates a blocking 403 to the browser
+    (the shared resolve ladder), so a plain fetch AND the crawl reach it; onboarding then bakes the
+    browser tier into the blob (from the settled ``final_tier``) so the shipped query re-fetches with it."""
     ua = (headers.get("user-agent") or headers.get("User-Agent") or "").lower()
     if "chrome" not in ua and "firefox" not in ua:  # a static/httpx UA -> blocked
         return html(page("Blocked", "<main><h1>403 — access denied</h1><p>Enable JavaScript.</p></main>"), status=403)

@@ -286,7 +286,7 @@ def write_query(
     it writes query code) or ``"index"`` (it picks record/field indexes and ``build_query``
     builds the selectors, so it never authors CSS); the test/validation is the same either way."""
     if doc is None:
-        doc = _fetch(wc, candidate_url, browser, optional=True)  # escalate auto->browser if blocked
+        doc = _fetch(wc, candidate_url, browser, optional=True)  # auto escalates a blocked (403) fetch to the browser
     # a BINARY document (a PDF, an image, a spreadsheet) has nothing to EXTRACT into rows -- the
     # deliverable IS the file. Author a download recipe deterministically (reference + resolve, no
     # model call), so a "download this document" brief still onboards (genericity for odd shapes).

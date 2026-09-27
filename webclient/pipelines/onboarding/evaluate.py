@@ -49,7 +49,7 @@ def evaluate_candidate(
     """Fetch the candidate, read its skeleton + signals, and have the model judge the
     dataset (present, sorted, complete, paginated, filtered, a subset, unstructured,
     drill-down)."""
-    doc = _fetch(wc, candidate.url, browser, optional=True)  # escalate auto->browser if blocked
+    doc = _fetch(wc, candidate.url, browser, optional=True)  # auto escalates a blocked (403) fetch to the browser
     if not doc.ok:
         return CandidateEval(url=candidate.url, verdict="fetch failed")
     flags = _read_flags(doc)  # the detected conclusions (spa / pagination / login / ...)

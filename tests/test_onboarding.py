@@ -1092,28 +1092,26 @@ def test_write_resolve_maps_flags_to_policy():
     assert only_browser.browser is not None and only_browser.browser.when == "always"
 
 
-def test_onboarding_fetch_escalates_to_browser_when_static_is_blocked():
-    # the Wikipedia bug: a browser-only site 403s on the static/auto fetch (auto does NOT escalate
-    # on a bare 403), so evaluate/source would reject a candidate the crawl already reached via a
-    # browser as "fetch failed". _fetch retries once with the full browser when a browser IS allowed.
+def test_onboarding_fetch_is_a_thin_passthrough_escalation_lives_in_the_auto_ladder():
+    # the browser-only-site (Wikipedia / investor.nvidia.com 403) escalation is done ONCE, by the
+    # core `auto` resolve ladder (webclient.core.client.resolve_loop._BLOCK_STATUSES) that EVERY fetch
+    # -- a plain fetch, the crawl, onboarding -- shares. So onboarding's _fetch must NOT hand-roll its
+    # own retry: it delegates a single fetch with the given tier. (The escalation itself is covered by
+    # test_fetch.py::test_auto_escalates_a_blocking_403... and test_crawl.py's crawl escalation test.)
     from webclient.pipelines.onboarding.common import _fetch
 
     class _Doc:
-        def __init__(self, ok): self.ok = ok
+        ok = True
 
-    class _WC:  # records the browser modes it was asked for; static/auto is blocked, browser works
+    class _WC:
         def __init__(self): self.calls = []
         def fetch(self, url, *, browser, **kw):
             self.calls.append(browser)
-            return _Doc(browser == "always")  # only the full browser gets the page
+            return _Doc()
 
     wc = _WC()
-    doc = _fetch(wc, "http://blocked/", "auto", optional=True)
-    assert doc.ok and wc.calls == ["auto", "always"]  # tried auto, then escalated to the browser
-
-    wc2 = _WC()
-    doc2 = _fetch(wc2, "http://blocked/", "never", optional=True)  # user opted OUT of a browser
-    assert not doc2.ok and wc2.calls == ["never"]  # never escalated -- a static-only run stays static
+    _fetch(wc, "http://x/", "auto", optional=True)
+    assert wc.calls == ["auto"]  # exactly one fetch -- no second "always" retry hand-rolled here
 
 
 def test_candidate_scoring_prefers_the_listing_over_a_queryable_drilldown():
