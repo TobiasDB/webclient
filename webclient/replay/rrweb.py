@@ -69,15 +69,20 @@ def to_rrweb(events: "list[Event]", *, document_id: "str | None" = None, custom:
         elif custom and not isinstance(e, TraceEvent):
             out.append(_custom(e, wire, ms))
     out.sort(key=lambda r: (r.get("timestamp", 0), 1 if r["type"] == CUSTOM else 0))  # DOM first at a tie
-    # a player needs Meta + FullSnapshot FIRST: pull the first pair ahead of any custom event
-    # that fired before the first document existed (a pool lease, a plan start), at its time
-    i = next((k for k, r in enumerate(out) if r["type"] == META), None)
-    if i is not None and i > 0:
-        head = [out[i]] + ([out[i + 1]] if i + 1 < len(out) and out[i + 1]["type"] == FULL else [])
-        t0 = out[0].get("timestamp", 0)
-        for k, r in enumerate(head):
-            r["timestamp"] = t0 - len(head) + k
-        out = head + [r for k, r in enumerate(out) if r not in head]
+    # a player needs Meta + FullSnapshot FIRST: pull the first Meta and the first FullSnapshot ahead
+    # of any custom event that fired at or before their time (a pool lease, a plan start, a navigation
+    # sharing the synthesised Meta's millisecond) so replay always starts from a full document. The
+    # FullSnapshot is pulled from WHEREVER it landed -- a tie can sort a custom event between the pair.
+    mi = next((k for k, r in enumerate(out) if r["type"] == META), None)
+    if mi is not None:
+        fi = next((k for k, r in enumerate(out) if r["type"] == FULL), None)
+        idx = [k for k in (mi, fi) if k is not None]
+        if idx != list(range(len(idx))):  # not already leading, in order
+            head = [out[k] for k in idx]
+            t0 = out[0].get("timestamp", 0)
+            for k, r in enumerate(head):
+                r["timestamp"] = t0 - len(head) + k
+            out = head + [r for k, r in enumerate(out) if k not in idx]
     return out
 
 

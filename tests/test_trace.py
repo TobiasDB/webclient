@@ -110,6 +110,20 @@ def test_rrweb_translation_both_ways(site, tmp_path):
     assert to_rrweb(reader.events, custom=False)[0]["type"] == 4
 
 
+def test_rrweb_leads_with_meta_and_fullsnapshot_even_when_a_custom_event_ties_the_timestamp():
+    # regression: the synthesised Meta sits at (snapshot_ms - 1); a custom event (a navigation, a pool
+    # lease) sharing that millisecond used to sort BETWEEN the Meta and the FullSnapshot, so replay
+    # started Meta -> Custom with no full document. The head-pull must lead with [Meta, FullSnapshot]
+    # regardless of where the FullSnapshot landed -- and deterministically, for either input order.
+    from webclient.models import Event, SnapshotEvent
+
+    snap = SnapshotEvent(topic="snapshot", ts=1000.0, document_id="d1", kind="html",
+                         content=b"<html><body><h1>Hi</h1></body></html>", url="http://x/", final_url="http://x/")
+    nav = Event(topic="network.navigation", ts=999.999, document_id="d1", url="http://x/")  # ms == Meta's ms
+    for order in ([snap, nav], [nav, snap]):
+        assert [r["type"] for r in to_rrweb(order)][:2] == [4, 2], f"order {[e.topic for e in order]}"
+
+
 def test_static_replay_answers_like_the_live_run(site, tmp_path):
     path = tmp_path / "run.jsonl"
     wc, live_doc, _api, live_titles, _ = _record(site, path)
