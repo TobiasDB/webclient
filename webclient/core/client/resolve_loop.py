@@ -33,6 +33,14 @@ __all__ = ["ResolveState", "ResolveObservation", "ResolveDriver", "ResolveLoop",
 
 Tier = Literal["proxy", "browser", "login"]
 TIERS: tuple[str, ...] = ("proxy", "browser")
+#: flags whose content only a BROWSER RENDER reveals -- a JS-composed SPA shell, a shadow root, a
+#: same-origin iframe. The ONE vocabulary both the resolve ladder and onboarding's write_resolve read
+#: (write_resolve bakes a browser for a CONFIRMED source on any of these). They deliberately DIVERGE on
+#: what to escalate SPECULATIVELY under ``auto``: AUTO_RENDER_FLAGS is the unambiguous subset (spa /
+#: shadow_dom -- content genuinely hidden from static HTML); a bare ``iframe`` is left OUT, since it is
+#: too often a benign ad/embed and rendering every page that has an <iframe> would be far too costly.
+RENDER_FLAGS: frozenset[str] = frozenset({"spa", "shadow_dom", "iframe"})
+AUTO_RENDER_FLAGS: frozenset[str] = frozenset({"spa", "shadow_dom"})
 _BOT_BLOCK_HINTS = ("protocol_error", "http2", "connection reset", "reset by peer", "remote protocol")
 #: HTTP statuses where a static fetch was BLOCKED but a real browser (a genuine UA + JS + cookies)
 #: plausibly gets through -- a browser-only site (403, e.g. Wikipedia / investor.nvidia.com), a
@@ -85,7 +93,8 @@ def default_resolve_driver(obs: ResolveObservation) -> "Tier | None | Ask":
     antibot = "anti_bot_triggered" in obs.present
     if antibot and obs.antibot_remedy in ("proxy", "stealth") and "proxy" not in obs.tiers:
         return "proxy"
-    if ("spa" in obs.present or (antibot and obs.antibot_remedy == "stealth")) and "browser" not in obs.tiers:
+    render = any(f in obs.present for f in AUTO_RENDER_FLAGS)  # a JS shell / shadow-root: content is hidden
+    if (render or (antibot and obs.antibot_remedy == "stealth")) and "browser" not in obs.tiers:
         return "browser"
     return None
 

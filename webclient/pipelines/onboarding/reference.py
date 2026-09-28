@@ -68,11 +68,14 @@ def write_resolve(flags: Sequence[Flag], *, needs_browser: bool = False) -> Reso
     is set when the source could ONLY be FETCHED via a browser (a static UA is blocked,
     e.g. a 403 with no SPA/anti-bot flag -- Wikipedia): the browser tier must then be baked
     into the shipped blob, or ``from_blob(...).collect()`` re-fetches statically and gets 0 rows."""
+    from ...core.client.resolve_loop import RENDER_FLAGS
+
     by = {f.name: f for f in flags if f.present}
     # a browser is needed to build the DOM: an SPA composes it client-side; shadow DOM /
     # a same-origin iframe hides content a plain HTML snapshot misses, and only a render
-    # inlines it (see the __wc_inline page script).
-    needs_render = any(n in by for n in ("spa", "shadow_dom", "iframe"))
+    # inlines it (see the __wc_inline page script). RENDER_FLAGS is the ONE shared vocabulary
+    # the resolve ladder also reads -- here (a confirmed source) we bake a browser for ANY of them.
+    needs_render = any(n in by for n in RENDER_FLAGS)
     triggered = by.get("anti_bot_triggered")
     stealth = bool(triggered and triggered.remedy == "stealth")
     proxy = bool(triggered and triggered.remedy in ("proxy", "stealth"))
