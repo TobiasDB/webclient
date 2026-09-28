@@ -62,6 +62,18 @@ def test_join_resolves_relative_and_absolute():
     assert ref.join("https://other.example/x").hostname == "other.example"
 
 
+def test_join_preserves_the_request_spec_headers_and_cookies():
+    # following a relative link must NOT drop the parent reference's auth: method/headers/cookies
+    # ride along (join repoints only the URL parts), so an authenticated crawl stays authenticated.
+    ref = Reference(hostname="e.com", path="/list").replace(
+        method="post", headers={"authorization": "Bearer t0k"}, cookies={"sid": "abc"})
+    hop = ref.join("items/3")
+    assert hop.url == "https://e.com/items/3"
+    assert hop.method == "post" and hop.headers == {"authorization": "Bearer t0k"} and hop.cookies == {"sid": "abc"}
+    # a new absolute target still carries them (scope before going off-origin if that matters)
+    assert ref.join("https://other.example/x").headers == {"authorization": "Bearer t0k"}
+
+
 def test_bound_reference_carries_client():
     from webclient import WebClient
 

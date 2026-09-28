@@ -3,17 +3,12 @@ sniffing helpers that go with it."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING, Literal, cast
 
 import httpx
 
 from .base import Client, ClientFactory
-
-#: HTTP methods safe to retry on a transport failure -- re-sending them can't duplicate a
-#: side effect (POST/PATCH are excluded: a retry could double-submit).
-_IDEMPOTENT = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
 
 if TYPE_CHECKING:
     from ..core.document import Document
@@ -49,35 +44,24 @@ class HTTPXClient(Client):
         headers: dict[str, str],
         cookies: dict[str, str],
         timeout: float,
-        retries: int = 0,
     ) -> httpx.Response:
-        """Perform the request described by ``ref``. Transport errors are retried only for an
-        IDEMPOTENT method (GET/HEAD/OPTIONS/PUT/DELETE) -- re-sending a POST/PATCH could duplicate
-        a side effect -- with a small exponential backoff between attempts (``retries`` defaults
-        to 0, so a plain fetch is one attempt)."""
+        """Perform the request described by ``ref`` and return the raw response. A transport failure
+        RAISES: the caller (:meth:`fetch`) turns it into a retriable not-ok document, and the core
+        resolve loop (``_afetch_core``) retries it under the one ``RetryPolicy`` -- so retry/backoff
+        lives in a SINGLE place (idempotency is honoured there, via the retriable-status vocabulary),
+        not duplicated in the transport."""
         for name, value in cookies.items():  # jar is cleared on reset()
             self._httpx.cookies.set(name, value)
-        method = ref.method.upper()
-        max_attempts = retries + 1 if method in _IDEMPOTENT else 1  # never re-send a POST/PATCH
-        last: httpx.TransportError | None = None
-        for attempt in range(max_attempts):
-            if attempt:  # back off before a retry (0.2s, 0.4s, ...) -- not before the first try
-                await asyncio.sleep(0.2 * (2 ** (attempt - 1)))
-            try:
-                return await self._httpx.request(
-                    method,
-                    ref.dispatch("url"),
-                    headers=headers or None,
-                    content=ref.body,
-                    json=ref.json_body,
-                    data=ref.form,
-                    follow_redirects=ref.follow_redirects,
-                    timeout=ref.timeout if ref.timeout is not None else timeout,
-                )
-            except httpx.TransportError as exc:
-                last = exc
-        assert last is not None
-        raise last
+        return await self._httpx.request(
+            ref.method.upper(),
+            ref.dispatch("url"),
+            headers=headers or None,
+            content=ref.body,
+            json=ref.json_body,
+            data=ref.form,
+            follow_redirects=ref.follow_redirects,
+            timeout=ref.timeout if ref.timeout is not None else timeout,
+        )
 
     async def fetch(
         self,

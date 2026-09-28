@@ -196,18 +196,32 @@ def _match_content(core: "Document", reqs: "list[NetRequest]", facts: "list[dict
     if root is None:
         return
     # the page's text: element -> its text, the DEEPEST element carrying a given text (a <li><a>T</a></li>
-    # is the <a>), elements whose text is short enough to be a value
+    # is the <a>), elements whose text is short enough to be a value. ONE post-order pass composes each
+    # node's text from its children's (returned up the stack) instead of a fresh ``itertext()`` per
+    # element -- that re-walked every subtree, making this O(n^2) on a large page. (No id()-keyed memo:
+    # lxml element proxies are ephemeral, so id() is reused across nodes and would cross wires.) ``norm``
+    # collapses whitespace, so the composition equals the ``norm(" ".join(el.itertext()))`` it replaced.
     by_text: dict[str, list[Any]] = {}
-    for el in root.iter():
-        if not isinstance(getattr(el, "tag", None), str) or el.tag.lower() in _SKIP:
-            continue
-        t = norm(" ".join(el.itertext()))
-        if not (_VALUE_MIN <= len(t) <= 400):
-            continue
-        kids = [c for c in el if isinstance(getattr(c, "tag", None), str)]
-        if len(kids) == 1 and norm(" ".join(kids[0].itertext())) == t:
-            continue  # its only child says the same: the child is the node
-        by_text.setdefault(t.lower(), []).append(el)
+
+    def _visit(el: Any) -> str:
+        parts = [el.text or ""]
+        n_kids = 0
+        only_child_text = ""
+        for c in el:
+            if isinstance(getattr(c, "tag", None), str):
+                ct = _visit(c)  # recurse: c is added to by_text inside, and returns its full text
+                parts.append(ct)
+                n_kids += 1
+                only_child_text = ct
+            if c.tail:
+                parts.append(c.tail)
+        t = norm(" ".join(parts))
+        if (el.tag.lower() not in _SKIP and _VALUE_MIN <= len(t) <= 400
+                and not (n_kids == 1 and only_child_text == t)):  # its only child says the same -> child is the node
+            by_text.setdefault(t.lower(), []).append(el)
+        return t
+
+    _visit(root)
     if not by_text:
         return
     data = [(r, facts_body) for r in reqs if r.data for facts_body in [_body_of(r, facts)] if facts_body]

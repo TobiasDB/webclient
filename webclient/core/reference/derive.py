@@ -46,7 +46,15 @@ class DeriveBacking(Backing):
         )
 
     def join(self, core: "Reference", href: str) -> "Reference":
-        """A new reference for ``href`` resolved against this one's URL (relative-link resolution)."""
+        """A new reference for ``href`` resolved against this one's URL (relative-link resolution).
+        Only the URL parts change: the method / headers / cookies / body / expect and the root/name
+        lineage are PRESERVED (via ``_derive``, like ``replace`` / ``with_params``), so following a
+        relative link from an authenticated reference keeps its auth. A different host still carries
+        them -- scope headers/cookies before joining off-origin if that matters."""
         from . import from_url
 
-        return from_url(urljoin(self.url(core), href))
+        target = from_url(urljoin(self.url(core), href))
+        return core._derive(core.model_copy(update={
+            "scheme": target.scheme, "hostname": target.hostname, "port": target.port,
+            "path": target.path, "params": target.params, "fragment": target.fragment,
+        }))

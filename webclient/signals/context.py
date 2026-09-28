@@ -10,13 +10,17 @@ Pure (no cores, no lxml) so the request/static half runs on a remote resolve too
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 # from the shared toolkit; norm/visible_text are lxml-free and re-exported so ``context``
 # stays remote-safe, and ``parse_html`` is lxml-lazy (degrades to ``None`` without lxml).
-from ..dom import norm as norm, parse_html, visible_text as visible_text
+from ..dom import decode_html, norm as norm, parse_html, visible_text as visible_text
+
+#: the charset in a ``Content-Type: text/html; charset=…`` header, so a non-UTF-8 page decodes right.
+_CHARSET_RE = re.compile(r"charset=([\w-]+)")
 
 
 def _lower_headers(headers: "Mapping[Any, Any] | Iterable[tuple[Any, Any]]") -> dict[str, str]:
@@ -92,8 +96,15 @@ class Context:
     ) -> "Context":
         """Build a Context from a raw response (+ optional facet inputs). Decodes the
         body and derives the cheap text fields once, so every detector shares them."""
-        text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else (body or "")
         hmap = _lower_headers(headers)
+        if isinstance(body, (bytes, bytearray)):
+            # decode with the WHATWG precedence (the HTTP charset, else an in-document <meta>/BOM,
+            # else utf-8) -- the SAME path ``tree`` takes -- so a non-UTF-8 page (Shift-JIS / 1251 /
+            # latin-1) does not mojibake the text the regex/text detectors read.
+            m = _CHARSET_RE.search(hmap.get("content-type", ""))
+            text = decode_html(bytes(body), m.group(1) if m else None)
+        else:
+            text = body or ""
         low = text.lower()[:8000]
         is_html = "html" in hmap.get("content-type", "") or "<html" in low or "<!doctype html" in low
         cookie_names = list(cookies.keys()) if isinstance(cookies, Mapping) else list(cookies)

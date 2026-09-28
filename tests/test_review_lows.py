@@ -26,9 +26,10 @@ def test_pool_default_limit_is_consistent_across_semaphore_and_stats():
 
 
 # -- L3: retry a transport error for idempotent methods only, never a POST -------------------
-def test_send_retries_idempotent_methods_only(monkeypatch):
-    monkeypatch.setattr("webclient.clients.http.asyncio.sleep", _noop_sleep)
-
+def test_send_makes_one_attempt_and_raises_retry_lives_in_the_core_loop():
+    # http-level send does NOT retry: it makes one attempt and raises a transport failure. The core
+    # resolve loop (_afetch_core) turns that into a retriable not-ok document and retries it under the
+    # one RetryPolicy (covered by test_fetch), so retry/backoff lives in a single place.
     class _FakeHttpx:
         def __init__(self) -> None:
             self.calls = 0
@@ -41,14 +42,12 @@ def test_send_retries_idempotent_methods_only(monkeypatch):
     async def main() -> None:
         client = HTTPXClient()
         client._httpx = _FakeHttpx()  # type: ignore[assignment]
-        # GET is idempotent -> retried (retries=2 -> 3 attempts)
         with pytest.raises(httpx.TransportError):
-            await client.send(from_url("http://x/"), headers={}, cookies={}, timeout=1, retries=2)
-        assert client._httpx.calls == 3
-        # POST is NOT idempotent -> one attempt even with retries=2 (never re-sent)
+            await client.send(from_url("http://x/"), headers={}, cookies={}, timeout=1)
+        assert client._httpx.calls == 1  # one attempt, no transport-level retry loop
         client._httpx.calls = 0
         with pytest.raises(httpx.TransportError):
-            await client.send(from_url("http://x/", "post"), headers={}, cookies={}, timeout=1, retries=2)
+            await client.send(from_url("http://x/", "post"), headers={}, cookies={}, timeout=1)
         assert client._httpx.calls == 1
 
     asyncio.run(main())

@@ -294,3 +294,15 @@ def test_cookie_banner_flag_from_a_consent_platform_or_a_notice_but_not_a_policy
     assert notice["cookie_banner"].present
     link = flags(ctx(b'<html><body><footer><a class="cookie-policy" href="/cookies">Cookie policy</a></footer></body></html>'))
     assert not link["cookie_banner"].present
+
+
+def test_context_decodes_body_with_the_declared_charset():
+    # regression: from_response must honour the Content-Type charset (not force UTF-8), else a
+    # non-UTF-8 page mojibakes and every text/regex detector misfires.
+    from webclient.signals.context import Context
+
+    body = "Café Münster".encode("latin-1")  # é/ü as latin-1 bytes (0xE9/0xFC)
+    ctx = Context.from_response(200, {"content-type": "text/html; charset=iso-8859-1"}, {}, body, url="http://x/")
+    assert "Café Münster" in ctx.text  # decoded right; forced-UTF-8 would have replacement chars
+    utf = Context.from_response(200, {"content-type": "text/html"}, {}, "Café".encode("utf-8"), url="http://x/")
+    assert "Café" in utf.text  # utf-8 default still works when no charset is declared
