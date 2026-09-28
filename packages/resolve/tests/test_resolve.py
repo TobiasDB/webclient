@@ -143,3 +143,88 @@ def test_escalate_renders_a_spa_shell_via_browser(httpserver: HTTPServer) -> Non
             await browser.aclose()
 
     assert _run(go()) == "RENDERED"  # the expensive tier ran only because the signal said so
+
+
+# -- pagination as middleware (beside retry/escalate): link / param / click strategies --
+
+def test_paginate_links_middleware_merges_pages(httpserver: HTTPServer) -> None:
+    from web.resolve import paginate_links
+    httpserver.expect_request("/p1").respond_with_data(
+        b"<li class='row'>a</li><a rel='next' href='/p2'>n</a>", content_type="text/html")
+    httpserver.expect_request("/p2").respond_with_data(
+        b"<li class='row'>b</li><a rel='next' href='/p3'>n</a>", content_type="text/html")
+    httpserver.expect_request("/p3").respond_with_data(b"<li class='row'>c</li>", content_type="text/html")
+
+    async def go() -> list[str]:
+        r = Resolver(HttpFetcher(), middleware=(paginate_links(),))
+        try:
+            doc = await r.resolve(Request(url=httpserver.url_for("/p1")))  # ONE merged Document
+            return [e.text for e in doc.select_all(".row")]
+        finally:
+            await r.aclose()
+
+    assert _run(go()) == ["a", "b", "c"]  # select_all spans all three pages
+
+
+def test_paginate_param_with_composed_stops(httpserver: HTTPServer) -> None:
+    from web.resolve import any_of, first_n, paginate_param, until_empty
+    httpserver.expect_request("/items", query_string="page=1").respond_with_data(
+        b"<li class='row'>1</li><li class='row'>2</li>", content_type="text/html")
+    httpserver.expect_request("/items", query_string="page=2").respond_with_data(
+        b"<li class='row'>3</li>", content_type="text/html")
+    httpserver.expect_request("/items", query_string="page=3").respond_with_data(
+        b"<p>empty</p>", content_type="text/html")
+
+    async def go() -> int:
+        # stop on the FIRST of: page empty, OR 10 items collected
+        stop = any_of(until_empty(".row"), first_n(10, ".row"))
+        r = Resolver(HttpFetcher(), middleware=(paginate_param("page", until=stop),))
+        try:
+            doc = await r.resolve(Request(url=httpserver.url_for("/items") + "?page=1"))
+            return len(doc.select_all(".row"))
+        finally:
+            await r.aclose()
+
+    assert _run(go()) == 3  # pages 1-2 (2+1 rows); page 3 empty stopped it
+
+
+def test_first_n_stop_bounds_by_item_budget(httpserver: HTTPServer) -> None:
+    from web.resolve import first_n, paginate_param
+    for pg in (1, 2, 3, 4):
+        httpserver.expect_request("/b", query_string=f"page={pg}").respond_with_data(
+            b"<li class='row'>x</li><li class='row'>y</li>", content_type="text/html")
+
+    async def go() -> int:
+        r = Resolver(HttpFetcher(), middleware=(paginate_param("page", until=first_n(5, ".row"), max_pages=99),))
+        try:
+            doc = await r.resolve(Request(url=httpserver.url_for("/b") + "?page=1"))
+            return len(doc.select_all(".row"))
+        finally:
+            await r.aclose()
+
+    # 2 rows/page; stops on the page that crosses 5 -> pages 1,2,3 = 6 rows (not the whole 99)
+    assert _run(go()) == 6
+
+
+def test_paginate_clicks_middleware_load_more(httpserver: HTTPServer) -> None:
+    from web.fetch import BrowserFetcher
+    from web.resolve import paginate_clicks
+    httpserver.expect_request("/lm").respond_with_data(
+        b"<html><body><ul id='list'><li class='row'>1</li></ul>"
+        b"<button id='more' onclick=\""
+        b"var n=document.querySelectorAll('.row').length+1;"
+        b"var li=document.createElement('li');li.className='row';li.textContent=n;"
+        b"document.getElementById('list').appendChild(li);if(n>=3)this.remove();\">more</button></body></html>",
+        content_type="text/html")
+
+    async def go() -> int:
+        browser = BrowserFetcher()
+        r = Resolver(HttpFetcher(), middleware=(paginate_clicks(browser, "#more"),))
+        try:
+            doc = await r.resolve(Request(url=httpserver.url_for("/lm")))
+            return len(doc.select_all(".row"))
+        finally:
+            await r.aclose()
+            await browser.aclose()
+
+    assert _run(go()) == 3  # clicked Load-more until the button removed itself

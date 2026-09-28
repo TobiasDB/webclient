@@ -17,10 +17,15 @@ from __future__ import annotations
 
 from .base import Handler, Middleware, Resolver
 from .middleware import escalate, rate_limit, retry
+from .paginate import paginate_clicks, paginate_links, paginate_param
 from .signals import DETECTORS, Signal, detect, login_wall, pagination, spa
+from .stops import any_of, first_n, until_empty, until_match, until_repeat
 
 __all__ = [
     "Resolver", "Handler", "Middleware", "retry", "rate_limit", "escalate",
+    # pagination: middleware strategies + composable stop conditions
+    "paginate_links", "paginate_param", "paginate_clicks",
+    "until_empty", "until_match", "first_n", "until_repeat", "any_of",
     # signals: purely-functional detectors over a Document (parse stays bytes -> Document)
     "Signal", "detect", "spa", "login_wall", "pagination", "DETECTORS",
 ]
