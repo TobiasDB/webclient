@@ -228,3 +228,38 @@ def test_paginate_clicks_middleware_load_more(httpserver: HTTPServer) -> None:
             await browser.aclose()
 
     assert _run(go()) == 3  # clicked Load-more until the button removed itself
+
+
+def test_middlewares_compose_pagination_over_retry_over_ratelimit(httpserver: HTTPServer) -> None:
+    """pagination (outer) drives pages; each page descends through retry then rate_limit (inner).
+    Page 2 fails transiently once -> retry re-fetches it through the chain; all pages merge."""
+    from werkzeug.wrappers import Response
+
+    from web.resolve import Resolver, paginate_links, rate_limit, retry
+
+    calls = {"p2": 0}
+    httpserver.expect_request("/p1").respond_with_data(
+        b"<li class='row'>a</li><a rel='next' href='/p2'>n</a>", content_type="text/html")
+
+    def p2(_req: object) -> Response:
+        calls["p2"] += 1
+        if calls["p2"] == 1:
+            return Response(b"busy", status=503)  # transient -> retry re-issues it
+        return Response(b"<li class='row'>b</li><a rel='next' href='/p3'>n</a>",
+                        content_type="text/html")
+
+    httpserver.expect_request("/p2").respond_with_handler(p2)
+    httpserver.expect_request("/p3").respond_with_data(b"<li class='row'>c</li>", content_type="text/html")
+
+    async def go() -> tuple[list[str], int]:
+        # profile: pagination -> retry -> rate_limit -> base (outermost first)
+        r = Resolver(HttpFetcher(), middleware=(paginate_links(), retry(3, backoff=0.0), rate_limit(0.01)))
+        try:
+            doc = await r.resolve(Request(url=httpserver.url_for("/p1")))
+            return [e.text for e in doc.select_all(".row")], calls["p2"]
+        finally:
+            await r.aclose()
+
+    rows, p2_calls = _run(go())
+    assert rows == ["a", "b", "c"]  # 3 pages merged into one Document
+    assert p2_calls == 2  # page 2's 503 was retried through the chain, not surfaced to pagination
