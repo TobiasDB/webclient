@@ -239,3 +239,15 @@ def test_json_reads_are_safe_on_non_json_documents() -> None:
     # and still work on a real JSON document
     j = parse(b'{"a": {"b": 5}}', content_type="application/json")
     assert j.at("a.b") == 5 and "a: {" in j.json_skeleton()
+
+
+def test_mislabelled_charset_does_not_crash_text() -> None:
+    # a bogus/unsupported charset must fall back to utf-8, not raise LookupError on .text
+    doc = parse("<html>café</html>".encode("utf-8"), content_type="text/html; charset=bogus")
+    assert doc.encoding == "utf-8"
+    assert "café" in doc.text
+    # a real declared charset is still honoured
+    win = parse("naïve".encode("windows-1252"), content_type="text/plain; charset=windows-1252")
+    assert win.encoding == "windows-1252" and win.text == "naïve"
+    # a meta charset with a typo also falls back
+    assert parse(b"<meta charset=notacodec><p>x</p>", content_type="text/html").encoding == "utf-8"

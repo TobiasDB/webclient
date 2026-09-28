@@ -5,12 +5,23 @@ else from the leading bytes; encoding from a ``charset=`` parameter, else UTF-8.
 
 from __future__ import annotations
 
+import codecs
 import re
 from typing import Literal
 
 Kind = Literal["html", "json", "xml", "text", "binary"]
 
 _CHARSET = re.compile(rb"charset=([\w-]+)", re.I)
+
+
+def _known(name: str) -> str:
+    """``name`` if it is a registered codec, else ``"utf-8"`` -- so a mislabelled/typo charset
+    (``charset=bogus``) can never make ``Document.text``'s ``decode()`` raise LookupError."""
+    try:
+        codecs.lookup(name)
+        return name
+    except LookupError:
+        return "utf-8"
 
 
 def sniff_kind(content_type: str | None, content: bytes) -> Kind:
@@ -47,9 +58,9 @@ def sniff_charset(content_type: str | None, content: bytes) -> str:
     """The text encoding: a ``charset=`` on the Content-Type, else a ``<meta charset>`` in the
     first bytes, else UTF-8."""
     if content_type and (m := _CHARSET.search(content_type.encode())):
-        return m.group(1).decode("ascii", "replace").lower()
+        return _known(m.group(1).decode("ascii", "replace").lower())
     if m := _CHARSET.search(content[:1024]):
-        return m.group(1).decode("ascii", "replace").lower()
+        return _known(m.group(1).decode("ascii", "replace").lower())
     return "utf-8"
 
 
