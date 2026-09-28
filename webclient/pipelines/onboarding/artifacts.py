@@ -1,12 +1,10 @@
 """onboarding.artifacts -- see the package docstring."""
 
 
-import abc
 import json
 import logging
-import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Sequence, cast
+from typing import Any, cast
 
 from pydantic import BaseModel, PrivateAttr, model_validator
 
@@ -14,21 +12,10 @@ from pydantic import BaseModel, PrivateAttr, model_validator
 #: evaluation, the query, spend); a CLI or app sets the level / handler. Each line is
 #: also appended to ``OnboardingResult.steps`` for a programmatic trace.
 
-from ...core.crawl import from_picks
-from ...core.document.models import Flag, PaginationHint
-from ...policy import (
-    AntiBotPolicy,
-    BrowserPolicy,
-    ProxyPolicy,
-    Resolve,
-)
-from ...llm.guides import lazy_query_guide
-from ...query.expr import from_blob
-from ...interface import Reference, WebClient, wq
-from ...clients.llm import Budget, BudgetExceeded, LlmClient, LlmError
-from ...llm.prompts import render_prompt
+from ...core.document.models import PaginationHint
+from ...policy import Resolve
 
-from .common import LLM, log
+from .common import log
 
 
 # --------------------------------------------------------------------------- #

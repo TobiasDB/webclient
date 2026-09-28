@@ -1,31 +1,15 @@
 """onboarding.evaluate -- see the package docstring."""
 
 
-import abc
 import json
-import logging
-import os
-from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Sequence
+from typing import Any, Sequence
 
-from pydantic import BaseModel, model_validator
 
 #: the pipeline's logger. Stages log progress here (seeds, crawl, candidates, the
 #: evaluation, the query, spend); a CLI or app sets the level / handler. Each line is
 #: also appended to ``OnboardingResult.steps`` for a programmatic trace.
 
-from ...core.crawl import from_picks
-from ...core.document.models import Flag
-from ...policy import (
-    AntiBotPolicy,
-    BrowserPolicy,
-    ProxyPolicy,
-    Resolve,
-)
-from ...llm.guides import lazy_query_guide
-from ...query.expr import from_blob
-from ...interface import Reference, WebClient, wq
-from ...clients.llm import Budget, BudgetExceeded, LlmClient, LlmError
+from ...interface import WebClient
 from ...llm.prompts import render_prompt
 
 from .common import LLM, BrowserMode, _fetch, _skeleton_for, log

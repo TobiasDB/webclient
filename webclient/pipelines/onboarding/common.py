@@ -34,68 +34,17 @@ so the whole pipeline runs offline against a stub model + a local server in test
 
 from __future__ import annotations
 
-
-import abc
-import json
 import logging
-import os
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Literal, Sequence
-
-from pydantic import BaseModel, model_validator
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 #: the pipeline's logger. Stages log progress here (seeds, crawl, candidates, the
 #: evaluation, the query, spend); a CLI or app sets the level / handler. Each line is
 #: also appended to ``OnboardingResult.steps`` for a programmatic trace.
 log = logging.getLogger("webclient.pipelines.onboarding")
-
-from ...core.crawl import from_picks
-from ...core.document.models import Flag
-from ...policy import (
-    AntiBotPolicy,
-    BrowserPolicy,
-    ProxyPolicy,
-    Resolve,
-)
-from ...llm.guides import lazy_query_guide
-from ...query.expr import from_blob
-from ...interface import Reference, WebClient, wq
-from ...clients.llm import Budget, BudgetExceeded, LlmClient, LlmError
-from ...llm.prompts import render_prompt
 
 if TYPE_CHECKING:
     from .artifacts import SearchHit  # noqa: F401
 
-
-
-
-import abc
-import json
-import logging
-import os
-from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Sequence
-
-from pydantic import BaseModel, model_validator
-
-#: the pipeline's logger. Stages log progress here (seeds, crawl, candidates, the
-#: evaluation, the query, spend); a CLI or app sets the level / handler. Each line is
-#: also appended to ``OnboardingResult.steps`` for a programmatic trace.
-log = logging.getLogger("webclient.pipelines.onboarding")
-
-from ...core.crawl import from_picks
-from ...core.document.models import Flag
-from ...policy import (
-    AntiBotPolicy,
-    BrowserPolicy,
-    ProxyPolicy,
-    Resolve,
-)
-from ...llm.guides import lazy_query_guide
-from ...query.expr import from_blob
-from ...interface import Reference, WebClient, wq
-from ...clients.llm import Budget, BudgetExceeded, LlmClient, LlmError
-from ...llm.prompts import render_prompt
 
 #: the model: a prompt in, its completion text out. Inject any client (a Claude call,
 #: a local model, or a stub in tests). Kept deliberately minimal.

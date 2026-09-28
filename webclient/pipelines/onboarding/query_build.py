@@ -8,7 +8,6 @@ from typing import Any
 
 from ...interface import wq
 from ...query.expr import from_blob
-from ...core.document.models import PaginationHint
 from ...policy import Resolve
 from .llm import _strip_fences, _json_blob
 
