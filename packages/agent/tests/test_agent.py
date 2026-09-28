@@ -70,3 +70,34 @@ def test_author_asks_then_resumes_with_a_human_selection() -> None:
     # the human supplies the Selection; the loop applies it and (the driver asks again -> waiting)
     resumed = _run(author.resume(Selection(row=".row", fields={"t": ".t"})))
     assert resumed.rows == [{"t": "A"}, {"t": "B"}]  # the human's selection was applied
+
+
+class _StubLlm:
+    """A model stub: returns a selection JSON until rows exist, then signals done. It reads the
+    prompt (which carries the last rows), so it exercises the real async driver path."""
+
+    async def complete(self, prompt: str) -> str:
+        if "Rows extracted so far: []" in prompt:
+            return 'Sure: {"row": ".row", "fields": {"t": ".t", "p": ".p"}}'
+        return 'Looks good: {"done": true}'
+
+
+def test_llm_driver_authors_extraction_via_the_loop() -> None:
+    from web.agent import Author, llm_driver
+
+    driver = llm_driver(_StubLlm(), goal="each row's t and p")  # async driver; the loop awaits it
+    result = _run(Author(_PAGE, driver).run())
+    assert result.verdict.reason == "done"
+    assert result.rows == [{"t": "A", "p": "1"}, {"t": "B", "p": "2"}]
+    assert result.selection is not None and result.selection.row == ".row"
+
+
+def test_llm_driver_tolerates_an_unparseable_reply() -> None:
+    from web.agent import Author, llm_driver
+
+    class _Garbage:
+        async def complete(self, prompt: str) -> str:
+            return "I'm not going to give you JSON."
+
+    result = _run(Author(_PAGE, llm_driver(_Garbage(), goal="x")).run())
+    assert result.verdict.reason == "done" and result.rows == []  # unparseable -> stop, no crash

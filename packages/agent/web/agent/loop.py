@@ -14,6 +14,7 @@ is done -- is a plain callable, so the base stays a small scaffold. Async-native
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any, Generic, Literal, TypeVar
 
@@ -64,7 +65,7 @@ class BoundedLoop(Generic[S, O, D]):
         self,
         *,
         observe: "Callable[[S], O]",
-        decide: "Callable[[O], D | Ask]",
+        decide: "Callable[[O], D | Ask | Awaitable[D | Ask]]",
         apply: "Callable[[S, D], None | Awaitable[None]]",
         done: "Callable[[D], bool]",
         progress: "Callable[[S], Any] | None" = None,
@@ -105,7 +106,8 @@ class BoundedLoop(Generic[S, O, D]):
         while True:
             if self.round >= self.max_rounds:
                 return self._verdict("budget")
-            decision = self._decide(self._observe(self._state))
+            raw: Any = self._decide(self._observe(self._state))
+            decision = await raw if inspect.isawaitable(raw) else raw  # driver may be sync or async
             if isinstance(decision, Ask):
                 self._waiting = True
                 return self._verdict("waiting", ask=decision)

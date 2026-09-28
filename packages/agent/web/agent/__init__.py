@@ -11,6 +11,7 @@ selectors that pull rows from a page, with a pluggable driver (an LLM / heuristi
 from __future__ import annotations
 
 from .extract import Author, Authored, Done, Driver, Selection, extract
+from .llm_driver import llm_driver
 from .loop import Ask, BoundedLoop, Verdict
 
-__all__ = ["BoundedLoop", "Verdict", "Ask", "Author", "Authored", "Selection", "Done", "Driver", "extract"]
+__all__ = ["BoundedLoop", "Verdict", "Ask", "Author", "Authored", "Selection", "Done", "Driver", "extract", "llm_driver"]

@@ -14,7 +14,7 @@ author), and a winning Selection maps directly onto a DSL plan
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from pydantic import BaseModel
@@ -49,8 +49,10 @@ def extract(doc: Document, selection: Selection) -> "list[dict[str, str | None]]
     return rows
 
 
-#: a driver looks at the page and the last rows, and decides the next move.
-Driver = Callable[[Document, "list[dict[str, str | None]]"], "Selection | Done | Ask"]
+#: a driver looks at the page and the last rows and decides the next move -- sync or async (an
+#: LLM driver is async; the loop awaits it).
+_Decision = Selection | Done | Ask
+Driver = Callable[[Document, list[dict[str, "str | None"]]], "_Decision | Awaitable[_Decision]"]
 
 
 class Authored(BaseModel):
