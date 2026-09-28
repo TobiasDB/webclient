@@ -5,6 +5,9 @@ description = "web-* fetch: the transport layer — Request -> Snapshot. Depends
 requires-python = ">=3.12"
 dependencies = ["web-kernel", "httpx>=0.24", "pydantic>=2"]
 
+[project.optional-dependencies]
+browser = ["playwright>=1.30"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

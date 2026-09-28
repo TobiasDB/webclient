@@ -17,8 +17,9 @@ not this layer's.
 from __future__ import annotations
 
 from .base import Fetcher
+from .browser import BrowserFetcher, LivePage
 from .http import HttpFetcher
 from .request import Request
 from .snapshot import Snapshot
 
-__all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher"]
+__all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "LivePage"]

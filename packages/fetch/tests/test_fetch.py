@@ -65,3 +65,49 @@ def test_non_2xx_is_a_valid_snapshot_not_an_error(httpserver: HTTPServer) -> Non
     # a 404 is a fact the transport reports, not a transport error -- policy is resolve's call
     assert snap.status == 404 and snap.error is None and not snap.ok
     assert snap.content == b"nope"
+
+
+# -- browser transport: renders JS (what a static fetch cannot) + live-page actions --
+
+from web.fetch import BrowserFetcher, LivePage  # noqa: E402
+
+
+def test_browser_executes_js_a_static_fetch_cannot(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/j").respond_with_data(
+        b"<html><body><div id='root'></div>"
+        b"<script>document.getElementById('root').textContent='REND'+'ERED'</script></body></html>",
+        content_type="text/html")  # the string is BUILT at runtime -> not literally in the source
+
+    async def go() -> tuple[bytes, bytes]:
+        static = await HttpFetcher().fetch(Request(url=httpserver.url_for("/j")))
+        bf = BrowserFetcher()
+        try:
+            rendered = await bf.fetch(Request(url=httpserver.url_for("/j")))
+        finally:
+            await bf.aclose()
+        return static.content, rendered.content
+
+    static_c, rendered_c = _run(go())
+    assert b"RENDERED" not in static_c  # httpx sees the empty shell
+    assert b"RENDERED" in rendered_c    # the browser ran the script
+
+
+def test_live_page_actions_return_self_and_snapshot(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/f").respond_with_data(
+        b"<html><body><input id='q'>"
+        b"<button id='go' onclick=\"document.body.setAttribute('data-done', document.getElementById('q').value)\">go</button>"
+        b"</body></html>", content_type="text/html")
+
+    async def go() -> bytes:
+        bf = BrowserFetcher()
+        try:
+            page = await bf.open(Request(url=httpserver.url_for("/f")))
+            driven = await (await page.type("#q", "hello")).click("#go")  # actions return Self
+            assert isinstance(driven, LivePage)
+            snap = await driven.snapshot()
+            await page.close()
+            return snap.content
+        finally:
+            await bf.aclose()
+
+    assert b'data-done="hello"' in _run(go())
