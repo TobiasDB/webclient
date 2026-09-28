@@ -57,6 +57,24 @@ class Context:
         """All cookie names joined (lowercased) into one searchable string."""
         return " ".join(str(c).lower() for c in self.cookies)
 
+    def xhr_urls(self) -> "list[str]":
+        """Every XHR/fetch request URL captured on this context, in document order (with repeats;
+        empty without a browser render). The ONE place that reads request URLs off the network
+        events -- the spa / data_api / injection detectors share it instead of each re-walking
+        ``events`` and duck-typing ``request.dispatch('url')``."""
+        out: list[str] = []
+        for e in self.events:
+            if getattr(e, "resource_type", None) not in ("xhr", "fetch"):
+                continue
+            req = getattr(e, "request", None)
+            if req is None:
+                continue
+            try:
+                out.append(str(req.dispatch("url")))
+            except Exception:  # noqa: BLE001 - a malformed request event never breaks detection
+                continue
+        return out
+
     @classmethod
     def from_response(
         cls,

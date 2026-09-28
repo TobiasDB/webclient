@@ -10,7 +10,6 @@ method on it -- so importing this module stays remote-safe.
 from __future__ import annotations
 
 import json
-import logging
 import re
 from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
@@ -23,15 +22,8 @@ from .registry import Hit, detector, flag
 if TYPE_CHECKING:
     from ..core.document.models import Form, Signal
 
-_log = logging.getLogger(__name__)
-
 _SPA_RATIO = 0.4  # injected-text share that alone marks a SPA
 _SPA_MAIN_RATIO = 0.15  # lower bar when the injection is main-area + same-origin XHR
-
-
-def _xhr_events(ctx: Context) -> list[Any]:
-    """The captured XHR/fetch network events (empty without a browser render)."""
-    return [e for e in ctx.events if getattr(e, "resource_type", None) in ("xhr", "fetch")]
 
 
 #: URL fragments that mark an XHR/fetch as a DATA endpoint (an API returning records),
@@ -90,15 +82,7 @@ def _injection(ctx: Context) -> "tuple[float, bool, int, int]":
     in_main = any((getattr(e, "detail", None) or {}).get("inMain") for e in load_added)
     page_host = (urlparse(ctx.final_url or ctx.url).hostname or "").lower()
     same_origin = cross_data = 0
-    for e in _xhr_events(ctx):
-        req = getattr(e, "request", None)
-        if req is None:
-            continue
-        try:
-            u = str(req.dispatch("url"))
-        except Exception as exc:  # a malformed request event -- don't let it flip SPA silently
-            _log.debug("dropped an XHR event with an unreadable url: %s", exc)
-            continue
+    for u in ctx.xhr_urls():
         host = (urlparse(u).hostname or "").lower()
         if not host:
             continue
@@ -144,15 +128,7 @@ def _data_endpoint_urls(ctx: Context) -> "list[str]":
     Empty without a browser render (an XHR is only observed live)."""
     page_host = (urlparse(ctx.final_url or ctx.url).hostname or "").lower()
     out: list[str] = []
-    for e in _xhr_events(ctx):
-        req = getattr(e, "request", None)
-        if req is None:
-            continue
-        try:
-            u = str(req.dispatch("url"))
-        except Exception as exc:  # noqa: BLE001 - a malformed request event never breaks detection
-            _log.debug("data_api: dropped an XHR event with an unreadable url: %s", exc)
-            continue
+    for u in ctx.xhr_urls():
         host = (urlparse(u).hostname or "").lower()
         if not host or _is_telemetry(u):  # a beacon/metrics call is not a records source
             continue

@@ -13,7 +13,7 @@ escalation it calls for) and a `value` (the actionable payload).
 
 ## `spa`
 
-- **remedy**: `browser` · **value**: Same-origin XHR/fetch endpoints, duck-typed off the events so this stays pure.
+- **remedy**: `browser` · **value**: The XHR/fetch endpoints the render observed (the spa flag's value). Empty on a request/static
 
 | detector | stage | contra | needs | evidence |
 |---|---|---|---|---|

@@ -85,18 +85,9 @@ def _vendor_interstitial(low: str) -> str | None:
 
 
 def _spa_endpoints(signals: "list[Signal]", ctx: Context) -> list[str] | None:
-    """Same-origin XHR/fetch endpoints, duck-typed off the events so this stays pure.
-    Empty on a request/static context; filled by the facet's browser events."""
-    eps: list[str] = []
-    for e in ctx.events:
-        if getattr(e, "resource_type", None) in ("xhr", "fetch"):
-            req = getattr(e, "request", None)
-            if req is not None:
-                try:
-                    eps.append(str(req.dispatch("url")))
-                except Exception:
-                    pass
-    return eps or None
+    """The XHR/fetch endpoints the render observed (the spa flag's value). Empty on a request/static
+    context; filled by the facet's browser events. Reads the shared ``Context.xhr_urls``."""
+    return ctx.xhr_urls() or None
 
 
 def _antibot_remedy(signals: "list[Signal]", ctx: Context) -> str | None:
