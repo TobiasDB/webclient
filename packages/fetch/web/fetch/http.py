@@ -17,6 +17,7 @@ from web.kernel import emit
 
 from .errors import classify
 from .events import FetchEvent
+from .proxy import Proxy, as_proxy
 from .request import Request
 from .snapshot import Snapshot
 
@@ -40,10 +41,10 @@ class HttpFetcher:
     :class:`HttpSession` whose cookie jar persists across fetches. It just fetches -- the
     tier/escalation ladder is resolve's policy, not fetch's."""
 
-    def __init__(self, *, verify: bool = True, proxy: str | None = None, fingerprint: bool = False) -> None:
+    def __init__(self, *, verify: bool = True, proxy: "str | Proxy | None" = None, fingerprint: bool = False) -> None:
         self._verify = verify
-        self._proxy = proxy
-        self._client = httpx.AsyncClient(verify=verify, proxy=proxy)
+        self._proxy = as_proxy(proxy)
+        self._client = httpx.AsyncClient(verify=verify, proxy=self._proxy.httpx() if self._proxy else None)
         self._base_headers = _FINGERPRINT if fingerprint else {}
 
     async def fetch(self, request: Request) -> Snapshot:
@@ -53,7 +54,7 @@ class HttpFetcher:
     async def session(self) -> "HttpSession":
         """A stateful session over its OWN httpx client (a persistent cookie jar). Async so every
         backend's ``session()`` has one shape (the browser's must be)."""
-        return HttpSession(httpx.AsyncClient(verify=self._verify, proxy=self._proxy), self._base_headers)
+        return HttpSession(httpx.AsyncClient(verify=self._verify, proxy=self._proxy.httpx() if self._proxy else None), self._base_headers)
 
     async def aclose(self) -> None:
         await self._client.aclose()

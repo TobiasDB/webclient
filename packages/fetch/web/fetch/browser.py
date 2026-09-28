@@ -20,8 +20,9 @@ from web.kernel import Event, emit
 
 from .errors import classify
 from .events import DOMEvent, FetchEvent, NetworkEvent
+from .proxy import Proxy, as_proxy
 from .request import Request
-from .script import DOM_RECORDER, Script
+from .script import Script, ScriptRegistry, default_scripts
 from .snapshot import Snapshot
 
 _STEALTH = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
@@ -101,14 +102,19 @@ class BrowserFetcher:
 
     def __init__(
         self, *, headless: bool = True, channel: str = "chromium",
-        proxy: str | None = None, fingerprint: bool = False,
-        scripts: tuple[Script, ...] = (DOM_RECORDER,),
+        proxy: "str | Proxy | None" = None, fingerprint: bool = False,
+        scripts: "tuple[Script, ...] | ScriptRegistry | None" = None,
     ) -> None:
         self._headless = headless
         self._channel = channel  # "chromium" = bundled; "chrome" = the real Chrome install
-        self._proxy = proxy
+        self._proxy = as_proxy(proxy)
         self._fingerprint = fingerprint
-        self._scripts = scripts
+        #: a registry so a caller can enable/disable capture scripts; a bare tuple is wrapped.
+        self.scripts: ScriptRegistry = (
+            default_scripts() if scripts is None
+            else scripts if isinstance(scripts, ScriptRegistry)
+            else ScriptRegistry(scripts)
+        )
         self._pw: Any = None
         self._browser: Any = None
 
@@ -120,7 +126,7 @@ class BrowserFetcher:
             self._browser = await self._pw.chromium.launch(
                 headless=self._headless,
                 channel=None if self._channel == "chromium" else self._channel,
-                proxy={"server": self._proxy} if self._proxy else None,
+                proxy=self._proxy.playwright() if self._proxy else None,
             )
         return self._browser
 
@@ -130,16 +136,17 @@ class BrowserFetcher:
         browser = await self._browser_ready()
         context = await browser.new_context()
         page = await context.new_page()
+        scripts = self.scripts.enabled()  # only the enabled scripts install
         try:
             if self._fingerprint:  # a light stealth pass (real anti-detect is a heavier backend)
                 await page.add_init_script(_STEALTH)
-            for s in self._scripts:  # 'init' scripts run before any page script
+            for s in scripts:  # 'init' scripts run before any page script
                 if s.on == "init":
                     await page.add_init_script(s.js)
         except BaseException:  # setup failed -> don't leak the context we opened
             await context.close()
             raise
-        return BrowserSession(context, page, self._scripts)
+        return BrowserSession(context, page, scripts)
 
     async def fetch(self, request: Request) -> Snapshot:
         """One-shot: open a session, fetch, close. Never raises (a session failure is

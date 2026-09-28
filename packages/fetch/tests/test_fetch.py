@@ -279,3 +279,66 @@ def test_http_session_persists_cookies_but_one_shot_fetch_does_not(httpserver: H
 
     assert _run(session_flow()) == b"sid=abc"  # session carried the cookie
     assert _run(one_shot_flow()) == b"sid="    # one-shot did not
+
+
+# -- script registry: enable/disable capture without rebuilding the backend --
+
+from web.fetch import ScriptRegistry  # noqa: E402
+
+
+def test_script_registry_disables_capture(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/d").respond_with_data(
+        b"<html><body><button id='go' onclick=\"document.body.appendChild(document.createElement('p'))\">go</button></body></html>",
+        content_type="text/html")
+
+    async def go(enabled: bool) -> list[DOMEvent]:
+        bf = BrowserFetcher()
+        if not enabled:
+            bf.scripts.disable("dom")  # turn off the DOM recorder on this backend
+        try:
+            session = await bf.session()
+            await session.goto(Request(url=httpserver.url_for("/d")))
+            await session.click("#go")
+            snap = await session.snapshot()
+            await session.aclose()
+        finally:
+            await bf.aclose()
+        return [e for e in snap.events if isinstance(e, DOMEvent)]
+
+    assert _run(go(enabled=True))    # recorder on -> DOM events captured
+    assert _run(go(enabled=False)) == []  # disabled -> nothing captured
+
+
+def test_proxy_renders_for_each_backend() -> None:
+    from web.fetch import BrowserFetcher, HttpFetcher, Proxy
+
+    p = Proxy(server="http://gw:8080", username="u", password="p@ss", bypass="localhost")
+    assert p.httpx() == "http://u:p%40ss@gw:8080"                      # auth embedded, percent-encoded
+    assert p.playwright() == {"server": "http://gw:8080", "username": "u",
+                              "password": "p@ss", "bypass": "localhost"}
+    # backends accept a Proxy (or a bare string) without error
+    assert HttpFetcher(proxy=p) is not None and HttpFetcher(proxy="http://gw:8080") is not None
+    assert BrowserFetcher(proxy=p) is not None
+
+
+def test_pool_bounds_concurrency() -> None:
+    from web.fetch import Pool
+
+    class _Slow:  # a backend that tracks how many fetches overlap
+        def __init__(self): self.max_overlap = 0; self.now = 0
+        async def fetch(self, request: Request) -> Snapshot:
+            self.now += 1; self.max_overlap = max(self.max_overlap, self.now)
+            await asyncio.sleep(0.02)
+            self.now -= 1
+            return Snapshot(request=request, status=200)
+        async def aclose(self): pass
+
+    async def go() -> tuple[int, int]:
+        slow = _Slow()
+        pool = Pool(slow, limit=2)
+        await asyncio.gather(*[pool.fetch(Request(url=f"https://x/{i}")) for i in range(8)])
+        await pool.aclose()
+        return slow.max_overlap, pool.peak
+
+    max_overlap, peak = _run(go())
+    assert max_overlap == 2 and peak == 2  # 8 requests, never more than 2 in flight

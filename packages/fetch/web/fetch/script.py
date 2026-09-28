@@ -51,4 +51,41 @@ class Script(BaseModel):
 DOM_RECORDER = Script(name="dom", on="load", js=_DOM_RECORD_JS, drain=_DOM_DRAIN_JS)
 
 
-__all__ = ["Script", "DOM_RECORDER"]
+class ScriptRegistry:
+    """A named, mutable collection of page scripts the browser backend installs. Register scripts,
+    ``enable`` / ``disable`` them by name; only the enabled ones are installed. This lets a caller
+    add rrweb, a custom recorder, or a stealth patch -- and toggle capture -- without reconstructing
+    the backend. Enabled state is tracked here (not on the shared Script), so a module-level Script
+    is never mutated."""
+
+    def __init__(self, scripts: "tuple[Script, ...]" = (DOM_RECORDER,)) -> None:
+        self._scripts: dict[str, Script] = {}
+        self._enabled: dict[str, bool] = {}
+        for s in scripts:
+            self.register(s)
+
+    def register(self, script: Script, *, enabled: bool = True) -> "ScriptRegistry":
+        """Add (or replace) a script by name; returns self for chaining."""
+        self._scripts[script.name] = script
+        self._enabled[script.name] = enabled
+        return self
+
+    def enable(self, name: str) -> "ScriptRegistry":
+        self._enabled[name] = True
+        return self
+
+    def disable(self, name: str) -> "ScriptRegistry":
+        self._enabled[name] = False
+        return self
+
+    def enabled(self) -> "tuple[Script, ...]":
+        """The scripts currently enabled, in registration order -- what the backend installs."""
+        return tuple(s for n, s in self._scripts.items() if self._enabled.get(n))
+
+
+#: the default registry: the DOM recorder, enabled.
+def default_scripts() -> ScriptRegistry:
+    return ScriptRegistry((DOM_RECORDER,))
+
+
+__all__ = ["Script", "DOM_RECORDER", "ScriptRegistry", "default_scripts"]
