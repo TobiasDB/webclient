@@ -136,3 +136,30 @@ def test_interaction_agent_drives_a_live_page(httpserver: HTTPServer) -> None:
             await bf.aclose()
 
     assert b'data-done="hello"' in _run(go())  # the typed+clicked actions actually ran
+
+
+from web.agent import Scroll  # noqa: E402
+
+
+def test_drive_does_not_falsely_stall_past_max_stalls(httpserver: HTTPServer) -> None:
+    # 5 rounds of a repeatable action then Done: with a constant progress mark this used to
+    # FALSELY stall at round 4 (max_stalls). Stall detection is off, so it must reach Done.
+    httpserver.expect_request("/p").respond_with_data(
+        b"<html><body style='height:5000px'><p>tall</p></body></html>", content_type="text/html")
+    steps = iter([Scroll(), Scroll(), Scroll(), Scroll(), Scroll(), _Done()])
+
+    def policy(obs: Observation) -> object:
+        return next(steps)
+
+    async def go() -> str:
+        bf = BrowserFetcher()
+        try:
+            session = await bf.session()
+            await session.goto(Request(url=httpserver.url_for("/p")))
+            run = await drive(session, policy, max_rounds=10)
+            await session.aclose()
+            return run.verdict.reason
+        finally:
+            await bf.aclose()
+
+    assert _run(go()) == "done"  # reached Done, not "stalled"

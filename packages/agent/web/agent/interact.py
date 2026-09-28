@@ -90,7 +90,8 @@ async def drive(session: BrowserSession, policy: Policy, *, max_rounds: int = 20
         decide=policy,
         apply=_apply,
         done=lambda a: isinstance(a, Done),
-        progress=lambda s: None,  # progress/stall detection is per-goal; left to the caller
+        # no `progress` -> stall detection off (a constant mark would FALSELY stall); a goal-specific
+        # progress fn belongs to the caller/policy, and only max_rounds bounds a stuck loop here.
         max_rounds=max_rounds,
     )
     return AgentRun(verdict=await loop.arun(session))
