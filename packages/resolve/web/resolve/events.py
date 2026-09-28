@@ -1,0 +1,18 @@
+"""web.resolve's own event types -- what the resolve policies report on the bus."""
+
+from __future__ import annotations
+
+from web.kernel import Event
+
+
+class ResolveEvent(Event):
+    """A resolve-policy step: a retry attempt, a tier climb, or a fetched page. ``phase`` names
+    which (``retry`` / ``escalate`` / ``page``); ``url`` and ``detail`` give context."""
+
+    topic: str = "resolve"
+    phase: str = ""
+    url: str = ""
+    detail: dict[str, object] = {}
+
+
+__all__ = ["ResolveEvent"]

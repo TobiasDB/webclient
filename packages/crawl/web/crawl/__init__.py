@@ -20,8 +20,17 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from web.fetch import Request
+from web.kernel import Event, emit
 from web.parse import Document
 from web.resolve import Resolver
+
+
+class CrawlEvent(Event):
+    """One page the crawl fetched, with how many it has fetched so far."""
+
+    topic: str = "crawl"
+    url: str = ""
+    fetched: int = 0
 
 #: whether to FOLLOW ``link`` found on ``doc`` -- the crawl's traversal scope.
 Follow = Callable[[Document, str], bool]
@@ -64,8 +73,10 @@ class Crawler:
                 frontier.append(s)
         fetched = 0
         while frontier and fetched < goal.max_pages:
-            doc = await self._resolver.resolve(Request(url=frontier.popleft()))
+            url = frontier.popleft()
+            doc = await self._resolver.resolve(Request(url=url))
             fetched += 1
+            emit(CrawlEvent(url=url, fetched=fetched))
             if goal.collect is None or goal.collect(doc):
                 yield doc
             if doc.kind in ("html", "xml"):  # traverse links even from non-results
@@ -78,4 +89,4 @@ class Crawler:
         await self._resolver.aclose()
 
 
-__all__ = ["Crawler", "Goal", "Follow", "Collect", "same_origin"]
+__all__ = ["Crawler", "Goal", "CrawlEvent", "Follow", "Collect", "same_origin"]

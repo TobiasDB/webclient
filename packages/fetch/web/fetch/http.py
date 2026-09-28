@@ -13,8 +13,9 @@ import time
 
 import httpx
 
-from web.kernel import err
+from web.kernel import emit, err
 
+from .events import FetchEvent
 from .request import Request
 from .snapshot import Snapshot
 
@@ -64,7 +65,7 @@ class HttpFetcher:
         set_cookies: dict[str, str] = {}
         for hop in (*resp.history, resp):  # Set-Cookie from every hop, not just the final one
             set_cookies.update(dict(hop.cookies))
-        return Snapshot(
+        snap = Snapshot(
             request=request,
             url=str(resp.url),
             status=resp.status_code,
@@ -74,6 +75,8 @@ class HttpFetcher:
             set_cookies=set_cookies,
             redirects=[str(h.url) for h in resp.history],
         )
+        emit(FetchEvent(url=snap.url, status=snap.status, elapsed=snap.elapsed, source="http"))
+        return snap
 
     async def aclose(self) -> None:
         await self._client.aclose()

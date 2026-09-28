@@ -14,6 +14,16 @@ from typing import Any
 from web.kernel import Event
 
 
+class FetchEvent(Event):
+    """One fetch a backend performed: the URL, the resulting status, and how long it took. The
+    backend that produced it is on ``source`` (e.g. ``"http"`` / ``"browser"``)."""
+
+    topic: str = "fetch"
+    url: str = ""
+    status: int = 0
+    elapsed: float = 0.0
+
+
 class NetworkEvent(Event):
     """One response the page received during the fetch (method, URL, status, resource type)."""
 
@@ -34,4 +44,4 @@ class DOMEvent(Event):
     records: list[dict[str, Any]] = []
 
 
-__all__ = ["NetworkEvent", "DOMEvent"]
+__all__ = ["FetchEvent", "NetworkEvent", "DOMEvent"]

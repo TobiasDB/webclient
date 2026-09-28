@@ -30,3 +30,15 @@ def test_bus_delivers_by_prefix_and_swallows_handler_errors() -> None:
     sub()  # unsubscribe
     bus.publish(Event(topic="fetch"))
     assert all_seen == ["fetch.retry", "parse"]  # no longer delivered
+
+
+def test_emit_is_noop_without_a_trace_and_captured_within_one() -> None:
+    from web.kernel import Trace, emit
+
+    emit(Event(topic="x"))  # no active trace -> no-op, no error
+    with Trace() as t:
+        emit(Event(topic="fetch"))
+        emit(Event(topic="crawl"))
+    assert [e.topic for e in t.events] == ["fetch", "crawl"]
+    emit(Event(topic="after"))  # outside the scope -> not captured
+    assert [e.topic for e in t.events] == ["fetch", "crawl"]

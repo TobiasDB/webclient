@@ -10,7 +10,7 @@ to the layers that own them.
 from __future__ import annotations
 
 from .errors import WebError, WebException, err
-from .events import Event, EventBus, Subscription, topic_matches
+from .events import Event, EventBus, Subscription, Trace, emit, topic_matches, using
 
 __all__ = [
     "WebError",
@@ -20,4 +20,7 @@ __all__ = [
     "EventBus",
     "Subscription",
     "topic_matches",
+    "emit",
+    "using",
+    "Trace",
 ]

@@ -60,11 +60,13 @@ resolve. The bridge `web.resolve.document(snap)` just hands parse the bytes.
 
 ## Layers
 
-### web.kernel — data + bus + loop (depends on: pydantic)
+### web.kernel — data + the event bus (depends on: pydantic)
 - `WebError` / `WebException` / `err(code, msg, **detail)` — structured errors.
 - `Event` (base; each layer subclasses) + `EventBus` (sync pub/sub over dotted topics).
-- `BoundedLoop(observe, decide, apply, done, progress=, max_rounds=, max_stalls=)` — the one
-  `observe→decide→apply` primitive; `.run()` (sync) / `.arun()` (async) → `Verdict`.
+- **The ambient bus:** `emit(event)` publishes to the bus active in the current context (a free
+  no-op otherwise — works across `await` via a `ContextVar`); `Trace()` is a `with`-scope that
+  installs a bus and collects everything emitted (`with Trace() as t: … ; t.events`). Layers call
+  `emit(...)` at key points; nothing threads a bus through call signatures.
 
 ### web.fetch — `Request → Snapshot`, backends + the middleware framework
 Fetch is *just fetch*: it only worries about its **backend**. It knows nothing of tiers,
@@ -149,6 +151,11 @@ The opinionated orchestration over fetch's framework. Owns everything policy.
   request actually climbs to it.
 - **The DSL never leaks downward.** `dsl.ref(url).click(...).doc().select_all(".row").project(...)
   .collect()` records a `Plan`; `run()` calls the same plain methods everything else uses.
+- **Observability via the ambient bus.** Each layer `emit`s its own event as it works —
+  `FetchEvent` (web.fetch), `ResolveEvent` (retry / escalate / page, web.resolve), `CrawlEvent`
+  (web.crawl). Wrap any run in `with Trace() as t:` to collect the whole cross-layer stream
+  (`t.events`) or `t.subscribe(prefix, handler)` for live handling. Emitting is free unless a
+  Trace is active.
 
 ## Development
 

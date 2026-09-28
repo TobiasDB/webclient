@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from .base import Fetcher
 from .browser import BrowserFetcher, LivePage
-from .events import DOMEvent, NetworkEvent
+from .events import DOMEvent, FetchEvent, NetworkEvent
 from .script import DOM_RECORDER, Script
 from .http import HttpFetcher
 from .middleware import Handler, Middleware, stack

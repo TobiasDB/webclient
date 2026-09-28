@@ -112,3 +112,36 @@ def test_login_and_pagination_detectors() -> None:
 def test_anti_bot_reads_content_markers() -> None:
     assert anti_bot(_d(b"<html><body>Please verify you are human (captcha)</body></html>")) is not None
     assert anti_bot(_d(b"<html><body>normal page</body></html>")) is None
+
+
+def test_trace_captures_events_across_layers(httpserver: HTTPServer) -> None:
+    from web.kernel import Trace
+
+    httpserver.expect_request("/p").respond_with_data(b"<h1>hi</h1>", content_type="text/html")
+    fetcher = _FlakyFetcher(fail=1)  # one transient failure -> a retry event too
+
+    async def go_flaky() -> list[str]:
+        r = Resolver(ladder=(fetcher,), retry=retry(3, backoff=0.0))
+        try:
+            await r.resolve(Request(url="https://x/"))
+        finally:
+            await r.aclose()
+        return []
+
+    with Trace() as t:
+        _run(go_flaky())
+    topics = [e.topic for e in t.events]
+    # the flaky fetcher isn't an http backend so no FetchEvent, but the retry policy emitted one
+    assert "resolve" in topics and any(getattr(e, "phase", "") == "retry" for e in t.events)
+
+    # a real http fetch emits a FetchEvent
+    async def go_http() -> None:
+        r = Resolver()
+        try:
+            await r.resolve(Request(url=httpserver.url_for("/p")))
+        finally:
+            await r.aclose()
+
+    with Trace() as t2:
+        _run(go_http())
+    assert any(e.topic == "fetch" and getattr(e, "status", 0) == 200 for e in t2.events)

@@ -12,8 +12,10 @@ from collections.abc import Callable
 from urllib.parse import urlparse
 
 from web.fetch import Fetcher, Handler, Middleware, Request, Snapshot
+from web.kernel import emit
 
 from .document import document
+from .events import ResolveEvent
 from .signals import anti_bot, spa
 
 _RETRIABLE_STATUS = frozenset({429, 500, 502, 503, 504})
@@ -33,6 +35,7 @@ def retry(max_attempts: int = 3, backoff: float = 0.2) -> Middleware:
         snap = await nxt(request)
         attempt = 1
         while attempt < max_attempts and _retriable(snap):
+            emit(ResolveEvent(phase="retry", url=request.url, detail={"attempt": attempt}))
             await asyncio.sleep(backoff * (2 ** (attempt - 1)))
             snap = await nxt(request)
             attempt += 1
@@ -79,9 +82,10 @@ def escalate(tiers: "list[Fetcher]", *, blocked: "Callable[[Snapshot], bool] | N
 
     async def mw(request: Request, nxt: Handler) -> Snapshot:
         snap = await nxt(request)
-        for tier in tiers:
+        for i, tier in enumerate(tiers):
             if not check(snap):
                 break
+            emit(ResolveEvent(phase="escalate", url=request.url, detail={"tier": i + 1}))
             snap = await tier.fetch(request)
         return snap
 
