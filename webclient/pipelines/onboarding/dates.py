@@ -5,10 +5,15 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from .artifacts import Brief
 from .common import log  # noqa: F401
+
+#: RELATIVE phrases a general date read accepts but a date FIELD should not ("2 days ago" is not an
+#: absolute publication date). Rejected before the shared parser so onboarding stays strict.
+_RELATIVE_DATE = re.compile(r"\b(today|yesterday|tomorrow)\b|\bago\b", re.I)
 
 
 #: newest item older than this many TYPICAL inter-row intervals -> the latest data is
@@ -33,30 +38,25 @@ _COMPLETENESS_OFF = (
 
 
 def _parse_date(s: str) -> "Any":
-    """A ``date`` from a human/ISO/localised date string, or ``None``. Parsing is delegated to
-    ``python-dateutil`` (a declared dependency, the same parser ``Field.date()`` uses) rather than a
-    hand-rolled format list -- so ISO, RFC 822 (RSS ``pubDate``), month names, and localised forms
-    (``31.12.2026`` DE dot, ``18/12/2025`` etc.) all parse without us enumerating each. ``dayfirst``
-    stays False (US-style) for an AMBIGUOUS slash date, and ``fuzzy`` is off so a non-date string is
-    rejected (``None``) instead of being coerced. A value that carries NO year is refused, so a bare
-    number/day isn't silently completed to today's month/year."""
-    from dateutil import parser as _du
+    """A ``date`` from a human/ISO/localised date string, or ``None``. Delegates to the ONE date
+    parser the DSL's ``.date()`` op uses -- :func:`webclient.query.collection.parse_when` (dateutil-
+    backed) -- so onboarding and the query layer read a date the SAME way (no second parser to drift).
+    Onboarding's field-STRICTNESS is layered on top: a bare number that isn't a plausible 4-digit YEAR
+    is refused (so ``5``/``42`` don't become today, but ``1990`` parses); a RELATIVE phrase
+    (``2 days ago``/``yesterday``) is refused (a date field wants an absolute date); and a DOT-only date
+    is read DAY-first (the European ``31.12.2026`` / ``01.03.2026`` = 1 Mar convention) while a slash
+    date stays US month-first."""
+    from ...query.collection import parse_when
 
     s = s.strip()
     if not s or not any(c.isdigit() for c in s):
         return None
-    # dateutil fills a missing field from today's date, so a BARE number would become a date -- reject
-    # a plain integer unless it is a plausible 4-digit YEAR (so "1990" parses, but "5"/"42" do not).
-    if s.isdigit() and not (1000 <= int(s) <= 9999):
+    if s.isdigit() and not (1000 <= int(s) <= 9999):  # a bare number that isn't a plausible year
         return None
-    # DOT-separated dates are the European convention and are DAY-first (31.12.2026, 01.03.2026 = 1 Mar);
-    # SLASH dates are US month-first (12/18/2025). This separator cue is all dateutil needs to
-    # disambiguate the day/month order -- everything else (ISO, RFC 822, month names) it handles itself.
-    dayfirst = "." in s and "/" not in s
-    try:
-        return _du.parse(s, dayfirst=dayfirst, fuzzy=False).date()
-    except (ValueError, OverflowError, TypeError):
+    if _RELATIVE_DATE.search(s.lower()):  # "2 days ago" / today / yesterday -> not an absolute date
         return None
+    when = parse_when(s, dayfirst="." in s and "/" not in s)  # EU dot = day-first; US slash = month-first
+    return when.date() if when is not None else None
 
 
 #: leaf field names (or suffixes) that denote a date/time -- matched on the LAST dotted
