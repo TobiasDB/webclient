@@ -18,7 +18,7 @@ def _run(coro):
 
 
 def _dsl() -> DSL:
-    return DSL(Resolver(HttpFetcher()))
+    return DSL(Resolver())
 
 
 def test_surfaces_and_join_record_a_plan() -> None:
@@ -62,7 +62,7 @@ def test_api_dispatch_roundtrips_a_blob(httpserver: HTTPServer) -> None:
     assert Plan.from_blob(blob).reads[0].op == "select_all"
 
     async def server() -> str:
-        r = Resolver(HttpFetcher())
+        r = Resolver()
         try:
             els = await run_blob(blob, r)
             return els[0].text
@@ -106,7 +106,7 @@ def test_reference_actions_drive_a_browser(httpserver: HTTPServer) -> None:
         b"</body></html>", content_type="text/html")
 
     async def go() -> "str | None":
-        d = DSL(Resolver(HttpFetcher()), browser=BrowserFetcher())
+        d = DSL(Resolver(), browser=BrowserFetcher())
         try:  # actions drive one live page, .doc() snapshots+parses once, then read
             els = await d.ref(httpserver.url_for("/f")).type("#q", "hi").click("#go").doc().select_all("body").acollect()
             return els[0].attr("data-done")

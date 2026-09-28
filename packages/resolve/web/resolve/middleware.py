@@ -8,10 +8,11 @@ parse, not in fetch). Compose them into a per-vendor profile and hand it to a Re
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from urllib.parse import urlparse
 
 from web.fetch import Fetcher, Handler, Middleware, Request, Snapshot
-from web.parse import parse
+from web.parse import Document, parse
 
 from .signals import detect
 
@@ -59,16 +60,29 @@ def rate_limit(min_interval: float) -> Middleware:
     return mw
 
 
-def escalate(browser: Fetcher, *, when: tuple[str, ...] = ("spa",)) -> Middleware:
-    """Re-issue the SAME request on a DIFFERENT transport: after a static fetch, parse the
-    Snapshot and, if a render-worthy signal fired (``spa`` -- a JS-gated shell), re-fetch it via
-    ``browser``. The expensive tier runs only when the evidence says so (the adaptive rule)."""
+def _blocked(doc: Document) -> bool:
+    """The default 'this tier was insufficient, climb' rule: a bad status, an anti-bot wall, or a
+    JS-gated shell (a static tier sees an empty page)."""
+    if not doc.ok:
+        return True
+    return bool({s.name for s in detect(doc)} & {"spa", "anti_bot"})
+
+
+def escalate(tiers: "list[Fetcher]", *, blocked: "Callable[[Document], bool] | None" = None) -> Middleware:
+    """Walk the escalation LADDER: after the base fetch (via ``next``), if the result looks
+    blocked/insufficient, re-issue the SAME request on the next tier, and so on until one
+    succeeds or the ladder is exhausted. ``tiers`` are the tiers ABOVE the base (browser,
+    chrome, ...); each tier just fetches -- choosing/ordering them is this policy. (A tier's
+    fetch is a different transport, so it does not re-enter retry/rate_limit; wrap a tier with
+    those if it needs them.)"""
+    check = blocked or _blocked
 
     async def mw(request: Request, nxt: Handler) -> Snapshot:
         snap = await nxt(request)
-        doc = parse(snap)
-        if doc.kind == "html" and {s.name for s in detect(doc)} & set(when):
-            return await browser.fetch(request)
+        for tier in tiers:
+            if not check(parse(snap)):
+                break
+            snap = await tier.fetch(request)
         return snap
 
     return mw

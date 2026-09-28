@@ -6,8 +6,8 @@ middleware chain around a base Fetcher and parses the resulting Snapshot into a 
 
     from web.fetch import HttpFetcher, BrowserFetcher, Request
     from web.resolve import Resolver, profile, rate_limit, retry, escalate, paginate_links
-    acme = Profile(rate_limit=0.5, retry=3, escalate=BrowserFetcher(), paginate=paginate_links())
-    doc = await Resolver(HttpFetcher(), profile=acme).resolve(Request(url="https://acme.com"))
+    acme = Profile(ladder=(HttpFetcher(), BrowserFetcher()), rate_limit=0.5, retry=3, paginate=paginate_links())
+    doc = await Resolver(profile=acme).resolve(Request(url="https://acme.com"))
 
 The provided middlewares (retry / rate_limit / escalate / paginate_*) are REFERENCE
 implementations -- a consumer writes their own ``async (request, next) -> Snapshot`` and stacks it
@@ -25,11 +25,12 @@ from .middleware import escalate, rate_limit, retry
 from .paginate import Until, paginate_clicks, paginate_links, paginate_param
 from .signals import DETECTORS, Signal, detect, login_wall, pagination, spa
 from .stops import any_of, first_n, until_empty, until_match, until_repeat
+from .tiers import ladder
 
 __all__ = [
     "Resolver", "Profile", "Middleware", "Handler", "stack",
     # middleware implementations (consumer-pluggable; these are the reference ones)
-    "retry", "rate_limit", "escalate",
+    "retry", "rate_limit", "escalate", "ladder",
     "paginate_links", "paginate_param", "paginate_clicks", "Until",
     # pagination stop conditions (composable, some stateful)
     "until_empty", "until_match", "first_n", "until_repeat", "any_of",

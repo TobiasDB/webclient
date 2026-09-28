@@ -151,3 +151,23 @@ def test_actions_are_recorded_as_dom_events(httpserver: HTTPServer) -> None:
 
     doms = _run(go())
     assert doms and any(r["type"] == "childList" and r["added"] >= 1 for e in doms for r in e.records)
+
+
+def test_http_fingerprint_sends_browser_headers(httpserver: HTTPServer) -> None:
+    seen = {}
+    def echo(req):
+        from werkzeug.wrappers import Response
+        seen["ua"] = req.headers.get("User-Agent", "")
+        return Response(b"ok", content_type="text/html")
+    httpserver.expect_request("/f").respond_with_handler(echo)
+
+    async def go(fingerprint: bool) -> str:
+        f = HttpFetcher(fingerprint=fingerprint)
+        try:
+            await f.fetch(Request(url=httpserver.url_for("/f")))
+            return seen["ua"]
+        finally:
+            await f.aclose()
+
+    assert "Chrome" in _run(go(True))       # fingerprint backend sends a browser UA
+    assert "Chrome" not in _run(go(False))  # plain backend does not

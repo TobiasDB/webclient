@@ -72,8 +72,15 @@ class LivePage:
 class BrowserFetcher:
     """A browser :class:`~web.fetch.base.Fetcher` over Playwright/Chromium (lazily launched)."""
 
-    def __init__(self, *, headless: bool = True, scripts: tuple[Script, ...] = (DOM_RECORDER,)) -> None:
+    def __init__(
+        self, *, headless: bool = True, channel: str = "chromium",
+        proxy: str | None = None, fingerprint: bool = False,
+        scripts: tuple[Script, ...] = (DOM_RECORDER,),
+    ) -> None:
         self._headless = headless
+        self._channel = channel  # "chromium" = bundled; "chrome" = the real Chrome install
+        self._proxy = proxy
+        self._fingerprint = fingerprint
         self._scripts = scripts
         self._pw: Any = None
         self._browser: Any = None
@@ -83,7 +90,11 @@ class BrowserFetcher:
             from playwright.async_api import async_playwright
 
             self._pw = await async_playwright().start()
-            self._browser = await self._pw.chromium.launch(headless=self._headless)
+            self._browser = await self._pw.chromium.launch(
+                headless=self._headless,
+                channel=None if self._channel == "chromium" else self._channel,
+                proxy={"server": self._proxy} if self._proxy else None,
+            )
         return self._browser
 
     async def open(self, request: Request) -> LivePage:
@@ -91,6 +102,9 @@ class BrowserFetcher:
         script and captures every response as a NetworkEvent along the way."""
         browser = await self._browser_ready()
         page = await browser.new_page()
+        if self._fingerprint:  # a light stealth pass (real anti-detect is a heavier backend)
+            await page.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
         network: list[NetworkEvent] = []
         page.on("response", lambda r: network.append(NetworkEvent(
             method=r.request.method, url=r.url, status=r.status, resource_type=r.request.resource_type)))
@@ -113,8 +127,10 @@ class BrowserFetcher:
     async def aclose(self) -> None:
         if self._browser is not None:
             await self._browser.close()
+            self._browser = None  # idempotent: a Resolver closes every tier, callers may too
         if self._pw is not None:
             await self._pw.stop()
+            self._pw = None
 
 
 __all__ = ["BrowserFetcher", "LivePage"]

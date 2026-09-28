@@ -55,8 +55,21 @@ def pagination(doc: Document) -> "Signal | None":
     return None
 
 
+def anti_bot(doc: Document) -> "Signal | None":
+    """An anti-bot wall / challenge page -- a CAPTCHA or bot-check interstitial, so the content
+    is gated behind evasion (a fingerprint or proxy tier), not behind rendering."""
+    if doc.kind != "html":
+        return None
+    text = doc.text.lower()
+    markers = ("captcha", "cf-challenge", "verify you are human", "unusual traffic",
+               "access denied", "are you a robot", "checking your browser")
+    if any(m in text for m in markers):
+        return Signal(name="anti_bot", confidence=0.7)
+    return None
+
+
 #: the built-in detectors, run in order by :func:`detect`.
-DETECTORS: tuple[Callable[[Document], "Signal | None"], ...] = (spa, login_wall, pagination)
+DETECTORS: tuple[Callable[[Document], "Signal | None"], ...] = (spa, login_wall, pagination, anti_bot)
 
 
 def detect(doc: Document) -> list[Signal]:
