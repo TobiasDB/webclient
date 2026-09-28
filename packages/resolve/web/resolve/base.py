@@ -60,6 +60,13 @@ class Profile:
 _EMPTY = Profile()
 
 
+async def _open_session(tier: Fetcher) -> Fetcher:
+    """Open a persistent session on a tier that supports one (a Session is itself Fetcher-shaped);
+    a backend without ``session()`` (e.g. a replay backend) is used as-is."""
+    opener = getattr(tier, "session", None)
+    return cast(Fetcher, await opener()) if opener is not None else tier
+
+
 class Resolver:
     """``Request -> Document``: the base tier wrapped in an ordered middleware chain, then parse.
     The four policy slots are always ordered correctly regardless of kwarg order; a ``profile``
@@ -77,28 +84,42 @@ class Resolver:
     ) -> None:
         p = profile or _EMPTY
         chosen = ladder if ladder is not None else p.ladder
-        tiers: tuple[Fetcher, ...] = tuple(chosen) if chosen else (HttpFetcher(),)  # empty/None -> default
-        self._tiers = tiers
+        self._tiers: tuple[Fetcher, ...] = tuple(chosen) if chosen else (HttpFetcher(),)  # empty/None -> default
+        # keep the resolved slots so session() can rebuild the same chain over persistent tiers
+        self._rl = rate_limit if rate_limit is not None else p.rate_limit
+        self._rt = retry if retry is not None else p.retry
+        self._pg = paginate if paginate is not None else p.paginate
+        self._mw = middleware or p.middleware
+        self._fetcher = self._stack_over(self._tiers)
+
+    def _stack_over(self, tiers: tuple[Fetcher, ...]) -> Fetcher:
+        """Build the ordered middleware chain around ``tiers[0]``, escalating over the rest."""
         base_tier = next(iter(tiers))  # non-empty by construction
-        rl = rate_limit if rate_limit is not None else p.rate_limit
-        rt = retry if retry is not None else p.retry
-        pg = paginate if paginate is not None else p.paginate
-        mw = middleware or p.middleware
-        esc = _escalate(list(tiers[1:])) if len(tiers) > 1 else None  # climb the ladder on a block
+        esc = _escalate(list(tiers[1:])) if len(tiers) > 1 else None
         chain = tuple(
             m for m in (
-                *mw,                             # custom, outermost
-                pg,                              # drives the page loop
+                *self._mw,                       # custom, outermost
+                self._pg,                        # drives the page loop
                 esc,                             # climb the transport ladder on a signal
-                _slot(rt, _retry),               # same request on transient failure
-                _slot(rl, _rate_limit),          # host politeness, innermost
+                _slot(self._rt, _retry),         # same request on transient failure
+                _slot(self._rl, _rate_limit),    # host politeness, innermost
             )
             if m is not None
         )
-        self._fetcher = stack(base_tier, chain)  # base tier + the chain
+        return stack(base_tier, chain)
 
     async def resolve(self, request: Request) -> Document:
         return document(await self._fetcher.fetch(request))
+
+    async def session(self) -> "Resolver":
+        """A stateful resolver: open a persistent SESSION on each tier (a cookie jar / browser
+        context that survives across resolves) and rebuild the same chain over them. Returns a
+        Resolver over the sessions, so a Crawler uses it unchanged -- an authenticated crawl keeps
+        its state across pages. Closing it closes the sessions it opened."""
+        sessions = tuple([await _open_session(t) for t in self._tiers])
+        return Resolver(
+            ladder=sessions, rate_limit=self._rl, retry=self._rt, paginate=self._pg, middleware=self._mw,
+        )
 
     async def aclose(self) -> None:
         for tier in self._tiers:  # close every tier (unused browser tiers are a no-op)

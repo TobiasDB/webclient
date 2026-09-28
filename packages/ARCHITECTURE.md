@@ -115,6 +115,11 @@ The opinionated orchestration over fetch's framework. Owns everything policy.
 - `Resolver(*, ladder=None, profile=None, rate_limit=None, retry=None, paginate=None, middleware=())`
   `.resolve(Request) -> Document`. It stacks the middleware chain around the base tier and parses
   the resulting Snapshot **once** (`document(snap)`).
+- **Sessions compose because a `Session` is `Fetcher`-shaped.** `await resolver.session()` opens a
+  persistent session on each tier and returns a Resolver over them — an authenticated flow keeps
+  its cookies/context across resolves. Since it's still a Resolver, `Crawler(await resolver.session())`
+  is an authenticated crawl with no special path (log in once on the session, then crawl protected
+  pages). Closing it closes the sessions it opened.
 - **Named slots, ordering baked in** (a consumer cannot misorder), outermost → innermost:
   `custom → paginate → escalate(ladder) → retry → rate_limit → base tier`. A slot takes config
   (`retry=3`, `rate_limit=0.5`) or a ready middleware.

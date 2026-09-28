@@ -50,8 +50,9 @@ class HttpFetcher:
         self._client.cookies.clear()  # stateless one-shot: no cookie carry-over between fetches
         return await _perform(self._client, request, self._base_headers)
 
-    def session(self) -> "HttpSession":
-        """A stateful session over its OWN httpx client (a persistent cookie jar)."""
+    async def session(self) -> "HttpSession":
+        """A stateful session over its OWN httpx client (a persistent cookie jar). Async so every
+        backend's ``session()`` has one shape (the browser's must be)."""
         return HttpSession(httpx.AsyncClient(verify=self._verify, proxy=self._proxy), self._base_headers)
 
     async def aclose(self) -> None:

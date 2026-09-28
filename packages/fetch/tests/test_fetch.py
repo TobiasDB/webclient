@@ -258,7 +258,7 @@ def test_http_session_persists_cookies_but_one_shot_fetch_does_not(httpserver: H
 
     async def session_flow() -> bytes:
         f = HttpFetcher()
-        s = f.session()  # stateful: the jar persists
+        s = await f.session()  # stateful: the jar persists
         assert isinstance(s, (HttpSession, Session))
         try:
             await s.fetch(Request(url=httpserver.url_for("/login")))   # sets sid
