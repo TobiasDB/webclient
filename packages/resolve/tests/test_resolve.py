@@ -85,3 +85,39 @@ def test_rate_limit_spaces_same_host_requests() -> None:
 
     elapsed = _run(go())
     assert elapsed >= 0.05  # the second request waited for the host's slot
+
+
+# -- signals: purely-functional detectors over a Document (parse stays bytes -> Document) --
+
+from web.parse import parse_bytes  # noqa: E402
+from web.resolve import Signal, detect, login_wall, pagination, spa  # noqa: E402
+
+
+def test_spa_signal_on_a_client_rendered_shell() -> None:
+    shell = parse_bytes(
+        b"<html><body><div id='root'></div><script src='/app.js'></script></body></html>",
+        content_type="text/html",
+    )
+    s = spa(shell)
+    assert isinstance(s, Signal) and s.name == "spa"
+    # a server-rendered page with real text does NOT fire spa
+    full = parse_bytes(b"<html><body><div id='root'>" + b"content " * 60 + b"</div></body></html>",
+                       content_type="text/html")
+    assert spa(full) is None
+
+
+def test_login_and_pagination_detectors_are_pure() -> None:
+    login = parse_bytes(b"<form><input type='password'></form>", content_type="text/html")
+    assert login_wall(login) is not None and login_wall(login).name == "login_wall"
+    paged = parse_bytes(b"<a rel='next' href='/2'>next</a>", content_type="text/html")
+    assert pagination(paged) is not None
+
+
+def test_detect_runs_all_and_collects_fired() -> None:
+    doc = parse_bytes(
+        b"<html><body><div id='app'></div><script src='/a.js'></script>"
+        b"<input type='password'></body></html>", content_type="text/html")
+    names = {s.name for s in detect(doc)}
+    assert {"spa", "login_wall"} <= names
+    # a JSON document fires nothing (detectors guard on kind)
+    assert detect(parse_bytes(b'{"a":1}', content_type="application/json")) == []

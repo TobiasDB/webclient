@@ -17,5 +17,10 @@ from __future__ import annotations
 
 from .base import Handler, Middleware, Resolver
 from .middleware import rate_limit, retry
+from .signals import DETECTORS, Signal, detect, login_wall, pagination, spa
 
-__all__ = ["Resolver", "Handler", "Middleware", "retry", "rate_limit"]
+__all__ = [
+    "Resolver", "Handler", "Middleware", "retry", "rate_limit",
+    # signals: purely-functional detectors over a Document (parse stays bytes -> Document)
+    "Signal", "detect", "spa", "login_wall", "pagination", "DETECTORS",
+]
