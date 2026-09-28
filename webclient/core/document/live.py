@@ -21,7 +21,7 @@ import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from ...clients import PageScript
-from ...models import ActionEvent, ConsoleEvent, DOMUpdateEvent, NetworkEvent
+from ...kernel.models import ActionEvent, ConsoleEvent, DOMUpdateEvent, NetworkEvent
 from ..web_core import Backing
 
 if TYPE_CHECKING:
@@ -333,7 +333,7 @@ def publish_network_view(doc: "Document") -> None:
     """Under a trace: the page's network joined to what it built (``doc.network()``, bodies left
     out -- they are in the stream), as a ``network.view`` event, so a run view can show each page's
     requests and what each put on the page. A view is a nicety: it never breaks the capture."""
-    from ...models import NetworkViewEvent
+    from ...kernel.models import NetworkViewEvent
     from .network import network_view
 
     try:
@@ -555,7 +555,7 @@ class LiveBacking(Backing):
         """Click an element on the live page (the settled page's primary action when
         ``selector`` is omitted), then settle the resulting DOM. Loud on a miss unless
         ``optional``/``error`` soften it. Returns the document so interactions chain."""
-        from ...errors import lenient
+        from ...kernel.errors import lenient
 
         await self._aact(
             core, "click", selector=selector, timeout=timeout,
@@ -575,7 +575,7 @@ class LiveBacking(Backing):
     ) -> "Document":
         """Type ``text`` into the element matched by ``selector`` on the live page, then
         settle. Loud on a miss unless ``optional``/``error`` soften it. Returns the document."""
-        from ...errors import lenient
+        from ...kernel.errors import lenient
 
         await self._aact(
             core, "write", selector=selector, text=text, timeout=timeout,
@@ -595,7 +595,7 @@ class LiveBacking(Backing):
         """Wait until ``selector`` appears on the live page (or the page settles when it is
         omitted), bounded by ``timeout``. A timeout is a structured miss -- raised unless
         ``optional``/``error`` soften it. Returns the document so ops chain."""
-        from ...errors import lenient, select_error
+        from ...kernel.errors import lenient, select_error
 
         optional = lenient(optional, error)
         try:
@@ -628,7 +628,7 @@ class LiveBacking(Backing):
         """The first element matching ``selector`` on the live page. Queries the live DOM off
         the engine loop, but falls back to an in-memory select on the captured content when
         already running on the loop (a plan the evaluator drives) -- see the note above."""
-        from ...errors import RETURN
+        from ...kernel.errors import RETURN
 
         if self._loop(core).on_loop_thread():
             return _html().select(
@@ -764,7 +764,7 @@ class LiveBacking(Backing):
             if _is_timeout(exc):
                 if optional:
                     return
-                from ...errors import select_error
+                from ...kernel.errors import select_error
 
                 raise select_error(f"{action}: no target for {selector!r}") from exc
             raise
@@ -838,10 +838,10 @@ class LiveBacking(Backing):
         """Select the n-th live-DOM match of ``selector`` as a sub-document (its ``outerHTML``),
         carrying over the element's own interaction mutations. Loud on a miss unless ``error`` is
         ``RETURN``."""
-        from ...errors import RETURN
+        from ...kernel.errors import RETURN
         from . import Document
 
-        from ...errors import select_error
+        from ...kernel.errors import select_error
 
         loc = core._page.locator(selector)
         if await loc.count() <= index:

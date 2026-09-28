@@ -9,7 +9,7 @@ from ..web_core import Backing
 from .models import PageCard
 
 if TYPE_CHECKING:
-    from ...errors import WebError
+    from ...kernel.errors import WebError
     from ..reference import Reference
     from . import Document
 

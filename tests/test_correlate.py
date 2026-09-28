@@ -15,7 +15,7 @@ from webclient.core.document.correlate import (
     XhrRequest,
 )
 from webclient.core.reference import from_url
-from webclient.models import DOMUpdateEvent, NetworkEvent
+from webclient.kernel.models import DOMUpdateEvent, NetworkEvent
 
 
 def _net(index, url, t_s, method="GET"):

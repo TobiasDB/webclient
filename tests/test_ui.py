@@ -100,7 +100,7 @@ def test_waiting_loops_are_listed_and_resumable_over_http(httpserver):
 def test_catalogues_come_from_the_registries():
     """/signals and /errors are rendered by the docs and the website; they mirror the
     registries exactly (every flag, every detector, every catalogued code)."""
-    from webclient.errors import CATALOG
+    from webclient.kernel.errors import CATALOG
     from webclient.signals.registry import DETECTORS, FLAGS
 
     with TestClient(create_app()) as client:

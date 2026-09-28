@@ -7,7 +7,7 @@ walked by 1, a walk started on page 3 going back, later pages fetched off page o
 import pytest
 
 from webclient import WebClient
-from webclient.errors import WebException
+from webclient.kernel.errors import WebException
 from webclient.interface import wq
 
 

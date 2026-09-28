@@ -110,7 +110,7 @@ class JsonBacking(Backing):
         """Render the json to the ``"elements"`` format (its flat leaf list); any other
         format is unsupported and raises."""
         if format != "elements":
-            from ...errors import render_error
+            from ...kernel.errors import render_error
 
             raise render_error(f"no json render format {format!r}")
         return _json_elements(self._data(core))
@@ -137,7 +137,7 @@ class JsonBacking(Backing):
         """Navigate a dotted/indexed ``path`` (``a.b[0].c``) to a sub-value, returned as a
         sub-document. A missing path is a miss -- an empty document when ``optional``, else the
         configured error."""
-        from ...errors import RETURN
+        from ...kernel.errors import RETURN
 
         from .html import _miss
 
@@ -174,7 +174,7 @@ class JsonBacking(Backing):
             return _regex_field(_strip(data[name]), pattern, group)
         # a missing key: same contract as html attr -- raise (structured) by default,
         # a not-ok Field under optional / RETURN. (Never silently return the node.)
-        from ...errors import RAISE, current_policy, select_error
+        from ...kernel.errors import RAISE, current_policy, select_error
 
         if not optional and (error or current_policy()) is RAISE:
             raise select_error(f"no key {name!r}")

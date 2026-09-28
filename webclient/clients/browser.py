@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Any, Literal
 
-from ..errors import RAISE, RETURN, _Policy, select_error
+from ..kernel.errors import RAISE, RETURN, _Policy, select_error
 from .base import Client, ClientFactory
 
 Phase = Literal["init", "load", "inline", "drain", "unload"]

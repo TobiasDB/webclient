@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 from pydantic import BaseModel
 
 from ..query.collection import Collection, Field
-from ..errors import WebError, WebException
+from ..kernel.errors import WebError, WebException
 from ..query.expr import Expr, lazy_root
 from ..query.plan import Plan
 
@@ -49,7 +49,7 @@ class UnsupportedOp(WebException, TypeError):
             f"{op!r} is not available here; this core has "
             f"{sorted(have) or 'no capabilities'}"
         )
-        from ..errors import make
+        from ..kernel.errors import make
 
         WebException.__init__(self, make("op.unsupported", msg, op=op))
         self.op, self.have = op, have
@@ -254,7 +254,7 @@ class WebCore:
         and with its item (a card of a loop over cards), publishing step / result like a plan step."""
         import time
 
-        from ..events import CURRENT_ITEM, CURRENT_STEP
+        from ..kernel.events import CURRENT_ITEM, CURRENT_STEP
 
         tree = rec._read_tree()
         parent, item = at
@@ -268,7 +268,7 @@ class WebCore:
         t0 = time.perf_counter()
         try:
             if bus is not None:
-                from ..models import PlanEvent
+                from ..kernel.models import PlanEvent
 
                 sel = next((a for a in args if isinstance(a, str)), None)
                 bus.publish(PlanEvent(phase="step", document_id=getattr(self, "name", None) or None,
@@ -308,7 +308,7 @@ class WebCore:
         and it publishes the same ``step`` / ``result`` events an executed plan's step does."""
         import time
 
-        from ..events import CURRENT_STEP
+        from ..kernel.events import CURRENT_STEP
 
         engine = self._bound_engine()
         bus = engine.bus if engine is not None else None
@@ -316,7 +316,7 @@ class WebCore:
         t0 = time.perf_counter()
         try:
             if bus is not None:
-                from ..models import PlanEvent
+                from ..kernel.models import PlanEvent
 
                 sel = next((a for a in args if isinstance(a, str)), None)
                 bus.publish(PlanEvent(phase="step", document_id=getattr(self, "name", None) or None,
@@ -334,7 +334,7 @@ class WebCore:
             CURRENT_STEP.reset(token)
 
     async def _recorded_awaitable(self, coro: Any, address: str, bus: Any, op: str, t0: float) -> Any:
-        from ..events import CURRENT_STEP
+        from ..kernel.events import CURRENT_STEP
 
         CURRENT_STEP.set(tuple(address.split("/")))
         try:
@@ -370,7 +370,7 @@ class WebCore:
             own.append(bound)
         engine = self._bound_engine()
         if engine is not None:
-            from ..models import ErrorEvent
+            from ..kernel.models import ErrorEvent
 
             engine.bus.publish(ErrorEvent(
                 error=bound, raised=raised, document_id=getattr(self, "name", None) or None,
@@ -531,7 +531,7 @@ class WebCore:
         ``NoSuchDocument`` we re-run the plan that produced this handle
         (``_remote_source``) to get a fresh id, then retry the op against it. Any other
         failure -- or a handle with no recorded producer -- propagates unchanged."""
-        from ..errors import RemoteError
+        from ..kernel.errors import RemoteError
 
         try:
             return thunk()

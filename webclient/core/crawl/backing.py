@@ -16,7 +16,7 @@ import logging
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, cast
 from urllib.parse import urlparse, urlsplit
 
-from ...errors import make
+from ...kernel.errors import make
 from ...loop import BoundedLoop
 from ..web_core import Backing
 from .canon import (  # URL canon / scope / scoring vocabulary (pure helpers)
@@ -171,7 +171,7 @@ class CrawlBacking(Backing):
 
     def _emit(self, core: "Crawl[Any]", phase: str, **detail: Any) -> None:
         """Publish a :class:`~webclient.models.LoopEvent` for this crawl (loop ``"crawl"``)."""
-        from ...models import LoopEvent
+        from ...kernel.models import LoopEvent
 
         client = getattr(core, "_client", None)
         bus = getattr(client, "bus", None) if client is not None else None
@@ -400,7 +400,7 @@ class CrawlBacking(Backing):
     def _expand_xhr(self, core: "Crawl[Any]", doc: Any, depth: int) -> None:
         """Add the data-API endpoints a browser render observed (its XHR/fetch calls)
         to the frontier, so a browser crawl covers the JSON APIs behind the page."""
-        from ...models import NetworkEvent
+        from ...kernel.models import NetworkEvent
 
         for e in doc.events_of(NetworkEvent):
             if getattr(e, "resource_type", None) not in ("xhr", "fetch"):

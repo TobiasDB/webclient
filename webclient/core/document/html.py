@@ -72,7 +72,7 @@ def _regex_field(value: Any, pattern: "str | None", group: "int | str | None") -
 def _xhr_endpoints(core: "Document") -> "list[str]":
     """The data-API URLs the page fetched (XHR/fetch), deduped in order -- read from
     the captured network events (only present on a browser-rendered document)."""
-    from ...models import NetworkEvent
+    from ...kernel.models import NetworkEvent
 
     out: list[str] = []
     seen: set[str] = set()
@@ -97,7 +97,7 @@ def _correlation(core: "Document") -> "Correlation | None":
     opt-in narrowing that never widens the temporal gate."""
     import os
 
-    from ...models import DOMUpdateEvent, NetworkEvent
+    from ...kernel.models import DOMUpdateEvent, NetworkEvent
     from .correlate import ContentCorrelator, Correlator, OrderingCorrelator
 
     net = [e for e in core._events if isinstance(e, NetworkEvent) and e.index is not None]
@@ -189,7 +189,7 @@ def _miss(parent: "Document", message: str, error: Any) -> "Document":
     not-ok sub-document. ``SelectError`` is both a ``WebException`` (so one
     ``except WebException`` covers fetch failures and misses alike) and a
     ``LookupError`` (back-compat)."""
-    from ...errors import RAISE, current_policy, make, select_error
+    from ...kernel.errors import RAISE, current_policy, make, select_error
 
     if (error or current_policy()) is RAISE:
         raise select_error(message)
@@ -415,7 +415,7 @@ class HtmlBacking(Backing):
             return _html_elements(root)
         if format == "skeleton":
             return self.skeleton(core, **options)
-        from ...errors import render_error
+        from ...kernel.errors import render_error
 
         raise render_error(f"no html render format {format!r}")
 
@@ -441,7 +441,7 @@ class HtmlBacking(Backing):
         """The first element matching a CSS or XPath ``selector``, itself selectable.
         Loud on a miss (pass ``optional=True`` for a not-ok element instead); ``index``
         picks the n-th match."""
-        from ...errors import RETURN
+        from ...kernel.errors import RETURN
 
         els = self._find(core, selector)
         if not (-len(els) <= index < len(els)):
@@ -538,7 +538,7 @@ class HtmlBacking(Backing):
                 return _regex_field(url, pattern, group)
             return self._link_ref(core, url)
         if value is None:  # absent attribute -> raise (structured) by default
-            from ...errors import RAISE, current_policy, select_error
+            from ...kernel.errors import RAISE, current_policy, select_error
 
             if not optional and (error or current_policy()) is RAISE:
                 raise select_error(f"no attribute {name!r}", code="select.no_attribute")

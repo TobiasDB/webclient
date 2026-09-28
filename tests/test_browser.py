@@ -822,7 +822,7 @@ def test_browser_feeds_dom_x_network_correlation_signals(httpserver, wc):
     """A real SPA fetch: the browser driver captures the DOM-mutation phase / inMain
     / added detail AND the network resource_type the ``flags`` facet correlates,
     so the spa flag's xhr_composed / body_injected signals fire (Ask 3)."""
-    from webclient.models import NetworkEvent
+    from webclient.kernel.models import NetworkEvent
 
     httpserver.expect_request("/xhrspa").respond_with_data(
         XHR_SPA, content_type="text/html"

@@ -115,7 +115,7 @@ def test_rrweb_leads_with_meta_and_fullsnapshot_even_when_a_custom_event_ties_th
     # lease) sharing that millisecond used to sort BETWEEN the Meta and the FullSnapshot, so replay
     # started Meta -> Custom with no full document. The head-pull must lead with [Meta, FullSnapshot]
     # regardless of where the FullSnapshot landed -- and deterministically, for either input order.
-    from webclient.models import Event, SnapshotEvent
+    from webclient.kernel.models import Event, SnapshotEvent
 
     snap = SnapshotEvent(topic="snapshot", ts=1000.0, document_id="d1", kind="html",
                          content=b"<html><body><h1>Hi</h1></body></html>", url="http://x/", final_url="http://x/")
@@ -182,14 +182,14 @@ def test_har_transport_matching():
 
 
 def test_har_from_events_skips_bodiless_events():
-    from webclient.models import NetworkEvent
+    from webclient.kernel.models import NetworkEvent
     assert har_from_events([NetworkEvent(status_code=200)])["log"]["entries"] == []
 
 
 def test_loop_events_are_published(httpserver):
     from webclient import LoopEvent
     from webclient.loop import BoundedLoop
-    from webclient.events import EventBus
+    from webclient.kernel.events import EventBus
 
     bus = EventBus()
     seen = []
@@ -269,7 +269,7 @@ def test_browser_har_replay_serves_the_page_offline(httpserver, tmp_path):
 
 def test_trace_stores_a_repeated_body_once_and_reads_it_back(tmp_path):
     # every page of a site re-downloads the same bundles: a body is written once, later copies by hash
-    from webclient.models import NetworkEvent
+    from webclient.kernel.models import NetworkEvent
     from webclient.trace import Trace, read
 
     big = b"x" * 5000
@@ -288,7 +288,7 @@ def test_trace_stores_a_repeated_body_once_and_reads_it_back(tmp_path):
 def test_a_trace_being_written_is_read_on_as_it_grows(tmp_path):
     # a watched run: the service reads a trace still being written -- each event is on disk as it is
     # written (never a half line), and a reader reads on from where it was, bodies restored
-    from webclient.models import NetworkEvent
+    from webclient.kernel.models import NetworkEvent
     from webclient.trace import Trace, read
 
     path = tmp_path / "live.jsonl"

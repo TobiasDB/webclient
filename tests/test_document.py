@@ -96,7 +96,7 @@ def test_select_miss_is_a_structured_webexception():
     # one `except WebException` now covers fetch failures AND selection misses,
     # and it stays a LookupError for back-compat.
     from webclient import WebException
-    from webclient.errors import SelectError
+    from webclient.kernel.errors import SelectError
 
     doc = make_doc()
     with pytest.raises(WebException) as ei:

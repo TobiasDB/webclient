@@ -126,7 +126,7 @@ def _same_page(frame: str, page: str) -> bool:
 def _attribute(core: "Document", reqs: "list[NetRequest]", facts: "list[dict[str, Any]]") -> "tuple[int, int]":
     """Fill each data request's ``phase`` and ``produced`` from the correlation. Returns the counts
     of nodes before any data request / tied to one."""
-    from ...models import DOMUpdateEvent, NetworkEvent
+    from ...kernel.models import DOMUpdateEvent, NetworkEvent
     from .correlate import ContentCorrelator, Correlator, OrderingCorrelator
     from .html import tree
 

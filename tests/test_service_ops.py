@@ -321,8 +321,8 @@ def test_concurrent_runs_keep_their_own_traces(tmp_path):
 
 
 def test_the_bus_stamps_the_run_and_attributes_a_pages_later_events_to_it():
-    from webclient.events import EventBus, run_scope
-    from webclient.models import Event
+    from webclient.kernel.events import EventBus, run_scope
+    from webclient.kernel.models import Event
 
     bus = EventBus()
     seen: list[Event] = []
@@ -341,7 +341,7 @@ def test_the_engine_loop_carries_the_run_into_its_coroutines():
     import asyncio
 
     from webclient.core.client.loop import EngineLoop
-    from webclient.events import CURRENT_RUN, run_scope
+    from webclient.kernel.events import CURRENT_RUN, run_scope
 
     loop = EngineLoop()
     try:

@@ -231,7 +231,7 @@ def _spa(rendered: bytes, static: bytes, xhr_url: str | None = None) -> Document
     d._static_html = static
     if xhr_url:
         from webclient.core.reference import from_url
-        from webclient.models import NetworkEvent
+        from webclient.kernel.models import NetworkEvent
 
         e = NetworkEvent(resource_type="fetch")
         e.request = from_url(xhr_url)

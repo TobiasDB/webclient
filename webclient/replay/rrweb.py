@@ -26,10 +26,10 @@ from html import escape
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin
 
-from ..models import ActionEvent, DOMEvent, DOMUpdateEvent, Event, SnapshotEvent, TraceEvent
+from ..kernel.models import ActionEvent, DOMEvent, DOMUpdateEvent, Event, SnapshotEvent, TraceEvent
 
 if TYPE_CHECKING:
-    from ..events import EventRegistry
+    from ..kernel.events import EventRegistry
 
 __all__ = ["to_rrweb", "from_rrweb", "html_to_node", "node_to_html"]
 
@@ -165,7 +165,7 @@ def from_rrweb(rr: "list[dict[str, Any]]", *, document_id: "str | None" = None,
                registry: "EventRegistry | None" = None) -> "list[Event]":
     """See the module doc. Timestamps (ms) become ``ts``; ``document_id`` is stamped on the
     events that lack one."""
-    from ..events import EventRegistry
+    from ..kernel.events import EventRegistry
 
     reg = registry or EventRegistry()
     out: list[Event] = []

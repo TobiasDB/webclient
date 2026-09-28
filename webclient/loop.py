@@ -141,7 +141,7 @@ class BoundedLoop(Generic[S, O, D]):
         """Publish a :class:`~webclient.models.LoopEvent` (a no-op without a bus)."""
         if self.bus is None:
             return
-        from .models import LoopEvent
+        from .kernel.models import LoopEvent
 
         self.bus.publish(LoopEvent(loop=self.name, phase=phase, round=round_index, detail=detail))  # type: ignore[arg-type]
 

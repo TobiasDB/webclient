@@ -26,12 +26,12 @@ from .core.web_core import _wrap_result as wrap  # a list of cores -> a Collecti
 if TYPE_CHECKING:
     from .query.collection import Collection, Field
     from .core.document import Element
-    from .events import EventBus
-    from .models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
+    from .kernel.events import EventBus
+    from .kernel.models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event
     from .clients import ClientPool, WaitConfig
     from .core.document.models import DatasetHint, Flag, NetworkView, IndexedElement, Metadata, PageCard, PatternHint, Signal, Structure, Transport, XhrCall
     from .core.client.models import Robots
-    from .errors import WebError
+    from .kernel.errors import WebError
 
 T = TypeVar("T")
 S = TypeVar("S")

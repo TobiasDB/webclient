@@ -117,7 +117,7 @@ def test_conservative_no_false_positives():
 
 
 def test_retriable_statuses_match_the_policy():
-    from webclient.errors import error_for
+    from webclient.kernel.errors import error_for
 
     assert error_for(503).retriable and error_for(500).retriable
     assert error_for(429).retriable and error_for(0).retriable  # transport

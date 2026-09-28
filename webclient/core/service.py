@@ -58,7 +58,7 @@ def wire_models() -> "dict[str, type[Any]]":
     ``{"__model__": ...}`` payload."""
     global _WIRE_MODELS_CACHE
     if _WIRE_MODELS_CACHE is None:
-        from ..models import (
+        from ..kernel.models import (
             CORE_EVENTS,
             Event,
         )
@@ -121,7 +121,7 @@ def _raise_for_body(resp: Any) -> None:
     """Turn a non-2xx service response into a structured ``RemoteError``."""
     if 200 <= resp.status_code < 300:
         return
-    from ..errors import RemoteError, WebError
+    from ..kernel.errors import RemoteError, WebError
 
     err: WebError | None = None
     try:  # the service sends {"error": {type, message, status_code, ...}}

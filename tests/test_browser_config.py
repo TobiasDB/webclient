@@ -6,7 +6,7 @@ from webclient import BrowserConfig, WebClient
 from webclient.clients.browser import BrowserFactory, _random_fingerprint
 from webclient.core.client import _looks_like_bot_block
 from webclient.core.document import Document
-from webclient.errors import error_for
+from webclient.kernel.errors import error_for
 
 
 def test_browser_config_defaults_to_stealth():

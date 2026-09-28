@@ -199,7 +199,7 @@ class Crawl(SessionCore, ICrawl[T], Generic[T]):
         round. Raises if the crawl is not waiting."""
         if self._pending is None:
             raise RuntimeError("the crawl is not waiting for a decision")
-        from ...models import LoopEvent
+        from ...kernel.models import LoopEvent
 
         self._pending = None
         engine = getattr(self._client, "_the_engine", lambda: None)()

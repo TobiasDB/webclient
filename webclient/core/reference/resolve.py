@@ -36,7 +36,7 @@ class ResolveBacking(Backing):
         does not silently re-fetch un-proxied); the browser tier is taken from it. ``browser``
         alone still works for the common case. ``keep_alive`` (browser only) marks the live
         page as caller-owned so a plan won't auto-release it. ``wait`` picks the render wait."""
-        from ...errors import lenient
+        from ...kernel.errors import lenient
         from ...policy import Resolve
 
         pol: "Resolve | None" = None

@@ -110,7 +110,7 @@ def _load_mut(*, in_main=True):
     # a load-phase "added" mutation (position/count only; the ratio is measured from
     # net text growth via _render_stats, not from mutations -- so reorganising DOM
     # doesn't inflate it).
-    from webclient.events import DOMUpdateEvent
+    from webclient.kernel.events import DOMUpdateEvent
 
     return DOMUpdateEvent(
         kind="added", detail={"ids": [], "phase": "load", "added": 1, "inMain": in_main}

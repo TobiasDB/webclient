@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from ..clients import BrowserFactory, ClientPool, HTTPXFactory
-from ..events import EventBus
+from ..kernel.events import EventBus
 
 log = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ class Engine:
     def _resource_event(self, what: str, detail: dict[str, Any]) -> None:
         """The pool's observer: a lease waited / was created / the pool is exhausted / a
         quota held -- published as a ``ResourceEvent`` (the scalability stream, N15)."""
-        from ..models import ResourceEvent
+        from ..kernel.models import ResourceEvent
 
         self.bus.publish(ResourceEvent(source="pool", detail={"what": what, **detail}))
 

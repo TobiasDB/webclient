@@ -91,7 +91,7 @@ class Pipeline:
     def _emit(self, stage: str, phase: str, **detail: Any) -> None:
         if self.bus is None:
             return
-        from .models import PipelineEvent
+        from .kernel.models import PipelineEvent
 
         self.bus.publish(PipelineEvent(pipeline=self.name, stage=stage, phase=phase, detail=detail))  # type: ignore[arg-type]
 

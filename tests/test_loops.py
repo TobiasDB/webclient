@@ -5,7 +5,7 @@ Pipeline type (N12)."""
 import pytest
 
 from webclient import Ask, BoundedLoop, LoopEvent, Pipeline, PipelineEvent, Stage, WebClient
-from webclient.events import EventBus
+from webclient.kernel.events import EventBus
 
 
 def test_bounded_loop_step_run_and_ask_resume():

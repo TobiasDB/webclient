@@ -28,11 +28,11 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator
 
-from .events import EventRegistry
-from .models import Event, SnapshotEvent, TraceEvent
+from .kernel.events import EventRegistry
+from .kernel.models import Event, SnapshotEvent, TraceEvent
 
 if TYPE_CHECKING:
-    from .events import EventBus, Subscription
+    from .kernel.events import EventBus, Subscription
 
 SCHEMA_VERSION = 2
 log = logging.getLogger(__name__)
@@ -280,7 +280,7 @@ class TraceReader:
     # -- views ----------------------------------------------------------------
     def of(self, topic: str) -> "list[Event]":
         """The events whose topic matches ``topic`` by dotted prefix."""
-        from .models import topic_matches
+        from .kernel.models import topic_matches
 
         return [e for e in self.events if topic_matches(topic, e.topic)]
 

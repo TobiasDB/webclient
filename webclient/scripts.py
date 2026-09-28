@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable, List, Literal
 from .clients.browser import PageScript, Phase
 
 if TYPE_CHECKING:
-    from .events import EventBus
+    from .kernel.events import EventBus
 
 log = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ class ScriptRegistry:
 
     def for_topic(self, topic: str) -> "List[Script]":
         """The active topic scripts whose ``on`` prefix-matches ``topic``."""
-        from .models import topic_matches
+        from .kernel.models import topic_matches
 
         return [s for s in self._scripts.values()
                 if s.topic is not None and self.active(s) and topic_matches(s.topic, topic)]
@@ -187,7 +187,7 @@ class ScriptRegistry:
         """Publish a :class:`~webclient.models.ScriptEvent` for one run (a no-op without a bus)."""
         if self._bus is None:
             return
-        from .models import ScriptEvent
+        from .kernel.models import ScriptEvent
 
         detail: dict[str, Any] = {}
         if error:

@@ -358,7 +358,7 @@ def views(doc: Any, include: "list[str]") -> "dict[str, Any]":
     if "content" in want:
         out["content"] = (doc.content or b"").decode(doc.encoding or "utf-8", "replace")
     if "rrweb" in want and doc.kind == "html":
-        from .models import SnapshotEvent
+        from .kernel.models import SnapshotEvent
         from .replay.rrweb import to_rrweb
 
         snap = SnapshotEvent(url=doc.url, final_url=doc.final_url or doc.url, kind="html", content=doc.content,

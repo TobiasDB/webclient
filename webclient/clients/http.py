@@ -81,7 +81,7 @@ class HTTPXClient(Client):
         import time
 
         from ..core.document import Document
-        from ..errors import error_for
+        from ..kernel.errors import error_for
 
         start = time.monotonic()
         try:
@@ -120,7 +120,7 @@ class HTTPXClient(Client):
             set_cookies.update(dict(hop.cookies))
         doc._set_cookies = set_cookies
         if resp.status_code == 599 and resp.headers.get("x-webclient-har") == "miss":
-            from ..errors import make
+            from ..kernel.errors import make
 
             doc.error = make("replay.har_miss", f"no HAR entry for {ref.method.upper()} {doc.url}")
         elif not (200 <= resp.status_code < 300):

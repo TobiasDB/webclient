@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..models import Event, SnapshotEvent
+from ..kernel.models import Event, SnapshotEvent
 from ..trace import TraceReader, read
 
 if TYPE_CHECKING:

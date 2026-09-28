@@ -13,13 +13,13 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload  # noqa: F401
 
 from pydantic import BaseModel
 
-from ...errors import WebError
+from ...kernel.errors import WebError
 
 if TYPE_CHECKING:
     # cores/collections the generated ops return (the value models they return
     # are defined below in this module).
     from ...query.collection import Collection, Field  # noqa: F401
-    from ...models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event  # noqa: F401
+    from ...kernel.models import ActionEvent, ConsoleEvent, DOMUpdateEvent, Event  # noqa: F401
     from ...interface import LazyDocument  # noqa: F401
     from ..reference import Reference  # noqa: F401
     from . import Document  # noqa: F401

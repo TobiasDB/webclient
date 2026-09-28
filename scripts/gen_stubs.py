@@ -36,7 +36,7 @@ from webclient.core.crawl import Crawl  # noqa: E402
 from webclient.core.document import Document, Element  # noqa: E402
 from webclient.core.reference import Reference  # noqa: E402
 from webclient.core.session import Session  # noqa: E402
-from webclient.errors import WebError  # noqa: E402
+from webclient.kernel.errors import WebError  # noqa: E402
 from webclient.core.document.models import DatasetHint, NetworkView, PatternHint  # noqa: E402
 from webclient.core.document.models import (  # noqa: E402
     Flag,
@@ -45,13 +45,13 @@ from webclient.core.document.models import (  # noqa: E402
     Structure,
     Transport,
 )
-from webclient.models import (  # noqa: E402
+from webclient.kernel.models import (  # noqa: E402
     ActionEvent,
     ConsoleEvent,
     DOMUpdateEvent,
     Event,
 )
-from webclient.models import E as _EventTypeVar  # noqa: E402
+from webclient.kernel.models import E as _EventTypeVar  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SURFACES = ROOT / "webclient" / "interface.py"  # every dispatch-view stub

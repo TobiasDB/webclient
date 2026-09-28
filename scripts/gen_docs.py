@@ -18,7 +18,7 @@ DOCS = ROOT / "docs"
 
 
 def errors_md() -> str:
-    from webclient.errors import CATALOG, REMEDIES
+    from webclient.kernel.errors import CATALOG, REMEDIES
 
     out = [
         "# Error catalogue",

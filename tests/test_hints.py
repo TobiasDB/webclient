@@ -41,7 +41,7 @@ def test_attr_other_is_field_str():
 
 
 def test_attr_with_error_kwarg_still_binds_str_overload():
-    from webclient.errors import RETURN
+    from webclient.kernel.errors import RETURN
 
     got = return_type(Document, "attr", ("data-x",), {"error": RETURN})
     assert typing.get_origin(got) is Field

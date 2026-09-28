@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, overload
 
-from ...models import E
+from ...kernel.models import E
 from ..web_core import Backing
 
 if TYPE_CHECKING:
-    from ...models import ActionEvent, Event
+    from ...kernel.models import ActionEvent, Event
     from . import Document
 
 
@@ -41,14 +41,14 @@ class EventBacking(Backing):
         """Events narrowed to a kind: by an ``Event`` subclass (isinstance) or by a topic
         prefix given as a string."""
         if isinstance(event_type, str):  # a topic prefix
-            from ...models import topic_matches
+            from ...kernel.models import topic_matches
 
             return [e for e in core._events if topic_matches(event_type, e.topic)]
         return [e for e in core._events if isinstance(e, event_type)]
 
     def action_events(self, core: "Document") -> "list[ActionEvent]":
         """The interaction subset of the events (clicks/writes/…); empty until a live document."""
-        from ...models import ActionEvent
+        from ...kernel.models import ActionEvent
 
         return [e for e in core._events if isinstance(e, ActionEvent)]
 

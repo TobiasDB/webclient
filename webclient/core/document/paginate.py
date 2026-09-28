@@ -81,7 +81,7 @@ _REMOVED = {
 
 
 def _invalid(message: str) -> Exception:
-    from ...errors import WebException, make
+    from ...kernel.errors import WebException, make
 
     return WebException(make("paginate.invalid", message))
 
@@ -379,7 +379,7 @@ async def _act(walk: Walk, cfg: PaginationConfig, client: Any) -> None:
 
     doc = walk.current
     if getattr(doc, "_page", None) is None:
-        from ...errors import WebException, make
+        from ...kernel.errors import WebException, make
 
         raise WebException(make("paginate.not_live", "click= / scroll= load more on a HELD browser page; resolve it with browser=True"))
     action = (

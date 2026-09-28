@@ -5,7 +5,7 @@ import pytest
 
 from webclient import Script, ScriptEvent, ScriptPolicy, ScriptRegistry, WebClient
 from webclient.clients import PageScript
-from webclient.events import EventBus
+from webclient.kernel.events import EventBus
 
 
 def test_registry_names_declares_and_toggles():
@@ -31,7 +31,7 @@ def test_topic_scripts_arm_the_bus_and_report():
     reg.bind(bus, fired.append)
     reg.register(Script("probe", "() => 1", on="action"))
     assert reg.get("probe").topic == "action" and reg.get("probe").phase is None
-    from webclient.models import ActionEvent, ConsoleEvent
+    from webclient.kernel.models import ActionEvent, ConsoleEvent
     bus.publish(ActionEvent(action="click"))
     bus.publish(ConsoleEvent(level="log", text="x"))
     assert [e.topic for e in fired] == ["action"]

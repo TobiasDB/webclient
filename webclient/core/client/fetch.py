@@ -60,7 +60,7 @@ class FetchBacking(Backing):
         :class:`~webclient.clients.WaitConfig`, browser only) picks the render
         wait strategy + timeout behaviour. An IO op: the interface bridges it
         (``dispatch``)."""
-        from ...errors import lenient
+        from ...kernel.errors import lenient
 
         ref = self.ref(core, url, **kw)
         return await core.afetch(

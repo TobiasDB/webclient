@@ -57,7 +57,7 @@ def test_merge_nests_as_a_field_and_streams(httpserver):
 def test_positional_column_without_alias_is_rejected(httpserver):
     import pytest
 
-    from webclient.errors import WebException
+    from webclient.kernel.errors import WebException
 
     httpserver.expect_request("/b").respond_with_data(TABLE, content_type="text/html")
     plan = wq.reference(httpserver.url_for("/b")).resolve().extract(wq.doc.select("h1").attr("text")).project()

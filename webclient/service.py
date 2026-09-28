@@ -24,8 +24,8 @@ from typing import Any, cast
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
-from .errors import WebError, WebException
-from .events import run_scope
+from .kernel.errors import WebError, WebException
+from .kernel.events import run_scope
 from .query.expr import from_plan
 from .interface import Document, Reference, WebClient
 from .settings import current as _settings
@@ -284,7 +284,7 @@ def _error(
     rebuilds the same object), enriched from the error catalogue by ``type`` when no
     ``error`` is given. The inner ``status_code`` defaults to the HTTP status but carries
     the *upstream* status for a proxied fetch failure (a 502 wrapping an origin 500)."""
-    from .errors import CATALOG
+    from .kernel.errors import CATALOG
 
     if error is None:
         spec = next((s for s in CATALOG.values() if s.type == type_), None)
@@ -543,7 +543,7 @@ def create_app(
                 error=err,
             )
         except AttributeError as exc:  # an op the object does not have (a malformed plan), not a crash
-            from .errors import make
+            from .kernel.errors import make
 
             err = make("op.unsupported", f"the plan applies an op its object does not have: {exc}")
             return _error(422, err.type, str(exc), hint=err.hint, error=err)
@@ -729,7 +729,7 @@ def create_app(
         """The error catalogue: every code with its type, title, remedy, hint, retriable
         default, status and the longer doc."""
         _auth(authorization)
-        from .errors import CATALOG
+        from .kernel.errors import CATALOG
 
         return [
             {"code": s.code, "type": s.type, "title": s.title, "remedy": s.remedy, "hint": s.hint,
@@ -1007,7 +1007,7 @@ def create_app(
         def publish_sample(detail: "dict[str, Any]") -> None:
             # a resource SAMPLE of this run (memory, CPU, the pool): on the bus as the run's, so its live events
             # and its trace both carry it (the sampler's thread has no run context: say whose it is)
-            from .models import ResourceEvent
+            from .kernel.models import ResourceEvent
 
             engine.bus.publish(ResourceEvent(source="sampler", run_id=run_id, detail={"what": "sample", **detail}))
 
@@ -1058,7 +1058,7 @@ def create_app(
             except WebException as exc:
                 status, run["error"] = "error", exc.error.model_dump(mode="json")
             except Exception as exc:  # noqa: BLE001 - the run reports it; the server stays up
-                from .errors import make
+                from .kernel.errors import make
 
                 code = "op.unsupported" if isinstance(exc, AttributeError) else "remote.failed"
                 status, run["error"] = "error", make(code, f"{type(exc).__name__}: {exc}").model_dump(mode="json")

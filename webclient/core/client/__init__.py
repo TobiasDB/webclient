@@ -25,9 +25,9 @@ from ...clients import (
     WaitEvent,
 )
 from ...query.collection import Field
-from ...errors import WebError, WebException, error_for, make
-from ...events import EventBus
-from ...models import NavigationEvent, NetworkEvent, PlanEvent, SnapshotEvent
+from ...kernel.errors import WebError, WebException, error_for, make
+from ...kernel.events import EventBus
+from ...kernel.models import NavigationEvent, NetworkEvent, PlanEvent, SnapshotEvent
 from ...query.executor import aevaluate, astream, evaluate
 from ..document import Document
 from ...policy import policy_headers
@@ -162,7 +162,7 @@ def _row_event(count: int, row: Any) -> Any:
     recorded run replays its rows as they arrived, not just that some did."""
     import json
 
-    from ...models import PlanEvent
+    from ...kernel.models import PlanEvent
     from ...query.collection import Field
 
     value = row.get() if isinstance(row, Field) else row

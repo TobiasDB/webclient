@@ -244,7 +244,7 @@ class FlagsBacking(Backing):
 
     def xhr_endpoints(self, core: "Document") -> "list[XhrCall]":
         """The XHR/fetch calls a browser render captured -- an SPA's real data sources."""
-        from ...models import NetworkEvent
+        from ...kernel.models import NetworkEvent
 
         return [
             XhrCall(

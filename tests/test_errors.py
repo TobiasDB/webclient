@@ -7,7 +7,7 @@ import pytest
 
 import webclient
 from webclient import WebClient, WebError
-from webclient.errors import CATALOG, REMEDIES, error_for, make, select_error
+from webclient.kernel.errors import CATALOG, REMEDIES, error_for, make, select_error
 
 
 def test_every_code_used_in_the_package_is_catalogued():

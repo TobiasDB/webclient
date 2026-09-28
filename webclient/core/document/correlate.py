@@ -22,7 +22,7 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel
 
 from ...dom import json_leaves, parse_json
-from ...models import DOMUpdateEvent, NetworkEvent
+from ...kernel.models import DOMUpdateEvent, NetworkEvent
 
 
 class XhrRequest(BaseModel):

@@ -5,8 +5,8 @@ WebError is published as an ErrorEvent bound to its op/subject and lands on ``do
 import pytest
 
 from webclient import RETURN, ErrorEvent, LoopEvent, WebClient, WebException
-from webclient.events import EventBus, EventRegistry
-from webclient.models import ActionEvent
+from webclient.kernel.events import EventBus, EventRegistry
+from webclient.kernel.models import ActionEvent
 
 
 def test_bus_history_and_since():

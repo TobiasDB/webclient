@@ -381,7 +381,7 @@ def split_alias(expr: Any) -> "tuple[Any, Any]":
     (the value expression, the name -- a literal or an Expr evaluated per element)."""
     got = _alias_at(expr)
     if got is None:
-        from ..errors import WebException, make
+        from ..kernel.errors import WebException, make
 
         raise WebException(make("plan.invalid", "a positional extract column needs .alias(name): extract(expr.alias('key')) or extract(expr.alias(<expr>))"))
     return got

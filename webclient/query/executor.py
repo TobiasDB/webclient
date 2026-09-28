@@ -226,7 +226,7 @@ _READ_FROM: ContextVar[Any] = ContextVar("webclient_read_from", default=None)
 def _nested_address() -> tuple[str, ...]:
     """The address a (sub-)plan starting NOW sits at: the current step's, with the segment its caller
     pushed (``kw:title``) -- or ``sub`` when the caller named none (a bound op's own sub-plan)."""
-    from ..events import CURRENT_STEP
+    from ..kernel.events import CURRENT_STEP
 
     cur = CURRENT_STEP.get()
     return (*cur, "sub") if cur and cur[-1].isdigit() else cur
@@ -236,7 +236,7 @@ def _nested_address() -> tuple[str, ...]:
 def _plan_id(plan: "Plan", client: Any = None) -> Iterator[None]:
     """The plan a TOP-LEVEL evaluation runs (a sub-plan's events belong to the plan it is part of). It ANNOUNCES
     itself -- ``PlanEvent(phase="plan")`` with its id and blob -- so a trace knows every plan that ran in it."""
-    from ..events import CURRENT_PLAN
+    from ..kernel.events import CURRENT_PLAN
 
     if CURRENT_PLAN.get() is not None:
         yield
@@ -244,7 +244,7 @@ def _plan_id(plan: "Plan", client: Any = None) -> Iterator[None]:
     token = CURRENT_PLAN.set(plan.id)
     bus = getattr(client, "bus", None) if client is not None else None
     if bus is not None:
-        from ..models import PlanEvent
+        from ..kernel.models import PlanEvent
 
         try:
             bus.publish(PlanEvent(phase="plan", detail={"plan_id": plan.id, "blob": plan.to_blob()}))
@@ -268,7 +268,7 @@ def _plan_at(at: tuple[str, ...]) -> Iterator[None]:
 @contextmanager
 def _step_at(index: int) -> Iterator[None]:
     """Run as the step at ``index`` of the plan being walked (the bus stamps it on every event)."""
-    from ..events import CURRENT_STEP
+    from ..kernel.events import CURRENT_STEP
 
     token = CURRENT_STEP.set((*_PLAN_AT.get(), str(index)))
     try:
@@ -281,7 +281,7 @@ def _step_at(index: int) -> Iterator[None]:
 def arg_segment(segment: "str | None") -> Iterator[None]:
     """Descend into the arg ``segment`` (``kw:title``, ``arg:0``) of the running step: a sub-plan
     evaluated inside is addressed under it."""
-    from ..events import CURRENT_STEP
+    from ..kernel.events import CURRENT_STEP
 
     if not segment:
         yield
@@ -503,7 +503,7 @@ def _note_parallel(n: int, limit: int, steps: "list[Step] | None", client: Any) 
     bus = getattr(client, "bus", None) if client is not None else None
     if bus is None:
         return
-    from ..models import PlanEvent
+    from ..kernel.models import PlanEvent
 
     bus.publish(PlanEvent(phase="parallel", detail={
         "n": n, "limit": max(min(limit, n), 1) if n else 0,
@@ -522,7 +522,7 @@ def _note_fanout(value: Any, name: str, selector: "str | None", result: Any, cli
         n = len(result)
     except TypeError:
         return
-    from ..models import PlanEvent
+    from ..kernel.models import PlanEvent
 
     bus.publish(PlanEvent(phase="fanout", document_id=getattr(value, "name", None) or None,
                           detail={"op": name, "selector": selector, "n": n}))
@@ -610,7 +610,7 @@ def _note_result(step: Step, value: Any, t0: float, client: Any, exc: "BaseExcep
     bus = getattr(client, "bus", None) if client is not None else None
     if bus is None:
         return
-    from ..models import PlanEvent
+    from ..kernel.models import PlanEvent
 
     detail: "dict[str, Any]" = {"op": step.name, "ms": round((time.perf_counter() - t0) * 1000, 2)}
     if exc is not None:
@@ -628,7 +628,7 @@ def _note_result(step: Step, value: Any, t0: float, client: Any, exc: "BaseExcep
     # an eager project's rows, one per item (a streamed project publishes each as its item finishes): which item
     # each row came from -- in order, the rows ARE the items (a filter drops before the fan-out's indices are given)
     if exc is None and step.name == "project" and isinstance(value, list) and value and all(isinstance(r, dict) for r in value):
-        from ..events import CURRENT_ITEM
+        from ..kernel.events import CURRENT_ITEM
 
         for k, row in enumerate(value):
             token = CURRENT_ITEM.set((*CURRENT_ITEM.get(), k))
@@ -649,7 +649,7 @@ def _note_step(value: Any, name: str, args: "list[Any]", client: Any) -> None:
     bus = getattr(client, "bus", None) if client is not None else None
     if bus is None:
         return
-    from ..models import PlanEvent
+    from ..kernel.models import PlanEvent
 
     selector = next((a for a in args if isinstance(a, str)), None)
     bus.publish(PlanEvent(
@@ -676,7 +676,7 @@ async def _check_divergence(doc: Any, recorded: str, client: Any) -> None:
     )
     bus = getattr(client, "bus", None)
     if bus is not None:
-        from ..models import PlanEvent
+        from ..kernel.models import PlanEvent
 
         bus.publish(PlanEvent(
             phase="divergence",
@@ -920,7 +920,7 @@ async def _as_item(i: int, fn: Callable[[X], Awaitable[Y]], item: X, bus: Any) -
     """Run one fan-out item with its index path set (so every event it publishes carries it),
     publishing ``PlanEvent(phase="item")`` when it ends: ``ok``, ``dropped`` (filtered out) or
     ``failed`` (with the error code)."""
-    from ..events import CURRENT_ITEM
+    from ..kernel.events import CURRENT_ITEM
 
     token = CURRENT_ITEM.set((*CURRENT_ITEM.get(), i))
     try:
@@ -930,13 +930,13 @@ async def _as_item(i: int, fn: Callable[[X], Awaitable[Y]], item: X, bus: Any) -
             raise
         except BaseException as exc:
             if bus is not None:
-                from ..models import PlanEvent
+                from ..kernel.models import PlanEvent
 
                 err = getattr(exc, "error", None)
                 bus.publish(PlanEvent(phase="item", detail={"status": "failed", "code": getattr(err, "code", type(exc).__name__)}))
             raise
         if bus is not None:
-            from ..models import PlanEvent
+            from ..kernel.models import PlanEvent
 
             bus.publish(PlanEvent(phase="item", detail={"status": "dropped" if out is _DROP else "ok"}))
         return out

@@ -163,7 +163,7 @@ class Settings(BaseSettings):
 
     def configure_logging(self) -> "logging.Logger":
         """Attach a stream handler at ``log_level`` (no-op when it is ``None``)."""
-        from .log import configure_logging
+        from .kernel.log import configure_logging
 
         return configure_logging(self.log_level)
 
