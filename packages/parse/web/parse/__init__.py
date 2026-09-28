@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from .document import Document, Element
 from .metadata import Metadata, metadata
+from .records import RecordRegion, find_records
 from .structure import Heading, outline, skeleton
 from .sniff import Kind, sniff_charset, sniff_kind
 
@@ -31,5 +32,5 @@ def parse(content: bytes, *, content_type: str | None = None, url: str = "") -> 
     )
 
 
-__all__ = ["parse", "Document", "Element", "Metadata", "metadata", "Heading", "outline", "skeleton",
-           "Kind", "sniff_kind", "sniff_charset"]
+__all__ = ["parse", "Document", "Element", "Metadata", "metadata", "RecordRegion", "find_records",
+           "Heading", "outline", "skeleton", "Kind", "sniff_kind", "sniff_charset"]

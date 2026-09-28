@@ -144,10 +144,56 @@ def test_regex_extracts_from_free_text() -> None:
 
 
 def test_skeleton_keeps_semantics_drops_noise() -> None:
-    html = b'<div id="app" class="grid css-1a2b3c"><script>var x=1</script><span class="price">$5</span></div>'
+    html = b'<div id="app" class="catalog grid css-1a2b3c"><script>var x=1</script><span class="price">$5</span></div>'
     doc = parse(html, content_type="text/html")
     sk = doc.skeleton()
-    assert "div#app.grid" in sk           # id + semantic class kept
+    assert "div#app.catalog" in sk        # id + semantic class kept
     assert "css-1a2b3c" not in sk         # hashed build class dropped
+    assert "grid" not in sk               # tailwind utility class dropped
     assert "script" not in sk             # noise subtree skipped
     assert "span.price" in sk
+
+
+# -- record-region detection + JSON navigation --
+
+
+def test_find_records_locates_the_dataset_not_the_nav() -> None:
+    html = b"""<html><body>
+      <nav><a href=/1>Home</a><a href=/2>About</a><a href=/3>Contact</a><a href=/4>Blog</a></nav>
+      <main><ul class=list>
+        <li class=item><span class=t>A</span><span class=p>$1</span></li>
+        <li class=item><span class=t>B</span><span class=p>$2</span></li>
+        <li class=item><span class=t>C</span><span class=p>$3</span></li>
+        <li class=item><span class=t>D</span><span class=p>$4</span></li>
+      </ul></main>
+    </body></html>"""
+    doc = parse(html, content_type="text/html")
+    regs = doc.records()
+    assert regs, "expected at least one record region"
+    top = regs[0]
+    assert top.item_selector == "li.item" and top.count == 4   # the dataset, not the 4-link nav
+    # the richer content list outranks the bare-link nav menu
+    assert top.score >= max(r.score for r in regs)
+
+
+def test_records_unwrap_anonymous_tailwind_wrappers() -> None:
+    # each record sits alone inside a class-less wrapper div (the SPA/Tailwind norm)
+    html = b"""<div id=grid>
+      <div class="mt-4 flex"><article class=card><h3>One</h3></article></div>
+      <div class="mt-4 flex"><article class=card><h3>Two</h3></article></div>
+      <div class="mt-4 flex"><article class=card><h3>Three</h3></article></div>
+    </div>"""
+    doc = parse(html, content_type="text/html")
+    top = doc.records()[0]
+    assert top.item_selector == "article.card" and top.count == 3   # inner record, not the div wrapper
+
+
+def test_json_dotted_path_and_skeleton() -> None:
+    doc = parse(b'{"data": {"results": [{"name": "Ann", "age": 30}, {"name": "Bo"}]}, "next": "c1"}',
+                content_type="application/json")
+    assert doc.at("data.results[0].name") == "Ann"
+    assert doc.at("data.results[1].name") == "Bo"
+    assert doc.at("next") == "c1"
+    assert doc.at("data.missing") is None and doc.at("data.results[9]") is None
+    sk = doc.json_skeleton()
+    assert "results: [2]" in sk and "name: string" in sk and "age: number" in sk  # merged element shape

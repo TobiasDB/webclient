@@ -10,18 +10,17 @@ belong to a higher layer that annotates this base.
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
+
+from .classes import semantic_classes
 
 if TYPE_CHECKING:
     from .document import Document
 
 #: subtrees that are noise in a structural outline -- skipped whole.
 _SKIP = frozenset({"script", "style", "noscript", "template", "svg", "path", "link", "meta"})
-#: a hashed/build segment: 5+ alphanumerics containing a digit (``1a2b3c``, ``jsx123456``).
-_HASH_SEG = re.compile(r"^(?=[a-z0-9]*\d)[a-z0-9]{5,}$", re.I)
 
 
 class Heading(BaseModel):
@@ -36,14 +35,9 @@ def _tag(node: Any) -> str:
     return t.lower() if isinstance(t, str) else ""
 
 
-def _is_hashed(token: str) -> bool:
-    """A class token is noise if any hyphen/underscore segment looks like a build hash."""
-    return any(_HASH_SEG.match(seg) for seg in re.split(r"[-_]", token) if seg)
-
-
 def _keep_classes(value: str) -> list[str]:
-    """Keep semantic class tokens; drop high-entropy hashed build classes."""
-    return [c for c in value.split() if c and not _is_hashed(c)]
+    """Keep semantic class tokens; drop utility + high-entropy hashed build classes."""
+    return semantic_classes(value.split())
 
 
 def _signature(node: Any) -> str:

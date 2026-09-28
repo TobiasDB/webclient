@@ -20,6 +20,7 @@ from .sniff import Kind
 
 if TYPE_CHECKING:
     from .metadata import Metadata
+    from .records import RecordRegion
     from .structure import Heading
 
 
@@ -186,6 +187,33 @@ class Document:
         from .metadata import metadata
 
         return metadata(self)
+
+    def records(self, *, min_items: int = 3, top_k: int = 3) -> "list[RecordRegion]":
+        """The dominant repeating regions (the dataset) with a suggested ``select_all`` selector --
+        the mechanical answer to "where is the list?" (see :mod:`.records`)."""
+        from .records import find_records
+
+        return find_records(self, min_items=min_items, top_k=top_k)
+
+    # -- JSON navigation (JSON documents; see :mod:`.jsonpath`) --
+
+    def at(self, path: str) -> Any:
+        """Follow a dotted path into the parsed JSON (``"data.results[0].name"``), or ``None``."""
+        from .jsonpath import dig
+
+        return dig(self.json(), path)
+
+    def json_skeleton(self, *, max_lines: int = 400, text_chars: int = 40) -> str:
+        """A token-lean outline of the JSON shape -- write dotted-path queries from it."""
+        from .jsonpath import skeleton
+
+        return skeleton(self.json(), max_lines=max_lines, text_chars=text_chars)
+
+    def json_leaves(self, *, budget: int = 20000) -> "list[str]":
+        """Every scalar leaf of the JSON value, as strings (the values a page is likely to echo)."""
+        from .jsonpath import leaves
+
+        return leaves(self.json(), budget=budget)
 
 
 class _Unset:
