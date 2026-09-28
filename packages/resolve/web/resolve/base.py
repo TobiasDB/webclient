@@ -19,9 +19,8 @@ kwarg overrides the profile.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, cast
+from typing import Any, Protocol, runtime_checkable
 
 from web.fetch import Fetcher, HttpFetcher, Middleware, Request, stack
 from web.parse import Document
@@ -30,14 +29,6 @@ from .document import document
 from .middleware import escalate as _escalate
 from .middleware import rate_limit as _rate_limit
 from .middleware import retry as _retry
-
-
-def _slot(value: Any, make: "Callable[[Any], Middleware]") -> "Middleware | None":
-    """A slot is empty (None), a ready middleware (callable -> used as-is), or config (passed to
-    ``make``). config values (int/float) are not callable; middlewares are."""
-    if value is None:
-        return None
-    return cast(Middleware, value) if callable(value) else make(value)
 
 
 @dataclass(frozen=True)
@@ -52,7 +43,7 @@ class Profile:
     paginate: "Middleware | None" = None
     middleware: tuple[Middleware, ...] = ()
 
-    def with_(self, **overrides: Any) -> "Profile":
+    def with_(self, **overrides: Any) -> "Profile":  # Any: a passthrough to dataclasses.replace
         """A copy with some slots overridden -- combine or adjust a base profile."""
         return replace(self, **overrides)
 
@@ -60,11 +51,17 @@ class Profile:
 _EMPTY = Profile()
 
 
+@runtime_checkable
+class _Openable(Protocol):
+    """A backend that can open a persistent session (a Session is itself Fetcher-shaped)."""
+
+    async def session(self) -> Fetcher: ...
+
+
 async def _open_session(tier: Fetcher) -> Fetcher:
-    """Open a persistent session on a tier that supports one (a Session is itself Fetcher-shaped);
-    a backend without ``session()`` (e.g. a replay backend) is used as-is."""
-    opener = getattr(tier, "session", None)
-    return cast(Fetcher, await opener()) if opener is not None else tier
+    """Open a persistent session on a tier that supports one; a backend without ``session()``
+    (e.g. a replay backend) is used as-is."""
+    return await tier.session() if isinstance(tier, _Openable) else tier
 
 
 class Resolver:
@@ -93,16 +90,20 @@ class Resolver:
         self._fetcher = self._stack_over(self._tiers)
 
     def _stack_over(self, tiers: tuple[Fetcher, ...]) -> Fetcher:
-        """Build the ordered middleware chain around ``tiers[0]``, escalating over the rest."""
+        """Build the ordered middleware chain around ``tiers[0]``, escalating over the rest. A slot
+        holds config (an int/float built into its middleware) or a ready middleware (used as-is);
+        the ``isinstance`` narrows the union cleanly, no cast needed."""
         base_tier = next(iter(tiers))  # non-empty by construction
         esc = _escalate(list(tiers[1:])) if len(tiers) > 1 else None
+        retry_mw = _retry(self._rt) if isinstance(self._rt, int) else self._rt
+        rate_mw = _rate_limit(self._rl) if isinstance(self._rl, (int, float)) else self._rl
         chain = tuple(
             m for m in (
-                *self._mw,                       # custom, outermost
-                self._pg,                        # drives the page loop
-                esc,                             # climb the transport ladder on a signal
-                _slot(self._rt, _retry),         # same request on transient failure
-                _slot(self._rl, _rate_limit),    # host politeness, innermost
+                *self._mw,          # custom, outermost
+                self._pg,           # drives the page loop
+                esc,                # climb the transport ladder on a signal
+                retry_mw,           # same request on transient failure
+                rate_mw,            # host politeness, innermost
             )
             if m is not None
         )

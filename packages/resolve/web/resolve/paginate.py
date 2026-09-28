@@ -16,8 +16,9 @@ from __future__ import annotations
 import asyncio
 import json as _json
 from collections.abc import Callable
-from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from pydantic import JsonValue
 
 from web.fetch import BrowserFetcher, Handler, Middleware, Request, Snapshot
 from web.kernel import err
@@ -26,19 +27,6 @@ from .document import document
 
 #: stop the unfold after a page when this holds (see :mod:`.stops`).
 Until = Callable[[Document], bool]
-
-
-def _dig(value: Any, path: str) -> Any:
-    """Follow a dotted path into a JSON value (``"data.next_cursor"``); ``""`` returns the value
-    itself. A missing key / wrong type yields ``None``."""
-    if not path:
-        return value
-    for key in path.split("."):
-        if isinstance(value, dict):
-            value = value.get(key)
-        else:
-            return None
-    return value
 
 
 def _merge(snaps: list[Snapshot]) -> Snapshot:
@@ -146,22 +134,23 @@ def paginate_cursor(
 
     async def mw(request: Request, nxt: Handler) -> Snapshot:
         snap = await nxt(request)
-        items: list[Any] = []
+        items: list[JsonValue] = []
         last = snap
         for _ in range(max_pages):
             if not snap.ok:
                 break
+            doc = document(snap)
             try:
-                body = document(snap).json()
+                doc.json()  # validate JSON before navigating; non-JSON ends the unfold
             except (ValueError, _json.JSONDecodeError):
                 break
-            page_items = _dig(body, items_path)
+            page_items = doc.at(items_path)  # dotted-path dig (shared with parse -- no fork)
             if isinstance(page_items, list):
                 items.extend(page_items)
             elif page_items is not None:
                 items.append(page_items)
-            cursor = _dig(body, cursor_path)
-            if not cursor or (until and until(document(snap))):
+            cursor = doc.at(cursor_path)
+            if not cursor or (until and until(doc)):
                 break
             url = _bump_param(request.url, param, str(cursor))
             snap = await nxt(request.model_copy(update={"url": url}))
