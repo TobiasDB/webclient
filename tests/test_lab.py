@@ -76,6 +76,18 @@ def test_spa_feed_static_signals(lab, wc, index):
     assert len(shell.select_all(exp["record_selector"])) == exp["records_static"]
 
 
+def test_data_api_flag_names_the_live_endpoint(lab, wc, index):
+    # a page that fetches its records from a JSON API fires the data_api flag, whose value is the
+    # live endpoint URL(s) it CALLED -- a clear signal the real dataset is the API, not the rendered
+    # HTML. Needs a browser render (an XHR is only observed live). A static page does NOT fire it.
+    live = wc.fetch(f"{lab}{index['feed']['path']}", browser="always")
+    flags = {f.name: f for f in live.flags()}
+    assert "data_api" in flags and flags["data_api"].present
+    assert flags["data_api"].value and any("/lab/feed" in u for u in flags["data_api"].value)
+    static = wc.fetch(f"{lab}{index['shop']['path']}")  # no XHR -> no data_api
+    assert "data_api" not in {f.name for f in static.flags()}
+
+
 def test_pagination_rel_next_and_cursor(lab, wc, index):
     exp = expected(lab, wc, "paginated")
     first = wc.fetch(f"{lab}{index['paginated']['path']}")

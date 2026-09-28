@@ -121,6 +121,46 @@ def _xhr_composed(ctx: Context) -> Hit | None:
     return None
 
 
+def _data_endpoint_urls(ctx: Context) -> "list[str]":
+    """The live DATA-API URLs the page CALLED: every same-origin XHR/fetch, plus cross-origin calls
+    that look like a records/content endpoint (not analytics/ads/assets). Deduped, order preserved.
+    Empty without a browser render (an XHR is only observed live)."""
+    page_host = (urlparse(ctx.final_url or ctx.url).hostname or "").lower()
+    out: list[str] = []
+    for e in _xhr_events(ctx):
+        req = getattr(e, "request", None)
+        if req is None:
+            continue
+        try:
+            u = str(req.dispatch("url"))
+        except Exception as exc:  # noqa: BLE001 - a malformed request event never breaks detection
+            _log.debug("data_api: dropped an XHR event with an unreadable url: %s", exc)
+            continue
+        host = (urlparse(u).hostname or "").lower()
+        if host and (host == page_host or _is_data_endpoint(u)) and u not in out:
+            out.append(u)
+    return out
+
+
+@detector(flag="data_api", name="data_endpoint_called", stage="network")
+def _data_endpoint_called(ctx: Context) -> "Hit | None":
+    """data_api evidence: the page CALLED a live JSON data API -- a same-origin XHR/fetch, or a
+    cross-origin call to a records/content endpoint (not analytics). The whole dataset often lives
+    behind it, so it is a strong hint the real source is the API (queryable, complete) rather than
+    the rendered DOM."""
+    n = len(_data_endpoint_urls(ctx))
+    return Hit(0.85, f"the page called {n} live data endpoint(s)", n) if n else None
+
+
+def _data_api_value(signals: "list[Signal]", ctx: Context) -> Any:
+    """The ``data_api`` flag's value: the live data-endpoint URLs the page called (capped), so the UI
+    can name them and the pipeline can target one directly rather than scraping the rendered DOM."""
+    return _data_endpoint_urls(ctx)[:20] or None
+
+
+flag("data_api", value=_data_api_value)
+
+
 @detector(flag="spa", name="xhr_composed_cross_origin", stage="network")
 def _xhr_composed_cross_origin(ctx: Context) -> Hit | None:
     """SPA evidence (network): main content composed from a CROSS-origin DATA endpoint (a CaaS/CDN

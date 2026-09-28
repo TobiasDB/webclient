@@ -9,7 +9,7 @@ noisy-OR, contra signals scale it down, and it is *present* at confidence >= 0.5
 (`Settings.detection.present_threshold`). A present flag may carry a `remedy` (the transport
 escalation it calls for) and a `value` (the actionable payload).
 
-19 flags, 50 detectors.
+20 flags, 51 detectors.
 
 ## `spa`
 
@@ -80,6 +80,14 @@ escalation it calls for) and a `value` (the actionable payload).
 | `consent_platform` | static |  | — | cookie_banner evidence (strong): a consent-management platform's loader or container in the served HTML (OneTrust, Cookiebot, Didomi, Quantcast, Usercentrics, TrustArc, …). |
 | `cookie_notice` | static |  | — | cookie_banner evidence: an element named as a cookie / consent / GDPR banner. |
 | `banner_answered` | rendered |  | `LiveBacking.init`, `wc.cookies` | cookie_banner evidence (rendered): the page script found a visible banner and answered / hid it before the snapshot. |
+
+## `data_api`
+
+- **remedy**: `none` · **value**: The ``data_api`` flag's value: the live data-endpoint URLs the page called (capped), so the UI
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `data_endpoint_called` | network |  | `LiveBacking.init`, `LiveBacking.drain` | data_api evidence: the page CALLED a live JSON data API -- a same-origin XHR/fetch, or a cross-origin call to a records/content endpoint (not analytics). The whole dataset often lives behind it, so it is a strong hint the real source is the API (queryable, complete) rather than the rendered DOM. |
 
 ## `shadow_dom`
 
