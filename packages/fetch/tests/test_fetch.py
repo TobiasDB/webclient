@@ -1,0 +1,67 @@
+"""web.fetch tests -- the transport layer in isolation, against a local httpserver."""
+
+from __future__ import annotations
+
+import asyncio
+
+from pytest_httpserver import HTTPServer
+
+from web.fetch import Fetcher, HttpFetcher, Request, Snapshot
+
+
+def _run(coro):  # tiny helper: no pytest-asyncio dependency
+    return asyncio.run(coro)
+
+
+def test_httpfetcher_returns_a_snapshot_of_raw_bytes(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/page").respond_with_data(
+        b"<h1>hi</h1>", content_type="text/html; charset=utf-8", headers={"x-test": "1"}
+    )
+
+    async def go() -> Snapshot:
+        f = HttpFetcher()
+        try:
+            return await f.fetch(Request(url=httpserver.url_for("/page")))
+        finally:
+            await f.aclose()
+
+    snap = _run(go())
+    assert isinstance(snap, Snapshot) and snap.ok
+    assert snap.status == 200 and snap.content == b"<h1>hi</h1>"
+    assert snap.headers["x-test"] == "1"  # transport metadata preserved
+    assert snap.request.url.endswith("/page") and snap.error is None
+    # fetch does NOT sniff/decode -- content is raw bytes, no 'kind'/'encoding' field
+    assert not hasattr(snap, "kind") and not hasattr(snap, "encoding")
+
+
+def test_httpfetcher_is_a_fetcher() -> None:
+    assert isinstance(HttpFetcher(), Fetcher)  # runtime-checkable interface
+
+
+def test_transport_failure_is_error_not_raise() -> None:
+    async def go() -> Snapshot:
+        f = HttpFetcher()
+        try:  # nothing is listening on this port
+            return await f.fetch(Request(url="http://127.0.0.1:9/nope", timeout=0.5))
+        finally:
+            await f.aclose()
+
+    snap = _run(go())
+    assert not snap.ok and snap.status == 0
+    assert snap.error is not None and snap.error.code == "fetch.transport"
+
+
+def test_non_2xx_is_a_valid_snapshot_not_an_error(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/missing").respond_with_data(b"nope", status=404)
+
+    async def go() -> Snapshot:
+        f = HttpFetcher()
+        try:
+            return await f.fetch(Request(url=httpserver.url_for("/missing")))
+        finally:
+            await f.aclose()
+
+    snap = _run(go())
+    # a 404 is a fact the transport reports, not a transport error -- policy is resolve's call
+    assert snap.status == 404 and snap.error is None and not snap.ok
+    assert snap.content == b"nope"
