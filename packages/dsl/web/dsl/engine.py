@@ -21,6 +21,7 @@ from web.fetch import BrowserFetcher, Request
 from web.kernel import WebException, err
 from web.resolve import Resolver, document
 
+from . import transforms
 from .plan import Plan, Step
 
 
@@ -79,6 +80,47 @@ class Document:
         """Over a ``select_all`` collection, map each element to a row dict -- each field is the
         text of its sub-selector (``project(title='.t', price='.p')`` -> ``list[dict]``)."""
         return self._read("project", selectors)
+
+    # -- post-extraction transforms: shape the extracted DATA (see :mod:`.transforms`) --
+    def filter(self, **equals: Any) -> "Document":
+        """Keep rows whose named fields match (substring for strings, equality otherwise)."""
+        return self._read("filter", equals)
+
+    def nonempty(self) -> "Document":
+        """Drop empty rows (a dict with no truthy field; an empty/None scalar)."""
+        return self._read("nonempty")
+
+    def distinct(self, key: "str | None" = None) -> "Document":
+        """Drop duplicates in order; ``key`` dedupes row dicts by one field."""
+        return self._read("distinct", key)
+
+    def limit(self, n: int) -> "Document":
+        """Keep at most the first ``n`` items."""
+        return self._read("limit", n)
+
+    def merge(self) -> "Document":
+        """Flatten one level -- a list of lists becomes one flat list."""
+        return self._read("merge")
+
+    def number(self, field: "str | None" = None) -> "Document":
+        """Parse the first number out of each value (or one ``field`` of each row)."""
+        return self._read("number", {"field": field})
+
+    def date(self, field: "str | None" = None) -> "Document":
+        """Parse a date/time out of each value (ISO 8601), optionally targeting one ``field``."""
+        return self._read("date", {"field": field})
+
+    def strip(self, field: "str | None" = None) -> "Document":
+        """Strip surrounding whitespace from each value (or one ``field``)."""
+        return self._read("strip", {"field": field})
+
+    def split(self, sep: "str | None" = None, *, field: "str | None" = None) -> "Document":
+        """Split each string value on ``sep`` (whitespace if omitted), optionally one ``field``."""
+        return self._read("split", {"field": field, "sep": sep})
+
+    def regex(self, pattern: str, *, group: "int | str" = 0, field: "str | None" = None) -> "Document":
+        """Reduce each value to a regex match (``group`` of it), optionally one ``field``."""
+        return self._read("regex", {"field": field, "pattern": pattern, "group": group})
 
     def _full(self) -> Plan:
         return Plan(url=self._plan.url, actions=self._plan.actions, reads=list(self._reads))
@@ -166,14 +208,16 @@ def _one(obj: Any, step: Step) -> Any:
 
 
 def _apply_read(obj: Any, step: Step) -> Any:
-    """Apply a read, fanning out over a collection. ``project`` maps each element to a row dict
-    (field -> the text of its sub-selector); any other read maps element-wise over a list."""
+    """Apply a read. ``project`` maps each element to a row dict; the :mod:`.transforms` ops shape
+    the extracted DATA; any other read is an element method fanned out over a collection."""
     if obj is None:  # a prior select missed -> the rest of the chain is None, not a crash
         return None
     if step.op == "project":
         fields: dict[str, str] = step.args[0]
         rows = obj if isinstance(obj, list) else [obj]
         return [{k: (e.text if (e := el.select(v)) is not None else None) for k, v in fields.items()} for el in rows]
+    if step.op in transforms.TRANSFORMS:
+        return transforms.apply(obj, step.op, step.args)
     if isinstance(obj, list):
         return [_one(el, step) if el is not None else None for el in obj]
     return _one(obj, step)

@@ -147,3 +147,79 @@ def test_dsl_missing_select_does_not_crash(httpserver: HTTPServer) -> None:
             await d.aclose()
 
     assert _run(go()) is None
+
+
+# -- post-extraction transforms: shape the extracted data --
+
+_SHOP = (b"<ul>"
+         b"<li class=item><span class=t>Widget</span><span class=p>$1,299.00</span></li>"
+         b"<li class=item><span class=t>Gadget</span><span class=p>$49</span></li>"
+         b"<li class=item><span class=t>Widget</span><span class=p>$1,299.00</span></li>"
+         b"<li class=item><span class=t></span><span class=p></span></li>"
+         b"</ul>")
+
+
+def test_transforms_clean_and_reshape_rows(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/s").respond_with_data(_SHOP, content_type="text/html")
+
+    async def go() -> list:
+        d = _dsl()
+        try:
+            return await (d.ref(httpserver.url_for("/s")).doc()
+                          .select_all("li.item").project(title=".t", price=".p")
+                          .nonempty().distinct(key="title").number(field="price")
+                          .acollect())
+        finally:
+            await d.aclose()
+
+    rows = _run(go())
+    assert rows == [{"title": "Widget", "price": 1299.0}, {"title": "Gadget", "price": 49}]
+
+
+def test_filter_and_limit(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/s").respond_with_data(_SHOP, content_type="text/html")
+
+    async def go() -> list:
+        d = _dsl()
+        try:
+            return await (d.ref(httpserver.url_for("/s")).doc()
+                          .select_all("li.item").project(title=".t", price=".p")
+                          .filter(title="widget").limit(1).acollect())
+        finally:
+            await d.aclose()
+
+    rows = _run(go())
+    assert rows == [{"title": "Widget", "price": "$1,299.00"}]  # substring, case-insensitive
+
+
+def test_transforms_survive_a_blob_roundtrip(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/s").respond_with_data(_SHOP, content_type="text/html")
+    blob = (_dsl().ref(httpserver.url_for("/s")).doc()
+            .select_all("li.item").project(title=".t", price=".p")
+            .nonempty().number(field="price").to_blob())
+
+    async def server() -> list:
+        r = Resolver()
+        try:
+            return await run_blob(blob, r)
+        finally:
+            await r.aclose()
+
+    rows = _run(server())
+    assert {"title": "Gadget", "price": 49} in rows and len(rows) == 3
+
+
+def test_date_transform_normalises_to_iso(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/e").respond_with_data(
+        b"<ul><li class=e>Posted March 3, 2026</li></ul>", content_type="text/html")
+
+    async def go() -> list:
+        d = _dsl()
+        try:
+            return await (d.ref(httpserver.url_for("/e")).doc()
+                          .select_all("li.e").text().date().acollect())
+        finally:
+            await d.aclose()
+
+    out = _run(go())
+    assert out[0].startswith("2026-03-03")
