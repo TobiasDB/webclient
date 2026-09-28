@@ -23,7 +23,7 @@ from typing import Any, Sequence
 from ...interface import WebClient
 from ...clients.llm import Budget, BudgetExceeded, LlmClient
 
-from ...loop import Ask
+from ...kernel.loop import Ask
 from ...pipeline import Pipeline, PipelineRun, Stage
 from .common import LLM, SearchFn, _fetch, _mode
 from .artifacts import Brief, OnboardingResult, _RunArtifacts, _ensure_logging, _trace, _summarize

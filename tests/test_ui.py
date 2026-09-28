@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from webclient import RETURN, WebClient
-from webclient.loop import Ask
+from webclient.kernel.loop import Ask
 from webclient.service import create_app
 
 PAGE = '<html><head><title>T</title></head><body><main><p class="x">hi</p></main></body></html>'

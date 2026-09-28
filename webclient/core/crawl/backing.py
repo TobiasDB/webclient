@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, cast
 from urllib.parse import urlparse, urlsplit
 
 from ...kernel.errors import make
-from ...loop import BoundedLoop
+from ...kernel.loop import BoundedLoop
 from ..web_core import Backing
 from .canon import (  # URL canon / scope / scoring vocabulary (pure helpers)
     _BOILER_PATH_RE,
@@ -274,7 +274,7 @@ class CrawlBacking(Backing):
         driver if one is set (e.g. an LLM picking the edges most likely to reach a dataset),
         otherwise the built-in best-first heuristic (the top-``width`` frontier edges by
         score). Used by ``run``/``stream`` and a bare ``step()``."""
-        from ...loop import Ask
+        from ...kernel.loop import Ask
 
         driver = core._driver
         engine = getattr(core._client, "_the_engine", lambda: None)()

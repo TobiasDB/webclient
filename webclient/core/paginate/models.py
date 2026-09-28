@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
-from ...loop import LoopVerdict
+from ...kernel.loop import LoopVerdict
 from ..document.paginate import PaginationConfig
 
 if TYPE_CHECKING:

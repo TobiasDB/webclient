@@ -23,7 +23,7 @@ from typing import Any, Callable
 
 from pydantic import BaseModel
 
-from .loop import Ask
+from .kernel.loop import Ask
 
 log = logging.getLogger(__name__)
 

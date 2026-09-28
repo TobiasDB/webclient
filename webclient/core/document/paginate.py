@@ -44,7 +44,7 @@ from .html import tree
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from ...loop import BoundedLoop
+    from ...kernel.loop import BoundedLoop
     from ..reference import Reference
     from . import Document
 
@@ -420,7 +420,7 @@ def pager_loop(walk: Walk, cfg: PaginationConfig, client: Any, *, bus: Any = Non
     page one, the iterator's next, a concurrent batch (``pages`` with a known stop and nothing to test
     per page), or a click / scroll -- or a stop cause; APPLY fetches and integrates them (:func:`_take`).
     The loop's verdict is ``done`` with the cause as its result."""
-    from ...loop import BoundedLoop
+    from ...kernel.loop import BoundedLoop
 
     budget = max(1, min(cfg.max_pages, _MAX_PAGES_CAP))
 

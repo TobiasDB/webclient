@@ -38,6 +38,35 @@ if True:  # keep the runtime import surface tiny; the callables are structural
 
 log = logging.getLogger(__name__)
 
+
+# -- loop budgets: the kernel owns the defaults; an app installs its own -----------
+class _Budgets(BaseModel):
+    """The two budgets a :class:`BoundedLoop` reads. The kernel default keeps a loop
+    usable with zero app config; the app (``webclient.settings``) registers a provider
+    that returns its own, env-configured budgets instead (structurally its
+    ``LoopSettings``)."""
+
+    max_rounds: int = 20
+    max_stalls: int = 3
+
+
+_budget_provider: "Callable[[], Any] | None" = None
+
+
+def set_loop_budget_provider(provider: "Callable[[], Any] | None") -> None:
+    """Install (or clear, with ``None``) the source of default loop budgets -- any object
+    with ``max_rounds`` / ``max_stalls`` fields. ``webclient.settings`` installs one so loops
+    pick up the process-wide, env-configured budgets; the kernel imports nothing to do it
+    (dependency inversion), so it never reaches up into the app config layer."""
+    global _budget_provider
+    _budget_provider = provider
+
+
+def _loop_budgets() -> Any:
+    """The effective default budgets: the installed provider's, else the kernel default."""
+    return _budget_provider() if _budget_provider is not None else _Budgets()
+
+
 S = TypeVar("S")  # the driven STATE (e.g. a live Document, a crawl, a query-in-progress)
 O = TypeVar("O")  # an OBSERVATION handed to decide
 D = TypeVar("D")  # a DECISION returned by decide
@@ -113,9 +142,7 @@ class BoundedLoop(Generic[S, O, D]):
         name: str = "loop",
         bus: Any = None,
     ) -> None:
-        from .settings import current
-
-        budgets = current().loops
+        budgets = _loop_budgets()
         self._observe = observe
         self._decide = decide
         self._done_result = done_result
@@ -141,7 +168,7 @@ class BoundedLoop(Generic[S, O, D]):
         """Publish a :class:`~webclient.models.LoopEvent` (a no-op without a bus)."""
         if self.bus is None:
             return
-        from .kernel.models import LoopEvent
+        from .models import LoopEvent
 
         self.bus.publish(LoopEvent(loop=self.name, phase=phase, round=round_index, detail=detail))  # type: ignore[arg-type]
 

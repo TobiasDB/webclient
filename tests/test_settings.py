@@ -63,7 +63,7 @@ def test_tuning_groups_default_and_read_from_env(monkeypatch):
 
 def test_current_settings_are_read_at_use_time():
     from webclient import use_settings, current_settings
-    from webclient.loop import BoundedLoop
+    from webclient.kernel.loop import BoundedLoop
     from webclient.settings import LoopSettings
 
     previous = use_settings(Settings(loops=LoopSettings(max_rounds=2, max_stalls=1)))

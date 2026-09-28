@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic import BaseModel
 
-from ...loop import Ask, BoundedLoop, LoopVerdict
+from ...kernel.loop import Ask, BoundedLoop, LoopVerdict
 
 if TYPE_CHECKING:
     from . import Crawl

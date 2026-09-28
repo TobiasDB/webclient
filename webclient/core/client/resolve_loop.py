@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 from pydantic import BaseModel
 
 from ...kernel.errors import make
-from ...loop import Ask, BoundedLoop, LoopVerdict
+from ...kernel.loop import Ask, BoundedLoop, LoopVerdict
 
 if TYPE_CHECKING:
     from ..document import Document

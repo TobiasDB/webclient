@@ -191,6 +191,14 @@ def use(settings: "Settings | None") -> "Settings | None":
     return previous
 
 
+# The kernel's BoundedLoop owns default budgets but reads them through a provider seam so it
+# never imports this app-config layer. Install ours here (at import) so every loop picks up
+# the process-wide, env-configured ``loops`` budgets -- exactly as when loop read current().
+from .kernel.loop import set_loop_budget_provider as _set_loop_budget_provider
+
+_set_loop_budget_provider(lambda: current().loops)
+
+
 __all__ = [
     "Settings", "LlmSettings", "LimitsSettings", "DetectionSettings", "ServiceSettings",
     "LoopSettings", "current", "use",

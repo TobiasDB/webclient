@@ -171,7 +171,7 @@ def site(httpserver):
 
 
 def test_crawl_driver_can_ask_and_resume(site):
-    from webclient.loop import Ask as _Ask
+    from webclient.kernel.loop import Ask as _Ask
 
     with WebClient() as wc:
         seen = []

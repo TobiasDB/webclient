@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
 from pydantic import BaseModel, Field
 
 from ..core.document.models import IndexedElement
-from ..loop import BoundedLoop
+from ..kernel.loop import BoundedLoop
 
 if TYPE_CHECKING:
     from collections.abc import Callable

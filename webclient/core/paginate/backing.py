@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, AsyncIterator, cast
 
-from ...loop import LoopVerdict
+from ...kernel.loop import LoopVerdict
 from ..document.paginate import pager_loop, take_first
 from ..web_core import Backing
 from .models import PaginationVerdict
 
 if TYPE_CHECKING:
-    from ...loop import BoundedLoop
+    from ...kernel.loop import BoundedLoop
     from . import Pagination
 
 

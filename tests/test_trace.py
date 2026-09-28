@@ -188,7 +188,7 @@ def test_har_from_events_skips_bodiless_events():
 
 def test_loop_events_are_published(httpserver):
     from webclient import LoopEvent
-    from webclient.loop import BoundedLoop
+    from webclient.kernel.loop import BoundedLoop
     from webclient.kernel.events import EventBus
 
     bus = EventBus()

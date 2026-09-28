@@ -27,7 +27,7 @@ from ..core.document.element_index import field_options, record_options
 from ..core.document.html import tree
 from ..core.document.models import IndexedElement
 from ..interface import wq
-from ..loop import BoundedLoop
+from ..kernel.loop import BoundedLoop
 
 if TYPE_CHECKING:
     from collections.abc import Callable
