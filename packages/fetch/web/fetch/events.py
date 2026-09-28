@@ -9,7 +9,7 @@ reconstruct the page), so no separate HAR is needed; replay itself is a later la
 
 from __future__ import annotations
 
-from typing import Any
+from pydantic import JsonValue
 
 from web.kernel import Event
 
@@ -44,7 +44,7 @@ class DOMEvent(Event):
 
     topic: str = "dom"
     script: str = ""
-    records: list[dict[str, Any]] = []
+    records: list[dict[str, JsonValue]] = []
 
 
 class ConsoleEvent(Event):

@@ -10,8 +10,6 @@ header/context layer both backends share. ``fingerprint=True`` on a backend uses
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel
 
 
@@ -37,11 +35,6 @@ class Fingerprint(BaseModel):
             "Upgrade-Insecure-Requests": "1",
             **self.headers,
         }
-
-    def context_options(self) -> dict[str, Any]:
-        """Options for Playwright's ``new_context`` (UA, viewport, locale) matching this identity."""
-        w, h = self.viewport
-        return {"user_agent": self.user_agent, "viewport": {"width": w, "height": h}, "locale": self.locale}
 
 
 #: a Chrome-on-Windows desktop fingerprint (the ``fingerprint=True`` default).

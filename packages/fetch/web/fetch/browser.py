@@ -221,8 +221,13 @@ class BrowserFetcher:
         """Open a session that OWNS a fresh context + page (isolated cookies/state). Applies the
         fingerprint's context options + stealth pass and any ``init`` scripts before navigation."""
         browser = await self._browser_ready()
-        options = self._fingerprint.context_options() if self._fingerprint else {}
-        context = await browser.new_context(**options)
+        fp = self._fingerprint
+        if fp is not None:  # apply the identity's context options (explicit, so no dict[str, Any])
+            w, h = fp.viewport
+            context = await browser.new_context(
+                user_agent=fp.user_agent, viewport={"width": w, "height": h}, locale=fp.locale)
+        else:
+            context = await browser.new_context()
         page = await context.new_page()
         scripts = self.scripts.enabled()  # only the enabled scripts install
         try:
