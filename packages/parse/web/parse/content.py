@@ -187,6 +187,8 @@ def _table_records(table: Node, *, transpose: bool) -> "list[dict[str, str]]":
     matrix = [[r.get(c, "") for c in range(width)] for r in grid]
     if transpose:
         matrix = [list(col) for col in zip(*matrix)] if matrix else []
+    if not matrix or not matrix[0]:  # no rows, or a header row with no cells -> no records
+        return []
     header, *body = matrix
     keys = [h or f"col{i}" for i, h in enumerate(header)]
     return [{keys[i]: (r[i] if i < len(r) else "") for i in range(len(keys))} for r in body]

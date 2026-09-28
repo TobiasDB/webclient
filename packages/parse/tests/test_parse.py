@@ -218,3 +218,13 @@ def test_skeleton_drop_chrome_omits_nav() -> None:
     doc = parse(html, content_type="text/html")
     assert "nav" not in doc.skeleton(drop_chrome=True)
     assert "nav" in doc.skeleton(drop_chrome=False)
+
+
+def test_tables_degenerate_no_cells_does_not_crash() -> None:
+    # a <table> with rows but no cells: previously transpose=True crashed (empty matrix unpack)
+    doc = parse(b"<table><tr></tr><tr></tr></table>", content_type="text/html")
+    assert doc.tables() == []
+    assert doc.tables(transpose=True) == []
+    # a header-only table yields no data rows, not junk
+    doc2 = parse(b"<table><tr><th>A</th><th>B</th></tr></table>", content_type="text/html")
+    assert doc2.tables() == []
