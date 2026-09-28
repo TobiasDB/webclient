@@ -9,12 +9,17 @@ written against it, the JSON twin of the DOM skeleton.
 from __future__ import annotations
 
 import re
-from typing import Any
+
+from pydantic import JsonValue
+
+#: a parsed JSON value. pydantic's recursive ``JsonValue`` (no ``Any``, safe as a model field, and
+#: callers narrow by isinstance) -- reused rather than hand-rolling the union.
+JSON = JsonValue
 
 _INDEX = re.compile(r"^(.*?)\[(\d+)\]$")  # a path segment with a trailing [n]
 
 
-def dig(value: Any, path: str) -> Any:
+def dig(value: JSON, path: str) -> JSON:
     """Follow a dotted path into a JSON value: ``"a.b"`` keys, ``"items[0]"`` indexes, ``""`` the
     value itself. A missing key / wrong type / out-of-range index yields ``None``."""
     if not path:
@@ -31,14 +36,14 @@ def dig(value: Any, path: str) -> Any:
     return value
 
 
-def leaves(value: Any, *, budget: int = 20000) -> "list[str]":
+def leaves(value: JSON, *, budget: int = 20000) -> "list[str]":
     """Every scalar leaf (string/number/bool) of a JSON value, as strings -- bounded by ``budget``."""
     out: list[str] = []
     _walk(value, out, budget)
     return out
 
 
-def _walk(value: Any, out: "list[str]", budget: int) -> None:
+def _walk(value: JSON, out: "list[str]", budget: int) -> None:
     if len(out) >= budget:
         return
     if isinstance(value, dict):
@@ -53,7 +58,7 @@ def _walk(value: Any, out: "list[str]", budget: int) -> None:
         out.append(str(value))
 
 
-def _type(v: Any) -> str:
+def _type(v: JSON) -> str:
     if v is None:
         return "null"
     if isinstance(v, bool):
@@ -63,9 +68,9 @@ def _type(v: Any) -> str:
     return "string"
 
 
-def _merge_keys(items: "list[Any]") -> "dict[str, Any]":
+def _merge_keys(items: "list[JSON]") -> "dict[str, JSON]":
     """A representative object for an array of objects: the union of keys with a sample value each."""
-    merged: dict[str, Any] = {}
+    merged: dict[str, JSON] = {}
     for it in items:
         if isinstance(it, dict):
             for k, v in it.items():
@@ -74,16 +79,16 @@ def _merge_keys(items: "list[Any]") -> "dict[str, Any]":
     return merged
 
 
-def skeleton(value: Any, *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30) -> str:
+def skeleton(value: JSON, *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30) -> str:
     """A token-lean JSON shape outline: keys with value types, an array as ``[N]`` with its element
     shape (object keys merged across items) -- so a query can be written by dotted path."""
     lines: list[str] = []
 
-    def sample(v: Any) -> str:
+    def sample(v: JSON) -> str:
         s = str(v)
         return s if len(s) <= text_chars else s[:text_chars] + "…"
 
-    def walk(v: Any, key: str, depth: int) -> None:
+    def walk(v: JSON, key: str, depth: int) -> None:
         if len(lines) >= max_lines or depth > max_depth:
             return
         pad = "  " * depth

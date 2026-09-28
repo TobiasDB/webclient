@@ -8,11 +8,12 @@ the parsed lxml tree); the query/onboarding "Locate" step stands on this.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
 from .classes import semantic_classes
+from .nodes import Node, classes as _all_classes, tag as _tag
 
 if TYPE_CHECKING:
     from .document import Document
@@ -35,20 +36,15 @@ class RecordRegion(BaseModel):
     score: float = 0.0
 
 
-def _tag(node: Any) -> str:
-    t = getattr(node, "tag", "")
-    return t.lower() if isinstance(t, str) else ""
+def _classes(el: Node) -> "list[str]":
+    return semantic_classes(_all_classes(el))
 
 
-def _classes(el: Any) -> "list[str]":
-    return semantic_classes(str(el.get("class") or "").split())
-
-
-def _kids(el: Any) -> "list[Any]":
+def _kids(el: Node) -> "list[Node]":
     return [c for c in el if _tag(c) and _tag(c) not in _SKIP]
 
 
-def _unwrap(el: Any) -> Any:
+def _unwrap(el: Node) -> Node:
     """Descend through anonymous single-child wrappers (the SPA/Tailwind per-record ``<div>``) to
     the semantic record inside, so records group by their inner shape, not a bare wrapper tag."""
     for _ in range(4):
@@ -61,25 +57,25 @@ def _unwrap(el: Any) -> Any:
     return el
 
 
-def _sig(el: Any) -> "tuple[str, frozenset[str], tuple[str, ...]]":
+def _sig(el: Node) -> "tuple[str, frozenset[str], tuple[str, ...]]":
     """A light structural signature of the UNWRAPPED record: tag + semantic classes + child shape.
     Two siblings share a signature when they are the same KIND of record."""
     el = _unwrap(el)
     return (_tag(el), frozenset(_classes(el)), tuple(_tag(c) for c in _kids(el)))
 
 
-def _chromey(el: Any) -> bool:
-    node, hops = el, 0
+def _chromey(el: Node) -> bool:
+    node: "Node | None" = el
+    hops = 0
     while node is not None and hops < 25:
-        if _tag(node) in _CHROME_TAGS or (getattr(node, "get", None) and
-                                          (node.get("role") or "").lower() in _CHROME_ROLES):
+        if _tag(node) in _CHROME_TAGS or (node.get("role") or "").lower() in _CHROME_ROLES:
             return True
         node = node.getparent()
         hops += 1
     return False
 
 
-def _richness(members: "list[Any]") -> float:
+def _richness(members: "list[Node]") -> float:
     """Average descendant count of a sample, scaled to 0..1 (a bare-link menu is thin; cards rich)."""
     sample = members[:20]
     total = 0
@@ -93,7 +89,7 @@ def _richness(members: "list[Any]") -> float:
     return min(total / len(sample), 10.0) / 10.0 if sample else 0.0
 
 
-def _item_selector(members: "list[Any]") -> str:
+def _item_selector(members: "list[Node]") -> str:
     """A selector for the records: the unwrapped tag, narrowed by a class common to ALL members."""
     unwrapped = [_unwrap(m) for m in members]
     tag = _tag(unwrapped[0])
@@ -119,7 +115,7 @@ def find_records(doc: "Document", *, min_items: int = 3, top_k: int = 3) -> "lis
         children = _kids(container)
         if len(children) < min_items:
             continue
-        groups: dict[Any, list[Any]] = {}
+        groups: dict[tuple[str, frozenset[str], tuple[str, ...]], list[Node]] = {}
         for c in children:
             groups.setdefault(_sig(c), []).append(c)
         penalty = 0.25 if _chromey(container) else 1.0

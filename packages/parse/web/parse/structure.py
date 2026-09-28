@@ -10,11 +10,12 @@ belong to a higher layer that annotates this base.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
 from .classes import semantic_classes
+from .nodes import Node, classes as _all_classes, tag as _tag
 
 if TYPE_CHECKING:
     from .document import Document
@@ -30,24 +31,13 @@ class Heading(BaseModel):
     text: str
 
 
-def _tag(node: Any) -> str:
-    t = getattr(node, "tag", "")
-    return t.lower() if isinstance(t, str) else ""
-
-
-def _keep_classes(value: str) -> list[str]:
-    """Keep semantic class tokens; drop utility + high-entropy hashed build classes."""
-    return semantic_classes(value.split())
-
-
-def _signature(node: Any) -> str:
+def _signature(node: Node) -> str:
     """The open-tag signature shown for a node: ``tag#id.class[.class]`` plus a role/label hint."""
-    tag = _tag(node)
-    out = tag
+    out = _tag(node)
     node_id = node.get("id")
     if node_id:
         out += f"#{node_id}"
-    classes = _keep_classes(node.get("class") or "")
+    classes = semantic_classes(_all_classes(node))
     if classes:
         out += "." + ".".join(classes[:4])
     for a in ("role", "aria-label", "name", "type", "placeholder"):
@@ -68,7 +58,7 @@ def skeleton(doc: "Document", *, max_lines: int = 400, text_chars: int = 40, max
     return "\n".join(lines[:max_lines])
 
 
-def _emit(node: Any, depth: int, lines: list[str], *, max_lines: int, text_chars: int, max_depth: int) -> None:
+def _emit(node: Node, depth: int, lines: list[str], *, max_lines: int, text_chars: int, max_depth: int) -> None:
     if len(lines) >= max_lines or depth > max_depth or _tag(node) in _SKIP:
         return
     indent = "  " * depth

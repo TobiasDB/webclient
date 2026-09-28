@@ -1,73 +1,74 @@
 """``Document`` and ``Element`` -- the parse layer's output: a resource's CONTENT, interpreted.
 
 A Document is pure content: the raw bytes, the sniffed ``kind`` and text ``encoding``, and the
-base ``url`` (only for resolving relative links). It exposes the utilities to find / extract --
-``text``, ``select`` / ``select_all`` / ``links`` for markup, ``json`` for JSON. It carries NO
-transport facts (status / headers / errors) -- those live on the Snapshot and are used internally
-by resolve; a Document is just what the bytes say. Parsing is lazy (the lxml tree / JSON value is
-built on first use and cached). A selected node is an :class:`Element`, itself readable and
-nestable -- ``select`` composes. Ordinary methods returning ordinary values (no dispatch/laziness
--- that is the DSL's job on top).
+base ``url`` (only for resolving relative links). It exposes the utilities to find / extract, most
+of them thin front doors onto a sibling module (content / structure / records / index / regex /
+jsonpath / metadata) so this file stays the interface, not the algorithms. It carries NO transport
+facts (status / headers / errors) -- those live on the Snapshot. Parsing is lazy (the lxml tree /
+JSON value is built on first use and cached). A selected node is an :class:`Element`, itself
+readable and nestable. Ordinary methods returning ordinary values -- laziness is the DSL's job.
 """
 
 from __future__ import annotations
 
 import json as _json
-from typing import TYPE_CHECKING, Any
+from typing import Literal
 from urllib.parse import urljoin
 
-from .sniff import Kind
+from lxml import etree, html
 
-if TYPE_CHECKING:
-    from .metadata import Metadata
-    from .records import RecordRegion
-    from .structure import Heading
+from . import content as _content
+from . import regex as _regex_mod
+from . import structure as _structure
+from .index import IndexedElement, index_elements
+from .jsonpath import JSON, dig, leaves, skeleton as _json_skeleton
+from .metadata import Metadata, metadata
+from .nodes import Node, query, text as _node_text
+from .records import RecordRegion, find_records
+from .sniff import Kind
+from .structure import Heading
 
 
 class Element:
     """A node selected from a markup :class:`Document` -- readable (``text`` / ``attr``) and
     nestable (``select`` runs against this node's subtree). Wraps one lxml element."""
 
-    def __init__(self, node: Any, base_url: str = "") -> None:
+    def __init__(self, node: Node, base_url: str = "") -> None:
         self._node = node
         self._base = base_url
 
     @property
     def text(self) -> str:
         """All descendant text, whitespace-collapsed (works for HTML and XML nodes)."""
-        return " ".join("".join(self._node.itertext()).split())
+        return _node_text(self._node)
 
     @property
     def html(self) -> str:
         """This element serialised back to markup."""
-        from lxml import etree
-
         return etree.tostring(self._node, encoding="unicode")
 
-    def attr(self, name: str) -> str | None:
+    def attr(self, name: str) -> "str | None":
         """An attribute value, or ``None``. ``attr('href')`` / ``attr('src')`` are resolved
         against the document's URL (absolute)."""
-        val: str | None = self._node.get(name)
+        val = self._node.get(name)
         if val is not None and name in ("href", "src") and self._base:
             return urljoin(self._base, val)
         return val
 
     def select(self, css: str) -> "Element | None":
         """The FIRST descendant matching a CSS selector, or ``None`` (nested selection)."""
-        els = self._node.cssselect(css)
+        els = query(self._node, css)
         return Element(els[0], self._base) if els else None
 
     def select_all(self, css: str) -> "list[Element]":
         """ALL descendants matching a CSS selector (nested selection)."""
-        return [Element(n, self._base) for n in self._node.cssselect(css)]
+        return [Element(n, self._base) for n in query(self._node, css)]
 
     @property
     def region(self) -> str:
         """The page landmark this node sits in -- ``nav`` / ``main`` / ``article`` / ``header`` /
         ``footer`` / ``aside`` (nearest ancestor), or ``""``."""
-        from .content import region
-
-        return region(self)
+        return _content.region(self)
 
 
 class Document:
@@ -79,8 +80,9 @@ class Document:
         self.kind = kind
         self.url = url  # the base for relative-link resolution only
         self.encoding = encoding
-        self._tree: Any = None
-        self._json: Any = _UNSET
+        self._tree: "Node | None" = None
+        self._json: JSON = None
+        self._json_ready = False
 
     @property
     def text(self) -> str:
@@ -91,136 +93,111 @@ class Document:
         """Whether this document has a markup tree to select over (html / xml / text)."""
         return self.kind in ("html", "xml", "text")
 
-    def _root(self) -> Any:
+    def _root(self) -> Node:
         """The lazily-parsed lxml root, cached. Lenient: a malformed document (or empty bytes)
         recovers to as much of a tree as possible, so a read never crashes on bad content."""
-        if self._tree is None:
-            from lxml import etree, html
-
+        tree = self._tree
+        if tree is None:
             try:
                 if self.kind == "xml":
-                    self._tree = etree.fromstring(self.content, etree.XMLParser(recover=True))
+                    tree = etree.fromstring(self.content, etree.XMLParser(recover=True))
                 else:  # html / text: parse leniently as HTML
-                    self._tree = html.fromstring(self.content or b"<html></html>")
+                    tree = html.fromstring(self.content or b"<html></html>")
             except (etree.ParserError, etree.XMLSyntaxError, ValueError):
-                self._tree = html.fromstring(b"<html></html>")  # unparseable -> empty tree
-        return self._tree
+                tree = html.fromstring(b"<html></html>")  # unparseable -> empty tree
+            self._tree = tree
+        return tree
 
     def select(self, css: str) -> "Element | None":
         """The FIRST element matching a CSS selector, or ``None`` (empty for a non-markup doc)."""
         if not self._markup():
             return None
-        els = self._root().cssselect(css)
+        els = query(self._root(), css)
         return Element(els[0], self.url) if els else None
 
     def select_all(self, css: str) -> "list[Element]":
         """ALL elements matching a CSS selector (empty for a non-markup doc)."""
         if not self._markup():
             return []
-        return [Element(n, self.url) for n in self._root().cssselect(css)]
+        return [Element(n, self.url) for n in query(self._root(), css)]
 
     def links(self) -> "list[str]":
         """Every ``<a href>`` target, resolved absolute against the document URL (empty for a
         non-markup doc)."""
         if not self._markup():
             return []
-        return [urljoin(self.url, a.get("href")) for a in self._root().cssselect("a[href]")]
+        return [urljoin(self.url, href) for a in query(self._root(), "a[href]")
+                if (href := a.get("href")) is not None]
 
-    def json(self) -> Any:
+    def json(self) -> JSON:
         """The parsed JSON value (JSON documents); cached. Raises on non-JSON."""
-        if self._json is _UNSET:
+        if not self._json_ready:
             self._json = _json.loads(self.content or b"null")
+            self._json_ready = True
         return self._json
 
-    # -- content extraction (implemented in sibling modules to keep this file lean) --
+    # -- content extraction (thin front doors onto the sibling modules) --
 
     def main_content(self) -> "Element | None":
         """The page's main content region (``<main>``/``<article>``/densest block), or ``None``."""
-        from .content import main_content
-
-        return main_content(self)
+        return _content.main_content(self)
 
     def readable(self, *, main_content_only: bool = True) -> str:
         """The page's readable text, chrome stripped (nav/footer/scripts), whitespace collapsed."""
-        from .content import readable_text
-
-        return readable_text(self, main_content_only=main_content_only)
+        return _content.readable_text(self, main_content_only=main_content_only)
 
     def markdown(self, *, main_content_only: bool = False) -> str:
         """The page rendered as markdown -- headings, links, lists, emphasis, code."""
-        from .content import markdown
-
-        return markdown(self, main_content_only=main_content_only)
+        return _content.markdown(self, main_content_only=main_content_only)
 
     def tables(self, selector: "str | None" = None, *, transpose: bool = False) -> "list[dict[str, str]]":
         """HTML ``<table>`` rows as header-keyed records, with rowspan/colspan expanded."""
-        from .content import tables
-
-        return tables(self, selector, transpose=transpose)
+        return _content.tables(self, selector, transpose=transpose)
 
     def regex(self, pattern: str, *, group: "int | str" = 0, flags: int = 0) -> "str | None":
         """The first ``pattern`` match in the document text (``group`` of it), or ``None``."""
-        from .regex import regex
-
-        return regex(self, pattern, group=group, flags=flags)
+        return _regex_mod.regex(self, pattern, group=group, flags=flags)
 
     def regex_all(self, pattern: str, *, group: "int | str" = 0, flags: int = 0) -> "list[str]":
         """Every ``pattern`` match in the document text, each reduced to ``group``."""
-        from .regex import regex_all
-
-        return regex_all(self, pattern, group=group, flags=flags)
+        return _regex_mod.regex_all(self, pattern, group=group, flags=flags)
 
     def skeleton(self, *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30) -> str:
         """A token-lean indented open-tag outline of the DOM (for cheap selector authoring)."""
-        from .structure import skeleton
-
-        return skeleton(self, max_lines=max_lines, text_chars=text_chars, max_depth=max_depth)
+        return _structure.skeleton(self, max_lines=max_lines, text_chars=text_chars, max_depth=max_depth)
 
     def outline(self) -> "list[Heading]":
         """The document's heading tree (``<h1>``..``<h6>``) in order."""
-        from .structure import outline
+        return _structure.outline(self)
 
-        return outline(self)
-
-    def metadata(self) -> "Metadata":
+    def metadata(self) -> Metadata:
         """Head-level facts: title, description, canonical, OpenGraph, JSON-LD, feeds."""
-        from .metadata import metadata
-
         return metadata(self)
 
     def records(self, *, min_items: int = 3, top_k: int = 3) -> "list[RecordRegion]":
         """The dominant repeating regions (the dataset) with a suggested ``select_all`` selector --
         the mechanical answer to "where is the list?" (see :mod:`.records`)."""
-        from .records import find_records
-
         return find_records(self, min_items=min_items, top_k=top_k)
+
+    def index(self, *, kind: "Literal['interactive', 'content']" = "interactive",
+              limit: int = 200) -> "list[IndexedElement]":
+        """The numbered element table -- controls to drive (``interactive``) or text leaves to
+        extract (``content``), each with a durable class-free selector (see :mod:`.index`)."""
+        return index_elements(self, kind=kind, limit=limit)
 
     # -- JSON navigation (JSON documents; see :mod:`.jsonpath`) --
 
-    def at(self, path: str) -> Any:
+    def at(self, path: str) -> JSON:
         """Follow a dotted path into the parsed JSON (``"data.results[0].name"``), or ``None``."""
-        from .jsonpath import dig
-
         return dig(self.json(), path)
 
     def json_skeleton(self, *, max_lines: int = 400, text_chars: int = 40) -> str:
         """A token-lean outline of the JSON shape -- write dotted-path queries from it."""
-        from .jsonpath import skeleton
-
-        return skeleton(self.json(), max_lines=max_lines, text_chars=text_chars)
+        return _json_skeleton(self.json(), max_lines=max_lines, text_chars=text_chars)
 
     def json_leaves(self, *, budget: int = 20000) -> "list[str]":
         """Every scalar leaf of the JSON value, as strings (the values a page is likely to echo)."""
-        from .jsonpath import leaves
-
         return leaves(self.json(), budget=budget)
-
-
-class _Unset:
-    __slots__ = ()
-
-
-_UNSET = _Unset()
 
 
 __all__ = ["Document", "Element"]

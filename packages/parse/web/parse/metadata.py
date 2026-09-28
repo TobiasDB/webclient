@@ -8,10 +8,12 @@ onboarding pipeline wants without hand-writing selectors each time. JSON-LD bloc
 from __future__ import annotations
 
 import json as _json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from urllib.parse import urljoin
 
 from pydantic import BaseModel
+
+from .jsonpath import JSON
 
 if TYPE_CHECKING:
     from .document import Document
@@ -24,7 +26,7 @@ class Metadata(BaseModel):
     description: str | None = None
     canonical: str | None = None
     og: dict[str, str] = {}          # OpenGraph (og:*) properties
-    ld_json: list[Any] = []          # parsed application/ld+json blocks
+    ld_json: list[JSON] = []         # parsed application/ld+json blocks
     feeds: list[str] = []            # RSS/Atom feed URLs (absolute)
 
 
@@ -46,7 +48,7 @@ def metadata(doc: "Document") -> Metadata:
     title_el = doc.select("title")
     title = (title_el.text if title_el is not None else None) or og.get("og:title")
 
-    ld: list[Any] = []
+    ld: list[JSON] = []
     for el in doc.select_all("script[type='application/ld+json']"):
         try:
             ld.append(_json.loads(el.text or "null"))
