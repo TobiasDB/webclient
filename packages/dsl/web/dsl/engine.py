@@ -17,8 +17,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from web.crawl import Crawler, Goal
 from web.fetch import BrowserFetcher, Request
 from web.kernel import WebException, err
+from web.parse import Document as ParsedDocument
 from web.resolve import Resolver, document
 
 from . import transforms
@@ -146,13 +148,11 @@ class Crawl:
         self._seeds = seeds
         self._max_pages = max_pages
 
-    async def acollect(self) -> list[Any]:
-        from web.crawl import Crawler, Goal
-
+    async def acollect(self) -> "list[ParsedDocument]":
         goal = Goal(start=self._seeds, max_pages=self._max_pages)
         return [d async for d in Crawler(self._engine.resolver).crawl(goal)]
 
-    def collect(self) -> list[Any]:
+    def collect(self) -> "list[ParsedDocument]":
         return asyncio.run(self.acollect())
 
 

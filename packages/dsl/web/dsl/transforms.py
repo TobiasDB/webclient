@@ -13,6 +13,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from dateutil import parser as _dateparser
+
 #: the op names handled here (vs the element reads applied in engine._apply_read).
 TRANSFORMS = frozenset({"filter", "distinct", "limit", "merge", "nonempty",
                         "number", "date", "split", "regex", "strip"})
@@ -134,10 +136,8 @@ def _to_date(v: Any) -> "str | None":
     """Parse a date/time out of a value, normalised to ISO 8601, or ``None``."""
     if not isinstance(v, str) or not v.strip():
         return None
-    from dateutil import parser as _dp
-
     try:
-        return _dp.parse(v, fuzzy=True).isoformat()
+        return _dateparser.parse(v, fuzzy=True).isoformat()
     except (ValueError, OverflowError):
         return None
 
