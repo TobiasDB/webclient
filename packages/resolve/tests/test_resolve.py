@@ -121,3 +121,25 @@ def test_detect_runs_all_and_collects_fired() -> None:
     assert {"spa", "login_wall"} <= names
     # a JSON document fires nothing (detectors guard on kind)
     assert detect(parse_bytes(b'{"a":1}', content_type="application/json")) == []
+
+
+def test_escalate_renders_a_spa_shell_via_browser(httpserver: HTTPServer) -> None:
+    from web.fetch import BrowserFetcher
+    from web.resolve import escalate
+    # a JS shell: static resolve sees an empty #root and fires spa -> escalate renders it
+    httpserver.expect_request("/spa").respond_with_data(
+        b"<html><body><div id='root'></div>"
+        b"<script>document.getElementById('root').textContent='REND'+'ERED'</script></body></html>",
+        content_type="text/html")
+
+    async def go() -> str:
+        browser = BrowserFetcher()
+        r = Resolver(HttpFetcher(), middleware=(escalate(browser),))
+        try:
+            doc = await r.resolve(Request(url=httpserver.url_for("/spa")))
+            return doc.select("#root")[0].text
+        finally:
+            await r.aclose()
+            await browser.aclose()
+
+    assert _run(go()) == "RENDERED"  # the expensive tier ran only because the signal said so

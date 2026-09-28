@@ -16,11 +16,11 @@ httpx or lxml. A sync / lazy / remote face is the DSL's job, not this layer's.
 from __future__ import annotations
 
 from .base import Handler, Middleware, Resolver
-from .middleware import rate_limit, retry
+from .middleware import escalate, rate_limit, retry
 from .signals import DETECTORS, Signal, detect, login_wall, pagination, spa
 
 __all__ = [
-    "Resolver", "Handler", "Middleware", "retry", "rate_limit",
+    "Resolver", "Handler", "Middleware", "retry", "rate_limit", "escalate",
     # signals: purely-functional detectors over a Document (parse stays bytes -> Document)
     "Signal", "detect", "spa", "login_wall", "pagination", "DETECTORS",
 ]

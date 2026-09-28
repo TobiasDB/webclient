@@ -96,3 +96,21 @@ def test_crawl_surface(httpserver: HTTPServer) -> None:
         return len(docs)
 
     assert _run(go()) >= 2
+
+
+def test_reference_actions_drive_a_browser(httpserver: HTTPServer) -> None:
+    from web.fetch import BrowserFetcher
+    httpserver.expect_request("/f").respond_with_data(
+        b"<html><body><input id='q'>"
+        b"<button id='go' onclick=\"document.body.setAttribute('data-done', document.getElementById('q').value)\">go</button>"
+        b"</body></html>", content_type="text/html")
+
+    async def go() -> "str | None":
+        d = DSL(Resolver(HttpFetcher()), browser=BrowserFetcher())
+        try:  # actions drive one live page, .doc() snapshots+parses once, then read
+            els = await d.ref(httpserver.url_for("/f")).type("#q", "hi").click("#go").doc().select("body").acollect()
+            return els[0].attr("data-done")
+        finally:
+            await d.aclose()
+
+    assert _run(go()) == "hi"

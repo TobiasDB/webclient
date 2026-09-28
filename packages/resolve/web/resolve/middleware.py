@@ -11,10 +11,11 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import urlparse
 
-from web.fetch import Request
-from web.parse import Document
+from web.fetch import Fetcher, Request
+from web.parse import Document, parse
 
 from .base import Handler, Middleware
+from .signals import detect
 
 _RETRIABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
@@ -61,4 +62,19 @@ def rate_limit(min_interval: float) -> Middleware:
     return mw
 
 
-__all__ = ["retry", "rate_limit"]
+def escalate(browser: Fetcher, *, when: tuple[str, ...] = ("spa",)) -> Middleware:
+    """The signals -> policy payoff: after a static resolve, if a render-worthy signal fired
+    (``spa`` by default -- the page is a JS-gated shell), re-fetch through ``browser`` (a
+    render-capable Fetcher) and re-parse. A page that renders server-side skips the browser, so
+    the expensive tier is used only when the evidence says it is needed (the adaptive rule)."""
+
+    async def mw(request: Request, nxt: Handler) -> Document:
+        doc = await nxt(request)
+        if doc.kind == "html" and {s.name for s in detect(doc)} & set(when):
+            return parse(await browser.fetch(request))
+        return doc
+
+    return mw
+
+
+__all__ = ["retry", "rate_limit", "escalate"]

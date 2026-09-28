@@ -18,8 +18,9 @@ import asyncio
 import inspect
 from typing import Any
 
-from web.fetch import Request
+from web.fetch import BrowserFetcher, Request
 from web.kernel import WebException, err
+from web.parse import parse
 from web.resolve import Resolver
 
 from .plan import Plan, Step
@@ -110,8 +111,9 @@ class DSL:
     """A lazy execution engine over a :class:`~web.resolve.Resolver`. ``ref(url)`` enters the
     Reference surface; ``crawl(seeds)`` the Crawl surface."""
 
-    def __init__(self, resolver: Resolver) -> None:
+    def __init__(self, resolver: Resolver, *, browser: BrowserFetcher | None = None) -> None:
         self.resolver = resolver
+        self.browser = browser
 
     def ref(self, url: str) -> Reference:
         return Reference(self, url)
@@ -119,12 +121,25 @@ class DSL:
     def crawl(self, seeds: list[str], *, max_pages: int = 50) -> Crawl:
         return Crawl(self, list(seeds), max_pages)
 
+    async def _root(self, plan: Plan) -> Any:
+        """Obtain the root Document: drive a live page through the Reference actions and parse
+        its snapshot (browser), or resolve the URL statically when there are no actions."""
+        if not plan.actions:
+            return await self.resolver.resolve(Request(url=plan.url))
+        if self.browser is None:
+            raise WebException(err("dsl.needs_browser", "Reference actions require a browser (DSL(..., browser=...))"))
+        page = await self.browser.open(Request(url=plan.url))
+        try:
+            for a in plan.actions:
+                page = await getattr(page, a.op)(*a.args)
+            return parse(await page.snapshot())
+        finally:
+            await page.close()
+
     async def run(self, plan: Plan) -> Any:
-        """Execute a plan: (drive the page through the Reference actions, then) resolve + parse
-        the root and apply the Document reads -- awaiting coroutine results, passing values through."""
-        if plan.actions:  # click/type/wait need a live page -- the browser fetcher (future)
-            raise WebException(err("dsl.needs_browser", "Reference actions require a browser fetcher"))
-        obj: Any = await self.resolver.resolve(Request(url=plan.url))
+        """Execute a plan: obtain the root Document, then apply the Document reads -- awaiting a
+        coroutine result (async method), passing a plain value through (sync method)."""
+        obj: Any = await self._root(plan)
         for r in plan.reads:
             result = getattr(obj, r.op)(*r.args)
             obj = await result if inspect.isawaitable(result) else result
@@ -132,6 +147,8 @@ class DSL:
 
     async def aclose(self) -> None:
         await self.resolver.aclose()
+        if self.browser is not None:
+            await self.browser.aclose()
 
 
 async def run_blob(blob: str, resolver: Resolver) -> Any:
