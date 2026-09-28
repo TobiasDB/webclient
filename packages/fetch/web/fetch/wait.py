@@ -10,9 +10,12 @@ rendered; a concrete condition (``selector``) that never arrives raises, so a re
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from playwright.async_api import Page
 
 #: the readiness milestones (see the class docstring).
 Until = Literal["domcontentloaded", "load", "networkidle", "dom_stable", "selector"]
@@ -28,7 +31,7 @@ class Wait(BaseModel):
     selector: "str | None" = None
 
 
-async def apply_wait(page: Any, wait: Wait) -> None:
+async def apply_wait(page: "Page", wait: Wait) -> None:
     """Wait for ``wait``'s milestone on an already-navigated ``page``. ``load`` is handled by the
     initial ``goto``, so it is a no-op here."""
     ms = int(wait.timeout * 1000)
@@ -45,14 +48,14 @@ async def apply_wait(page: Any, wait: Wait) -> None:
         await _dom_stable(page, wait.timeout, wait.quiet)
 
 
-async def _dom_stable(page: Any, timeout: float, quiet: float) -> None:
+async def _dom_stable(page: "Page", timeout: float, quiet: float) -> None:
     """Return once the DOM node count stops changing for ``quiet`` seconds, or the budget is hit
     (a settle, not a failure) -- the safe general wait for a page that rewrites its own DOM."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     last, stable_since = -1, None
     while loop.time() < deadline:
-        n = await page.evaluate("document.getElementsByTagName('*').length")
+        n = int(await page.evaluate("document.getElementsByTagName('*').length"))
         if n == last:
             stable_since = stable_since or loop.time()
             if loop.time() - stable_since >= quiet:

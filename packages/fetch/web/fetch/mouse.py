@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import random
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from playwright.async_api import Page
 
 
 def human_path(x1: float, y1: float, x2: float, y2: float, *, steps: int = 24) -> "list[tuple[float, float]]":
@@ -28,7 +31,7 @@ def human_path(x1: float, y1: float, x2: float, y2: float, *, steps: int = 24) -
     return out
 
 
-async def move_along(page: Any, x: float, y: float, *, steps: int = 24) -> None:
+async def move_along(page: "Page", x: float, y: float, *, steps: int = 24) -> None:
     """Move ``page``'s mouse from its current spot to (x,y) along a human path, with easing pauses.
     Starts from the viewport centre (Playwright does not expose the current cursor position)."""
     vp = page.viewport_size or {"width": 1280, "height": 800}

@@ -8,10 +8,13 @@ Playwright.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:  # playwright is an optional extra; this is the renderer for its proxy config
+    from playwright.async_api import ProxySettings
 
 
 class Proxy(BaseModel):
@@ -32,9 +35,9 @@ class Proxy(BaseModel):
         auth = quote(self.username) + (":" + quote(self.password) if self.password else "")
         return f"{scheme}{sep}{auth}@{rest}" if sep else f"{auth}@{self.server}"
 
-    def playwright(self) -> dict[str, str]:
-        """A proxy dict for Playwright's ``launch(proxy=...)``."""
-        out: dict[str, str] = {"server": self.server}
+    def playwright(self) -> "ProxySettings":
+        """The proxy config for Playwright's ``launch(proxy=...)`` (its ``ProxySettings`` shape)."""
+        out: "ProxySettings" = {"server": self.server}
         if self.username is not None:
             out["username"] = self.username
         if self.password is not None:

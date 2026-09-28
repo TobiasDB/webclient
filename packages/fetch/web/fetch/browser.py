@@ -14,7 +14,7 @@ imported lazily, so importing web.fetch never requires it.
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Literal
 
 from web.kernel import Event, emit
 
@@ -28,6 +28,9 @@ from .script import Script, ScriptRegistry, default_scripts
 from .snapshot import Snapshot
 from .wait import Wait, apply_wait
 
+if TYPE_CHECKING:  # playwright is an optional extra; imported lazily at runtime in _browser_ready
+    from playwright.async_api import Browser, BrowserContext, ConsoleMessage, Page, Playwright, Response
+
 _STEALTH = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
 _BODY_CAP = 512_000  # per-response body captured (text/data responses only)
 _BODIES_MAX = 60     # how many response bodies to drain per snapshot
@@ -37,7 +40,8 @@ class BrowserSession:
     """A browser session: it OWNS a Playwright context + page. Actions mutate the page and return
     Self; ``snapshot`` materialises a Snapshot; ``aclose`` closes the context (and its page)."""
 
-    def __init__(self, context: Any, page: Any, scripts: tuple[Script, ...], wait: "Wait | None" = None) -> None:
+    def __init__(self, context: "BrowserContext", page: "Page", scripts: tuple[Script, ...],
+                 wait: "Wait | None" = None) -> None:
         self._context = context
         self._page = page
         self._scripts = scripts
@@ -45,10 +49,16 @@ class BrowserSession:
         self._request = Request(url=page.url or "about:blank")
         self._status = 0
         self._headers: dict[str, str] = {}
-        self._responses: list[Any] = []  # raw Response objects; bodies drained in snapshot()
+        self._responses: "list[Response]" = []  # raw Response objects; bodies drained in snapshot()
         self._console: list[ConsoleEvent] = []
-        page.on("response", lambda r: self._responses.append(r))
-        page.on("console", lambda m: self._console.append(ConsoleEvent(level=m.type, text=m.text)))
+        page.on("response", self._record_response)
+        page.on("console", self._record_console)
+
+    def _record_response(self, response: "Response") -> None:
+        self._responses.append(response)
+
+    def _record_console(self, message: "ConsoleMessage") -> None:
+        self._console.append(ConsoleEvent(level=message.type, text=message.text))
 
     async def goto(self, request: Request, *, wait: "Wait | None" = None) -> "BrowserSession":
         """Navigate the owned page to ``request`` and settle per ``wait`` (else the session default);
@@ -56,7 +66,7 @@ class BrowserSession:
         self._request = request
         self._responses.clear()
         w = wait or self._wait
-        nav = "domcontentloaded" if w.until == "domcontentloaded" else "load"
+        nav: Literal["domcontentloaded", "load"] = "domcontentloaded" if w.until == "domcontentloaded" else "load"
         resp = await self._page.goto(request.url, wait_until=nav, timeout=request.timeout * 1000)
         self._status = resp.status if resp is not None else 0
         self._headers = dict(resp.headers) if resp is not None else {}
@@ -97,8 +107,9 @@ class BrowserSession:
         await self._page.go_back()
         return self
 
-    async def evaluate(self, script: str) -> Any:
-        """Run JS in the page and return its result -- a read, not a chainable action."""
+    async def evaluate(self, script: str) -> object:
+        """Run JS in the page and return its result -- a read, not a chainable action. The result is
+        arbitrary JS, so it is typed ``object``; a caller narrows it."""
         return await self._page.evaluate(script)
 
     async def screenshot(self, selector: "str | None" = None) -> bytes:
@@ -186,23 +197,25 @@ class BrowserFetcher:
             else scripts if isinstance(scripts, ScriptRegistry)
             else ScriptRegistry(scripts)
         )
-        self._pw: Any = None
-        self._browser: Any = None
+        self._pw: "Playwright | None" = None
+        self._browser: "Browser | None" = None
 
-    async def _browser_ready(self) -> Any:
-        if self._browser is None:
+    async def _browser_ready(self) -> "Browser":
+        browser = self._browser
+        if browser is None:
             from playwright.async_api import async_playwright
 
             self._pw = await async_playwright().start()
             if self._cdp is not None:  # attach to an existing browser over the DevTools protocol
-                self._browser = await self._pw.chromium.connect_over_cdp(self._cdp)
+                browser = await self._pw.chromium.connect_over_cdp(self._cdp)
             else:
-                self._browser = await self._pw.chromium.launch(
+                browser = await self._pw.chromium.launch(
                     headless=self._headless,
                     channel=None if self._channel == "chromium" else self._channel,
                     proxy=self._proxy.playwright() if self._proxy else None,
                 )
-        return self._browser
+            self._browser = browser
+        return browser
 
     async def session(self) -> BrowserSession:
         """Open a session that OWNS a fresh context + page (isolated cookies/state). Applies the
