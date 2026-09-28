@@ -228,3 +228,14 @@ def test_tables_degenerate_no_cells_does_not_crash() -> None:
     # a header-only table yields no data rows, not junk
     doc2 = parse(b"<table><tr><th>A</th><th>B</th></tr></table>", content_type="text/html")
     assert doc2.tables() == []
+
+
+def test_json_reads_are_safe_on_non_json_documents() -> None:
+    # symmetry with markup reads being safe on JSON: JSON reads no-op on non-JSON (don't raise)
+    html = parse(b"<html><body><p>hi</p></body></html>", content_type="text/html")
+    assert html.at("data.x") is None
+    assert html.json_skeleton() == ""
+    assert html.json_leaves() == []
+    # and still work on a real JSON document
+    j = parse(b'{"a": {"b": 5}}', content_type="application/json")
+    assert j.at("a.b") == 5 and "a: {" in j.json_skeleton()

@@ -190,17 +190,24 @@ class Document:
         return index_elements(self, kind=kind, limit=limit)
 
     # -- JSON navigation (JSON documents; see :mod:`.jsonpath`) --
+    # These are SAFE on a non-JSON document (they no-op), mirroring how the markup reads are safe
+    # on a JSON one; use ``json()`` directly when you want the raise-on-non-JSON behaviour.
 
     def at(self, path: str) -> JSON:
-        """Follow a dotted path into the parsed JSON (``"data.results[0].name"``), or ``None``."""
-        return dig(self.json(), path)
+        """Follow a dotted path into the parsed JSON (``"data.results[0].name"``), or ``None`` (also
+        ``None`` for a non-JSON document)."""
+        return dig(self.json(), path) if self.kind == "json" else None
 
     def json_skeleton(self, *, max_lines: int = 400, text_chars: int = 40) -> str:
-        """A token-lean outline of the JSON shape -- write dotted-path queries from it."""
+        """A token-lean outline of the JSON shape (``""`` for a non-JSON document)."""
+        if self.kind != "json":
+            return ""
         return _json_skeleton(self.json(), max_lines=max_lines, text_chars=text_chars)
 
     def json_leaves(self, *, budget: int = 20000) -> "list[str]":
-        """Every scalar leaf of the JSON value, as strings (the values a page is likely to echo)."""
+        """Every scalar leaf of the JSON value, as strings (empty for a non-JSON document)."""
+        if self.kind != "json":
+            return []
         return leaves(self.json(), budget=budget)
 
 
