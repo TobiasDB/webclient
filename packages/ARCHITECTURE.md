@@ -29,6 +29,7 @@ takes the ideas, not the code.
 ## The stack
 
 ```
+web.agent     an observe→decide→apply loop that drives the stack           ← parse (+ below)
 web.dsl       lazy engine, 4 dispatch modes (sync / async / lazy / API)   ← all below
 web.crawl     Goal → Documents                                            ← …, resolve
 web.resolve   Request → Document  · middleware impls · tiers · signals     ← kernel, fetch, parse
@@ -160,6 +161,18 @@ The opinionated orchestration over fetch's framework. Owns everything policy.
   `Plan { url, actions, reads }` is serialisable, which is what makes remote free.
 
 ---
+
+### web.agent — the agent tier: a resumable `observe → decide → apply` loop
+This is where `BoundedLoop` belongs — its **interrupt / resume** is what an agent needs (the
+simple loops below don't). `decide` may return an `Ask` instead of a decision; the loop stops
+`waiting` and the caller `resume`s it with a human answer, continuing from the same round.
+- `BoundedLoop(observe, decide, apply, done, progress=, max_rounds=, max_stalls=)`;
+  `await .arun(state) -> Verdict` (may be `waiting`), `await .resume(answer)`.
+- First agent — extraction **authoring**: `Author(doc, driver).run() -> Authored` drives the loop
+  to find a `Selection` (row selector + field sub-selectors) that pulls rows from a page. The
+  `driver` (an LLM / heuristic / stub) sees the page and the last rows and returns a refined
+  `Selection`, `Done`, or `Ask`. A winning Selection maps straight onto a DSL plan
+  (`ref(url).doc().select_all(row).project(**fields)`).
 
 ## How it composes
 
