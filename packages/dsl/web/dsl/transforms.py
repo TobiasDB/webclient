@@ -92,7 +92,8 @@ def _distinct(value: object, key: "str | None") -> object:
     seen: set[object] = set()
     out: list[object] = []
     for item in value:
-        marker = item.get(key) if key and isinstance(item, dict) else _hashable(item)
+        keyed = item.get(key) if key and isinstance(item, dict) else item
+        marker = _hashable(keyed)  # _hashable() so an unhashable key value (list/dict) can't crash
         if marker in seen:
             continue
         seen.add(marker)

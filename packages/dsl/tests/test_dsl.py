@@ -223,3 +223,13 @@ def test_date_transform_normalises_to_iso(httpserver: HTTPServer) -> None:
 
     out = _run(go())
     assert out[0].startswith("2026-03-03")
+
+
+def test_distinct_key_tolerates_unhashable_values() -> None:
+    # distinct(key=...) on rows whose key column holds a list must not crash (unhashable marker)
+    from web.dsl.transforms import apply as _apply
+    rows = [{"tags": ["a", "b"], "id": 1}, {"tags": ["a", "b"], "id": 2}, {"tags": ["c"], "id": 3}]
+    out = _apply(rows, "distinct", [{"field": None}])  # distinct with a key set below
+    assert isinstance(out, list)
+    keyed = _apply(rows, "distinct", ["tags"])  # key = "tags" (a list-valued column)
+    assert keyed == [{"tags": ["a", "b"], "id": 1}, {"tags": ["c"], "id": 3}]  # deduped by list value
