@@ -1,66 +1,32 @@
-"""web.parse -- interpretation: ``bytes | Snapshot -> Document``.
+"""web.parse -- interpretation: ``bytes -> Document``. Depends only on web.kernel.
 
-The layer fetch deliberately stops short of: it sniffs the content kind, decodes the charset,
-and parses the bytes into a :class:`Document` you can read (``text`` / ``select`` / ``links`` /
-``json``). Two entry points:
+Purely content: sniff the kind, decode the charset, build the tree, and expose the utilities to
+find / extract -- ``select`` / ``select_all`` / ``links`` / ``json`` on a :class:`Document`, and
+``text`` / ``attr`` / nested ``select`` on an :class:`Element`. It knows nothing of transport --
+no Snapshot, no status/headers -- so it runs on any bytes, in isolation:
 
-    from web.parse import parse_bytes, parse
-    doc = parse_bytes(b"<h1>hi</h1>", content_type="text/html")   # fetch-free, works on raw bytes
-    doc = parse(snapshot)                                          # from a web.fetch.Snapshot
+    from web.parse import parse
+    doc = parse(b"<h1>hi</h1>", content_type="text/html")
 
-``parse_bytes`` needs nothing but bytes, so parse is usable in isolation; ``parse`` is the thin
-adapter that reads a Snapshot's fields. Depends on web.kernel and web.fetch (for the Snapshot
-contract) -- lower layers only.
+``url`` is only the base for resolving relative links. The ``Snapshot -> Document`` bridge lives
+in web.resolve, and it just hands over the bytes.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-from web.kernel import WebError
-
 from .document import Document, Element
 from .sniff import Kind, sniff_charset, sniff_kind
 
-if TYPE_CHECKING:
-    from web.fetch import Snapshot
 
-
-def parse_bytes(
-    content: bytes,
-    *,
-    content_type: str | None = None,
-    url: str = "",
-    status: int = 0,
-    headers: dict[str, str] | None = None,
-    error: "WebError | None" = None,
-) -> Document:
-    """Interpret raw bytes into a :class:`Document` -- the fetch-free core. Sniffs the kind
-    and charset from ``content_type`` + the bytes."""
+def parse(content: bytes, *, content_type: str | None = None, url: str = "") -> Document:
+    """Interpret bytes into a :class:`Document`: sniff the kind and charset from ``content_type``
+    + the bytes, keeping ``url`` as the base for relative-link resolution."""
     return Document(
         content=content,
         kind=sniff_kind(content_type, content),
         url=url,
-        status=status,
-        headers=headers,
         encoding=sniff_charset(content_type, content),
-        error=error,
     )
 
 
-def parse(snapshot: "Snapshot") -> Document:
-    """Interpret a :class:`web.fetch.Snapshot` into a :class:`Document` -- the fetch -> parse
-    step. Reads the response's Content-Type (case-insensitively) to sniff, and carries the
-    snapshot's url / status / headers / error onto the document."""
-    ci = {k.lower(): v for k, v in snapshot.headers.items()}
-    return parse_bytes(
-        snapshot.content,
-        content_type=ci.get("content-type"),
-        url=snapshot.url or snapshot.request.url,
-        status=snapshot.status,
-        headers=snapshot.headers,
-        error=snapshot.error,
-    )
-
-
-__all__ = ["parse", "parse_bytes", "Document", "Element", "Kind", "sniff_kind", "sniff_charset"]
+__all__ = ["parse", "Document", "Element", "Kind", "sniff_kind", "sniff_charset"]

@@ -19,8 +19,7 @@ from typing import Any
 
 from web.fetch import BrowserFetcher, Request
 from web.kernel import WebException, err
-from web.parse import parse
-from web.resolve import Resolver
+from web.resolve import Resolver, document
 
 from .plan import Plan, Step
 
@@ -106,9 +105,10 @@ class Crawl:
         self._max_pages = max_pages
 
     async def acollect(self) -> list[Any]:
-        from web.crawl import Crawler
+        from web.crawl import Crawler, Goal
 
-        return [d async for d in Crawler(self._engine.resolver).crawl(self._seeds, max_pages=self._max_pages)]
+        goal = Goal(start=self._seeds, max_pages=self._max_pages)
+        return [d async for d in Crawler(self._engine.resolver).crawl(goal)]
 
     def collect(self) -> list[Any]:
         return asyncio.run(self.acollect())
@@ -139,7 +139,7 @@ class DSL:
         try:
             for a in plan.actions:
                 page = await getattr(page, a.op)(*a.args)
-            return parse(await page.snapshot())
+            return document(await page.snapshot())
         finally:
             await page.close()
 

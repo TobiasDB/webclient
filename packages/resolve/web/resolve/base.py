@@ -24,7 +24,8 @@ from dataclasses import dataclass, replace
 from typing import Any, cast
 
 from web.fetch import Fetcher, HttpFetcher, Middleware, Request, stack
-from web.parse import Document, parse
+from web.parse import Document
+from .document import document
 
 from .middleware import escalate as _escalate
 from .middleware import rate_limit as _rate_limit
@@ -97,7 +98,7 @@ class Resolver:
         self._fetcher = stack(base_tier, chain)  # base tier + the chain
 
     async def resolve(self, request: Request) -> Document:
-        return parse(await self._fetcher.fetch(request))
+        return document(await self._fetcher.fetch(request))
 
     async def aclose(self) -> None:
         for tier in self._tiers:  # close every tier (unused browser tiers are a no-op)

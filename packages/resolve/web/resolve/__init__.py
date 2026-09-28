@@ -21,9 +21,10 @@ from __future__ import annotations
 from web.fetch import Handler, Middleware, stack
 
 from .base import Profile, Resolver
+from .document import document
 from .middleware import escalate, rate_limit, retry
 from .paginate import Until, paginate_clicks, paginate_links, paginate_param
-from .signals import DETECTORS, Signal, detect, login_wall, pagination, spa
+from .signals import Signal, anti_bot, login_wall, pagination, spa
 from .stops import any_of, first_n, until_empty, until_match, until_repeat
 from .tiers import ladder
 
@@ -35,5 +36,5 @@ __all__ = [
     # pagination stop conditions (composable, some stateful)
     "until_empty", "until_match", "first_n", "until_repeat", "any_of",
     # signals: purely-functional detectors over a Document
-    "Signal", "detect", "spa", "login_wall", "pagination", "DETECTORS",
+    "document", "Signal", "spa", "login_wall", "pagination", "anti_bot",
 ]

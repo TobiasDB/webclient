@@ -1,14 +1,13 @@
-"""``Document`` and ``Element`` -- the parse layer's output: a resource interpreted.
+"""``Document`` and ``Element`` -- the parse layer's output: a resource's CONTENT, interpreted.
 
-A Document is plain code: it holds the raw bytes plus what fetch reported (url, status,
-headers), knows its sniffed ``kind`` and text ``encoding``, and exposes reads over the parsed
-content -- ``text``, ``select(css)`` / ``links()`` for markup, ``json()`` for JSON. Parsing is
-lazy (the lxml tree / JSON value is built on first use and cached), so a Document is cheap to
-construct. A selected node is an :class:`Element`, itself readable and nestable -- ``select``
-composes.
-
-No laziness-as-a-plan, no dispatch: these are ordinary methods returning ordinary values. A
-sync/lazy/remote/recording face is the DSL layer's job, built on top of these plain reads.
+A Document is pure content: the raw bytes, the sniffed ``kind`` and text ``encoding``, and the
+base ``url`` (only for resolving relative links). It exposes the utilities to find / extract --
+``text``, ``select`` / ``select_all`` / ``links`` for markup, ``json`` for JSON. It carries NO
+transport facts (status / headers / errors) -- those live on the Snapshot and are used internally
+by resolve; a Document is just what the bytes say. Parsing is lazy (the lxml tree / JSON value is
+built on first use and cached). A selected node is an :class:`Element`, itself readable and
+nestable -- ``select`` composes. Ordinary methods returning ordinary values (no dispatch/laziness
+-- that is the DSL's job on top).
 """
 
 from __future__ import annotations
@@ -16,8 +15,6 @@ from __future__ import annotations
 import json as _json
 from typing import Any
 from urllib.parse import urljoin
-
-from web.kernel import WebError
 
 from .sniff import Kind
 
@@ -61,34 +58,16 @@ class Element:
 
 
 class Document:
-    """A parsed resource. Construct via :func:`web.parse.parse` / :func:`parse_bytes`; read it
-    with ``text`` / ``select`` / ``links`` / ``json`` per its ``kind``."""
+    """A parsed resource's content. Construct via :func:`web.parse.parse`; read it with
+    ``text`` / ``select`` / ``select_all`` / ``links`` / ``json`` per its ``kind``."""
 
-    def __init__(
-        self,
-        *,
-        content: bytes,
-        kind: Kind,
-        url: str = "",
-        status: int = 0,
-        headers: dict[str, str] | None = None,
-        encoding: str = "utf-8",
-        error: WebError | None = None,
-    ) -> None:
+    def __init__(self, *, content: bytes, kind: Kind, url: str = "", encoding: str = "utf-8") -> None:
         self.content = content
         self.kind = kind
-        self.url = url
-        self.status = status
-        self.headers = headers or {}
+        self.url = url  # the base for relative-link resolution only
         self.encoding = encoding
-        self.error = error
         self._tree: Any = None
         self._json: Any = _UNSET
-
-    @property
-    def ok(self) -> bool:
-        """No parse/transport error and, when a status is known, a 2xx one."""
-        return self.error is None and (self.status == 0 or 200 <= self.status < 300)
 
     @property
     def text(self) -> str:
@@ -119,10 +98,7 @@ class Document:
 
     def links(self) -> "list[str]":
         """Every ``<a href>`` target, resolved absolute against the document URL."""
-        out: list[str] = []
-        for a in self._root().cssselect("a[href]"):
-            out.append(urljoin(self.url, a.get("href")))
-        return out
+        return [urljoin(self.url, a.get("href")) for a in self._root().cssselect("a[href]")]
 
     def json(self) -> Any:
         """The parsed JSON value (JSON documents); cached. Raises on non-JSON."""

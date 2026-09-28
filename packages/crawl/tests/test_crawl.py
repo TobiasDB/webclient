@@ -9,7 +9,7 @@ from pytest_httpserver import HTTPServer
 from web.fetch import HttpFetcher
 from web.parse import Document
 from web.resolve import Resolver
-from web.crawl import Crawler
+from web.crawl import Crawler, Goal
 
 
 def _run(coro):
@@ -28,7 +28,7 @@ def test_crawl_follows_same_origin_links_bfs(httpserver: HTTPServer) -> None:
         c = Crawler(Resolver())
         try:
             urls: list[str] = []
-            async for doc in c.crawl([httpserver.url_for("/")], max_pages=10):
+            async for doc in c.crawl(Goal(start=httpserver.url_for("/"), max_pages=10)):
                 assert isinstance(doc, Document)
                 urls.append(doc.url)
             return urls
@@ -50,7 +50,7 @@ def test_max_pages_bounds_the_crawl(httpserver: HTTPServer) -> None:
         c = Crawler(Resolver())
         try:
             n = 0
-            async for _ in c.crawl([httpserver.url_for("/")], max_pages=2):
+            async for _ in c.crawl(Goal(start=httpserver.url_for("/"), max_pages=2)):
                 n += 1
             return n
         finally:

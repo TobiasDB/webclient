@@ -18,7 +18,8 @@ from collections.abc import Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from web.fetch import BrowserFetcher, Handler, Middleware, Request, Snapshot
-from web.parse import Document, parse
+from web.parse import Document
+from .document import document
 
 #: stop the unfold after a page when this holds (see :mod:`.stops`).
 Until = Callable[[Document], bool]
@@ -58,7 +59,7 @@ def paginate_links(*, until: "Until | None" = None, max_pages: int = 20) -> Midd
         snap = await nxt(request)
         snaps, seen = [snap], {request.url}
         for _ in range(max_pages - 1):
-            doc = parse(snap)
+            doc = document(snap)
             nxt_url = _next_link(doc)
             if not snap.ok or nxt_url is None or nxt_url in seen or (until and until(doc)):
                 break
@@ -78,7 +79,7 @@ def paginate_param(name: str = "page", *, step: int = 1, until: "Until | None" =
         snap, url = await nxt(request), request.url
         snaps = [snap]
         for _ in range(max_pages - 1):
-            if not snap.ok or (until and until(parse(snap))):
+            if not snap.ok or (until and until(document(snap))):
                 break
             url = _bump(url, name, step)
             snap = await nxt(request.model_copy(update={"url": url}))
@@ -101,7 +102,7 @@ def paginate_clicks(
         try:
             for _ in range(max_clicks):
                 snap = await page.snapshot()
-                doc = parse(snap)
+                doc = document(snap)
                 if (until and until(doc)) or doc.select(more) is None:
                     break
                 await page.click(more)
