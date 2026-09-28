@@ -105,3 +105,95 @@ def test_authenticated_crawl_carries_session_cookies(httpserver: HTTPServer) -> 
 
     assert sorted(_run(with_session())) == ["one", "two"]  # cookie carried -> both protected pages
     assert _run(without_session()) == ["denied"]           # no session -> denied, no links to follow
+
+
+# -- canonical dedup, sitemap seeding, robots --
+from web.crawl import canonical, parse_robots, sitemap_urls  # noqa: E402
+
+
+def test_canonical_folds_tracking_and_trailing_slash() -> None:
+    a = canonical("HTTPS://Ex.com:443/p/?utm_source=x&b=2&a=1#frag")
+    b = canonical("https://ex.com/p?a=1&b=2")
+    assert a == b == "https://ex.com/p?a=1&b=2"
+
+
+def test_crawl_dedups_by_canonical_url(httpserver: HTTPServer) -> None:
+    # the index links to the same page two ways (bare + tracking param); it must be fetched once
+    httpserver.expect_request("/").respond_with_data(
+        b"<a href='/p'>x</a><a href='/p?utm_source=news'>x again</a>", content_type="text/html")
+    httpserver.expect_request("/p").respond_with_data(b"<p>page</p>", content_type="text/html")
+
+    async def go() -> int:
+        c = Crawler(Resolver())
+        try:
+            return len([d async for d in c.crawl(Goal(start=httpserver.url_for("/"), max_pages=10))])
+        finally:
+            await c.aclose()
+
+    assert _run(go()) == 2  # index + /p once (not the ?utm variant)
+
+
+def test_result_rel_canonical_dedups_yields(httpserver: HTTPServer) -> None:
+    # two distinct URLs that both declare the SAME canonical -> yielded once
+    canon = httpserver.url_for("/article")
+    page = f"<link rel=canonical href='{canon}'><p>hi</p>".encode()
+    httpserver.expect_request("/").respond_with_data(
+        b"<a href='/article'>a</a><a href='/article?page=2'>a2</a>", content_type="text/html")
+    httpserver.expect_request("/article").respond_with_data(page, content_type="text/html")
+    httpserver.expect_request("/article", query_string="page=2").respond_with_data(page, content_type="text/html")
+
+    async def go() -> int:
+        c = Crawler(Resolver())
+        try:
+            urls = [d.url async for d in c.crawl(Goal(start=httpserver.url_for("/"), max_pages=10))]
+            return sum(1 for u in urls if "article" in u)
+        finally:
+            await c.aclose()
+
+    assert _run(go()) == 1  # both article URLs share a canonical -> one result
+
+
+def test_parse_robots_rules_and_sitemaps() -> None:
+    text = ("User-agent: *\n"
+            "Disallow: /private\n"
+            "Allow: /private/ok\n"
+            "Sitemap: https://ex.com/sitemap.xml\n")
+    rob = parse_robots(text)
+    assert rob.sitemaps == ["https://ex.com/sitemap.xml"]
+    assert rob.allowed("https://ex.com/public")
+    assert not rob.allowed("https://ex.com/private/secret")
+    assert rob.allowed("https://ex.com/private/ok")  # longer Allow wins
+
+
+def test_crawl_seeds_from_sitemap(httpserver: HTTPServer) -> None:
+    sm = (f"<urlset><url><loc>{httpserver.url_for('/one')}</loc></url>"
+          f"<url><loc>{httpserver.url_for('/two')}</loc></url></urlset>").encode()
+    httpserver.expect_request("/sitemap.xml").respond_with_data(sm, content_type="application/xml")
+    httpserver.expect_request("/one").respond_with_data(b"<p>1</p>", content_type="text/html")
+    httpserver.expect_request("/two").respond_with_data(b"<p>2</p>", content_type="text/html")
+
+    async def go() -> list[str]:
+        r = Resolver()
+        return await sitemap_urls(r, httpserver.url_for("/"))
+
+    urls = _run(go())
+    assert urls == [httpserver.url_for("/one"), httpserver.url_for("/two")]
+
+
+def test_crawl_respects_robots_disallow(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/robots.txt").respond_with_data(
+        b"User-agent: *\nDisallow: /secret\n", content_type="text/plain")
+    httpserver.expect_request("/").respond_with_data(
+        b"<a href='/ok'>ok</a><a href='/secret/x'>no</a>", content_type="text/html")
+    httpserver.expect_request("/ok").respond_with_data(b"<p>ok</p>", content_type="text/html")
+
+    async def go() -> list[str]:
+        c = Crawler(Resolver())
+        try:
+            return [d.url async for d in c.crawl(
+                Goal(start=httpserver.url_for("/"), max_pages=10, respect_robots=True))]
+        finally:
+            await c.aclose()
+
+    urls = _run(go())
+    assert any("/ok" in u for u in urls) and not any("secret" in u for u in urls)

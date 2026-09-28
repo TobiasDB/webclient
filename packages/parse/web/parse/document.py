@@ -33,8 +33,8 @@ class Element:
 
     @property
     def text(self) -> str:
-        """All descendant text, whitespace-collapsed."""
-        return " ".join(self._node.text_content().split())
+        """All descendant text, whitespace-collapsed (works for HTML and XML nodes)."""
+        return " ".join("".join(self._node.itertext()).split())
 
     @property
     def html(self) -> str:
