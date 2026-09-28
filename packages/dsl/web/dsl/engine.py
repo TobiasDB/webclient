@@ -15,12 +15,14 @@ lights up all modes.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+
+from pydantic import JsonValue
 
 from web.crawl import Crawler, Goal
 from web.fetch import BrowserFetcher, Request
 from web.kernel import WebException, err
 from web.parse import Document as ParsedDocument
+from web.parse import Element as ParsedElement
 from web.resolve import Resolver, document
 
 from . import transforms
@@ -35,7 +37,7 @@ class Reference:
         self._url = url
         self._actions = actions
 
-    def _drive(self, op: str, *args: Any) -> "Reference":
+    def _drive(self, op: str, *args: JsonValue) -> "Reference":
         return Reference(self._engine, self._url, (*self._actions, Step(op=op, args=list(args))))
 
     def click(self, selector: str) -> "Reference":
@@ -60,7 +62,7 @@ class Document:
         self._plan = plan
         self._reads = reads
 
-    def _read(self, op: str, *args: Any) -> "Document":
+    def _read(self, op: str, *args: JsonValue) -> "Document":
         return Document(self._engine, self._plan, (*self._reads, Step(op=op, args=list(args))))
 
     def select(self, css: str) -> "Document":
@@ -81,10 +83,11 @@ class Document:
     def project(self, **selectors: str) -> "Document":
         """Over a ``select_all`` collection, map each element to a row dict -- each field is the
         text of its sub-selector (``project(title='.t', price='.p')`` -> ``list[dict]``)."""
-        return self._read("project", selectors)
+        fields: "dict[str, JsonValue]" = dict(selectors)
+        return self._read("project", fields)
 
     # -- post-extraction transforms: shape the extracted DATA (see :mod:`.transforms`) --
-    def filter(self, **equals: Any) -> "Document":
+    def filter(self, **equals: JsonValue) -> "Document":
         """Keep rows whose named fields match (substring for strings, equality otherwise)."""
         return self._read("filter", equals)
 
@@ -127,11 +130,11 @@ class Document:
     def _full(self) -> Plan:
         return Plan(url=self._plan.url, actions=self._plan.actions, reads=list(self._reads))
 
-    def collect(self) -> Any:
+    def collect(self) -> object:
         """SYNC dispatch: run the plan to completion (blocks; not from inside a running loop)."""
         return asyncio.run(self._engine.run(self._full()))
 
-    async def acollect(self) -> Any:
+    async def acollect(self) -> object:
         """ASYNC dispatch: run the plan on the caller's loop."""
         return await self._engine.run(self._full())
 
@@ -170,7 +173,7 @@ class DSL:
     def crawl(self, seeds: list[str], *, max_pages: int = 50) -> Crawl:
         return Crawl(self, list(seeds), max_pages)
 
-    async def _root(self, plan: Plan) -> Any:
+    async def _root(self, plan: Plan) -> ParsedDocument:
         """Obtain the root Document: drive a live page through the Reference actions and parse
         its snapshot (browser), or resolve the URL statically when there are no actions."""
         if not plan.actions:
@@ -186,10 +189,10 @@ class DSL:
         finally:
             await session.aclose()
 
-    async def run(self, plan: Plan) -> Any:
+    async def run(self, plan: Plan) -> object:
         """Execute a plan: obtain the root Document, then apply the Document reads. Reads are
         pure/sync; a read applied to a collection (a ``select_all`` result) maps over it."""
-        obj: Any = await self._root(plan)
+        obj: object = await self._root(plan)
         for r in plan.reads:
             obj = _apply_read(obj, r)
         return obj
@@ -200,22 +203,38 @@ class DSL:
             await self.browser.aclose()
 
 
-def _one(obj: Any, step: Step) -> Any:
+def _one(obj: object, step: Step) -> object:
     """Apply one read to a single object: call a method, or read a property (parse's ``text`` /
-    ``links`` are properties, so a non-callable attribute is used directly)."""
+    ``links`` are properties, so a non-callable attribute is used directly). ``getattr`` is the
+    recorded-op dispatch, so the reflective call is Any internally but returned as ``object``."""
     attr = getattr(obj, step.op)
     return attr(*step.args) if callable(attr) else attr
 
 
-def _apply_read(obj: Any, step: Step) -> Any:
+def _project(obj: object, fields: "dict[str, JsonValue]") -> "list[dict[str, object]]":
+    """Map each element of a ``select_all`` collection to a row: field -> the text of its
+    sub-selector (a per-record extraction)."""
+    rows = obj if isinstance(obj, list) else [obj]
+    out: list[dict[str, object]] = []
+    for el in rows:
+        if not isinstance(el, ParsedElement):
+            continue
+        row: dict[str, object] = {}
+        for key, selector in fields.items():
+            sub = el.select(selector) if isinstance(selector, str) else None
+            row[key] = sub.text if sub is not None else None
+        out.append(row)
+    return out
+
+
+def _apply_read(obj: object, step: Step) -> object:
     """Apply a read. ``project`` maps each element to a row dict; the :mod:`.transforms` ops shape
     the extracted DATA; any other read is an element method fanned out over a collection."""
     if obj is None:  # a prior select missed -> the rest of the chain is None, not a crash
         return None
     if step.op == "project":
-        fields: dict[str, str] = step.args[0]
-        rows = obj if isinstance(obj, list) else [obj]
-        return [{k: (e.text if (e := el.select(v)) is not None else None) for k, v in fields.items()} for el in rows]
+        first = step.args[0] if step.args else {}
+        return _project(obj, first if isinstance(first, dict) else {})
     if step.op in transforms.TRANSFORMS:
         return transforms.apply(obj, step.op, step.args)
     if isinstance(obj, list):
@@ -223,7 +242,7 @@ def _apply_read(obj: Any, step: Step) -> Any:
     return _one(obj, step)
 
 
-async def run_blob(blob: str, resolver: Resolver) -> Any:
+async def run_blob(blob: str, resolver: Resolver) -> object:
     """API/remote dispatch, server side: rebuild a plan from its blob and run it locally."""
     return await DSL(resolver).run(Plan.from_blob(blob))
 

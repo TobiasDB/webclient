@@ -13,16 +13,15 @@ form of the surface boundary: everything before ``.doc()`` drives, everything af
 
 from __future__ import annotations
 
-from typing import Any
-
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 
 class Step(BaseModel):
-    """One recorded call: ``op(*args)`` -- a Reference action or a Document read."""
+    """One recorded call: ``op(*args)`` -- a Reference action or a Document read. Args are plain
+    JSON (:class:`~pydantic.JsonValue`), so a Plan serialises to a blob for remote dispatch."""
 
     op: str
-    args: list[Any] = []
+    args: list[JsonValue] = []
 
 
 class Plan(BaseModel):
