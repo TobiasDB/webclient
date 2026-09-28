@@ -14,7 +14,6 @@ from __future__ import annotations
 import contextvars
 import time
 from collections.abc import Callable
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -46,7 +45,7 @@ class Subscription:
     def __enter__(self) -> "Subscription":
         return self
 
-    def __exit__(self, *exc: Any) -> None:
+    def __exit__(self, *exc: object) -> None:
         self()
 
 
@@ -94,14 +93,15 @@ def emit(event: Event) -> None:
 class _Using:
     def __init__(self, bus: EventBus) -> None:
         self._bus = bus
-        self._token: "Any" = None
+        self._token: "contextvars.Token[EventBus | None] | None" = None
 
     def __enter__(self) -> EventBus:
         self._token = _CURRENT.set(self._bus)
         return self._bus
 
-    def __exit__(self, *exc: Any) -> None:
-        _CURRENT.reset(self._token)
+    def __exit__(self, *exc: object) -> None:
+        if self._token is not None:
+            _CURRENT.reset(self._token)
 
 
 def using(bus: EventBus) -> _Using:
@@ -117,7 +117,7 @@ class Trace:
         self.bus = EventBus()
         self.events: list[Event] = []
         self.bus.subscribe("", self.events.append)
-        self._token: "Any" = None
+        self._token: "contextvars.Token[EventBus | None] | None" = None
 
     def subscribe(self, prefix: str, handler: "Callable[[Event], None]") -> Subscription:
         return self.bus.subscribe(prefix, handler)
@@ -126,8 +126,9 @@ class Trace:
         self._token = _CURRENT.set(self.bus)
         return self
 
-    def __exit__(self, *exc: Any) -> None:
-        _CURRENT.reset(self._token)
+    def __exit__(self, *exc: object) -> None:
+        if self._token is not None:
+            _CURRENT.reset(self._token)
 
 
 __all__ = ["Event", "EventBus", "Subscription", "topic_matches", "emit", "using", "Trace"]

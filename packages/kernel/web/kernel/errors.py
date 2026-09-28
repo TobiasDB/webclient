@@ -10,9 +10,7 @@ codes (``"http.timeout"``, ``"parse.not_html"``, ...). That is the whole error m
 
 from __future__ import annotations
 
-from typing import Any
-
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 
 class WebError(BaseModel):
@@ -21,7 +19,7 @@ class WebError(BaseModel):
 
     code: str
     message: str = ""
-    detail: dict[str, Any] = {}
+    detail: dict[str, JsonValue] = {}
 
     def __str__(self) -> str:
         return f"{self.code}: {self.message}" if self.message else self.code
@@ -37,7 +35,7 @@ class WebException(Exception):
         super().__init__(str(self.error))
 
 
-def err(code: str, message: str = "", **detail: Any) -> WebError:
+def err(code: str, message: str = "", **detail: JsonValue) -> WebError:
     """Build a :class:`WebError` concisely: ``err("http.timeout", "no response", url=u)``."""
     return WebError(code=code, message=message, detail=detail)
 
