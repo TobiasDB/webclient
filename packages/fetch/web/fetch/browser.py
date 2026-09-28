@@ -1,12 +1,14 @@
-"""``BrowserFetcher`` and ``LivePage`` -- the browser transport (Playwright), behind the same
-:class:`~web.fetch.base.Fetcher` interface as the static one.
+"""The browser backend (Playwright) and its :class:`BrowserSession`.
 
-Two ways to use it. As a plain Fetcher, :meth:`BrowserFetcher.fetch` renders a page and returns
-its Snapshot -- the JS-executed DOM, which a static fetch cannot produce (this is what an
-``spa`` escalation upgrades to). For interaction, :meth:`BrowserFetcher.open` returns a
-:class:`LivePage`: its actions (``click`` / ``type`` / ``wait_for``) drive the one page and
-return **Self**, so a chain of them costs nothing until :meth:`LivePage.snapshot` materialises
-the result. Playwright is imported lazily, so importing web.fetch never requires it.
+The browser backend implements the ``fetch(request) -> Snapshot`` protocol like any other, and
+adds a stateful :class:`BrowserSession` for interaction. **The session OWNS its Playwright
+context + page** and their whole lifecycle -- navigate with ``goto`` / ``fetch``, drive with
+``click`` / ``type`` / ``wait_for`` (each returns Self, so a chain snapshots nothing), capture
+with ``snapshot``, and ``aclose`` to release the page + context. Nothing outside the session
+opens or closes its page; that ownership is the point.
+
+``BrowserFetcher.fetch(request)`` is a one-shot: open a session, fetch, close. Playwright is
+imported lazily, so importing web.fetch never requires it.
 """
 
 from __future__ import annotations
@@ -22,58 +24,80 @@ from .request import Request
 from .script import DOM_RECORDER, Script
 from .snapshot import Snapshot
 
+_STEALTH = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
 
-class LivePage:
-    """A live browser page. Actions return Self (drive without snapshotting); ``snapshot``
-    captures the current DOM as a :class:`Snapshot`, draining each script's recorder into a
-    DOMEvent and attaching the NetworkEvents seen so far."""
 
-    def __init__(
-        self, page: Any, request: Request, status: int,
-        scripts: tuple[Script, ...], network: list[NetworkEvent],
-    ) -> None:
+class BrowserSession:
+    """A browser session: it OWNS a Playwright context + page. Actions mutate the page and return
+    Self; ``snapshot`` materialises a Snapshot; ``aclose`` closes the context (and its page)."""
+
+    def __init__(self, context: Any, page: Any, scripts: tuple[Script, ...]) -> None:
+        self._context = context
         self._page = page
-        self._request = request
-        self._status = status
         self._scripts = scripts
-        self._network = network
+        self._request = Request(url=page.url or "about:blank")
+        self._status = 0
+        self._network: list[NetworkEvent] = []
+        page.on("response", lambda r: self._network.append(NetworkEvent(
+            method=r.request.method, url=r.url, status=r.status, resource_type=r.request.resource_type)))
 
-    async def click(self, selector: str) -> "LivePage":
+    async def goto(self, request: Request) -> "BrowserSession":
+        """Navigate the owned page to ``request`` (no snapshot); returns Self so navigation and
+        actions chain. Installs the ``load`` recorders after the initial render."""
+        self._request = request
+        resp = await self._page.goto(request.url, wait_until="load", timeout=request.timeout * 1000)
+        self._status = resp.status if resp is not None else 0
+        for s in self._scripts:
+            if s.on == "load":
+                await self._page.evaluate(s.js)
+        return self
+
+    async def click(self, selector: str) -> "BrowserSession":
         await self._page.click(selector)
         return self
 
-    async def type(self, selector: str, text: str) -> "LivePage":
+    async def type(self, selector: str, text: str) -> "BrowserSession":
         await self._page.fill(selector, text)
         return self
 
-    async def wait_for(self, selector: str) -> "LivePage":
+    async def wait_for(self, selector: str) -> "BrowserSession":
         await self._page.wait_for_selector(selector)
         return self
 
     async def snapshot(self) -> Snapshot:
+        """Capture the current DOM as a Snapshot, draining each recorder into a DOMEvent and
+        attaching the NetworkEvents seen so far."""
         content: str = await self._page.content()
         emit(FetchEvent(url=self._page.url, status=self._status, source="browser"))
         events: list[Event] = list(self._network)
-        for s in self._scripts:  # drain each recorder into a DOMEvent
+        for s in self._scripts:
             if s.drain:
                 records = await self._page.evaluate(s.drain)
                 if records:
                     events.append(DOMEvent(script=s.name, records=records))
-        return Snapshot(
-            request=self._request,
-            url=self._page.url,
-            status=self._status,
-            headers={"content-type": "text/html; charset=utf-8"},
-            content=content.encode("utf-8"),
-            events=events,
-        )
+        return Snapshot(request=self._request, url=self._page.url, status=self._status,
+                        headers={"content-type": "text/html; charset=utf-8"},
+                        content=content.encode("utf-8"), events=events)
 
-    async def close(self) -> None:
-        await self._page.close()
+    async def fetch(self, request: Request) -> Snapshot:
+        """Navigate + snapshot -- the Fetcher protocol within the session. Never raises: a nav
+        failure becomes ``snapshot.error`` (classified)."""
+        start = time.perf_counter()
+        try:
+            await self.goto(request)
+        except Exception as exc:
+            return Snapshot(request=request, url=request.url, elapsed=time.perf_counter() - start,
+                            error=classify(exc, url=request.url))
+        return await self.snapshot()
+
+    async def aclose(self) -> None:
+        """Close the context (and its page) -- the session owns them, so this is where they die."""
+        await self._context.close()
 
 
 class BrowserFetcher:
-    """A browser :class:`~web.fetch.base.Fetcher` over Playwright/Chromium (lazily launched)."""
+    """A browser backend over Playwright/Chromium (lazily launched). ``session()`` opens an owned
+    :class:`BrowserSession`; ``fetch`` is a one-shot session."""
 
     def __init__(
         self, *, headless: bool = True, channel: str = "chromium",
@@ -100,54 +124,44 @@ class BrowserFetcher:
             )
         return self._browser
 
-    async def open(self, request: Request) -> LivePage:
-        """Navigate to the request and return a :class:`LivePage` to drive. Installs each page
-        script and captures every response as a NetworkEvent along the way."""
+    async def session(self) -> BrowserSession:
+        """Open a session that OWNS a fresh context + page (isolated cookies/state). Installs the
+        stealth pass and any ``init`` scripts before navigation."""
         browser = await self._browser_ready()
-        page = await browser.new_page()
-        if self._fingerprint:  # a light stealth pass (real anti-detect is a heavier backend)
-            await page.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-        network: list[NetworkEvent] = []
-        page.on("response", lambda r: network.append(NetworkEvent(
-            method=r.request.method, url=r.url, status=r.status, resource_type=r.request.resource_type)))
+        context = await browser.new_context()
+        page = await context.new_page()
         try:
+            if self._fingerprint:  # a light stealth pass (real anti-detect is a heavier backend)
+                await page.add_init_script(_STEALTH)
             for s in self._scripts:  # 'init' scripts run before any page script
                 if s.on == "init":
                     await page.add_init_script(s.js)
-            resp = await page.goto(request.url, wait_until="load", timeout=request.timeout * 1000)
-            for s in self._scripts:  # 'load' recorders installed after the initial render
-                if s.on == "load":
-                    await page.evaluate(s.js)
-        except BaseException:  # a nav failure must not leak the page we opened
-            await page.close()
+        except BaseException:  # setup failed -> don't leak the context we opened
+            await context.close()
             raise
-        return LivePage(page, request, resp.status if resp is not None else 0, self._scripts, network)
+        return BrowserSession(context, page, self._scripts)
 
     async def fetch(self, request: Request) -> Snapshot:
-        """Render the request to a Snapshot. Never raises for a fetch failure (a nav timeout /
-        error becomes ``snapshot.error``); the page is always closed."""
+        """One-shot: open a session, fetch, close. Never raises (a session failure is
+        ``snapshot.error``); the session -- and its page -- is always closed."""
         start = time.perf_counter()
         try:
-            page = await self.open(request)
-        except Exception as exc:  # open() already cleaned up its page
-            return Snapshot(request=request, url=request.url, elapsed=time.perf_counter() - start,
-                            error=classify(exc, url=request.url))
-        try:
-            return await page.snapshot()
+            s = await self.session()
         except Exception as exc:
             return Snapshot(request=request, url=request.url, elapsed=time.perf_counter() - start,
                             error=classify(exc, url=request.url))
+        try:
+            return await s.fetch(request)
         finally:
-            await page.close()
+            await s.aclose()
 
     async def aclose(self) -> None:
         if self._browser is not None:
             await self._browser.close()
-            self._browser = None  # idempotent: a Resolver closes every tier, callers may too
+            self._browser = None  # idempotent
         if self._pw is not None:
             await self._pw.stop()
             self._pw = None
 
 
-__all__ = ["BrowserFetcher", "LivePage"]
+__all__ = ["BrowserFetcher", "BrowserSession"]

@@ -69,7 +69,7 @@ def test_non_2xx_is_a_valid_snapshot_not_an_error(httpserver: HTTPServer) -> Non
 
 # -- browser transport: renders JS (what a static fetch cannot) + live-page actions --
 
-from web.fetch import BrowserFetcher, LivePage  # noqa: E402
+from web.fetch import BrowserFetcher, BrowserSession  # noqa: E402
 
 
 def test_browser_executes_js_a_static_fetch_cannot(httpserver: HTTPServer) -> None:
@@ -101,11 +101,12 @@ def test_live_page_actions_return_self_and_snapshot(httpserver: HTTPServer) -> N
     async def go() -> bytes:
         bf = BrowserFetcher()
         try:
-            page = await bf.open(Request(url=httpserver.url_for("/f")))
-            driven = await (await page.type("#q", "hello")).click("#go")  # actions return Self
-            assert isinstance(driven, LivePage)
+            session = await bf.session()  # the session owns the page
+            await session.goto(Request(url=httpserver.url_for("/f")))
+            driven = await (await session.type("#q", "hello")).click("#go")  # actions return Self
+            assert isinstance(driven, BrowserSession)
             snap = await driven.snapshot()
-            await page.close()
+            await session.aclose()  # closing the session closes the page it owns
             return snap.content
         finally:
             await bf.aclose()
@@ -141,10 +142,11 @@ def test_actions_are_recorded_as_dom_events(httpserver: HTTPServer) -> None:
     async def go() -> list[DOMEvent]:
         bf = BrowserFetcher()  # default DOM_RECORDER installed
         try:
-            page = await bf.open(Request(url=httpserver.url_for("/d")))
-            await page.click("#go")  # mutates the DOM -> the recorder buffers it
-            snap = await page.snapshot()
-            await page.close()
+            session = await bf.session()
+            await session.goto(Request(url=httpserver.url_for("/d")))
+            await session.click("#go")  # mutates the DOM -> the recorder buffers it
+            snap = await session.snapshot()
+            await session.aclose()
         finally:
             await bf.aclose()
         return [e for e in snap.events if isinstance(e, DOMEvent)]
@@ -237,3 +239,43 @@ def test_browser_backend_never_raises_on_nav_failure() -> None:
 
     snap = _run(go())
     assert not snap.ok and snap.error is not None and snap.error.code in ("fetch.connect", "fetch.dns")
+
+
+# -- sessions: state ownership (http cookie jar; the browser session owns its page) --
+
+from web.fetch import HttpSession, Session  # noqa: E402
+
+
+def test_http_session_persists_cookies_but_one_shot_fetch_does_not(httpserver: HTTPServer) -> None:
+    from werkzeug.wrappers import Response
+
+    httpserver.expect_request("/login").respond_with_response(
+        Response(b"ok", headers={"Set-Cookie": "sid=abc; Path=/"}))
+
+    def echo(req: object) -> "Response":
+        return Response(("sid=" + req.cookies.get("sid", "")).encode(), content_type="text/plain")  # type: ignore[attr-defined]
+    httpserver.expect_request("/me").respond_with_handler(echo)
+
+    async def session_flow() -> bytes:
+        f = HttpFetcher()
+        s = f.session()  # stateful: the jar persists
+        assert isinstance(s, (HttpSession, Session))
+        try:
+            await s.fetch(Request(url=httpserver.url_for("/login")))   # sets sid
+            me = await s.fetch(Request(url=httpserver.url_for("/me")))  # jar sends it back
+            return me.content
+        finally:
+            await s.aclose()
+            await f.aclose()
+
+    async def one_shot_flow() -> bytes:
+        f = HttpFetcher()
+        try:  # stateless: cookies do NOT carry between fetches
+            await f.fetch(Request(url=httpserver.url_for("/login")))
+            me = await f.fetch(Request(url=httpserver.url_for("/me")))
+            return me.content
+        finally:
+            await f.aclose()
+
+    assert _run(session_flow()) == b"sid=abc"  # session carried the cookie
+    assert _run(one_shot_flow()) == b"sid="    # one-shot did not

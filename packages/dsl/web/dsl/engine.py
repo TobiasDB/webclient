@@ -135,13 +135,14 @@ class DSL:
             return await self.resolver.resolve(Request(url=plan.url))
         if self.browser is None:
             raise WebException(err("dsl.needs_browser", "Reference actions require a browser (DSL(..., browser=...))"))
-        page = await self.browser.open(Request(url=plan.url))
+        session = await self.browser.session()  # the session owns the page
         try:
+            await session.goto(Request(url=plan.url))
             for a in plan.actions:
-                page = await getattr(page, a.op)(*a.args)
-            return document(await page.snapshot())
+                await getattr(session, a.op)(*a.args)
+            return document(await session.snapshot())
         finally:
-            await page.close()
+            await session.aclose()
 
     async def run(self, plan: Plan) -> Any:
         """Execute a plan: obtain the root Document, then apply the Document reads. Reads are

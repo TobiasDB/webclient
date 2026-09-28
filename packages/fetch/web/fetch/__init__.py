@@ -17,15 +17,16 @@ not this layer's.
 from __future__ import annotations
 
 from .base import Fetcher
-from .browser import BrowserFetcher, LivePage
+from .browser import BrowserFetcher, BrowserSession
 from .events import DOMEvent, FetchEvent, NetworkEvent
 from .script import DOM_RECORDER, Script
-from .http import HttpFetcher
+from .http import HttpFetcher, HttpSession
 from .middleware import Handler, Middleware, stack
 from .replay import Recorder, ReplayBackend
+from .session import Session
 from .request import Request
 from .snapshot import Snapshot
 
-__all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "LivePage",
+__all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "BrowserSession", "HttpSession", "Session",
            "Script", "DOM_RECORDER", "NetworkEvent", "DOMEvent",
            "Middleware", "Handler", "stack", "Recorder", "ReplayBackend"]

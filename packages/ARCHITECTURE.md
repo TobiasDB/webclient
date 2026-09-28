@@ -76,20 +76,28 @@ backend just fetches (and maybe holds state).
   raises for a transport failure (that becomes `snapshot.error`); does transport **only** (no
   sniffing / decoding — a 404 is a valid Snapshot). HTTP, Browser, Replay all implement this one
   protocol; they are interchangeable to everything above.
-- **Shared backend concepts** — every backend takes the same cross-cutting settings: `proxy`,
-  `fingerprint`, and (a) session/state. (Real TLS/JA3 impersonation is a heavier `fingerprint`
-  that plugs into the HTTP backend.)
-- **Backend-specific actions** — a backend MAY add extra, state-mutating actions beyond `fetch()`.
-  The browser backend adds `click` / `type` / `wait_for` (they mutate its live page).
+- **Shared backend concepts** — every backend takes the same cross-cutting settings (`proxy`,
+  `fingerprint`) and can open a **session** — a stateful handle that OWNS its resources. (Real
+  TLS/JA3 impersonation is a heavier `fingerprint` that plugs into the HTTP backend.)
+- **Sessions own their state.** `backend.session() -> Session`; `session.fetch(request)` persists
+  state across calls; `session.aclose()` releases it. **Page ownership lives on the session** (a
+  key lesson from the old client): a live browser page belongs to a `BrowserSession` and dies with
+  it — nothing else opens or closes it. A backend's one-shot `fetch()` is a session opened and
+  closed for a single request.
+- **Backend-specific actions** — a session MAY add state-mutating actions beyond `fetch()`. The
+  `BrowserSession` adds `goto` / `click` / `type` / `wait_for` (each returns Self) + `snapshot`.
+- **Failure modes are classified.** A backend never leaks an httpx/playwright exception; it
+  classifies it (`web.fetch.errors.classify`) into a stable taxonomy on `snapshot.error` —
+  `fetch.timeout / dns / connect / tls / proxy / redirects / url / protocol / aborted / browser`
+  — the same code across backends, so policy branches on the failure mode, not the library.
 - The backends:
-  - `HttpFetcher(*, verify=True, proxy=None, fingerprint=False)` — httpx.
+  - `HttpFetcher(*, verify=True, proxy=None, fingerprint=False)` — httpx; `session() -> HttpSession`
+    (a persistent cookie jar). Its one-shot `fetch` is stateless (no cookie carry-over).
   - `BrowserFetcher(*, headless=True, channel="chromium", proxy=None, fingerprint=False, scripts=(DOM_RECORDER,))`
-    — Playwright (`channel="chrome"` = real Chrome). Its stateful actions live on the page handle
-    it opens: `open(Request) -> LivePage`.
-  - `LivePage` — the browser backend's live session: `click/type/wait_for` return **Self** (drive
-    without snapshotting); `snapshot()` materialises a Snapshot, draining page scripts into events.
-  - `ReplayBackend` — answers each Request from a recorded event stream (a miss → a visible drift
-    Snapshot). Offline, deterministic; just another backend.
+    — Playwright (`channel="chrome"` = real Chrome); `session() -> BrowserSession` (owns a fresh
+    context + page).
+  - `Recorder(inner)` + `ReplayBackend(events)` — record a run's network stream, re-serve it
+    offline (a miss → a visible drift Snapshot). Just backends.
 - Capture (no HAR): `Script { name, js, on: "init"|"load", drain }` runs in the page; its output
   is drained into a `DOMEvent`. rrweb is such a script. Responses become `NetworkEvent`s. Both
   land on `Snapshot.events` — enough to replay a fetch later (replay itself is a future layer).

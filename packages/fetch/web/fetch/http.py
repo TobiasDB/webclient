@@ -35,50 +35,77 @@ _FINGERPRINT: dict[str, str] = {
 
 
 class HttpFetcher:
-    """A static HTTP :class:`~web.fetch.base.Fetcher` over httpx. ``proxy`` routes through a
-    proxy; ``fingerprint`` sends browser-like headers. It just fetches -- the tier/escalation
-    ladder that CHOOSES between such backends is resolve's policy, not fetch's."""
+    """A static HTTP backend over httpx. ``proxy`` routes through a proxy; ``fingerprint`` sends
+    browser-like headers. Its ``fetch`` is a stateless one-shot; ``session()`` opens a stateful
+    :class:`HttpSession` whose cookie jar persists across fetches. It just fetches -- the
+    tier/escalation ladder is resolve's policy, not fetch's."""
 
     def __init__(self, *, verify: bool = True, proxy: str | None = None, fingerprint: bool = False) -> None:
+        self._verify = verify
+        self._proxy = proxy
         self._client = httpx.AsyncClient(verify=verify, proxy=proxy)
         self._base_headers = _FINGERPRINT if fingerprint else {}
 
     async def fetch(self, request: Request) -> Snapshot:
-        start = time.perf_counter()
-        headers = {**self._base_headers, **request.headers} if self._base_headers else request.headers
-        try:
-            resp = await self._client.request(
-                request.method.upper(),
-                request.url,
-                headers=headers or None,
-                cookies=request.cookies or None,
-                content=request.body,
-                follow_redirects=request.follow_redirects,
-                timeout=request.timeout,
-            )
-        except Exception as exc:  # never raise for a transport failure; classify into a stable
-            # failure mode. (CancelledError is a BaseException, so cancellation still propagates.)
-            return Snapshot(
-                request=request,
-                url=request.url,
-                elapsed=time.perf_counter() - start,
-                error=classify(exc, url=request.url),
-            )
-        set_cookies: dict[str, str] = {}
-        for hop in (*resp.history, resp):  # Set-Cookie from every hop, not just the final one
-            set_cookies.update(dict(hop.cookies))
-        snap = Snapshot(
-            request=request,
-            url=str(resp.url),
-            status=resp.status_code,
-            headers=dict(resp.headers),
-            content=resp.content,
-            elapsed=time.perf_counter() - start,
-            set_cookies=set_cookies,
-            redirects=[str(h.url) for h in resp.history],
+        self._client.cookies.clear()  # stateless one-shot: no cookie carry-over between fetches
+        return await _perform(self._client, request, self._base_headers)
+
+    def session(self) -> "HttpSession":
+        """A stateful session over its OWN httpx client (a persistent cookie jar)."""
+        return HttpSession(httpx.AsyncClient(verify=self._verify, proxy=self._proxy), self._base_headers)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
+class HttpSession:
+    """A stateful HTTP session: it OWNS an httpx client whose cookie jar persists across fetches
+    (so a login on one fetch carries to the next). Close it to release the client."""
+
+    def __init__(self, client: httpx.AsyncClient, base_headers: dict[str, str]) -> None:
+        self._client = client
+        self._base_headers = base_headers
+
+    async def fetch(self, request: Request) -> Snapshot:
+        return await _perform(self._client, request, self._base_headers)  # jar persists (not cleared)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
+async def _perform(client: httpx.AsyncClient, request: Request, base_headers: dict[str, str]) -> Snapshot:
+    """Perform one request on ``client`` and build the Snapshot -- shared by the backend and the
+    session. Never raises for a transport failure (it is classified onto ``snapshot.error``)."""
+    start = time.perf_counter()
+    headers = {**base_headers, **request.headers} if base_headers else request.headers
+    try:
+        resp = await client.request(
+            request.method.upper(),
+            request.url,
+            headers=headers or None,
+            cookies=request.cookies or None,
+            content=request.body,
+            follow_redirects=request.follow_redirects,
+            timeout=request.timeout,
         )
-        emit(FetchEvent(url=snap.url, status=snap.status, elapsed=snap.elapsed, source="http"))
-        return snap
+    except Exception as exc:  # classify; CancelledError is a BaseException, so it still propagates
+        return Snapshot(request=request, url=request.url, elapsed=time.perf_counter() - start,
+                        error=classify(exc, url=request.url))
+    set_cookies: dict[str, str] = {}
+    for hop in (*resp.history, resp):  # Set-Cookie from every hop, not just the final one
+        set_cookies.update(dict(hop.cookies))
+    snap = Snapshot(
+        request=request,
+        url=str(resp.url),
+        status=resp.status_code,
+        headers=dict(resp.headers),
+        content=resp.content,
+        elapsed=time.perf_counter() - start,
+        set_cookies=set_cookies,
+        redirects=[str(h.url) for h in resp.history],
+    )
+    emit(FetchEvent(url=snap.url, status=snap.status, elapsed=snap.elapsed, source="http"))
+    return snap
 
     async def aclose(self) -> None:
         await self._client.aclose()

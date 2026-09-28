@@ -100,20 +100,22 @@ def paginate_clicks(
 
     async def mw(request: Request, nxt: Handler) -> Snapshot:
         try:
-            page = await browser.open(request)
-        except Exception as exc:  # a nav failure is data, not a raise (resolve returns a Document)
+            session = await browser.session()  # the session owns the page
+        except Exception as exc:
             return Snapshot(request=request, url=request.url, error=err("fetch.transport", str(exc)))
         try:
+            await session.goto(request)
             for _ in range(max_clicks):
-                snap = await page.snapshot()
-                doc = document(snap)
+                doc = document(await session.snapshot())
                 if (until and until(doc)) or doc.select(more) is None:
                     break
-                await page.click(more)
+                await session.click(more)
                 await asyncio.sleep(settle)
-            return await page.snapshot()
+            return await session.snapshot()
+        except Exception as exc:  # a nav/interaction failure is data, not a raise
+            return Snapshot(request=request, url=request.url, error=err("fetch.transport", str(exc)))
         finally:
-            await page.close()
+            await session.aclose()
 
     return mw
 
