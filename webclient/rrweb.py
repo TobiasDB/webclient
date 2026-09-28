@@ -18,7 +18,10 @@ from functools import lru_cache
 from importlib import resources
 from typing import Any
 
-from .models import Event
+#: the ``RRWebEvent`` bus chunk lives in the kernel's event vocabulary (beside DOMEvent /
+#: NetworkEvent); this module is the fetch-level RECORDER that produces it. Re-exported here
+#: so ``from webclient.rrweb import RRWebEvent`` still reads naturally.
+from .kernel.models import RRWebEvent
 
 __all__ = ["RRWebEvent", "RRWEB_VERSION", "VIEWPORT", "init_source", "DRAIN_SOURCE", "SCRIPT_NAME"]
 
@@ -28,15 +31,6 @@ SCRIPT_NAME = "wc.rrweb"
 #: viewport), a static run's synthesised snapshot declares it, so the player never resizes
 #: between documents.
 VIEWPORT = (1280, 800)
-
-
-class RRWebEvent(Event):
-    """A chunk of rrweb events drained from the page (``events`` is rrweb's own JSON: each
-    ``{type, data, timestamp}``; type 2 = FullSnapshot, 3 = IncrementalSnapshot, 4 = Meta)."""
-
-    topic: str = "rrweb"
-    events: list[dict[str, Any]] = []
-    count: int = 0
 
 
 @lru_cache(maxsize=1)
