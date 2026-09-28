@@ -3,7 +3,7 @@ name = "web-agent"
 version = "0.1.0"
 description = "web-* agent: the agent tier — a resumable observe/decide/apply loop that drives the lower layers (extraction authoring)."
 requires-python = ">=3.12"
-dependencies = ["web-kernel", "web-parse", "web-llm", "pydantic>=2"]
+dependencies = ["web-kernel", "web-fetch", "web-parse", "web-llm", "pydantic>=2"]
 
 [build-system]
 requires = ["hatchling"]

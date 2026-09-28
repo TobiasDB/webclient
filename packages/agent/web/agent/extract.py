@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from web.parse import Document
 
-from .loop import Ask, BoundedLoop, Verdict
+from .loop import Ask, BoundedLoop, Done, Verdict
 
 
 class Selection(BaseModel):
@@ -29,10 +29,6 @@ class Selection(BaseModel):
 
     row: str
     fields: dict[str, str] = {}
-
-
-class Done(BaseModel):
-    """The driver's signal that the current rows are the answer."""
 
 
 def extract(doc: Document, selection: Selection) -> "list[dict[str, str | None]]":

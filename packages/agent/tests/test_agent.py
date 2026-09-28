@@ -101,3 +101,38 @@ def test_llm_driver_tolerates_an_unparseable_reply() -> None:
 
     result = _run(Author(_PAGE, llm_driver(_Garbage(), goal="x")).run())
     assert result.verdict.reason == "done" and result.rows == []  # unparseable -> stop, no crash
+
+
+# -- the interaction agent: drive a live page toward a goal --
+from pytest_httpserver import HTTPServer  # noqa: E402
+
+from web.agent import Click, Done as _Done, Observation, Type, drive  # noqa: E402
+from web.fetch import BrowserFetcher, Request  # noqa: E402
+
+
+def test_interaction_agent_drives_a_live_page(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/f").respond_with_data(
+        b"<html><body><input id='q'>"
+        b"<button id='go' onclick=\"document.body.setAttribute('data-done', document.getElementById('q').value)\">go</button>"
+        b"</body></html>", content_type="text/html")
+
+    steps = iter([Type(selector="#q", text="hello"), Click(selector="#go"), _Done()])
+
+    def policy(obs: Observation) -> object:
+        assert obs.url and obs.skeleton  # the agent observed the live page each round
+        return next(steps)
+
+    async def go() -> bytes:
+        bf = BrowserFetcher()
+        try:
+            session = await bf.session()
+            await session.goto(Request(url=httpserver.url_for("/f")))
+            run = await drive(session, policy, max_rounds=5)
+            assert run.verdict.ok  # the policy reached Done
+            content = (await session.snapshot()).content
+            await session.aclose()
+            return content
+        finally:
+            await bf.aclose()
+
+    assert b'data-done="hello"' in _run(go())  # the typed+clicked actions actually ran

@@ -23,8 +23,22 @@ from pydantic import BaseModel, JsonValue
 S = TypeVar("S")  # the driven state
 O = TypeVar("O")  # an observation of it
 D = TypeVar("D")  # a decision made from the observation
+_T = TypeVar("_T")
 
 Reason = Literal["done", "budget", "stalled", "error", "waiting"]
+
+
+async def _resolve(value: "_T | Awaitable[_T]") -> _T:
+    """Await ``value`` if it is a coroutine, else return it -- so observe/decide may be sync or
+    async and the loop handles both through one path."""
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+class Done(BaseModel):
+    """The shared terminal marker: a driver/policy returns it to end the loop successfully (the
+    current state is the answer). Loop vocabulary lives here, so every agent uses the one ``Done``."""
 
 
 class Ask(BaseModel):
@@ -66,7 +80,7 @@ class BoundedLoop(Generic[S, O, D]):
     def __init__(
         self,
         *,
-        observe: "Callable[[S], O]",
+        observe: "Callable[[S], O | Awaitable[O]]",
         decide: "Callable[[O], D | Ask | Awaitable[D | Ask]]",
         apply: "Callable[[S, D], None | Awaitable[None]]",
         done: "Callable[[D], bool]",
@@ -107,8 +121,8 @@ class BoundedLoop(Generic[S, O, D]):
         while True:
             if self.round >= self.max_rounds:
                 return self._verdict("budget")
-            raw = self._decide(self._observe(self._state))  # driver may be sync or async
-            decision: "D | Ask" = await raw if inspect.isawaitable(raw) else raw
+            observation: O = await _resolve(self._observe(self._state))  # sync or async observe
+            decision: "D | Ask" = await _resolve(self._decide(observation))  # sync or async driver
             if isinstance(decision, Ask):
                 self._waiting = True
                 return self._verdict("waiting", ask=decision)
@@ -140,4 +154,4 @@ class BoundedLoop(Generic[S, O, D]):
         return Verdict(reason=reason, rounds=self.round, error=error, ask=ask)
 
 
-__all__ = ["BoundedLoop", "Verdict", "Ask", "Reason"]
+__all__ = ["BoundedLoop", "Verdict", "Ask", "Done", "Reason"]
