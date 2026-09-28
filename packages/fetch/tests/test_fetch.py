@@ -48,7 +48,7 @@ def test_transport_failure_is_error_not_raise() -> None:
 
     snap = _run(go())
     assert not snap.ok and snap.status == 0
-    assert snap.error is not None and snap.error.code == "fetch.transport"
+    assert snap.error is not None and snap.error.code == "fetch.connect"
 
 
 def test_non_2xx_is_a_valid_snapshot_not_an_error(httpserver: HTTPServer) -> None:
@@ -211,28 +211,29 @@ def test_replay_backend_is_a_fetcher() -> None:
     assert isinstance(ReplayBackend([]), Fetcher) and isinstance(Recorder(HttpFetcher()), Fetcher)
 
 
-def test_http_backend_never_raises_on_a_bad_url() -> None:
-    async def go() -> tuple[Snapshot, Snapshot]:
+def test_http_backend_classifies_failure_modes() -> None:
+    async def go() -> dict[str, str]:
         f = HttpFetcher()
-        try:  # an unsupported scheme (not an httpx.HTTPError) and an unresolvable host
-            bad_scheme = await f.fetch(Request(url="ftp://nope/x"))
-            unresolvable = await f.fetch(Request(url="http://no.such.host.invalid/x", timeout=1.0))
-            return bad_scheme, unresolvable
+        out = {}
+        try:  # each distinct failure -> a distinct, stable code (never raises)
+            out["url"] = (await f.fetch(Request(url="ftp://nope/x"))).error.code            # unsupported scheme
+            out["dns"] = (await f.fetch(Request(url="http://no.such.host.invalid/x", timeout=2.0))).error.code
+            out["connect"] = (await f.fetch(Request(url="http://127.0.0.1:9/x", timeout=2.0))).error.code
         finally:
             await f.aclose()
+        return out
 
-    bad, unresolvable = _run(go())
-    assert bad.error is not None and bad.error.code == "fetch.transport"       # did not raise
-    assert unresolvable.error is not None and unresolvable.error.code == "fetch.transport"
+    codes = _run(go())
+    assert codes == {"url": "fetch.url", "dns": "fetch.dns", "connect": "fetch.connect"}
 
 
 def test_browser_backend_never_raises_on_nav_failure() -> None:
     async def go() -> Snapshot:
         bf = BrowserFetcher()
         try:  # nothing is listening -> nav fails; must become snapshot.error, not an exception
-            return await bf.fetch(Request(url="http://127.0.0.1:9/x", timeout=2.0))
+            return await bf.fetch(Request(url="http://127.0.0.1:49999/x", timeout=3.0))
         finally:
             await bf.aclose()
 
     snap = _run(go())
-    assert not snap.ok and snap.error is not None and snap.error.code == "fetch.transport"
+    assert not snap.ok and snap.error is not None and snap.error.code in ("fetch.connect", "fetch.dns")

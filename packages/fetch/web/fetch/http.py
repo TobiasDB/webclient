@@ -13,8 +13,9 @@ import time
 
 import httpx
 
-from web.kernel import emit, err
+from web.kernel import emit
 
+from .errors import classify
 from .events import FetchEvent
 from .request import Request
 from .snapshot import Snapshot
@@ -55,14 +56,13 @@ class HttpFetcher:
                 follow_redirects=request.follow_redirects,
                 timeout=request.timeout,
             )
-        except Exception as exc:  # never raise for a transport failure -- httpx.HTTPError, but
-            # also InvalidURL / UnsupportedProtocol / OS errors. (CancelledError is a
-            # BaseException, so it still propagates -- cancellation is not a transport failure.)
+        except Exception as exc:  # never raise for a transport failure; classify into a stable
+            # failure mode. (CancelledError is a BaseException, so cancellation still propagates.)
             return Snapshot(
                 request=request,
                 url=request.url,
                 elapsed=time.perf_counter() - start,
-                error=err("fetch.transport", str(exc), url=request.url),
+                error=classify(exc, url=request.url),
             )
         set_cookies: dict[str, str] = {}
         for hop in (*resp.history, resp):  # Set-Cookie from every hop, not just the final one

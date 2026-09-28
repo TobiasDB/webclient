@@ -14,8 +14,9 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from web.kernel import Event, emit, err
+from web.kernel import Event, emit
 
+from .errors import classify
 from .events import DOMEvent, FetchEvent, NetworkEvent
 from .request import Request
 from .script import DOM_RECORDER, Script
@@ -131,12 +132,12 @@ class BrowserFetcher:
             page = await self.open(request)
         except Exception as exc:  # open() already cleaned up its page
             return Snapshot(request=request, url=request.url, elapsed=time.perf_counter() - start,
-                            error=err("fetch.transport", str(exc), url=request.url))
+                            error=classify(exc, url=request.url))
         try:
             return await page.snapshot()
         except Exception as exc:
             return Snapshot(request=request, url=request.url, elapsed=time.perf_counter() - start,
-                            error=err("fetch.transport", str(exc), url=request.url))
+                            error=classify(exc, url=request.url))
         finally:
             await page.close()
 
