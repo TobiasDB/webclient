@@ -130,3 +130,6 @@ site/
 profile.svg
 *.trace/
 traces/
+
+# graphify generated knowledge-graph outputs
+graphify-out/
