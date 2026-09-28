@@ -44,3 +44,18 @@ def test_nested_select_composes() -> None:
     lis = doc.select_all("li")
     assert len(lis) == 2
     assert lis[0].select_all("a")[0].text == "A"  # select on an Element's subtree
+
+
+def test_markup_reads_are_safe_on_non_markup_and_bad_bytes() -> None:
+    # a JSON document: markup reads return empty, not raise
+    j = parse(b'{"a": 1}', content_type="application/json")
+    assert j.kind == "json" and j.select("a") is None and j.select_all("a") == [] and j.links() == []
+    assert j.json() == {"a": 1}
+
+    # malformed XML recovers to a partial tree -- select does not crash
+    bad_xml = parse(b"<root><item>1</item><item>2", content_type="application/xml")
+    assert bad_xml.kind == "xml" and len(bad_xml.select_all("item")) == 2
+
+    # empty content -> empty tree, empty reads
+    empty = parse(b"", content_type="text/html")
+    assert empty.select("div") is None and empty.select_all("div") == [] and empty.links() == []

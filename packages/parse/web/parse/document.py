@@ -74,30 +74,43 @@ class Document:
         """The body decoded to text (replacing undecodable bytes)."""
         return self.content.decode(self.encoding, errors="replace")
 
+    def _markup(self) -> bool:
+        """Whether this document has a markup tree to select over (html / xml / text)."""
+        return self.kind in ("html", "xml", "text")
+
     def _root(self) -> Any:
-        """The lazily-parsed lxml root (html or xml), cached."""
+        """The lazily-parsed lxml root, cached. Lenient: a malformed document (or empty bytes)
+        recovers to as much of a tree as possible, so a read never crashes on bad content."""
         if self._tree is None:
-            if self.kind == "json":
-                raise TypeError("select/links are for markup documents, not JSON")
             from lxml import etree, html
 
-            if self.kind == "xml":
-                self._tree = etree.fromstring(self.content)
-            else:  # html / text: parse leniently as HTML
-                self._tree = html.fromstring(self.content or b"<html></html>")
+            try:
+                if self.kind == "xml":
+                    self._tree = etree.fromstring(self.content, etree.XMLParser(recover=True))
+                else:  # html / text: parse leniently as HTML
+                    self._tree = html.fromstring(self.content or b"<html></html>")
+            except (etree.ParserError, etree.XMLSyntaxError, ValueError):
+                self._tree = html.fromstring(b"<html></html>")  # unparseable -> empty tree
         return self._tree
 
     def select(self, css: str) -> "Element | None":
-        """The FIRST element matching a CSS selector, or ``None`` (markup documents)."""
+        """The FIRST element matching a CSS selector, or ``None`` (empty for a non-markup doc)."""
+        if not self._markup():
+            return None
         els = self._root().cssselect(css)
         return Element(els[0], self.url) if els else None
 
     def select_all(self, css: str) -> "list[Element]":
-        """ALL elements matching a CSS selector (markup documents)."""
+        """ALL elements matching a CSS selector (empty for a non-markup doc)."""
+        if not self._markup():
+            return []
         return [Element(n, self.url) for n in self._root().cssselect(css)]
 
     def links(self) -> "list[str]":
-        """Every ``<a href>`` target, resolved absolute against the document URL."""
+        """Every ``<a href>`` target, resolved absolute against the document URL (empty for a
+        non-markup doc)."""
+        if not self._markup():
+            return []
         return [urljoin(self.url, a.get("href")) for a in self._root().cssselect("a[href]")]
 
     def json(self) -> Any:
