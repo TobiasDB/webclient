@@ -16,9 +16,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 from web.fetch import Snapshot
 from web.parse import Document
@@ -40,7 +39,7 @@ class Flag(BaseModel):
     confidence: float
     remedy: "str | None" = None
     signals: list[Signal] = []
-    detail: dict[str, Any] = {}
+    detail: dict[str, JsonValue] = {}
 
 
 @dataclass(frozen=True)

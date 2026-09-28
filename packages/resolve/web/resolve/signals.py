@@ -9,9 +9,7 @@ to make policy decisions (escalate on ``spa``; a ``login_wall`` has no transport
 
 from __future__ import annotations
 
-from typing import Any
-
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 from web.fetch import Snapshot
 from web.parse import Document
@@ -22,7 +20,7 @@ class Signal(BaseModel):
 
     name: str
     confidence: float = 1.0
-    detail: dict[str, Any] = {}
+    detail: dict[str, JsonValue] = {}
 
 
 def spa(doc: Document) -> "Signal | None":
