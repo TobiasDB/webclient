@@ -134,3 +134,16 @@ def test_fanout_maps_reads_over_a_collection(httpserver: HTTPServer) -> None:
     texts, rows = _run(go())
     assert texts == ["A", "B"]
     assert rows == [{"title": "A"}, {"title": "B"}]
+
+
+def test_dsl_missing_select_does_not_crash(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/p").respond_with_data(b"<h1>Hi</h1>", content_type="text/html")
+
+    async def go() -> object:
+        d = _dsl()
+        try:  # .select a missing node then read it -> None, not AttributeError
+            return await d.ref(httpserver.url_for("/p")).doc().select(".nope").text().acollect()
+        finally:
+            await d.aclose()
+
+    assert _run(go()) is None

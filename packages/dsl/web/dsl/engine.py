@@ -167,6 +167,8 @@ def _one(obj: Any, step: Step) -> Any:
 def _apply_read(obj: Any, step: Step) -> Any:
     """Apply a read, fanning out over a collection. ``project`` maps each element to a row dict
     (field -> the text of its sub-selector); any other read maps element-wise over a list."""
+    if obj is None:  # a prior select missed -> the rest of the chain is None, not a crash
+        return None
     if step.op == "project":
         fields: dict[str, str] = step.args[0]
         rows = obj if isinstance(obj, list) else [obj]
