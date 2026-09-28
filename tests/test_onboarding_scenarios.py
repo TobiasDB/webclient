@@ -270,7 +270,7 @@ def test_pipeline_filters_sold_out_rows(lab):
 # --------------------------------------------------------------------------- #
 
 def test_pipeline_reports_a_model_outage_as_retry(lab):
-    from webclient.clients.llm import LlmError
+    from webclient.llm.client import LlmError
 
     def throttled(prompt: str) -> str:
         raise LlmError(1, "rate limited")

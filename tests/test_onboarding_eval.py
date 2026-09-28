@@ -93,7 +93,7 @@ def test_onboard_llm_shim_builds_without_a_key():
     # run onboarding with no API key. Building the client makes no call, so this is fast.
     import os
 
-    from webclient.clients.llm import Budget
+    from webclient.llm.client import Budget
     from webclient.service import _onboard_llm
 
     shim = _onboard_llm("shim", Budget())

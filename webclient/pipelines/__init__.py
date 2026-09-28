@@ -8,7 +8,7 @@ they stay testable offline with a stub model.
 
 from __future__ import annotations
 
-from ..clients.llm import (
+from ..llm.client import (
     Budget,
     BudgetExceeded,
     LlmClient,

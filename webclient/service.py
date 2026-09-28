@@ -315,7 +315,7 @@ def _onboard_llm(model: str, budget: Any) -> "Any | None":
     works from the UI out of the box; any other value builds a real :class:`LlmClient` (needs
     ``ANTHROPIC_API_KEY`` / ``WEBCLIENT_LLM__*``). Returns ``None`` when no model is available (the
     shim is missing, or no key), so the caller can 400 with the right hint."""
-    from .clients.llm import LlmClient, cheapest_model
+    from .llm.client import LlmClient, cheapest_model
 
     if model == "shim":
         import sys
@@ -792,7 +792,7 @@ def create_app(
         ``{description, fields, search?}``; ``url`` seeds the crawl at a known page (else web search).
         Needs a model configured on the API (``ANTHROPIC_API_KEY`` / ``WEBCLIENT_LLM__*``)."""
         _auth(authorization)
-        from .clients.llm import Budget
+        from .llm.client import Budget
         from .pipelines.onboarding import Brief, SearchHit, ddg_search, onboard_company
 
         company = str(body.get("company") or "").strip()

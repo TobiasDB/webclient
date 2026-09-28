@@ -14,7 +14,7 @@ from ...core.document.models import DatasetHint, PaginationHint
 from ...policy import Resolve
 from ...llm.guides import lazy_query_guide
 from ...llm.prompts import render_prompt
-from ...clients.llm import LlmError
+from ...llm.client import LlmError
 
 from .dates import _timeliness
 from .common import LLM, BrowserMode, _fetch, _skeleton_for, log

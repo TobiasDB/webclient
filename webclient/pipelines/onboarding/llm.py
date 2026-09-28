@@ -10,7 +10,7 @@ from typing import Any
 #: also appended to ``OnboardingResult.steps`` for a programmatic trace.
 
 from ...core.document.models import Flag
-from ...clients.llm import LlmError
+from ...llm.client import LlmError
 
 from .common import LLM, log
 from .artifacts import SchemaField, Brief

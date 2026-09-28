@@ -25,7 +25,7 @@ from typing import Any
 
 import httpx
 
-from .base import Client, ClientFactory
+from ..clients.base import Client, ClientFactory
 
 #: statuses worth retrying: rate limit (429), transient server / overload errors.
 _RETRIABLE_STATUS = frozenset({429, 500, 502, 503, 504, 529})

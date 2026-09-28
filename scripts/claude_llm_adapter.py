@@ -24,13 +24,13 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 from webclient import WebClient
-from webclient.clients.llm import LlmError
+from webclient.llm.client import LlmError
 from webclient.pipelines.onboarding import Brief, ddg_search, onboard
 
 if TYPE_CHECKING:
     import httpx
 
-    from webclient.clients.llm import Budget, LlmClient
+    from webclient.llm.client import Budget, LlmClient
 
 log = logging.getLogger("claude_adapter")
 
@@ -161,7 +161,7 @@ def claude_shim_client(
     process (see :func:`shim_transport`). ``model`` is the priced model id used for budget
     accounting (default: the cheapest); ``cli_model`` is what the CLI actually runs
     (default: the cheapest, ``haiku``). ``auth`` is a dummy the transport ignores."""
-    from webclient.clients.llm import Budget, LlmClient, cheapest_model
+    from webclient.llm.client import Budget, LlmClient, cheapest_model
 
     return LlmClient(
         model=model or cheapest_model(),

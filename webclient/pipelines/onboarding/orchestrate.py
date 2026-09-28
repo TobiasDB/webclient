@@ -21,7 +21,7 @@ from typing import Any, Sequence
 #: also appended to ``OnboardingResult.steps`` for a programmatic trace.
 
 from ...interface import WebClient
-from ...clients.llm import Budget, BudgetExceeded, LlmClient
+from ...llm.client import Budget, BudgetExceeded, LlmClient
 
 from ...kernel.loop import Ask
 from ...pipeline import Pipeline, PipelineRun, Stage
@@ -59,8 +59,8 @@ def onboard_company(
     """Run the whole pipeline for one company: search -> crawl -> select -> evaluate
     -> write the reference, resolve, and query for the best source found.
 
-    Pass a :class:`~webclient.clients.llm.Budget` to cap LLM spend for this run: when
-    an :class:`~webclient.clients.llm.LlmClient` is the injected ``llm`` the budget is
+    Pass a :class:`~webclient.llm.client.Budget` to cap LLM spend for this run: when
+    an :class:`~webclient.llm.client.LlmClient` is the injected ``llm`` the budget is
     attached to it, and if the cap is hit mid-pipeline the run stops and reports
     ``ok=False`` / ``reason="llm budget exceeded"`` instead of raising to the caller.
 
