@@ -53,7 +53,7 @@ def test_retry_middleware_recovers_from_transient_failure() -> None:
     fetcher = _FlakyFetcher(fail=2)
 
     async def go() -> Document:
-        r = Resolver(fetcher, middleware=(retry(max_attempts=3, backoff=0.0),))
+        r = Resolver(fetcher, retry=retry(max_attempts=3, backoff=0.0))
         return await r.resolve(Request(url="https://x/"))
 
     doc = _run(go())
@@ -65,7 +65,7 @@ def test_retry_gives_up_and_returns_the_last_document() -> None:
     fetcher = _FlakyFetcher(fail=99)
 
     async def go() -> Document:
-        r = Resolver(fetcher, middleware=(retry(max_attempts=2, backoff=0.0),))
+        r = Resolver(fetcher, retry=retry(max_attempts=2, backoff=0.0))
         return await r.resolve(Request(url="https://x/"))
 
     doc = _run(go())
@@ -76,7 +76,7 @@ def test_rate_limit_spaces_same_host_requests() -> None:
     fetcher = _FlakyFetcher(fail=0)
 
     async def go() -> float:
-        r = Resolver(fetcher, middleware=(rate_limit(0.05),))
+        r = Resolver(fetcher, rate_limit=0.05)
         loop = asyncio.get_running_loop()
         t0 = loop.time()
         await r.resolve(Request(url="https://x/a"))
@@ -134,7 +134,7 @@ def test_escalate_renders_a_spa_shell_via_browser(httpserver: HTTPServer) -> Non
 
     async def go() -> str:
         browser = BrowserFetcher()
-        r = Resolver(HttpFetcher(), middleware=(escalate(browser),))
+        r = Resolver(HttpFetcher(), escalate=browser)
         try:
             doc = await r.resolve(Request(url=httpserver.url_for("/spa")))
             return doc.select_all("#root")[0].text
@@ -156,7 +156,7 @@ def test_paginate_links_middleware_merges_pages(httpserver: HTTPServer) -> None:
     httpserver.expect_request("/p3").respond_with_data(b"<li class='row'>c</li>", content_type="text/html")
 
     async def go() -> list[str]:
-        r = Resolver(HttpFetcher(), middleware=(paginate_links(),))
+        r = Resolver(HttpFetcher(), paginate=paginate_links())
         try:
             doc = await r.resolve(Request(url=httpserver.url_for("/p1")))  # ONE merged Document
             return [e.text for e in doc.select_all(".row")]
@@ -178,7 +178,7 @@ def test_paginate_param_with_composed_stops(httpserver: HTTPServer) -> None:
     async def go() -> int:
         # stop on the FIRST of: page empty, OR 10 items collected
         stop = any_of(until_empty(".row"), first_n(10, ".row"))
-        r = Resolver(HttpFetcher(), middleware=(paginate_param("page", until=stop),))
+        r = Resolver(HttpFetcher(), paginate=paginate_param("page", until=stop))
         try:
             doc = await r.resolve(Request(url=httpserver.url_for("/items") + "?page=1"))
             return len(doc.select_all(".row"))
@@ -195,7 +195,7 @@ def test_first_n_stop_bounds_by_item_budget(httpserver: HTTPServer) -> None:
             b"<li class='row'>x</li><li class='row'>y</li>", content_type="text/html")
 
     async def go() -> int:
-        r = Resolver(HttpFetcher(), middleware=(paginate_param("page", until=first_n(5, ".row"), max_pages=99),))
+        r = Resolver(HttpFetcher(), paginate=paginate_param("page", until=first_n(5, ".row"), max_pages=99))
         try:
             doc = await r.resolve(Request(url=httpserver.url_for("/b") + "?page=1"))
             return len(doc.select_all(".row"))
@@ -219,7 +219,7 @@ def test_paginate_clicks_middleware_load_more(httpserver: HTTPServer) -> None:
 
     async def go() -> int:
         browser = BrowserFetcher()
-        r = Resolver(HttpFetcher(), middleware=(paginate_clicks(browser, "#more"),))
+        r = Resolver(HttpFetcher(), paginate=paginate_clicks(browser, "#more"))
         try:
             doc = await r.resolve(Request(url=httpserver.url_for("/lm")))
             return len(doc.select_all(".row"))
@@ -253,7 +253,7 @@ def test_middlewares_compose_pagination_over_retry_over_ratelimit(httpserver: HT
 
     async def go() -> tuple[list[str], int]:
         # profile: pagination -> retry -> rate_limit -> base (outermost first)
-        r = Resolver(HttpFetcher(), middleware=(paginate_links(), retry(3, backoff=0.0), rate_limit(0.01)))
+        r = Resolver(HttpFetcher(), paginate=paginate_links(), retry=retry(3, backoff=0.0), rate_limit=0.01)
         try:
             doc = await r.resolve(Request(url=httpserver.url_for("/p1")))
             return [e.text for e in doc.select_all(".row")], calls["p2"]
@@ -263,3 +263,41 @@ def test_middlewares_compose_pagination_over_retry_over_ratelimit(httpserver: HT
     rows, p2_calls = _run(go())
     assert rows == ["a", "b", "c"]  # 3 pages merged into one Document
     assert p2_calls == 2  # page 2's 503 was retried through the chain, not surfaced to pagination
+
+
+def test_profile_bundles_and_combines_slots(httpserver: HTTPServer) -> None:
+    from web.resolve import Profile, Resolver, paginate_links, retry
+    httpserver.expect_request("/p1").respond_with_data(
+        b"<li class='row'>a</li><a rel='next' href='/p2'>n</a>", content_type="text/html")
+    httpserver.expect_request("/p2").respond_with_data(b"<li class='row'>b</li>", content_type="text/html")
+
+    # a reusable vendor profile bundling politeness + retry + pagination
+    acme = Profile(rate_limit=0.01, retry=retry(3, backoff=0.0), paginate=paginate_links())
+    tuned = acme.with_(rate_limit=0.0)  # combine/adjust: same profile, no throttle
+
+    async def go(p: Profile) -> list[str]:
+        r = Resolver(HttpFetcher(), profile=p)
+        try:
+            doc = await r.resolve(Request(url=httpserver.url_for("/p1")))
+            return [e.text for e in doc.select_all(".row")]
+        finally:
+            await r.aclose()
+
+    assert _run(go(acme)) == ["a", "b"]
+    assert _run(go(tuned)) == ["a", "b"]  # .with_ produced a working variant
+    assert tuned.retry is acme.retry and tuned.rate_limit == 0.0  # only the one slot changed
+
+
+def test_named_slots_order_is_fixed_regardless_of_kwarg_order(httpserver: HTTPServer) -> None:
+    from web.resolve import Resolver, paginate_links, retry
+    httpserver.expect_request("/x").respond_with_data(b"<li class='row'>a</li>", content_type="text/html")
+
+    async def go() -> str:
+        # kwargs given in "wrong" order -- the Resolver still orders paginate outer, rate_limit inner
+        r = Resolver(HttpFetcher(), rate_limit=0.0, paginate=paginate_links(), retry=retry(2, backoff=0.0))
+        try:
+            return (await r.resolve(Request(url=httpserver.url_for("/x")))).select_all(".row")[0].text
+        finally:
+            await r.aclose()
+
+    assert _run(go()) == "a"
