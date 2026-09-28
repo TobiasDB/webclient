@@ -15,7 +15,6 @@ author), and a winning Selection maps directly onto a DSL plan
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any
 
 from pydantic import BaseModel
 
@@ -49,6 +48,8 @@ def extract(doc: Document, selection: Selection) -> "list[dict[str, str | None]]
     return rows
 
 
+#: what the loop observes each round: the page + the rows the last Selection produced.
+_Obs = tuple[Document, "list[dict[str, str | None]]"]
 #: a driver looks at the page and the last rows and decides the next move -- sync or async (an
 #: LLM driver is async; the loop awaits it).
 _Decision = Selection | Done | Ask
@@ -76,7 +77,7 @@ class Author:
 
     def __init__(self, doc: Document, driver: Driver, *, max_rounds: int = 6) -> None:
         self._state = _State(doc)
-        self._loop: "BoundedLoop[_State, Any, Selection | Done]" = BoundedLoop(
+        self._loop: "BoundedLoop[_State, _Obs, Selection | Done]" = BoundedLoop(
             observe=lambda s: (s.doc, s.rows),
             decide=lambda obs: driver(obs[0], obs[1]),
             apply=self._apply,

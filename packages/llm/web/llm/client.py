@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 import httpx
 
@@ -35,7 +35,7 @@ class AnthropicLlm:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=60.0)
 
     async def complete(self, prompt: str) -> str:
-        body: dict[str, Any] = {
+        body: dict[str, object] = {
             "model": self._model,
             "max_tokens": self._max_tokens,
             "messages": [{"role": "user", "content": prompt}],
@@ -52,8 +52,13 @@ class AnthropicLlm:
             raise WebException(err("llm.request", str(exc))) from exc
         if resp.status_code != 200:
             raise WebException(err("llm.api", f"HTTP {resp.status_code}", body=resp.text[:500]))
-        data = resp.json()
-        return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+        data: object = resp.json()
+        content = data.get("content", []) if isinstance(data, dict) else []
+        parts = [
+            block["text"] for block in content
+            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
+        ]
+        return "".join(parts)
 
     async def aclose(self) -> None:
         await self._client.aclose()
