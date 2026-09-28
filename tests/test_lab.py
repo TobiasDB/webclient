@@ -88,6 +88,20 @@ def test_data_api_flag_names_the_live_endpoint(lab, wc, index):
     assert "data_api" not in {f.name for f in static.flags()}
 
 
+def test_structured_data_flag_on_a_feed_link_and_a_json_ld_dataset(lab, wc, index):
+    # a DECLARED machine-readable dataset (needs no browser): a schema.org ItemList island, or a
+    # syndication feed link -> the structured_data flag, whose value points at the clean source (the
+    # island / feed) instead of the rendered DOM. A lone Organization blob is NOT a dataset.
+    tw = wc.fetch(f"{lab}{index['twoface']['path']}")  # a ld+json ItemList
+    sd = {f.name: f for f in tw.flags()}.get("structured_data")
+    assert sd and sd.present and sd.value["json_ld_items"] >= 3
+    st = wc.fetch(f"{lab}{index['structured']['path']}")  # declares a syndication feed link
+    sd2 = {f.name: f for f in st.flags()}.get("structured_data")
+    assert sd2 and sd2.present and any("/lab/rss" in u for u in sd2.value["feeds"])
+    shop = wc.fetch(f"{lab}{index['shop']['path']}")  # no dataset structured data
+    assert "structured_data" not in {f.name for f in shop.flags() if f.present}
+
+
 def test_pagination_rel_next_and_cursor(lab, wc, index):
     exp = expected(lab, wc, "paginated")
     first = wc.fetch(f"{lab}{index['paginated']['path']}")

@@ -220,6 +220,18 @@ def _vendor_on_block(ctx: Context) -> Hit | None:
     return None
 
 
+@detector(flag="anti_bot_triggered", name="served_real_content", stage="static", contra=True)
+def _served_real_content(ctx: Context) -> Hit | None:
+    """CONTRA evidence against an active anti-bot challenge: a challenge-ish status (403/429/503) that
+    still returns SUBSTANTIAL real page content and shows NO vendor interstitial is a permission error,
+    a soft block, or a browser-only site that served anyway -- not a CAPTCHA to solve. It dampens the
+    bare-status signal (0.6) so a plain 403-with-content doesn't cost a needless proxy/stealth hop
+    (the auto ladder still escalates a bare 403 to the browser on its own)."""
+    if ctx.status in _CHALLENGE_STATUS and ctx.is_html and len(ctx.visible) > 2000 and _vendor_interstitial(ctx.low) is None:
+        return Hit(0.7, f"{len(ctx.visible)} chars of real content on a {ctx.status} (not a challenge page)")
+    return None
+
+
 # -- login --------------------------------------------------------------------
 
 

@@ -222,7 +222,7 @@ class FlagsBacking(Backing):
         """Every flag that is present, most-actionable first -- the compact digest of
         "what is notable about this page"."""
         order = (
-            "anti_bot_triggered", "login_required", "spa", "data_api", "shadow_dom", "iframe",
+            "anti_bot_triggered", "login_required", "spa", "data_api", "structured_data", "shadow_dom", "iframe",
             "anti_bot_present", "login_present", "cookie_banner", "pagination", "tabbed", "forms", "buttons",
         )
         got = self._flags(core)

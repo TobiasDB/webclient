@@ -9,7 +9,7 @@ noisy-OR, contra signals scale it down, and it is *present* at confidence >= 0.5
 (`Settings.detection.present_threshold`). A present flag may carry a `remedy` (the transport
 escalation it calls for) and a `value` (the actionable payload).
 
-20 flags, 51 detectors.
+21 flags, 54 detectors.
 
 ## `spa`
 
@@ -43,6 +43,7 @@ escalation it calls for) and a `value` (the actionable payload).
 | `challenge_interstitial` | static |  | — | anti_bot_triggered evidence (strong): the body IS a named vendor's challenge/interstitial page. |
 | `challenge_status` | request |  | — | anti_bot_triggered evidence: a status commonly used to block/challenge bots (403/429/503). |
 | `vendor_on_block` | request |  | — | anti_bot_triggered evidence (strong): a known vendor's fingerprint present ON a blocking status -- that vendor is actively blocking this request. |
+| `served_real_content` | static | yes | — | CONTRA evidence against an active anti-bot challenge: a challenge-ish status (403/429/503) that still returns SUBSTANTIAL real page content and shows NO vendor interstitial is a permission error, a soft block, or a browser-only site that served anyway -- not a CAPTCHA to solve. It dampens the bare-status signal (0.6) so a plain 403-with-content doesn't cost a needless proxy/stealth hop (the auto ladder still escalates a bare 403 to the browser on its own). |
 
 ## `login_present`
 
@@ -88,6 +89,15 @@ escalation it calls for) and a `value` (the actionable payload).
 | detector | stage | contra | needs | evidence |
 |---|---|---|---|---|
 | `data_endpoint_called` | network |  | `LiveBacking.init`, `LiveBacking.drain` | data_api evidence: the page CALLED a live JSON data API -- a same-origin XHR/fetch, or a cross-origin call to a records/content endpoint (not analytics). The whole dataset often lives behind it, so it is a strong hint the real source is the API (queryable, complete) rather than the rendered DOM. |
+
+## `structured_data`
+
+- **remedy**: `none` · **value**: The structured_data flag's value: the declared feed URLs + the JSON-LD dataset item count, so the
+
+| detector | stage | contra | needs | evidence |
+|---|---|---|---|---|
+| `feed_link` | static |  | — | structured_data evidence (strong): the page links a syndication FEED (RSS / Atom / JSON feed) -- a clean, machine-readable dataset source to read INSTEAD of scraping the rendered HTML. Value = the feed URL(s). |
+| `json_ld_dataset` | static |  | — | structured_data evidence (strong): a schema.org DATASET in the page's JSON-LD -- an ItemList or a typed array (>=3 objects). The whole record set often lives in the island, cleaner than the DOM. A lone Organization / WebSite / BreadcrumbList blob does NOT fire this. Value = the item count. |
 
 ## `shadow_dom`
 

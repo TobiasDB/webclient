@@ -49,6 +49,23 @@ _ANALYTICS_HOSTS = (
 )
 
 
+#: URL fragments that mark an XHR/fetch as TELEMETRY / a beacon (logging, metrics, RUM, CSP
+#: reports) -- a call the page makes for itself, never a records source. Excluded from data_api so
+#: an analytics-only page does not read as "calls a data API". Conservative: ``/event(s)`` is left
+#: OUT (it is a plausible records endpoint), only unambiguous beacon paths are here.
+_TELEMETRY_HINTS = (
+    "/collect", "/beacon", "/track", "/tracking", "/rum", "/vitals", "/csp-report", "/csp/report",
+    "/telemetry", "/metrics", "/log", "/logs", "/ping", "/pixel", "/stat", "/stats", "/perf",
+)
+
+
+def _is_telemetry(url: str) -> bool:
+    """Whether an XHR/fetch URL is a telemetry / beacon call (logging, metrics, RUM) rather than a
+    records source -- so it never counts as a live data API."""
+    low = url.lower()
+    return any(h in low for h in _TELEMETRY_HINTS)
+
+
 def _is_data_endpoint(url: str) -> bool:
     """Whether a cross-origin XHR/fetch URL looks like a records/content API (a CaaS/CDN
     data source) rather than analytics or an asset -- so composing main content from it
@@ -137,7 +154,9 @@ def _data_endpoint_urls(ctx: Context) -> "list[str]":
             _log.debug("data_api: dropped an XHR event with an unreadable url: %s", exc)
             continue
         host = (urlparse(u).hostname or "").lower()
-        if host and (host == page_host or _is_data_endpoint(u)) and u not in out:
+        if not host or _is_telemetry(u):  # a beacon/metrics call is not a records source
+            continue
+        if (host == page_host or _is_data_endpoint(u)) and u not in out:
             out.append(u)
     return out
 
@@ -159,6 +178,81 @@ def _data_api_value(signals: "list[Signal]", ctx: Context) -> Any:
 
 
 flag("data_api", value=_data_api_value)
+
+
+# -- structured_data: a machine-readable DATASET is DECLARED on the page ------------------------------
+# distinct from data_api (a live XHR the page CALLED at render time): this is a STATIC, declared source
+# -- a syndication feed link (RSS/Atom/JSON) or a schema.org ItemList / typed array in a
+# <script type="application/ld+json">. A robust hint the clean dataset can be read from the feed/island
+# rather than scraped from the rendered DOM (and it needs no browser -- it is in the served HTML).
+
+def _feed_links(ctx: Context) -> "list[str]":
+    """Absolute URLs of syndication feeds (RSS / Atom / JSON feed) the page declares in its head."""
+    if ctx.tree is None:
+        return []
+    base = ctx.final_url or ctx.url
+    out: list[str] = []
+    for el in ctx.tree.cssselect(
+        'link[type="application/rss+xml"], link[type="application/atom+xml"], '
+        'link[rel="alternate"][type="application/feed+json"]'
+    ):
+        href = (el.get("href") or "").strip()
+        if href and (u := urljoin(base, href)) not in out:
+            out.append(u)
+    return out
+
+
+def _json_ld_dataset(ctx: Context) -> int:
+    """The largest record count in a schema.org DATASET blob in the page's JSON-LD -- an ItemList's
+    ``itemListElement``, an ``@graph``, or a top-level array -- counting only shapes with >=3 typed
+    objects. 0 when the only JSON-LD is a lone Organization / WebSite / BreadcrumbList (not a dataset)."""
+    if ctx.tree is None:
+        return 0
+    best = 0
+
+    def typed(seq: Any) -> int:
+        return len(seq) if isinstance(seq, list) and sum(bool(isinstance(o, dict) and o.get("@type")) for o in seq) >= 3 else 0
+
+    for node in ctx.tree.cssselect('script[type="application/ld+json"]'):
+        try:
+            data = json.loads(node.text or "")
+        except (ValueError, TypeError):
+            continue
+        best = max(best, typed(data))
+        for obj in (data if isinstance(data, list) else [data]):
+            if isinstance(obj, dict):
+                items = obj.get("itemListElement")
+                best = max(best, len(items) if isinstance(items, list) and len(items) >= 3 else 0, typed(obj.get("@graph")))
+    return best
+
+
+@detector(flag="structured_data", name="feed_link", stage="static")
+def _feed_link(ctx: Context) -> "Hit | None":
+    """structured_data evidence (strong): the page links a syndication FEED (RSS / Atom / JSON feed) --
+    a clean, machine-readable dataset source to read INSTEAD of scraping the rendered HTML. Value = the
+    feed URL(s)."""
+    feeds = _feed_links(ctx)
+    return Hit(0.8, f"{len(feeds)} syndication feed link(s)", feeds) if feeds else None
+
+
+@detector(flag="structured_data", name="json_ld_dataset", stage="static")
+def _json_ld_dataset_sig(ctx: Context) -> "Hit | None":
+    """structured_data evidence (strong): a schema.org DATASET in the page's JSON-LD -- an ItemList or a
+    typed array (>=3 objects). The whole record set often lives in the island, cleaner than the DOM. A
+    lone Organization / WebSite / BreadcrumbList blob does NOT fire this. Value = the item count."""
+    n = _json_ld_dataset(ctx)
+    return Hit(0.8, f"a JSON-LD dataset ({n} items)", n) if n else None
+
+
+def _structured_data_value(signals: "list[Signal]", ctx: Context) -> Any:
+    """The structured_data flag's value: the declared feed URLs + the JSON-LD dataset item count, so the
+    pipeline can target the feed / island rather than scrape the DOM. ``None`` when nothing fired."""
+    feeds = next((s.value for s in signals if s.name == "feed_link" and isinstance(s.value, list)), [])
+    n = next((s.value for s in signals if s.name == "json_ld_dataset" and isinstance(s.value, int)), 0)
+    return {"feeds": feeds, "json_ld_items": n} if (feeds or n) else None
+
+
+flag("structured_data", value=_structured_data_value)
 
 
 @detector(flag="spa", name="xhr_composed_cross_origin", stage="network")
