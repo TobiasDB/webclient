@@ -33,6 +33,7 @@ from .element_index import ElementIndexBacking
 from .paginate import PaginateBacking
 
 if TYPE_CHECKING:
+    from ...clients.snapshot import Snapshot
     from ...interface import LazyDocument
     from ...query.collection import Collection
     from ..client import WebClient  # noqa: F401
@@ -311,4 +312,24 @@ class Document(WebCore, IDocument):
         ))
 
 
-__all__ = ["Document", "Element", "HtmlBacking", "JsonBacking"]
+def build_document(snap: "Snapshot") -> "Document":
+    """Turn a transport :class:`~webclient.clients.Snapshot` into a ``Document`` -- the
+    fetch -> parse step. The transport produces raw response data; this is the one place that
+    shapes it into a document (its transport-parsed Set-Cookie jar kept on the private slot),
+    so the fetch layer never constructs a Document."""
+    doc = Document(
+        url=snap.url,
+        final_url=snap.final_url,
+        kind=snap.kind,
+        content=snap.content,
+        status_code=snap.status_code,
+        response_headers=snap.response_headers,
+        encoding=snap.encoding,
+        elapsed=snap.elapsed,
+        error=snap.error,
+    )
+    doc._set_cookies = snap.set_cookies
+    return doc
+
+
+__all__ = ["Document", "Element", "HtmlBacking", "JsonBacking", "build_document"]

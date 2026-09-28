@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Literal, cast
 import httpx
 
 from .base import Client, ClientFactory
+from .snapshot import Snapshot
 
 if TYPE_CHECKING:
-    from ..core.document import Document
     from ..core.reference import Reference
 
 
@@ -70,35 +70,48 @@ class HTTPXClient(Client):
         headers: dict[str, str],
         cookies: dict[str, str],
         timeout: float,
-    ) -> "tuple[Document, httpx.Response | None]":
-        """Fetch ``ref`` into a ``(Document, response)`` -- the http client's
-        whole job: perform the request, interpret the response (sniff kind /
-        charset, capture Set-Cookie) and shape it into a document. Never raises: a
-        transport failure or a non-2xx status is recorded as ``doc.error`` (the
-        caller decides whether to retry or surface it). ``response`` is ``None`` on
-        a transport failure, else the raw ``httpx.Response`` (for redirect history
-        / ``Retry-After``)."""
+    ) -> "tuple[Snapshot, httpx.Response | None]":
+        """Fetch ``ref`` into a ``(Snapshot, response)`` -- the http client's whole job:
+        perform the request and interpret the response (sniff kind / charset, capture
+        Set-Cookie) into a pure :class:`Snapshot`. The parse layer turns that into a
+        Document; the transport never constructs one. Never raises: a transport failure or a
+        non-2xx status is recorded as ``snapshot.error`` (the caller decides whether to retry
+        or surface it). ``response`` is ``None`` on a transport failure, else the raw
+        ``httpx.Response`` (for redirect history / ``Retry-After`` in the escalation ladder)."""
         import time
 
-        from ..core.document import Document
         from ..kernel.errors import error_for
 
+        url = ref.dispatch("url")
         start = time.monotonic()
         try:
             resp = await self.send(
                 ref, headers=headers, cookies=cookies, timeout=timeout
             )
-        except Exception as exc:  # transport failure -> a not-ok document
-            log.warning("%s %s -> transport error: %s", ref.method.upper(), ref.dispatch("url"), exc)
-            doc = Document(
-                url=ref.dispatch("url"),
+        except Exception as exc:  # transport failure -> a not-ok snapshot
+            log.warning("%s %s -> transport error: %s", ref.method.upper(), url, exc)
+            return Snapshot(
+                url=url,
                 status_code=0,
                 elapsed=time.monotonic() - start,
                 error=error_for(0, str(exc)),
-            )
-            return doc, None
-        doc = Document(
-            url=ref.dispatch("url"),
+            ), None
+        # Set-Cookie from EVERY hop, not just the final response: an auth flow that
+        # sets its session cookie on a 302 (then lands on the app) would otherwise
+        # be lost. Each response's ``.cookies`` is httpx-parsed (so the Expires
+        # comma is handled); aggregate across the redirect history + the final hop.
+        set_cookies: dict[str, str] = {}
+        for hop in (*resp.history, resp):
+            set_cookies.update(dict(hop.cookies))
+        error = None
+        if resp.status_code == 599 and resp.headers.get("x-webclient-har") == "miss":
+            from ..kernel.errors import make
+
+            error = make("replay.har_miss", f"no HAR entry for {ref.method.upper()} {url}")
+        elif not (200 <= resp.status_code < 300):
+            error = error_for(resp.status_code)
+        snap = Snapshot(
+            url=url,
             final_url=str(resp.url),
             kind=sniff_kind(
                 resp.headers.get("content-type"),
@@ -110,24 +123,12 @@ class HTTPXClient(Client):
             response_headers=dict(resp.headers),
             elapsed=time.monotonic() - start,
             encoding=charset_of(resp.headers.get("content-type")),
+            set_cookies=set_cookies,
+            error=error,
         )
-        # Set-Cookie from EVERY hop, not just the final response: an auth flow that
-        # sets its session cookie on a 302 (then lands on the app) would otherwise
-        # be lost. Each response's ``.cookies`` is httpx-parsed (so the Expires
-        # comma is handled); aggregate across the redirect history + the final hop.
-        set_cookies: dict[str, str] = {}
-        for hop in (*resp.history, resp):
-            set_cookies.update(dict(hop.cookies))
-        doc._set_cookies = set_cookies
-        if resp.status_code == 599 and resp.headers.get("x-webclient-har") == "miss":
-            from ..kernel.errors import make
-
-            doc.error = make("replay.har_miss", f"no HAR entry for {ref.method.upper()} {doc.url}")
-        elif not (200 <= resp.status_code < 300):
-            doc.error = error_for(resp.status_code)
-        log.debug("%s %s -> %d %s %dB %.0fms", ref.method.upper(), doc.url, resp.status_code,
-                  doc.kind, len(resp.content), (doc.elapsed or 0.0) * 1000)
-        return doc, resp
+        log.debug("%s %s -> %d %s %dB %.0fms", ref.method.upper(), url, resp.status_code,
+                  snap.kind, len(resp.content), (snap.elapsed or 0.0) * 1000)
+        return snap, resp
 
     async def reset(self) -> None:
         """Clear the client's cookie jar before it is recycled, so a reused http client

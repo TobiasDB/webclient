@@ -478,11 +478,14 @@ class WebClient(SessionCore, IWebClient):
         the fetch (the client owns request + response interpretation). Binds the
         resulting document to this core; never raises, never registers -- the
         caller (``afetch``) retries, then registers/raises the final doc."""
+        from ..document import build_document
+
         async with await self.pool.lease("http") as lease:
             client = cast(Any, lease.client)  # the leased HTTPXClient (subclass)
-            doc, resp = await client.fetch(
+            snap, resp = await client.fetch(
                 ref, headers=headers, cookies=ref.cookies, timeout=self.timeout
             )
+        doc = build_document(snap)  # the fetch -> parse step (transport returns a Snapshot)
         doc._client = self
         return doc, resp
 

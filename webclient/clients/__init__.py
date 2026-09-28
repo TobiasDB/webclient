@@ -19,6 +19,7 @@ from .browser import (
     WaitEvent,
 )
 from .http import HTTPXClient, HTTPXFactory, charset_of, sniff_kind
+from .snapshot import Snapshot
 from .llm import (
     PRICING,
     Budget,
@@ -48,6 +49,7 @@ __all__ = [
     "ClientPool",
     "Lease",
     "PoolStats",
+    "Snapshot",
     "sniff_kind",
     "charset_of",
     "LlmClient",
