@@ -19,11 +19,15 @@ from .events import ResolveEvent
 from .signals import anti_bot, spa
 
 _RETRIABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+#: TRANSIENT transport errors worth retrying the same request for. NOT here: tls (cert),
+#: url (malformed), redirects (loop), protocol -- those are persistent, a retry can't help.
+_RETRIABLE_ERRORS = frozenset({"fetch.timeout", "fetch.connect", "fetch.dns", "fetch.proxy",
+                               "fetch.aborted", "fetch.transport"})
 
 
 def _retriable(snap: Snapshot) -> bool:
-    if snap.error is not None and snap.error.code == "fetch.transport":
-        return True
+    if snap.error is not None:
+        return snap.error.code in _RETRIABLE_ERRORS
     return snap.status in _RETRIABLE_STATUS
 
 

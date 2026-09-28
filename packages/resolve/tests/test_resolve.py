@@ -239,3 +239,15 @@ def test_tabbed_widget() -> None:
                 content_type="text/html")
     assert tabbed(doc) is not None
     assert "tabbed" in {f.name for f in flags(doc)}
+
+
+def test_retry_retries_real_transient_errors_not_persistent_ones() -> None:
+    from web.kernel import err
+    from web.resolve.middleware import _retriable
+
+    # the common transient transport errors must be retried (previously only "fetch.transport" was)
+    for code in ("fetch.timeout", "fetch.connect", "fetch.dns", "fetch.proxy", "fetch.transport"):
+        assert _retriable(Snapshot(request=Request(url="https://x/"), error=err(code, "x"))) is True
+    # persistent errors must NOT be retried (a retry can't help)
+    for code in ("fetch.tls", "fetch.url", "fetch.redirects"):
+        assert _retriable(Snapshot(request=Request(url="https://x/"), error=err(code, "x"))) is False
