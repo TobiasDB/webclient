@@ -13,18 +13,28 @@ from __future__ import annotations
 
 from typing import Any
 
+from web.kernel import Event
+
+from .events import DOMEvent, NetworkEvent
 from .request import Request
+from .script import DOM_RECORDER, Script
 from .snapshot import Snapshot
 
 
 class LivePage:
     """A live browser page. Actions return Self (drive without snapshotting); ``snapshot``
-    captures the current DOM as a :class:`Snapshot`."""
+    captures the current DOM as a :class:`Snapshot`, draining each script's recorder into a
+    DOMEvent and attaching the NetworkEvents seen so far."""
 
-    def __init__(self, page: Any, request: Request, status: int) -> None:
+    def __init__(
+        self, page: Any, request: Request, status: int,
+        scripts: tuple[Script, ...], network: list[NetworkEvent],
+    ) -> None:
         self._page = page
         self._request = request
         self._status = status
+        self._scripts = scripts
+        self._network = network
 
     async def click(self, selector: str) -> "LivePage":
         await self._page.click(selector)
@@ -40,12 +50,19 @@ class LivePage:
 
     async def snapshot(self) -> Snapshot:
         content: str = await self._page.content()
+        events: list[Event] = list(self._network)
+        for s in self._scripts:  # drain each recorder into a DOMEvent
+            if s.drain:
+                records = await self._page.evaluate(s.drain)
+                if records:
+                    events.append(DOMEvent(script=s.name, records=records))
         return Snapshot(
             request=self._request,
             url=self._page.url,
             status=self._status,
             headers={"content-type": "text/html; charset=utf-8"},
             content=content.encode("utf-8"),
+            events=events,
         )
 
     async def close(self) -> None:
@@ -55,8 +72,9 @@ class LivePage:
 class BrowserFetcher:
     """A browser :class:`~web.fetch.base.Fetcher` over Playwright/Chromium (lazily launched)."""
 
-    def __init__(self, *, headless: bool = True) -> None:
+    def __init__(self, *, headless: bool = True, scripts: tuple[Script, ...] = (DOM_RECORDER,)) -> None:
         self._headless = headless
+        self._scripts = scripts
         self._pw: Any = None
         self._browser: Any = None
 
@@ -69,11 +87,21 @@ class BrowserFetcher:
         return self._browser
 
     async def open(self, request: Request) -> LivePage:
-        """Navigate to the request and return a :class:`LivePage` to drive."""
+        """Navigate to the request and return a :class:`LivePage` to drive. Installs each page
+        script and captures every response as a NetworkEvent along the way."""
         browser = await self._browser_ready()
         page = await browser.new_page()
+        network: list[NetworkEvent] = []
+        page.on("response", lambda r: network.append(NetworkEvent(
+            method=r.request.method, url=r.url, status=r.status, resource_type=r.request.resource_type)))
+        for s in self._scripts:  # 'init' scripts run before any page script
+            if s.on == "init":
+                await page.add_init_script(s.js)
         resp = await page.goto(request.url, wait_until="load", timeout=request.timeout * 1000)
-        return LivePage(page, request, resp.status if resp is not None else 0)
+        for s in self._scripts:  # 'load' recorders installed after the initial render
+            if s.on == "load":
+                await page.evaluate(s.js)
+        return LivePage(page, request, resp.status if resp is not None else 0, self._scripts, network)
 
     async def fetch(self, request: Request) -> Snapshot:
         page = await self.open(request)

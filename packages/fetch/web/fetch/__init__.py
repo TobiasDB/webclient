@@ -18,8 +18,11 @@ from __future__ import annotations
 
 from .base import Fetcher
 from .browser import BrowserFetcher, LivePage
+from .events import DOMEvent, NetworkEvent
+from .script import DOM_RECORDER, Script
 from .http import HttpFetcher
 from .request import Request
 from .snapshot import Snapshot
 
-__all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "LivePage"]
+__all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "LivePage",
+           "Script", "DOM_RECORDER", "NetworkEvent", "DOMEvent"]

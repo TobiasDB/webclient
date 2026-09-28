@@ -111,3 +111,43 @@ def test_live_page_actions_return_self_and_snapshot(httpserver: HTTPServer) -> N
             await bf.aclose()
 
     assert b'data-done="hello"' in _run(go())
+
+
+# -- fetch-level capture: DOM events (Script recorder) + Network events on the Snapshot --
+
+from web.fetch import DOMEvent, NetworkEvent  # noqa: E402
+
+
+def test_browser_fetch_captures_network_events(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/n").respond_with_data(b"<html><body>hi</body></html>", content_type="text/html")
+
+    async def go() -> list[NetworkEvent]:
+        bf = BrowserFetcher()
+        try:
+            snap = await bf.fetch(Request(url=httpserver.url_for("/n")))
+        finally:
+            await bf.aclose()
+        return [e for e in snap.events if isinstance(e, NetworkEvent)]
+
+    nets = _run(go())
+    assert any(e.url.endswith("/n") and e.status == 200 for e in nets)  # the main navigation captured
+
+
+def test_actions_are_recorded_as_dom_events(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/d").respond_with_data(
+        b"<html><body><button id='go' onclick=\"document.body.appendChild(document.createElement('p'))\">go</button></body></html>",
+        content_type="text/html")
+
+    async def go() -> list[DOMEvent]:
+        bf = BrowserFetcher()  # default DOM_RECORDER installed
+        try:
+            page = await bf.open(Request(url=httpserver.url_for("/d")))
+            await page.click("#go")  # mutates the DOM -> the recorder buffers it
+            snap = await page.snapshot()
+            await page.close()
+        finally:
+            await bf.aclose()
+        return [e for e in snap.events if isinstance(e, DOMEvent)]
+
+    doms = _run(go())
+    assert doms and any(r["type"] == "childList" and r["added"] >= 1 for e in doms for r in e.records)
