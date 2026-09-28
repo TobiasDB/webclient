@@ -57,3 +57,41 @@ def test_max_pages_bounds_the_crawl(httpserver: HTTPServer) -> None:
             await c.aclose()
 
     assert _run(go()) == 2
+
+
+def test_paginate_walks_the_next_link(httpserver: HTTPServer) -> None:
+    from web.crawl import paginate
+    httpserver.expect_request("/p1").respond_with_data(
+        b"<p>one</p><a rel='next' href='/p2'>next</a>", content_type="text/html")
+    httpserver.expect_request("/p2").respond_with_data(
+        b"<p>two</p><a rel='next' href='/p3'>next</a>", content_type="text/html")
+    httpserver.expect_request("/p3").respond_with_data(b"<p>three</p>", content_type="text/html")  # no next
+
+    async def go() -> list[str]:
+        r = Resolver(HttpFetcher())
+        try:
+            texts: list[str] = []
+            async for doc in paginate(r, httpserver.url_for("/p1"), max_pages=10):
+                el = doc.select("p")
+                texts.append(el.text if el is not None else "")
+            return texts
+        finally:
+            await r.aclose()
+
+    assert _run(go()) == ["one", "two", "three"]  # walked p1 -> p2 -> p3, stopped (no next)
+
+
+def test_paginate_respects_max_pages(httpserver: HTTPServer) -> None:
+    from web.crawl import paginate
+    httpserver.expect_request("/a").respond_with_data(
+        b"<a rel='next' href='/a'>loops</a>", content_type="text/html")  # self-loop
+
+    async def go() -> int:
+        r = Resolver(HttpFetcher())
+        try:
+            return len([d async for d in paginate(r, httpserver.url_for("/a"), max_pages=3)])
+        finally:
+            await r.aclose()
+
+    # the self-link dedups to 1 page (already-seen guard); max_pages also bounds it
+    assert _run(go()) == 1
