@@ -59,3 +59,95 @@ def test_markup_reads_are_safe_on_non_markup_and_bad_bytes() -> None:
     # empty content -> empty tree, empty reads
     empty = parse(b"", content_type="text/html")
     assert empty.select("div") is None and empty.select_all("div") == [] and empty.links() == []
+
+
+# -- content extraction: metadata, readable/markdown, tables, regex, structure --
+
+_PAGE = b"""<!doctype html><html><head>
+  <title>  My  Page </title>
+  <meta name="description" content="a demo">
+  <meta property="og:title" content="OG Title">
+  <link rel="canonical" href="/canonical">
+  <link rel="alternate" type="application/rss+xml" href="/feed.xml">
+  <script type="application/ld+json">{"@type":"Article","name":"X"}</script>
+</head><body>
+  <nav><a href="/home">Home</a></nav>
+  <main>
+    <h1>Heading One</h1>
+    <p>Read <a href="/more">more</a> here.</p>
+    <h2>Sub</h2>
+  </main>
+  <footer>copyright</footer>
+</body></html>"""
+
+
+def test_metadata_reads_head_facts() -> None:
+    doc = parse(_PAGE, content_type="text/html", url="https://ex.com/dir/")
+    m = doc.metadata()
+    assert m.title == "My Page"
+    assert m.description == "a demo"
+    assert m.canonical == "https://ex.com/canonical"      # resolved absolute
+    assert m.og["og:title"] == "OG Title"
+    assert m.feeds == ["https://ex.com/feed.xml"]
+    assert m.ld_json == [{"@type": "Article", "name": "X"}]
+
+
+def test_readable_strips_chrome_to_main() -> None:
+    doc = parse(_PAGE, content_type="text/html", url="https://ex.com/")
+    txt = doc.readable()  # main_content_only default
+    assert "Heading One" in txt and "Read more here." in txt
+    assert "Home" not in txt and "copyright" not in txt   # nav + footer dropped
+
+
+def test_markdown_renders_headings_and_links() -> None:
+    doc = parse(_PAGE, content_type="text/html", url="https://ex.com/")
+    md = doc.markdown(main_content_only=True)
+    assert "# Heading One" in md and "## Sub" in md
+    assert "[more](https://ex.com/more)" in md
+
+
+def test_region_reports_the_landmark() -> None:
+    doc = parse(_PAGE, content_type="text/html", url="https://ex.com/")
+    assert doc.select_all("nav a")[0].region == "nav"
+    assert doc.select_all("main a")[0].region == "main"
+
+
+def test_outline_is_the_heading_tree() -> None:
+    doc = parse(_PAGE, content_type="text/html")
+    out = doc.outline()
+    assert [(h.level, h.text) for h in out] == [(1, "Heading One"), (2, "Sub")]
+
+
+def test_tables_expand_rowspan_into_records() -> None:
+    html = b"""<table>
+      <tr><th>Region</th><th>City</th></tr>
+      <tr><td rowspan="2">West</td><td>SF</td></tr>
+      <tr><td>LA</td></tr>
+    </table>"""
+    doc = parse(html, content_type="text/html")
+    rows = doc.tables()
+    assert rows == [{"Region": "West", "City": "SF"}, {"Region": "West", "City": "LA"}]
+
+
+def test_tables_transpose_keys_by_first_column() -> None:
+    html = b"<table><tr><td>Feature</td><td>A</td><td>B</td></tr><tr><td>Price</td><td>1</td><td>2</td></tr></table>"
+    doc = parse(html, content_type="text/html")
+    rows = doc.tables(transpose=True)
+    assert rows == [{"Feature": "A", "Price": "1"}, {"Feature": "B", "Price": "2"}]
+
+
+def test_regex_extracts_from_free_text() -> None:
+    doc = parse(b"<p>Order #4821 total $19.99 and #4822</p>", content_type="text/html")
+    assert doc.regex(r"#(\d+)", group=1) == "4821"
+    assert doc.regex_all(r"#(\d+)", group=1) == ["4821", "4822"]
+    assert doc.regex(r"nope") is None
+
+
+def test_skeleton_keeps_semantics_drops_noise() -> None:
+    html = b'<div id="app" class="grid css-1a2b3c"><script>var x=1</script><span class="price">$5</span></div>'
+    doc = parse(html, content_type="text/html")
+    sk = doc.skeleton()
+    assert "div#app.grid" in sk           # id + semantic class kept
+    assert "css-1a2b3c" not in sk         # hashed build class dropped
+    assert "script" not in sk             # noise subtree skipped
+    assert "span.price" in sk

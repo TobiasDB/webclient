@@ -1,0 +1,104 @@
+"""Structural views of a markup :class:`~web.parse.Document`.
+
+``skeleton`` is a token-lean, indented open-tag outline of the DOM: the bloat (scripts / styles /
+svg) removed, high-entropy hashed build classes (``css-1a2b3c``) dropped as noise, but every id and
+semantic class kept and leaf text hinted -- so an LLM can write CSS selectors for a page cheaply
+instead of chewing through raw HTML. ``outline`` is the heading tree (``<h1>``..``<h6>``) for a
+table of contents. Both are PURE content structure; a live crawl's XHR / correlation enrichments
+belong to a higher layer that annotates this base.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from .document import Document
+
+#: subtrees that are noise in a structural outline -- skipped whole.
+_SKIP = frozenset({"script", "style", "noscript", "template", "svg", "path", "link", "meta"})
+#: a hashed/build segment: 5+ alphanumerics containing a digit (``1a2b3c``, ``jsx123456``).
+_HASH_SEG = re.compile(r"^(?=[a-z0-9]*\d)[a-z0-9]{5,}$", re.I)
+
+
+class Heading(BaseModel):
+    """One entry in a document's heading outline."""
+
+    level: int   # 1..6
+    text: str
+
+
+def _tag(node: Any) -> str:
+    t = getattr(node, "tag", "")
+    return t.lower() if isinstance(t, str) else ""
+
+
+def _is_hashed(token: str) -> bool:
+    """A class token is noise if any hyphen/underscore segment looks like a build hash."""
+    return any(_HASH_SEG.match(seg) for seg in re.split(r"[-_]", token) if seg)
+
+
+def _keep_classes(value: str) -> list[str]:
+    """Keep semantic class tokens; drop high-entropy hashed build classes."""
+    return [c for c in value.split() if c and not _is_hashed(c)]
+
+
+def _signature(node: Any) -> str:
+    """The open-tag signature shown for a node: ``tag#id.class[.class]`` plus a role/label hint."""
+    tag = _tag(node)
+    out = tag
+    node_id = node.get("id")
+    if node_id:
+        out += f"#{node_id}"
+    classes = _keep_classes(node.get("class") or "")
+    if classes:
+        out += "." + ".".join(classes[:4])
+    for a in ("role", "aria-label", "name", "type", "placeholder"):
+        v = node.get(a)
+        if v:
+            out += f" [{a}={v[:24]}]"
+            break
+    return out
+
+
+def skeleton(doc: "Document", *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30) -> str:
+    """A token-lean indented open-tag outline of the DOM (ids + semantic classes kept, hashed build
+    classes + script/style/svg dropped, leaf text hinted to ``text_chars``). Empty for non-markup."""
+    if not doc._markup():
+        return ""
+    lines: list[str] = []
+    _emit(doc._root(), 0, lines, max_lines=max_lines, text_chars=text_chars, max_depth=max_depth)
+    return "\n".join(lines[:max_lines])
+
+
+def _emit(node: Any, depth: int, lines: list[str], *, max_lines: int, text_chars: int, max_depth: int) -> None:
+    if len(lines) >= max_lines or depth > max_depth or _tag(node) in _SKIP:
+        return
+    indent = "  " * depth
+    line = indent + _signature(node)
+    own = " ".join((node.text or "").split())
+    kids = [c for c in node if _tag(c) not in _SKIP]
+    if not kids and own:  # a leaf: hint its text
+        line += f"  {own[:text_chars]!r}"
+    elif own and len(own) > 1:
+        line += f"  {own[:text_chars]!r}"
+    lines.append(line)
+    for child in kids:
+        _emit(child, depth + 1, lines, max_lines=max_lines, text_chars=text_chars, max_depth=max_depth)
+
+
+def outline(doc: "Document") -> "list[Heading]":
+    """The document's heading tree (``<h1>``..``<h6>``) in order -- a table of contents."""
+    if not doc._markup():
+        return []
+    out: list[Heading] = []
+    for el in doc.select_all("h1, h2, h3, h4, h5, h6"):
+        tag = _tag(el._node)
+        out.append(Heading(level=int(tag[1]), text=el.text))
+    return out
+
+
+__all__ = ["skeleton", "outline", "Heading"]
