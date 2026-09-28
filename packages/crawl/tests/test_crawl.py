@@ -197,3 +197,19 @@ def test_crawl_respects_robots_disallow(httpserver: HTTPServer) -> None:
 
     urls = _run(go())
     assert any("/ok" in u for u in urls) and not any("secret" in u for u in urls)
+
+
+def test_robots_honours_wildcards_and_longest_match() -> None:
+    rob = parse_robots(
+        "User-agent: *\n"
+        "Disallow: /private\n"
+        "Allow: /private/ok\n"      # longer Allow overrides the Disallow (RFC 9309, not first-match)
+        "Disallow: /*.pdf$\n"       # wildcard + end-anchor
+        "Disallow: /a/*/secret\n"   # mid-path wildcard
+    )
+    assert rob.allowed("https://ex.com/public")
+    assert not rob.allowed("https://ex.com/private/secret")
+    assert rob.allowed("https://ex.com/private/ok")           # longest-match Allow wins
+    assert not rob.allowed("https://ex.com/report.pdf")       # /*.pdf$ wildcard honoured
+    assert rob.allowed("https://ex.com/report.pdf?x=1")       # $ anchors end -> query not blocked
+    assert not rob.allowed("https://ex.com/a/b/secret")       # mid-path * honoured

@@ -1,13 +1,16 @@
 """``robots.txt`` -- politeness: honour a site's crawl rules and discover its sitemaps.
 
-A minimal parser over the resolved ``/robots.txt``: it answers "may I fetch this path?" for our
-user-agent (matching the most specific applicable group, longest-match Allow/Disallow) and exposes
-the ``Sitemap:`` URLs the file advertises (a better seed source than guessing ``/sitemap.xml``).
-Fetching robots is itself a resolve, so it runs over the same Resolver as the crawl.
+A parser over the resolved ``/robots.txt``: it answers "may I fetch this path?" for our user-agent
+(RFC 9309 semantics -- LONGEST-matching rule wins, a tie favours Allow, with ``*``/``$`` wildcards)
+and exposes the ``Sitemap:`` URLs the file advertises (a better seed source than guessing
+``/sitemap.xml``). Fetching robots is itself a resolve, so it runs over the same Resolver as the
+crawl. NB we do NOT use ``urllib.robotparser``: it implements the OLD first-match precedence (so a
+longer ``Allow`` cannot override an earlier ``Disallow``) and does not honour wildcards.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
@@ -15,22 +18,36 @@ from web.fetch import Request
 from web.resolve import Resolver
 
 
+def _match_len(pattern: str, path: str) -> int:
+    """If the robots ``pattern`` matches ``path``, its length (for longest-match precedence), else
+    -1. ``*`` matches any run, a trailing ``$`` anchors the end (RFC 9309); otherwise it is a
+    prefix match."""
+    body = pattern[:-1] if pattern.endswith("$") else pattern
+    regex = "^" + "".join(".*" if ch == "*" else re.escape(ch) for ch in body)
+    if pattern.endswith("$"):
+        regex += "$"
+    return len(pattern) if re.match(regex, path) else -1
+
+
 @dataclass
 class Robots:
-    """Parsed robots rules for our agent: ``(allow, path)`` rules + advertised sitemap URLs."""
+    """Parsed robots rules for our agent: ``(allow, path-pattern)`` rules + advertised sitemap URLs."""
 
-    rules: list[tuple[bool, str]] = field(default_factory=list)  # (is_allow, path_prefix)
+    rules: list[tuple[bool, str]] = field(default_factory=list)  # (is_allow, path_pattern)
     sitemaps: list[str] = field(default_factory=list)
 
     def allowed(self, url: str) -> bool:
         """Whether ``url``'s path is permitted -- the longest matching rule wins; a tie favours
         Allow; no match means allowed (robots defaults to permit)."""
-        path = urlsplit(url).path or "/"
+        parts = urlsplit(url)
+        path = parts.path or "/"
+        if parts.query:  # robots matches against path + query (so /*.pdf$ won't block /a.pdf?x=1)
+            path += "?" + parts.query
         best_len, best_allow = -1, True
-        for is_allow, prefix in self.rules:
-            if path.startswith(prefix) and len(prefix) >= best_len:
-                if len(prefix) > best_len or is_allow:
-                    best_len, best_allow = len(prefix), is_allow
+        for is_allow, pattern in self.rules:
+            mlen = _match_len(pattern, path)
+            if mlen >= 0 and mlen >= best_len and (mlen > best_len or is_allow):
+                best_len, best_allow = mlen, is_allow
         return best_allow
 
 
