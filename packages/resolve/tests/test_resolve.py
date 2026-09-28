@@ -201,3 +201,41 @@ def test_paginate_cursor_concatenates_json_pages(httpserver: HTTPServer) -> None
 
     doc = _run(go())
     assert doc.json() == [1, 2, 3, 4, 5]  # all pages' items concatenated into one array
+
+
+# -- expanded signal/flag breadth --
+from web.resolve import data_api, record_list, structured_data, tabbed  # noqa: E402
+
+
+def test_structured_data_from_jsonld() -> None:
+    doc = parse(b'<html><head><script type="application/ld+json">{"@type":"Product"}</script></head><body>x</body></html>',
+                content_type="text/html")
+    assert structured_data(doc) is not None
+    assert "structured_data" in {f.name for f in flags(doc)}
+
+
+def test_data_api_json_island() -> None:
+    doc = parse(b'<html><body><script id="__NEXT_DATA__" type="application/json">{"props":{}}</script></body></html>',
+                content_type="text/html")
+    assert data_api(doc) is not None
+    by = {f.name: f for f in flags(doc)}
+    assert by["data_api"].remedy == "extract:json_island"
+
+
+def test_record_list_signal_carries_selector_and_count() -> None:
+    html = (b"<html><body><ul>"
+            + b"".join(b"<li class=item><span class=t>x</span></li>" for _ in range(5))
+            + b"</ul></body></html>")
+    doc = parse(html, content_type="text/html")
+    sig = record_list(doc)
+    assert sig is not None
+    assert sig.detail["item_selector"] == "li.item" and sig.detail["count"] == 5
+    rec_flag = next(f for f in flags(doc) if f.name == "record_list")
+    assert rec_flag.remedy == "extract:records"
+
+
+def test_tabbed_widget() -> None:
+    doc = parse(b'<html><body><div role="tablist"><button role="tab">A</button></div></body></html>',
+                content_type="text/html")
+    assert tabbed(doc) is not None
+    assert "tabbed" in {f.name for f in flags(doc)}

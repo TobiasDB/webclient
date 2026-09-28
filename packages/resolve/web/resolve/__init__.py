@@ -26,8 +26,9 @@ from .events import ResolveEvent
 from .flags import Flag, flags
 from .middleware import escalate, rate_limit, retry
 from .paginate import Until, paginate_clicks, paginate_cursor, paginate_links, paginate_param
-from .signals import (Signal, anti_bot, blocked_status, consent_wall, empty, infinite_scroll,
-                      login_wall, pagination, server_error, spa)
+from .signals import (Signal, anti_bot, blocked_status, consent_wall, data_api, empty, iframe,
+                      infinite_scroll, login_wall, pagination, record_list, server_error, spa,
+                      structured_data, tabbed)
 from .stops import any_of, first_n, until_empty, until_match, until_repeat
 from .tiers import ladder
 
@@ -41,5 +42,6 @@ __all__ = [
     # signals (evidence) + flags (conclusions with remedies)
     "document", "ResolveEvent", "Signal", "spa", "login_wall", "pagination", "anti_bot",
     "consent_wall", "infinite_scroll", "empty", "blocked_status", "server_error",
+    "structured_data", "data_api", "record_list", "tabbed", "iframe",
     "Flag", "flags",
 ]

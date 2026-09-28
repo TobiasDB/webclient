@@ -117,5 +117,60 @@ def server_error(snap: Snapshot) -> "Signal | None":
     return None
 
 
-__all__ = ["Signal", "spa", "login_wall", "pagination", "anti_bot",
-           "consent_wall", "infinite_scroll", "empty", "blocked_status", "server_error"]
+def structured_data(doc: Document) -> "Signal | None":
+    """The page publishes machine-readable data about itself -- JSON-LD (``ld+json``) or microdata
+    (``itemscope``). Prefer extracting THAT over scraping the rendered DOM."""
+    if doc.kind != "html":
+        return None
+    if doc.metadata().ld_json or doc.select("[itemscope]") is not None:
+        return Signal(name="structured_data", confidence=0.9)
+    return None
+
+
+def data_api(doc: Document) -> "Signal | None":
+    """The page carries its data as an inlined JSON blob (a ``__NEXT_DATA__`` / state island /
+    ``application/json`` script) rather than only as DOM -- read the island, don't render."""
+    if doc.kind != "html":
+        return None
+    if doc.select("script#__NEXT_DATA__, script[type='application/json'], script[id*=state]") is not None:
+        return Signal(name="data_api", confidence=0.7)
+    return None
+
+
+def record_list(doc: Document) -> "Signal | None":
+    """A repeating record region -- the DATASET -- is present (via :meth:`Document.records`). The
+    detail carries the suggested ``select_all`` item selector and the record count."""
+    if doc.kind != "html":
+        return None
+    regions = doc.records(top_k=1)
+    if not regions:
+        return None
+    top = regions[0]
+    return Signal(name="record_list", confidence=min(0.95, 0.5 + top.count * 0.02),
+                  detail={"item_selector": top.item_selector, "count": top.count})
+
+
+def tabbed(doc: Document) -> "Signal | None":
+    """A tab widget: some records may live behind a tab that only populates the DOM on click (the
+    remedy is an interaction, not a URL walk)."""
+    if doc.kind != "html":
+        return None
+    if doc.select("[role=tablist], [role=tab], [data-tabs], [data-tab], .tab-content") is not None:
+        return Signal(name="tabbed", confidence=0.6)
+    return None
+
+
+def iframe(doc: Document) -> "Signal | None":
+    """The content sits inside an ``<iframe>`` -- the fetched document is a frame around it, so a
+    read must descend into the framed source."""
+    if doc.kind != "html":
+        return None
+    frames = doc.select_all("iframe[src]")
+    if frames:
+        return Signal(name="iframe", confidence=0.5, detail={"count": len(frames)})
+    return None
+
+
+__all__ = ["Signal", "spa", "login_wall", "pagination", "anti_bot", "consent_wall", "infinite_scroll",
+           "empty", "blocked_status", "server_error", "structured_data", "data_api", "record_list",
+           "tabbed", "iframe"]

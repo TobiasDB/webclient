@@ -61,6 +61,11 @@ _CONCLUSIONS: tuple[_Conclusion, ...] = (
     _Conclusion("paginated", "paginate", doc_detectors=(_s.pagination,)),
     _Conclusion("infinite_scroll", "paginate:scroll", doc_detectors=(_s.infinite_scroll,)),
     _Conclusion("server_error", "retry", snap_detectors=(_s.server_error,)),
+    _Conclusion("structured_data", "extract:jsonld", doc_detectors=(_s.structured_data,)),
+    _Conclusion("data_api", "extract:json_island", doc_detectors=(_s.data_api,)),
+    _Conclusion("record_list", "extract:records", doc_detectors=(_s.record_list,)),
+    _Conclusion("tabbed", "interact:tabs", doc_detectors=(_s.tabbed,)),
+    _Conclusion("iframe", "descend:iframe", doc_detectors=(_s.iframe,)),
 )
 
 
