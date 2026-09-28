@@ -95,3 +95,56 @@ def test_paginate_respects_max_pages(httpserver: HTTPServer) -> None:
 
     # the self-link dedups to 1 page (already-seen guard); max_pages also bounds it
     assert _run(go()) == 1
+
+
+def test_paginate_by_param_increments_and_stops_when_empty(httpserver: HTTPServer) -> None:
+    from web.crawl import by_param, paginate
+    # ?page=1,2 have items; ?page=3 is empty -> until stops it
+    httpserver.expect_request("/items", query_string="page=1").respond_with_data(
+        b"<li class='row'>a</li><li class='row'>b</li>", content_type="text/html")
+    httpserver.expect_request("/items", query_string="page=2").respond_with_data(
+        b"<li class='row'>c</li>", content_type="text/html")
+    httpserver.expect_request("/items", query_string="page=3").respond_with_data(
+        b"<p>no results</p>", content_type="text/html")
+
+    async def go() -> int:
+        r = Resolver(HttpFetcher())
+        try:
+            rows = 0
+            async for doc in paginate(r, httpserver.url_for("/items") + "?page=1",
+                                      next_url=by_param("page"),
+                                      until=lambda d: not d.select_all(".row"), max_pages=10):
+                rows += len(doc.select_all(".row"))
+            return rows
+        finally:
+            await r.aclose()
+
+    assert _run(go()) == 3  # 2 + 1 items; the empty page-3 stopped it (and contributed 0)
+
+
+def test_paginate_live_clicks_load_more(httpserver: HTTPServer) -> None:
+    from web.crawl import paginate_live
+    from web.fetch import BrowserFetcher
+    # a Load-more button that appends a row and removes itself on the 2nd click
+    httpserver.expect_request("/lm").respond_with_data(
+        b"<html><body><ul id='list'><li class='row'>1</li></ul>"
+        b"<button id='more' onclick=\""
+        b"var n=document.querySelectorAll('.row').length+1;"
+        b"var li=document.createElement('li');li.className='row';li.textContent=n;"
+        b"document.getElementById('list').appendChild(li);"
+        b"if(n>=3)this.remove();\">more</button></body></html>",
+        content_type="text/html")
+
+    async def go() -> list[int]:
+        bf = BrowserFetcher()
+        try:
+            counts: list[int] = []
+            async for doc in paginate_live(bf, httpserver.url_for("/lm"), more="#more", max_pages=10):
+                counts.append(len(doc.select_all(".row")))
+            return counts
+        finally:
+            await bf.aclose()
+
+    counts = _run(go())
+    # content accumulates: 1 row, then 2, then 3 (button gone) -> stops
+    assert counts[-1] == 3 and counts == sorted(counts)
