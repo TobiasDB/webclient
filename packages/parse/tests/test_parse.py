@@ -13,10 +13,10 @@ def test_sniff_and_select_html() -> None:
         url="https://ex.com/dir/",
     )
     assert isinstance(doc, Document) and doc.kind == "html"
-    ps = doc.select("p.q")
+    ps = doc.select_all("p.q")
     assert len(ps) == 1 and ps[0].text == "Hello world"  # whitespace collapsed
     assert doc.links() == ["https://ex.com/p"]  # href resolved absolute
-    assert doc.select("a")[0].attr("href") == "https://ex.com/p"
+    assert doc.select_all("a")[0].attr("href") == "https://ex.com/p"
 
 
 def test_sniff_json_and_read_value() -> None:
@@ -42,11 +42,11 @@ def test_parse_from_snapshot_carries_fields() -> None:
     )
     doc = parse(snap)
     assert doc.kind == "html" and doc.url == "https://ex.com/final" and doc.status == 200
-    assert doc.ok and doc.select("title")[0].text == "T"
+    assert doc.ok and doc.select_all("title")[0].text == "T"
 
 
 def test_nested_select_composes() -> None:
     doc = parse_bytes(b"<ul><li><a href='/a'>A</a></li><li><b>B</b></li></ul>", content_type="text/html")
-    lis = doc.select("li")
+    lis = doc.select_all("li")
     assert len(lis) == 2
-    assert lis[0].select("a")[0].text == "A"  # select on an Element's subtree
+    assert lis[0].select_all("a")[0].text == "A"  # select on an Element's subtree

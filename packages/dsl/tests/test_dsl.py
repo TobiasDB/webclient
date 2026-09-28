@@ -42,14 +42,14 @@ def test_sync_and_async_dispatch_same_plan(httpserver: HTTPServer) -> None:
     async def go_async() -> str:
         d = _dsl()
         try:
-            els = await d.ref(httpserver.url_for("/p")).doc().select("h1").acollect()
+            els = await d.ref(httpserver.url_for("/p")).doc().select_all("h1").acollect()
             return els[0].text
         finally:
             await d.aclose()
 
     d = _dsl()
     try:
-        els = d.ref(httpserver.url_for("/p")).doc().select("h1").collect()  # SYNC
+        els = d.ref(httpserver.url_for("/p")).doc().select_all("h1").collect()  # SYNC
         assert els[0].text == "Hi"
     finally:
         _run(d.aclose())
@@ -58,8 +58,8 @@ def test_sync_and_async_dispatch_same_plan(httpserver: HTTPServer) -> None:
 
 def test_api_dispatch_roundtrips_a_blob(httpserver: HTTPServer) -> None:
     httpserver.expect_request("/p").respond_with_data(b"<title>T</title>", content_type="text/html")
-    blob = _dsl().ref(httpserver.url_for("/p")).doc().select("title").to_blob()
-    assert Plan.from_blob(blob).reads[0].op == "select"
+    blob = _dsl().ref(httpserver.url_for("/p")).doc().select_all("title").to_blob()
+    assert Plan.from_blob(blob).reads[0].op == "select_all"
 
     async def server() -> str:
         r = Resolver(HttpFetcher())
@@ -108,9 +108,29 @@ def test_reference_actions_drive_a_browser(httpserver: HTTPServer) -> None:
     async def go() -> "str | None":
         d = DSL(Resolver(HttpFetcher()), browser=BrowserFetcher())
         try:  # actions drive one live page, .doc() snapshots+parses once, then read
-            els = await d.ref(httpserver.url_for("/f")).type("#q", "hi").click("#go").doc().select("body").acollect()
+            els = await d.ref(httpserver.url_for("/f")).type("#q", "hi").click("#go").doc().select_all("body").acollect()
             return els[0].attr("data-done")
         finally:
             await d.aclose()
 
     assert _run(go()) == "hi"
+
+
+def test_fanout_maps_reads_over_a_collection(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/list").respond_with_data(
+        b"<ul><li class='row'><a class='t' href='/a'>A</a></li>"
+        b"<li class='row'><a class='t' href='/b'>B</a></li></ul>", content_type="text/html")
+
+    async def go() -> tuple[list[str], list[dict]]:
+        d = _dsl()
+        try:
+            base = d.ref(httpserver.url_for("/list")).doc()
+            texts = await base.select_all(".row .t").text().acollect()      # map text over the collection
+            rows = await base.select_all(".row").project(title=".t").acollect()  # row dicts
+            return texts, rows
+        finally:
+            await d.aclose()
+
+    texts, rows = _run(go())
+    assert texts == ["A", "B"]
+    assert rows == [{"title": "A"}, {"title": "B"}]

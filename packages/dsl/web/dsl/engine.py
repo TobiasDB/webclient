@@ -15,7 +15,6 @@ lights up all modes.
 from __future__ import annotations
 
 import asyncio
-import inspect
 from typing import Any
 
 from web.fetch import BrowserFetcher, Request
@@ -73,6 +72,14 @@ class Document:
 
     def links(self) -> "Document":
         return self._read("links")
+
+    def attr(self, name: str) -> "Document":
+        return self._read("attr", name)
+
+    def project(self, **selectors: str) -> "Document":
+        """Over a ``select_all`` collection, map each element to a row dict -- each field is the
+        text of its sub-selector (``project(title='.t', price='.p')`` -> ``list[dict]``)."""
+        return self._read("project", selectors)
 
     def _full(self) -> Plan:
         return Plan(url=self._plan.url, actions=self._plan.actions, reads=list(self._reads))
@@ -137,18 +144,36 @@ class DSL:
             await page.close()
 
     async def run(self, plan: Plan) -> Any:
-        """Execute a plan: obtain the root Document, then apply the Document reads -- awaiting a
-        coroutine result (async method), passing a plain value through (sync method)."""
+        """Execute a plan: obtain the root Document, then apply the Document reads. Reads are
+        pure/sync; a read applied to a collection (a ``select_all`` result) maps over it."""
         obj: Any = await self._root(plan)
         for r in plan.reads:
-            result = getattr(obj, r.op)(*r.args)
-            obj = await result if inspect.isawaitable(result) else result
+            obj = _apply_read(obj, r)
         return obj
 
     async def aclose(self) -> None:
         await self.resolver.aclose()
         if self.browser is not None:
             await self.browser.aclose()
+
+
+def _one(obj: Any, step: Step) -> Any:
+    """Apply one read to a single object: call a method, or read a property (parse's ``text`` /
+    ``links`` are properties, so a non-callable attribute is used directly)."""
+    attr = getattr(obj, step.op)
+    return attr(*step.args) if callable(attr) else attr
+
+
+def _apply_read(obj: Any, step: Step) -> Any:
+    """Apply a read, fanning out over a collection. ``project`` maps each element to a row dict
+    (field -> the text of its sub-selector); any other read maps element-wise over a list."""
+    if step.op == "project":
+        fields: dict[str, str] = step.args[0]
+        rows = obj if isinstance(obj, list) else [obj]
+        return [{k: (e.text if (e := el.select(v)) is not None else None) for k, v in fields.items()} for el in rows]
+    if isinstance(obj, list):
+        return [_one(el, step) for el in obj]
+    return _one(obj, step)
 
 
 async def run_blob(blob: str, resolver: Resolver) -> Any:

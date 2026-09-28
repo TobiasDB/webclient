@@ -31,7 +31,7 @@ def spa(doc: Document) -> "Signal | None":
     if doc.kind != "html":
         return None
     body = doc.select("body")
-    visible = len(body[0].text) if body else 0
+    visible = len(body.text) if body is not None else 0
     mounts = doc.select("#root, #app, [data-reactroot], [data-server-rendered], [ng-version]")
     # the discriminator is LOW visible text behind a mount node with scripts -- the content
     # arrives via JS. A server-rendered page (>200 visible chars) never fires, even with scripts.

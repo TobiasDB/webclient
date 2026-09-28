@@ -26,7 +26,7 @@ def test_resolver_fetches_and_parses(httpserver: HTTPServer) -> None:
             await r.aclose()
 
     doc = _run(go())
-    assert doc.kind == "html" and doc.ok and doc.select("h1")[0].text == "hi"
+    assert doc.kind == "html" and doc.ok and doc.select_all("h1")[0].text == "hi"
 
 
 class _FlakyFetcher:
@@ -58,7 +58,7 @@ def test_retry_middleware_recovers_from_transient_failure() -> None:
 
     doc = _run(go())
     assert doc.ok and fetcher.calls == 3  # 2 failures + 1 success
-    assert doc.select("p")[0].text == "ok"
+    assert doc.select_all("p")[0].text == "ok"
 
 
 def test_retry_gives_up_and_returns_the_last_document() -> None:
@@ -137,7 +137,7 @@ def test_escalate_renders_a_spa_shell_via_browser(httpserver: HTTPServer) -> Non
         r = Resolver(HttpFetcher(), middleware=(escalate(browser),))
         try:
             doc = await r.resolve(Request(url=httpserver.url_for("/spa")))
-            return doc.select("#root")[0].text
+            return doc.select_all("#root")[0].text
         finally:
             await r.aclose()
             await browser.aclose()

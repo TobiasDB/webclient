@@ -50,8 +50,13 @@ class Element:
             return urljoin(self._base, val)
         return val
 
-    def select(self, css: str) -> "list[Element]":
-        """Descendant elements matching a CSS selector (nested selection)."""
+    def select(self, css: str) -> "Element | None":
+        """The FIRST descendant matching a CSS selector, or ``None`` (nested selection)."""
+        els = self._node.cssselect(css)
+        return Element(els[0], self._base) if els else None
+
+    def select_all(self, css: str) -> "list[Element]":
+        """ALL descendants matching a CSS selector (nested selection)."""
         return [Element(n, self._base) for n in self._node.cssselect(css)]
 
 
@@ -103,8 +108,13 @@ class Document:
                 self._tree = html.fromstring(self.content or b"<html></html>")
         return self._tree
 
-    def select(self, css: str) -> "list[Element]":
-        """Elements matching a CSS selector (markup documents)."""
+    def select(self, css: str) -> "Element | None":
+        """The FIRST element matching a CSS selector, or ``None`` (markup documents)."""
+        els = self._root().cssselect(css)
+        return Element(els[0], self.url) if els else None
+
+    def select_all(self, css: str) -> "list[Element]":
+        """ALL elements matching a CSS selector (markup documents)."""
         return [Element(n, self.url) for n in self._root().cssselect(css)]
 
     def links(self) -> "list[str]":
