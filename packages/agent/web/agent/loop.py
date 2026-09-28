@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable
-from typing import Any, Generic, Literal, TypeVar
+from typing import Generic, Literal, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 S = TypeVar("S")  # the driven state
 O = TypeVar("O")  # an observation of it
@@ -32,8 +32,8 @@ class Ask(BaseModel):
     The loop checkpoints (``reason="waiting"``) and resumes with the answer."""
 
     reason: str
-    options: list[Any] = []
-    detail: dict[str, Any] = {}
+    options: list[JsonValue] = []
+    detail: dict[str, JsonValue] = {}
 
 
 class Verdict(BaseModel):
@@ -61,6 +61,8 @@ class BoundedLoop(Generic[S, O, D]):
     """A bounded, resumable ``observe -> decide -> apply`` loop. ``done`` marks a decision terminal;
     ``progress`` (optional) maps state to a value compared across rounds for stall detection."""
 
+    _state: S  # set by arun() before _drive()/resume() ever read it
+
     def __init__(
         self,
         *,
@@ -68,7 +70,7 @@ class BoundedLoop(Generic[S, O, D]):
         decide: "Callable[[O], D | Ask | Awaitable[D | Ask]]",
         apply: "Callable[[S, D], None | Awaitable[None]]",
         done: "Callable[[D], bool]",
-        progress: "Callable[[S], Any] | None" = None,
+        progress: "Callable[[S], object] | None" = None,
         max_rounds: int = 20,
         max_stalls: int = 3,
     ) -> None:
@@ -77,8 +79,7 @@ class BoundedLoop(Generic[S, O, D]):
         self.max_rounds, self.max_stalls = max_rounds, max_stalls
         self.round = 0
         self._stalls = 0
-        self._prev: Any = _UNSET
-        self._state: Any = _UNSET
+        self._prev: object = _UNSET
         self._waiting = False
 
     async def arun(self, state: S) -> Verdict:
@@ -106,8 +107,8 @@ class BoundedLoop(Generic[S, O, D]):
         while True:
             if self.round >= self.max_rounds:
                 return self._verdict("budget")
-            raw: Any = self._decide(self._observe(self._state))
-            decision = await raw if inspect.isawaitable(raw) else raw  # driver may be sync or async
+            raw = self._decide(self._observe(self._state))  # driver may be sync or async
+            decision: "D | Ask" = await raw if inspect.isawaitable(raw) else raw
             if isinstance(decision, Ask):
                 self._waiting = True
                 return self._verdict("waiting", ask=decision)
