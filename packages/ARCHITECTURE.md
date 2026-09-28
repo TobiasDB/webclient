@@ -68,20 +68,28 @@ resolve. The bridge `web.resolve.document(snap)` just hands parse the bytes.
   installs a bus and collects everything emitted (`with Trace() as t: … ; t.events`). Layers call
   `emit(...)` at key points; nothing threads a bus through call signatures.
 
-### web.fetch — `Request → Snapshot`, backends + the middleware framework
-Fetch is *just fetch*: it only worries about its **backend**. It knows nothing of tiers,
-escalation, or policy.
-- `Fetcher` (protocol): `async fetch(Request) -> Snapshot` ; `async aclose()`. Never raises for a
-  transport failure — that becomes `snapshot.error`. Fetch does transport **only** (no sniffing /
-  decoding; a 404 is a valid Snapshot).
-- Backends (each just a Fetcher):
-  - `HttpFetcher(*, verify=True, proxy=None, fingerprint=False)` — httpx. `fingerprint` sends
-    browser-like headers (real TLS/JA3 impersonation is a heavier backend that plugs in here).
+### web.fetch — `Request → Snapshot`, the backends + the middleware framework
+`web.fetch` is a set of **backends** that implement one protocol. **It has NO concept of a ladder,
+tiers, escalation, or "which backend to use when"** — that is entirely `web.resolve`'s job. A
+backend just fetches (and maybe holds state).
+- **The protocol** — `Fetcher`: `async fetch(Request) -> Snapshot` ; `async aclose()`. Never
+  raises for a transport failure (that becomes `snapshot.error`); does transport **only** (no
+  sniffing / decoding — a 404 is a valid Snapshot). HTTP, Browser, Replay all implement this one
+  protocol; they are interchangeable to everything above.
+- **Shared backend concepts** — every backend takes the same cross-cutting settings: `proxy`,
+  `fingerprint`, and (a) session/state. (Real TLS/JA3 impersonation is a heavier `fingerprint`
+  that plugs into the HTTP backend.)
+- **Backend-specific actions** — a backend MAY add extra, state-mutating actions beyond `fetch()`.
+  The browser backend adds `click` / `type` / `wait_for` (they mutate its live page).
+- The backends:
+  - `HttpFetcher(*, verify=True, proxy=None, fingerprint=False)` — httpx.
   - `BrowserFetcher(*, headless=True, channel="chromium", proxy=None, fingerprint=False, scripts=(DOM_RECORDER,))`
-    — Playwright. `channel="chrome"` is the real Chrome; `fingerprint` a light stealth pass.
-    `open(Request) -> LivePage`.
-  - `LivePage` — a live page: `click/type/wait_for` return **Self** (drive without snapshotting);
-    `snapshot()` materialises a Snapshot, draining page scripts into events.
+    — Playwright (`channel="chrome"` = real Chrome). Its stateful actions live on the page handle
+    it opens: `open(Request) -> LivePage`.
+  - `LivePage` — the browser backend's live session: `click/type/wait_for` return **Self** (drive
+    without snapshotting); `snapshot()` materialises a Snapshot, draining page scripts into events.
+  - `ReplayBackend` — answers each Request from a recorded event stream (a miss → a visible drift
+    Snapshot). Offline, deterministic; just another backend.
 - Capture (no HAR): `Script { name, js, on: "init"|"load", drain }` runs in the page; its output
   is drained into a `DOMEvent`. rrweb is such a script. Responses become `NetworkEvent`s. Both
   land on `Snapshot.events` — enough to replay a fetch later (replay itself is a future layer).

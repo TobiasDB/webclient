@@ -25,13 +25,16 @@ class FetchEvent(Event):
 
 
 class NetworkEvent(Event):
-    """One response the page received during the fetch (method, URL, status, resource type)."""
+    """One response seen during a fetch (method, URL, status, resource type). Carries the response
+    ``body`` when recorded (see :class:`~web.fetch.Recorder`), which is what makes the network
+    stream replayable -- no separate HAR needed."""
 
     topic: str = "network"
     method: str = ""
     url: str = ""
     status: int = 0
     resource_type: str = ""
+    body: bytes = b""
 
 
 class DOMEvent(Event):
