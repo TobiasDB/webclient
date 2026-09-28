@@ -18,6 +18,7 @@ from collections.abc import Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from web.fetch import BrowserFetcher, Handler, Middleware, Request, Snapshot
+from web.kernel import err
 from web.parse import Document
 from .document import document
 
@@ -98,7 +99,10 @@ def paginate_clicks(
     the browser and ignores ``next``."""
 
     async def mw(request: Request, nxt: Handler) -> Snapshot:
-        page = await browser.open(request)
+        try:
+            page = await browser.open(request)
+        except Exception as exc:  # a nav failure is data, not a raise (resolve returns a Document)
+            return Snapshot(request=request, url=request.url, error=err("fetch.transport", str(exc)))
         try:
             for _ in range(max_clicks):
                 snap = await page.snapshot()

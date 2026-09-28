@@ -172,7 +172,7 @@ def _apply_read(obj: Any, step: Step) -> Any:
         rows = obj if isinstance(obj, list) else [obj]
         return [{k: (e.text if (e := el.select(v)) is not None else None) for k, v in fields.items()} for el in rows]
     if isinstance(obj, list):
-        return [_one(el, step) for el in obj]
+        return [_one(el, step) if el is not None else None for el in obj]
     return _one(obj, step)
 
 

@@ -55,7 +55,9 @@ class HttpFetcher:
                 follow_redirects=request.follow_redirects,
                 timeout=request.timeout,
             )
-        except httpx.HTTPError as exc:
+        except Exception as exc:  # never raise for a transport failure -- httpx.HTTPError, but
+            # also InvalidURL / UnsupportedProtocol / OS errors. (CancelledError is a
+            # BaseException, so it still propagates -- cancellation is not a transport failure.)
             return Snapshot(
                 request=request,
                 url=request.url,

@@ -11,11 +11,12 @@ the result. Playwright is imported lazily, so importing web.fetch never requires
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
-from web.kernel import Event
+from web.kernel import Event, emit, err
 
-from .events import DOMEvent, NetworkEvent
+from .events import DOMEvent, FetchEvent, NetworkEvent
 from .request import Request
 from .script import DOM_RECORDER, Script
 from .snapshot import Snapshot
@@ -50,6 +51,7 @@ class LivePage:
 
     async def snapshot(self) -> Snapshot:
         content: str = await self._page.content()
+        emit(FetchEvent(url=self._page.url, status=self._status, source="browser"))
         events: list[Event] = list(self._network)
         for s in self._scripts:  # drain each recorder into a DOMEvent
             if s.drain:
@@ -108,19 +110,33 @@ class BrowserFetcher:
         network: list[NetworkEvent] = []
         page.on("response", lambda r: network.append(NetworkEvent(
             method=r.request.method, url=r.url, status=r.status, resource_type=r.request.resource_type)))
-        for s in self._scripts:  # 'init' scripts run before any page script
-            if s.on == "init":
-                await page.add_init_script(s.js)
-        resp = await page.goto(request.url, wait_until="load", timeout=request.timeout * 1000)
-        for s in self._scripts:  # 'load' recorders installed after the initial render
-            if s.on == "load":
-                await page.evaluate(s.js)
+        try:
+            for s in self._scripts:  # 'init' scripts run before any page script
+                if s.on == "init":
+                    await page.add_init_script(s.js)
+            resp = await page.goto(request.url, wait_until="load", timeout=request.timeout * 1000)
+            for s in self._scripts:  # 'load' recorders installed after the initial render
+                if s.on == "load":
+                    await page.evaluate(s.js)
+        except BaseException:  # a nav failure must not leak the page we opened
+            await page.close()
+            raise
         return LivePage(page, request, resp.status if resp is not None else 0, self._scripts, network)
 
     async def fetch(self, request: Request) -> Snapshot:
-        page = await self.open(request)
+        """Render the request to a Snapshot. Never raises for a fetch failure (a nav timeout /
+        error becomes ``snapshot.error``); the page is always closed."""
+        start = time.perf_counter()
+        try:
+            page = await self.open(request)
+        except Exception as exc:  # open() already cleaned up its page
+            return Snapshot(request=request, url=request.url, elapsed=time.perf_counter() - start,
+                            error=err("fetch.transport", str(exc), url=request.url))
         try:
             return await page.snapshot()
+        except Exception as exc:
+            return Snapshot(request=request, url=request.url, elapsed=time.perf_counter() - start,
+                            error=err("fetch.transport", str(exc), url=request.url))
         finally:
             await page.close()
 

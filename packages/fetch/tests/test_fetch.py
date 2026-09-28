@@ -209,3 +209,30 @@ def test_record_then_replay_offline(httpserver: HTTPServer) -> None:
 def test_replay_backend_is_a_fetcher() -> None:
     from web.fetch import Fetcher
     assert isinstance(ReplayBackend([]), Fetcher) and isinstance(Recorder(HttpFetcher()), Fetcher)
+
+
+def test_http_backend_never_raises_on_a_bad_url() -> None:
+    async def go() -> tuple[Snapshot, Snapshot]:
+        f = HttpFetcher()
+        try:  # an unsupported scheme (not an httpx.HTTPError) and an unresolvable host
+            bad_scheme = await f.fetch(Request(url="ftp://nope/x"))
+            unresolvable = await f.fetch(Request(url="http://no.such.host.invalid/x", timeout=1.0))
+            return bad_scheme, unresolvable
+        finally:
+            await f.aclose()
+
+    bad, unresolvable = _run(go())
+    assert bad.error is not None and bad.error.code == "fetch.transport"       # did not raise
+    assert unresolvable.error is not None and unresolvable.error.code == "fetch.transport"
+
+
+def test_browser_backend_never_raises_on_nav_failure() -> None:
+    async def go() -> Snapshot:
+        bf = BrowserFetcher()
+        try:  # nothing is listening -> nav fails; must become snapshot.error, not an exception
+            return await bf.fetch(Request(url="http://127.0.0.1:9/x", timeout=2.0))
+        finally:
+            await bf.aclose()
+
+    snap = _run(go())
+    assert not snap.ok and snap.error is not None and snap.error.code == "fetch.transport"
