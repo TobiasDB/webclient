@@ -20,6 +20,7 @@ from web.kernel import Event, emit
 
 from .errors import classify
 from .events import DOMEvent, FetchEvent, NetworkEvent
+from .fingerprint import Fingerprint, as_fingerprint
 from .proxy import Proxy, as_proxy
 from .request import Request
 from .script import Script, ScriptRegistry, default_scripts
@@ -102,13 +103,17 @@ class BrowserFetcher:
 
     def __init__(
         self, *, headless: bool = True, channel: str = "chromium",
-        proxy: "str | Proxy | None" = None, fingerprint: bool = False,
+        proxy: "str | Proxy | None" = None, fingerprint: "bool | Fingerprint" = False,
+        cdp: "str | None" = None,
         scripts: "tuple[Script, ...] | ScriptRegistry | None" = None,
     ) -> None:
         self._headless = headless
         self._channel = channel  # "chromium" = bundled; "chrome" = the real Chrome install
         self._proxy = as_proxy(proxy)
-        self._fingerprint = fingerprint
+        self._fingerprint = as_fingerprint(fingerprint)
+        #: a CDP endpoint (e.g. ``http://localhost:9222``) to ATTACH to an already-running browser
+        #: instead of launching one -- a real user profile, a remote grid, an inspected Chrome.
+        self._cdp = cdp
         #: a registry so a caller can enable/disable capture scripts; a bare tuple is wrapped.
         self.scripts: ScriptRegistry = (
             default_scripts() if scripts is None
@@ -123,18 +128,22 @@ class BrowserFetcher:
             from playwright.async_api import async_playwright
 
             self._pw = await async_playwright().start()
-            self._browser = await self._pw.chromium.launch(
-                headless=self._headless,
-                channel=None if self._channel == "chromium" else self._channel,
-                proxy=self._proxy.playwright() if self._proxy else None,
-            )
+            if self._cdp is not None:  # attach to an existing browser over the DevTools protocol
+                self._browser = await self._pw.chromium.connect_over_cdp(self._cdp)
+            else:
+                self._browser = await self._pw.chromium.launch(
+                    headless=self._headless,
+                    channel=None if self._channel == "chromium" else self._channel,
+                    proxy=self._proxy.playwright() if self._proxy else None,
+                )
         return self._browser
 
     async def session(self) -> BrowserSession:
-        """Open a session that OWNS a fresh context + page (isolated cookies/state). Installs the
-        stealth pass and any ``init`` scripts before navigation."""
+        """Open a session that OWNS a fresh context + page (isolated cookies/state). Applies the
+        fingerprint's context options + stealth pass and any ``init`` scripts before navigation."""
         browser = await self._browser_ready()
-        context = await browser.new_context()
+        options = self._fingerprint.context_options() if self._fingerprint else {}
+        context = await browser.new_context(**options)
         page = await context.new_page()
         scripts = self.scripts.enabled()  # only the enabled scripts install
         try:

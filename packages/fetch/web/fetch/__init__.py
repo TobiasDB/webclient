@@ -19,6 +19,7 @@ from __future__ import annotations
 from .base import Fetcher
 from .browser import BrowserFetcher, BrowserSession
 from .events import DOMEvent, FetchEvent, NetworkEvent
+from .fingerprint import CHROME, Fingerprint
 from .script import DOM_RECORDER, Script, ScriptRegistry
 from .http import HttpFetcher, HttpSession
 from .middleware import Handler, Middleware, stack
@@ -30,5 +31,5 @@ from .request import Request
 from .snapshot import Snapshot
 
 __all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "BrowserSession", "HttpSession", "Session",
-           "Script", "ScriptRegistry", "Proxy", "Pool", "DOM_RECORDER", "NetworkEvent", "DOMEvent",
-           "Middleware", "Handler", "stack", "Recorder", "ReplayBackend"]
+           "Script", "ScriptRegistry", "Proxy", "Pool", "Fingerprint", "CHROME", "DOM_RECORDER", "NetworkEvent", "DOMEvent",
+           "FetchEvent", "Middleware", "Handler", "stack", "Recorder", "ReplayBackend"]

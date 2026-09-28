@@ -175,6 +175,32 @@ def test_http_fingerprint_sends_browser_headers(httpserver: HTTPServer) -> None:
     assert "Chrome" not in _run(go(False))  # plain backend does not
 
 
+def test_custom_fingerprint_drives_ua_and_client_hints(httpserver: HTTPServer) -> None:
+    from web.fetch import Fingerprint
+    seen: dict[str, str] = {}
+    def echo(req):
+        from werkzeug.wrappers import Response
+        seen["ua"] = req.headers.get("User-Agent", "")
+        seen["lang"] = req.headers.get("Accept-Language", "")
+        seen["plat"] = req.headers.get("Sec-Ch-Ua-Platform", "")
+        return Response(b"ok", content_type="text/html")
+    httpserver.expect_request("/f").respond_with_handler(echo)
+
+    fp = Fingerprint(user_agent="MyBot/2.0", accept_language="fr-FR", platform="Linux")
+
+    async def go() -> None:
+        f = HttpFetcher(fingerprint=fp)
+        try:
+            await f.fetch(Request(url=httpserver.url_for("/f")))
+        finally:
+            await f.aclose()
+
+    _run(go())
+    assert seen["ua"] == "MyBot/2.0"          # the identity's own UA, not the Chrome default
+    assert seen["lang"] == "fr-FR"
+    assert seen["plat"] == '"Linux"'          # client hints stay coherent with the identity
+
+
 # -- replay: record a live run's network stream, re-serve it offline (no HAR) --
 
 from web.fetch import Recorder, ReplayBackend  # noqa: E402
