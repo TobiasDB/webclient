@@ -368,3 +368,86 @@ def test_pool_bounds_concurrency() -> None:
 
     max_overlap, peak = _run(go())
     assert max_overlap == 2 and peak == 2  # 8 requests, never more than 2 in flight
+
+
+# -- wait strategies + rich capture + live actions --
+
+from web.fetch import ConsoleEvent, Wait  # noqa: E402
+
+
+def test_wait_selector_catches_late_content_domcontentloaded_misses(httpserver: HTTPServer) -> None:
+    # content is injected 400ms after parse; a 'selector' wait blocks for it, domcontentloaded is
+    # too early. The rendered element is quoted (<p class="row">), the script's literal is not, so
+    # this marker is present ONLY when the injection actually rendered.
+    httpserver.expect_request("/spa").respond_with_data(
+        b"<html><body><div id=app></div><script>"
+        b"setTimeout(()=>{document.getElementById('app').innerHTML='<p class=row>late</p>'},400)"
+        b"</script></body></html>", content_type="text/html")
+
+    async def go(wait):
+        bf = BrowserFetcher(wait=wait)
+        try:
+            return (await bf.fetch(Request(url=httpserver.url_for("/spa")))).content
+        finally:
+            await bf.aclose()
+
+    assert b'<p class="row">late' in _run(go(Wait(until="selector", selector=".row")))  # waited -> present
+    assert b'<p class="row">late' not in _run(go(Wait(until="domcontentloaded")))        # too early -> shell
+
+
+def test_wait_dom_stable_returns_on_a_static_page(httpserver: HTTPServer) -> None:
+    # dom_stable settles once the node count holds; a static page settles quickly and snapshots fine
+    httpserver.expect_request("/s").respond_with_data(b"<html><body><h1>done</h1></body></html>", content_type="text/html")
+
+    async def go():
+        bf = BrowserFetcher(wait=Wait(until="dom_stable", quiet=0.2))
+        try:
+            return (await bf.fetch(Request(url=httpserver.url_for("/s")))).content
+        finally:
+            await bf.aclose()
+
+    assert b"done" in _run(go())
+
+
+def test_captures_xhr_bodies_and_console(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/api").respond_with_data(b'{"n": 42}', content_type="application/json")
+    httpserver.expect_request("/x").respond_with_data(
+        b"<html><body><script>"
+        b"console.log('hello-console'); fetch('/api').then(r=>r.json());"
+        b"</script></body></html>", content_type="text/html")
+
+    async def go():
+        bf = BrowserFetcher(wait=Wait(until="networkidle"))
+        try:
+            return await bf.fetch(Request(url=httpserver.url_for("/x")))
+        finally:
+            await bf.aclose()
+
+    snap = _run(go())
+    nets = [e for e in snap.events if isinstance(e, NetworkEvent)]
+    api = [e for e in nets if e.url.endswith("/api")]
+    assert api and b'"n": 42' in api[0].body                     # xhr/fetch response body captured
+    consoles = [e for e in snap.events if isinstance(e, ConsoleEvent)]
+    assert any("hello-console" in e.text for e in consoles)      # console message captured
+
+
+def test_live_actions_scroll_evaluate_screenshot(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/p").respond_with_data(
+        b"<html><body style='height:3000px'><h1>tall</h1></body></html>", content_type="text/html")
+
+    async def go():
+        bf = BrowserFetcher()
+        try:
+            s = await bf.session()
+            await s.goto(Request(url=httpserver.url_for("/p")))
+            await s.scroll()                                     # to the bottom
+            y = await s.evaluate("window.scrollY")               # a read returns the JS value
+            png = await s.screenshot()                           # bytes
+            await s.aclose()
+            return y, png
+        finally:
+            await bf.aclose()
+
+    y, png = _run(go())
+    assert y > 0                                                # the page actually scrolled
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"                       # a real PNG

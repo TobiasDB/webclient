@@ -47,4 +47,13 @@ class DOMEvent(Event):
     records: list[dict[str, Any]] = []
 
 
-__all__ = ["FetchEvent", "NetworkEvent", "DOMEvent"]
+class ConsoleEvent(Event):
+    """One ``console.*`` message the page logged during a browser fetch (level + text). A cheap
+    window into client-side errors / debug output that never reaches the DOM."""
+
+    topic: str = "console"
+    level: str = ""
+    text: str = ""
+
+
+__all__ = ["FetchEvent", "NetworkEvent", "DOMEvent", "ConsoleEvent"]

@@ -18,43 +18,62 @@ from typing import Any
 
 from web.kernel import Event, emit
 
+from . import mouse
 from .errors import classify
-from .events import DOMEvent, FetchEvent, NetworkEvent
+from .events import ConsoleEvent, DOMEvent, FetchEvent, NetworkEvent
 from .fingerprint import Fingerprint, as_fingerprint
 from .proxy import Proxy, as_proxy
 from .request import Request
 from .script import Script, ScriptRegistry, default_scripts
 from .snapshot import Snapshot
+from .wait import Wait, apply_wait
 
 _STEALTH = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+_BODY_CAP = 512_000  # per-response body captured (text/data responses only)
+_BODIES_MAX = 60     # how many response bodies to drain per snapshot
 
 
 class BrowserSession:
     """A browser session: it OWNS a Playwright context + page. Actions mutate the page and return
     Self; ``snapshot`` materialises a Snapshot; ``aclose`` closes the context (and its page)."""
 
-    def __init__(self, context: Any, page: Any, scripts: tuple[Script, ...]) -> None:
+    def __init__(self, context: Any, page: Any, scripts: tuple[Script, ...], wait: "Wait | None" = None) -> None:
         self._context = context
         self._page = page
         self._scripts = scripts
+        self._wait = wait or Wait()
         self._request = Request(url=page.url or "about:blank")
         self._status = 0
-        self._network: list[NetworkEvent] = []
-        page.on("response", lambda r: self._network.append(NetworkEvent(
-            method=r.request.method, url=r.url, status=r.status, resource_type=r.request.resource_type)))
+        self._headers: dict[str, str] = {}
+        self._responses: list[Any] = []  # raw Response objects; bodies drained in snapshot()
+        self._console: list[ConsoleEvent] = []
+        page.on("response", lambda r: self._responses.append(r))
+        page.on("console", lambda m: self._console.append(ConsoleEvent(level=m.type, text=m.text)))
 
-    async def goto(self, request: Request) -> "BrowserSession":
-        """Navigate the owned page to ``request`` (no snapshot); returns Self so navigation and
-        actions chain. Installs the ``load`` recorders after the initial render."""
+    async def goto(self, request: Request, *, wait: "Wait | None" = None) -> "BrowserSession":
+        """Navigate the owned page to ``request`` and settle per ``wait`` (else the session default);
+        returns Self so navigation and actions chain. Installs the ``load`` recorders after render."""
         self._request = request
-        resp = await self._page.goto(request.url, wait_until="load", timeout=request.timeout * 1000)
+        self._responses.clear()
+        w = wait or self._wait
+        nav = "domcontentloaded" if w.until == "domcontentloaded" else "load"
+        resp = await self._page.goto(request.url, wait_until=nav, timeout=request.timeout * 1000)
         self._status = resp.status if resp is not None else 0
+        self._headers = dict(resp.headers) if resp is not None else {}
+        await apply_wait(self._page, w)  # settle further (networkidle / dom_stable / selector)
         for s in self._scripts:
             if s.on == "load":
                 await self._page.evaluate(s.js)
         return self
 
-    async def click(self, selector: str) -> "BrowserSession":
+    async def click(self, selector: str, *, human: bool = False) -> "BrowserSession":
+        """Click ``selector``. ``human=True`` moves the cursor there along a human path first
+        (see :mod:`.mouse`) -- for a page that scores pointer behaviour."""
+        if human:
+            el = await self._page.query_selector(selector)
+            box = await el.bounding_box() if el is not None else None
+            if box:
+                await mouse.move_along(self._page, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
         await self._page.click(selector)
         return self
 
@@ -66,20 +85,66 @@ class BrowserSession:
         await self._page.wait_for_selector(selector)
         return self
 
+    async def scroll(self, selector: "str | None" = None) -> "BrowserSession":
+        """Scroll ``selector`` into view, or the page to its bottom (to trigger lazy/infinite load)."""
+        if selector is not None:
+            await self._page.eval_on_selector(selector, "el => el.scrollIntoView()")
+        else:
+            await self._page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        return self
+
+    async def back(self) -> "BrowserSession":
+        await self._page.go_back()
+        return self
+
+    async def evaluate(self, script: str) -> Any:
+        """Run JS in the page and return its result -- a read, not a chainable action."""
+        return await self._page.evaluate(script)
+
+    async def screenshot(self, selector: "str | None" = None) -> bytes:
+        """A PNG of the page (or one element) -- returns the bytes; not chainable."""
+        if selector is not None:
+            el = await self._page.query_selector(selector)
+            png: bytes = await el.screenshot() if el is not None else b""
+            return png
+        shot: bytes = await self._page.screenshot()
+        return shot
+
+    async def _network_events(self) -> "list[NetworkEvent]":
+        """Build a NetworkEvent per response, draining xhr/fetch bodies (bounded, best-effort)."""
+        out: list[NetworkEvent] = []
+        drained = 0
+        for r in self._responses:
+            rtype = r.request.resource_type
+            body = b""
+            if rtype in ("xhr", "fetch") and drained < _BODIES_MAX:
+                try:
+                    raw = await r.body()
+                    if raw and len(raw) <= _BODY_CAP:
+                        body = raw
+                    drained += 1
+                except Exception:  # body gone / stream consumed -> skip, don't fail the snapshot
+                    pass
+            out.append(NetworkEvent(method=r.request.method, url=r.url, status=r.status,
+                                    resource_type=rtype, body=body))
+        return out
+
     async def snapshot(self) -> Snapshot:
-        """Capture the current DOM as a Snapshot, draining each recorder into a DOMEvent and
-        attaching the NetworkEvents seen so far."""
+        """Capture the current DOM as a Snapshot: the rendered HTML, the network stream (with
+        xhr/fetch bodies), console messages, and each recorder's drained DOM records."""
         content: str = await self._page.content()
         emit(FetchEvent(url=self._page.url, status=self._status, source="browser"))
-        events: list[Event] = list(self._network)
+        events: list[Event] = []
+        events += await self._network_events()
+        events += self._console
         for s in self._scripts:
             if s.drain:
                 records = await self._page.evaluate(s.drain)
                 if records:
                     events.append(DOMEvent(script=s.name, records=records))
+        headers = self._headers or {"content-type": "text/html; charset=utf-8"}
         return Snapshot(request=self._request, url=self._page.url, status=self._status,
-                        headers={"content-type": "text/html; charset=utf-8"},
-                        content=content.encode("utf-8"), events=events)
+                        headers=headers, content=content.encode("utf-8"), events=events)
 
     async def fetch(self, request: Request) -> Snapshot:
         """Navigate + snapshot -- the Fetcher protocol within the session. Never raises: a nav
@@ -104,13 +169,14 @@ class BrowserFetcher:
     def __init__(
         self, *, headless: bool = True, channel: str = "chromium",
         proxy: "str | Proxy | None" = None, fingerprint: "bool | Fingerprint" = False,
-        cdp: "str | None" = None,
+        cdp: "str | None" = None, wait: "Wait | None" = None,
         scripts: "tuple[Script, ...] | ScriptRegistry | None" = None,
     ) -> None:
         self._headless = headless
         self._channel = channel  # "chromium" = bundled; "chrome" = the real Chrome install
         self._proxy = as_proxy(proxy)
         self._fingerprint = as_fingerprint(fingerprint)
+        self._wait = wait  # the default readiness milestone for every session's goto
         #: a CDP endpoint (e.g. ``http://localhost:9222``) to ATTACH to an already-running browser
         #: instead of launching one -- a real user profile, a remote grid, an inspected Chrome.
         self._cdp = cdp
@@ -155,7 +221,7 @@ class BrowserFetcher:
         except BaseException:  # setup failed -> don't leak the context we opened
             await context.close()
             raise
-        return BrowserSession(context, page, scripts)
+        return BrowserSession(context, page, scripts, self._wait)
 
     async def fetch(self, request: Request) -> Snapshot:
         """One-shot: open a session, fetch, close. Never raises (a session failure is
