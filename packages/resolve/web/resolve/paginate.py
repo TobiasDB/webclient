@@ -14,7 +14,9 @@ paginator, an API-envelope paginator -- and stacks it in a profile; the framewor
 from __future__ import annotations
 
 import asyncio
+import json as _json
 from collections.abc import Callable
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from web.fetch import BrowserFetcher, Handler, Middleware, Request, Snapshot
@@ -24,6 +26,19 @@ from .document import document
 
 #: stop the unfold after a page when this holds (see :mod:`.stops`).
 Until = Callable[[Document], bool]
+
+
+def _dig(value: Any, path: str) -> Any:
+    """Follow a dotted path into a JSON value (``"data.next_cursor"``); ``""`` returns the value
+    itself. A missing key / wrong type yields ``None``."""
+    if not path:
+        return value
+    for key in path.split("."):
+        if isinstance(value, dict):
+            value = value.get(key)
+        else:
+            return None
+    return value
 
 
 def _merge(snaps: list[Snapshot]) -> Snapshot:
@@ -120,4 +135,49 @@ def paginate_clicks(
     return mw
 
 
-__all__ = ["paginate_links", "paginate_param", "paginate_clicks", "Until"]
+def paginate_cursor(
+    *, cursor_path: str, param: str, items_path: str = "", until: "Until | None" = None, max_pages: int = 50,
+) -> Middleware:
+    """CURSOR strategy for JSON APIs: read a next-cursor token from the response envelope
+    (``cursor_path``, a dotted path) and re-issue with it as the ``param`` query parameter, until
+    the cursor is absent/empty. The pages' item lists (``items_path``, default the whole body) are
+    concatenated into ONE merged JSON array Snapshot -- so a downstream ``.json()`` sees every item
+    across pages. ``until`` stops early on the parsed page."""
+
+    async def mw(request: Request, nxt: Handler) -> Snapshot:
+        snap = await nxt(request)
+        items: list[Any] = []
+        last = snap
+        for _ in range(max_pages):
+            if not snap.ok:
+                break
+            try:
+                body = document(snap).json()
+            except (ValueError, _json.JSONDecodeError):
+                break
+            page_items = _dig(body, items_path)
+            if isinstance(page_items, list):
+                items.extend(page_items)
+            elif page_items is not None:
+                items.append(page_items)
+            cursor = _dig(body, cursor_path)
+            if not cursor or (until and until(document(snap))):
+                break
+            url = _bump_param(request.url, param, str(cursor))
+            snap = await nxt(request.model_copy(update={"url": url}))
+            last = snap
+        merged = _json.dumps(items).encode("utf-8")
+        return last.model_copy(update={"content": merged, "url": request.url,
+                                       "headers": {**last.headers, "content-type": "application/json"}})
+
+    return mw
+
+
+def _bump_param(url: str, name: str, value: str) -> str:
+    parts = urlsplit(url)
+    q = dict(parse_qsl(parts.query))
+    q[name] = value
+    return urlunsplit(parts._replace(query=urlencode(q)))
+
+
+__all__ = ["paginate_links", "paginate_param", "paginate_clicks", "paginate_cursor", "Until"]

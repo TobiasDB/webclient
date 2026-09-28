@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from web.fetch import Snapshot
 from web.parse import Document
 
 
@@ -65,4 +66,58 @@ def anti_bot(doc: Document) -> "Signal | None":
     return None
 
 
-__all__ = ["Signal", "spa", "login_wall", "pagination", "anti_bot"]
+def consent_wall(doc: Document) -> "Signal | None":
+    """A cookie / GDPR consent gate: a consent banner is present and may overlay the content until
+    dismissed (the remedy is an interaction, not a transport change)."""
+    if doc.kind != "html":
+        return None
+    hit = doc.select("#onetrust-banner-sdk, #cookie-consent, [id*=cookie-banner], "
+                     "[class*=cookie-consent], [aria-label*=consent], [data-consent]")
+    if hit is not None:
+        return Signal(name="consent_wall", confidence=0.6)
+    return None
+
+
+def infinite_scroll(doc: Document) -> "Signal | None":
+    """The list grows on scroll rather than via a pager: a scroll sentinel / infinite-scroll hook
+    is present (the remedy is a scroll loop on a live page, not a URL walk)."""
+    if doc.kind != "html":
+        return None
+    if doc.select("[data-infinite-scroll], .infinite-scroll, [data-infinite], "
+                  "[class*=infinite-scroll], .load-more[data-scroll]") is not None:
+        return Signal(name="infinite_scroll", confidence=0.6)
+    return None
+
+
+def empty(doc: Document) -> "Signal | None":
+    """A near-empty document: almost no readable text (a failed render, a blank shell, or a body
+    that never populated). Distinct from ``spa`` -- this is 'nothing here', regardless of scripts."""
+    if doc.kind != "html":
+        return None
+    body = doc.select("body")
+    chars = len(body.text) if body is not None else 0
+    if chars < 50:
+        return Signal(name="empty", confidence=0.7, detail={"visible_chars": chars})
+    return None
+
+
+def blocked_status(snap: Snapshot) -> "Signal | None":
+    """A transport-level block by STATUS -- 401/403 (denied), 429 (rate-limited). A Snapshot fact,
+    not content: the remedy differs (backoff for 429; a stronger tier/proxy for 403)."""
+    if snap.status in (401, 403):
+        return Signal(name="blocked_status", confidence=0.9, detail={"status": snap.status})
+    if snap.status == 429:
+        return Signal(name="blocked_status", confidence=0.8, detail={"status": 429, "rate_limited": True})
+    return None
+
+
+def server_error(snap: Snapshot) -> "Signal | None":
+    """A 5xx or a transport failure -- transient, worth a retry rather than a tier climb."""
+    if snap.error is not None or 500 <= snap.status < 600:
+        return Signal(name="server_error", confidence=0.9,
+                      detail={"status": snap.status, "error": snap.error.code if snap.error else None})
+    return None
+
+
+__all__ = ["Signal", "spa", "login_wall", "pagination", "anti_bot",
+           "consent_wall", "infinite_scroll", "empty", "blocked_status", "server_error"]

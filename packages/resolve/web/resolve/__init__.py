@@ -23,9 +23,11 @@ from web.fetch import Handler, Middleware, stack
 from .base import Profile, Resolver
 from .document import document
 from .events import ResolveEvent
+from .flags import Flag, flags
 from .middleware import escalate, rate_limit, retry
-from .paginate import Until, paginate_clicks, paginate_links, paginate_param
-from .signals import Signal, anti_bot, login_wall, pagination, spa
+from .paginate import Until, paginate_clicks, paginate_cursor, paginate_links, paginate_param
+from .signals import (Signal, anti_bot, blocked_status, consent_wall, empty, infinite_scroll,
+                      login_wall, pagination, server_error, spa)
 from .stops import any_of, first_n, until_empty, until_match, until_repeat
 from .tiers import ladder
 
@@ -33,9 +35,11 @@ __all__ = [
     "Resolver", "Profile", "Middleware", "Handler", "stack",
     # middleware implementations (consumer-pluggable; these are the reference ones)
     "retry", "rate_limit", "escalate", "ladder",
-    "paginate_links", "paginate_param", "paginate_clicks", "Until",
+    "paginate_links", "paginate_param", "paginate_clicks", "paginate_cursor", "Until",
     # pagination stop conditions (composable, some stateful)
     "until_empty", "until_match", "first_n", "until_repeat", "any_of",
-    # signals: purely-functional detectors over a Document
+    # signals (evidence) + flags (conclusions with remedies)
     "document", "ResolveEvent", "Signal", "spa", "login_wall", "pagination", "anti_bot",
+    "consent_wall", "infinite_scroll", "empty", "blocked_status", "server_error",
+    "Flag", "flags",
 ]

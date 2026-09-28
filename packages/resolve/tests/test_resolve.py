@@ -145,3 +145,59 @@ def test_trace_captures_events_across_layers(httpserver: HTTPServer) -> None:
     with Trace() as t2:
         _run(go_http())
     assert any(e.topic == "fetch" and getattr(e, "status", 0) == 200 for e in t2.events)
+
+
+# -- flags: conclusions rolled up from signals, with remedies --
+from web.resolve import Flag, flags  # noqa: E402
+from web.resolve import paginate_cursor  # noqa: E402
+
+
+def test_flags_roll_signals_into_conclusions_with_remedies() -> None:
+    doc = parse(b"<html><body><form><input type=password></form></body></html>", content_type="text/html")
+    fs = flags(doc)
+    by_name = {f.name: f for f in fs}
+    assert "auth_required" in by_name
+    assert by_name["auth_required"].present and by_name["auth_required"].remedy == "session:login"
+    assert all(isinstance(f, Flag) for f in fs)
+
+
+def test_flags_use_the_snapshot_for_transport_conclusions() -> None:
+    doc = parse(b"<html><body>ok content here plenty of text to not look empty at all</body></html>",
+                content_type="text/html")
+    snap = Snapshot(request=Request(url="https://x/"), url="https://x/", status=429,
+                    headers={"content-type": "text/html"}, content=doc.content)
+    names = {f.name for f in flags(doc, snap)}
+    assert "blocked" in names  # 429 -> blocked_status evidence -> blocked conclusion
+
+
+def test_flags_noisy_or_combines_independent_evidence() -> None:
+    # anti-bot content AND a 403 status both feed "blocked" -> combined confidence exceeds either
+    doc = parse(b"<html><body>Please verify you are human to continue</body></html>", content_type="text/html")
+    snap = Snapshot(request=Request(url="https://x/"), url="https://x/", status=403, content=doc.content)
+    blocked = next(f for f in flags(doc, snap) if f.name == "blocked")
+    assert blocked.confidence > 0.9 and len(blocked.signals) == 2
+
+
+def test_paginate_cursor_concatenates_json_pages(httpserver: HTTPServer) -> None:
+    import json
+    def handler(req):
+        from werkzeug.wrappers import Response
+        cur = req.args.get("cursor")
+        if cur is None:
+            body = {"items": [1, 2], "next": "abc"}
+        elif cur == "abc":
+            body = {"items": [3, 4], "next": "def"}
+        else:
+            body = {"items": [5], "next": None}
+        return Response(json.dumps(body), content_type="application/json")
+    httpserver.expect_request("/api").respond_with_handler(handler)
+
+    async def go() -> Document:
+        r = Resolver(paginate=paginate_cursor(cursor_path="next", param="cursor", items_path="items"))
+        try:
+            return await r.resolve(Request(url=httpserver.url_for("/api")))
+        finally:
+            await r.aclose()
+
+    doc = _run(go())
+    assert doc.json() == [1, 2, 3, 4, 5]  # all pages' items concatenated into one array
