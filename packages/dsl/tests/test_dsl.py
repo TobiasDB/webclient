@@ -1,14 +1,16 @@
-"""web.dsl tests -- the four dispatch modes over one recorded plan."""
+"""web.dsl tests -- typed surfaces, clean joins, and the dispatch modes."""
 
 from __future__ import annotations
 
 import asyncio
 
+import pytest
 from pytest_httpserver import HTTPServer
 
 from web.fetch import HttpFetcher
+from web.kernel import WebException
 from web.resolve import Resolver
-from web.dsl import DSL, Lazy, Plan, run_blob
+from web.dsl import DSL, Document, Plan, Reference, run_blob
 
 
 def _run(coro):
@@ -19,11 +21,19 @@ def _dsl() -> DSL:
     return DSL(Resolver(HttpFetcher()))
 
 
-def test_lazy_records_a_plan_without_executing(httpserver: HTTPServer) -> None:
-    lazy = _dsl().get(httpserver.url_for("/p")).select("h1")
-    assert isinstance(lazy, Lazy)
-    assert lazy.plan.steps[0].op == "select" and lazy.plan.steps[0].args == ["h1"]
-    # nothing was requested -- purely lazy (no expectation registered, no call made)
+def test_surfaces_and_join_record_a_plan() -> None:
+    lazy = _dsl().ref("https://x/").click("#more").type("#q", "hi").doc().select_all(".row")
+    assert isinstance(lazy, Document)
+    plan = lazy._full()
+    assert [s.op for s in plan.actions] == ["click", "type"]  # Reference actions
+    assert plan.actions[1].args == ["#q", "hi"]
+    assert [s.op for s in plan.reads] == ["select_all"]  # Document reads after .doc()
+
+
+def test_actions_return_self_surface() -> None:
+    r = _dsl().ref("https://x/")
+    assert isinstance(r.click("#a"), Reference)  # actions return the Reference surface (Self)
+    assert isinstance(r.click("#a").type("#b", "c"), Reference)
 
 
 def test_sync_and_async_dispatch_same_plan(httpserver: HTTPServer) -> None:
@@ -32,30 +42,25 @@ def test_sync_and_async_dispatch_same_plan(httpserver: HTTPServer) -> None:
     async def go_async() -> str:
         d = _dsl()
         try:
-            els = await d.get(httpserver.url_for("/p")).select("h1").acollect()
+            els = await d.ref(httpserver.url_for("/p")).doc().select("h1").acollect()
             return els[0].text
         finally:
             await d.aclose()
 
-    # SYNC dispatch
     d = _dsl()
     try:
-        els = d.get(httpserver.url_for("/p")).select("h1").collect()
+        els = d.ref(httpserver.url_for("/p")).doc().select("h1").collect()  # SYNC
         assert els[0].text == "Hi"
     finally:
         _run(d.aclose())
-    # ASYNC dispatch, same recorded chain
-    assert _run(go_async()) == "Hi"
+    assert _run(go_async()) == "Hi"  # ASYNC, same chain
 
 
 def test_api_dispatch_roundtrips_a_blob(httpserver: HTTPServer) -> None:
     httpserver.expect_request("/p").respond_with_data(b"<title>T</title>", content_type="text/html")
+    blob = _dsl().ref(httpserver.url_for("/p")).doc().select("title").to_blob()
+    assert Plan.from_blob(blob).reads[0].op == "select"
 
-    # client side: build a plan and serialise it (no execution, no resolver needed to record)
-    blob = _dsl().get(httpserver.url_for("/p")).select("title").to_blob()
-    assert '"op":"select"' in blob and Plan.from_blob(blob).steps[0].op == "select"
-
-    # server side: run the blob against a local resolver
     async def server() -> str:
         r = Resolver(HttpFetcher())
         try:
@@ -65,3 +70,29 @@ def test_api_dispatch_roundtrips_a_blob(httpserver: HTTPServer) -> None:
             await r.aclose()
 
     assert _run(server()) == "T"
+
+
+def test_reference_actions_need_a_browser_for_now() -> None:
+    async def go() -> None:
+        d = _dsl()
+        try:
+            await d.ref("https://x/").click("#more").doc().text().acollect()
+        finally:
+            await d.aclose()
+
+    with pytest.raises(WebException) as ei:
+        _run(go())
+    assert ei.value.error.code == "dsl.needs_browser"
+
+
+def test_crawl_surface(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/").respond_with_data(b"<a href='/a'>a</a>", content_type="text/html")
+    httpserver.expect_request("/a").respond_with_data(b"<p>a</p>", content_type="text/html")
+
+    async def go() -> int:
+        d = _dsl()
+        docs = await d.crawl([httpserver.url_for("/")], max_pages=5).acollect()
+        await d.aclose()
+        return len(docs)
+
+    assert _run(go()) >= 2

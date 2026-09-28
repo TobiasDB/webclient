@@ -1,11 +1,15 @@
-"""The lazy execution engine and the four dispatch modes.
+"""The lazy engine and its typed surfaces -- clean separations with clean joins.
 
-A :class:`Lazy` is a proxy that RECORDS method calls into a :class:`Plan` instead of running
-them (``lazy``). Calling a terminal on it runs the plan in one of the other three modes:
-``collect`` blocks (``sync``), ``acollect`` awaits (``async``), and ``to_blob`` + :func:`run_blob`
-ship the plan to run elsewhere (``API`` / remote). The plain layers wrote each method once,
-sync-or-async; the engine dispatches them uniformly -- awaiting a coroutine result, passing a
-plain value straight through -- so one definition lights up all four modes.
+Three surfaces, one per layer, tied together by one-liners:
+  * :class:`Reference` -- drive a page: ``click`` / ``type`` / ``wait_for`` return **Self**, so a
+    chain of actions snapshots nothing; ``.doc()`` is the join into the Document surface.
+  * :class:`Document` -- read the parsed document: ``select`` / ``select_all`` / ``text`` / ``links``.
+  * :class:`Crawl` -- reach many documents from seeds.
+
+Each surface records into a :class:`Plan`; the terminals dispatch it in a mode -- ``collect``
+(sync), ``acollect`` (async), ``to_blob`` (API/remote). The plain layers wrote every method once;
+:meth:`DSL.run` awaits a coroutine result and passes a plain value through, so one definition
+lights up all modes.
 """
 
 from __future__ import annotations
@@ -15,75 +19,124 @@ import inspect
 from typing import Any
 
 from web.fetch import Request
+from web.kernel import WebException, err
 from web.resolve import Resolver
 
-from .plan import Plan
+from .plan import Plan, Step
 
 
-class Lazy:
-    """A recorder rooted at a plan. Any attribute access returns a call-recorder that appends a
-    step and returns a new Lazy, so ``dsl.get(url).select("h1").text()`` builds a plan without
-    touching the network. The Lazy itself is the LAZY form; the terminals run it."""
+class Reference:
+    """The Reference DSL: drive a page with actions that return Self, then ``.doc()`` to read."""
 
-    def __init__(self, engine: "DSL", plan: Plan) -> None:
+    def __init__(self, engine: "DSL", url: str, actions: tuple[Step, ...] = ()) -> None:
+        self._engine = engine
+        self._url = url
+        self._actions = actions
+
+    def _drive(self, op: str, *args: Any) -> "Reference":
+        return Reference(self._engine, self._url, (*self._actions, Step(op=op, args=list(args))))
+
+    def click(self, selector: str) -> "Reference":
+        return self._drive("click", selector)
+
+    def type(self, selector: str, text: str) -> "Reference":
+        return self._drive("type", selector, text)
+
+    def wait_for(self, selector: str) -> "Reference":
+        return self._drive("wait_for", selector)
+
+    def doc(self) -> "Document":
+        """The clean join: snapshot the driven page and parse it into the Document surface."""
+        return Document(self._engine, Plan(url=self._url, actions=list(self._actions)))
+
+
+class Document:
+    """The Document DSL: reads over the parsed document. Terminals dispatch the whole plan."""
+
+    def __init__(self, engine: "DSL", plan: Plan, reads: tuple[Step, ...] = ()) -> None:
         self._engine = engine
         self._plan = plan
+        self._reads = reads
 
-    def __getattr__(self, name: str) -> "Any":
-        if name.startswith("_"):
-            raise AttributeError(name)
+    def _read(self, op: str, *args: Any) -> "Document":
+        return Document(self._engine, self._plan, (*self._reads, Step(op=op, args=list(args))))
 
-        def record(*args: Any, **kwargs: Any) -> "Lazy":
-            return Lazy(self._engine, self._plan.then(name, args, kwargs))
+    def select(self, css: str) -> "Document":
+        return self._read("select", css)
 
-        return record
+    def select_all(self, css: str) -> "Document":
+        return self._read("select_all", css)
 
-    @property
-    def plan(self) -> Plan:
-        return self._plan
+    def text(self) -> "Document":
+        return self._read("text")
+
+    def links(self) -> "Document":
+        return self._read("links")
+
+    def _full(self) -> Plan:
+        return Plan(url=self._plan.url, actions=self._plan.actions, reads=list(self._reads))
+
+    def collect(self) -> Any:
+        """SYNC dispatch: run the plan to completion (blocks; not from inside a running loop)."""
+        return asyncio.run(self._engine.run(self._full()))
+
+    async def acollect(self) -> Any:
+        """ASYNC dispatch: run the plan on the caller's loop."""
+        return await self._engine.run(self._full())
 
     def to_blob(self) -> str:
         """API/remote dispatch: the serialised plan to run on a server (see :func:`run_blob`)."""
-        return self._plan.to_blob()
+        return self._full().to_blob()
 
-    async def acollect(self) -> Any:
-        """ASYNC dispatch: run the plan on the caller's loop and return the result."""
-        return await self._engine.run(self._plan)
 
-    def collect(self) -> Any:
-        """SYNC dispatch: run the plan to completion and return the result (blocks; call it from
-        non-async code, not from inside a running loop)."""
-        return asyncio.run(self._engine.run(self._plan))
+class Crawl:
+    """The Crawl DSL: reach documents from seeds (a thin lazy face over web.crawl)."""
+
+    def __init__(self, engine: "DSL", seeds: list[str], max_pages: int) -> None:
+        self._engine = engine
+        self._seeds = seeds
+        self._max_pages = max_pages
+
+    async def acollect(self) -> list[Any]:
+        from web.crawl import Crawler
+
+        return [d async for d in Crawler(self._engine.resolver).crawl(self._seeds, max_pages=self._max_pages)]
+
+    def collect(self) -> list[Any]:
+        return asyncio.run(self.acollect())
 
 
 class DSL:
-    """A lazy execution engine over a :class:`~web.resolve.Resolver`. ``get(url)`` roots a Lazy
-    at resolving that URL; recorded steps are method calls applied to the resulting Document."""
+    """A lazy execution engine over a :class:`~web.resolve.Resolver`. ``ref(url)`` enters the
+    Reference surface; ``crawl(seeds)`` the Crawl surface."""
 
     def __init__(self, resolver: Resolver) -> None:
-        self._resolver = resolver
+        self.resolver = resolver
 
-    def get(self, url: str) -> Lazy:
-        return Lazy(self, Plan(url=url))
+    def ref(self, url: str) -> Reference:
+        return Reference(self, url)
+
+    def crawl(self, seeds: list[str], *, max_pages: int = 50) -> Crawl:
+        return Crawl(self, list(seeds), max_pages)
 
     async def run(self, plan: Plan) -> Any:
-        """Execute a plan: resolve the root URL, then apply each step -- awaiting a coroutine
-        result (an async method) and passing a plain value straight through (a sync method)."""
-        obj: Any = await self._resolver.resolve(Request(url=plan.url))
-        for step in plan.steps:
-            result = getattr(obj, step.op)(*step.args, **step.kwargs)
+        """Execute a plan: (drive the page through the Reference actions, then) resolve + parse
+        the root and apply the Document reads -- awaiting coroutine results, passing values through."""
+        if plan.actions:  # click/type/wait need a live page -- the browser fetcher (future)
+            raise WebException(err("dsl.needs_browser", "Reference actions require a browser fetcher"))
+        obj: Any = await self.resolver.resolve(Request(url=plan.url))
+        for r in plan.reads:
+            result = getattr(obj, r.op)(*r.args)
             obj = await result if inspect.isawaitable(result) else result
         return obj
 
     async def aclose(self) -> None:
-        await self._resolver.aclose()
+        await self.resolver.aclose()
 
 
 async def run_blob(blob: str, resolver: Resolver) -> Any:
-    """API/remote dispatch, server side: rebuild a plan from its blob and run it against a local
-    resolver. A remote client ``to_blob``s a plan and POSTs it; the server calls this. (The
-    result is returned live here; serialising it back is the transport's concern.)"""
+    """API/remote dispatch, server side: rebuild a plan from its blob and run it locally."""
     return await DSL(resolver).run(Plan.from_blob(blob))
 
 
-__all__ = ["DSL", "Lazy", "run_blob"]
+__all__ = ["DSL", "Reference", "Document", "Crawl", "run_blob"]

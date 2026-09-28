@@ -1,23 +1,24 @@
-"""web.dsl -- the lazy execution engine on top of the plain layers.
+"""web.dsl -- the lazy execution engine on top: clean surfaces with clean joins.
 
-Record a chain of method calls into a serialisable Plan, then dispatch it in one of four modes
-from that ONE recording: sync (collect), async (acollect), lazy (the Lazy/Plan itself), and
-API/remote (to_blob + run_blob on a server). The plain layers below know nothing of this -- the
-DSL wraps their ordinary methods and provides all the laziness, blocking, and remoting.
+Reference (drive) -> .doc() -> Document (read); Crawl (reach). Record a chain into a
+serialisable Plan, then dispatch it in one mode from that ONE recording: sync (collect),
+async (acollect), lazy (the surface itself), API/remote (to_blob + run_blob). The plain
+layers below know nothing of this.
 
     from web.fetch import HttpFetcher
     from web.resolve import Resolver
     from web.dsl import DSL
     dsl = DSL(Resolver(HttpFetcher()))
-    title = dsl.get("https://example.com").select("title")   # lazy: nothing ran yet
-    els = title.collect()                                     # sync dispatch
-    els = await title.acollect()                              # async dispatch
-    blob = title.to_blob()                                    # API dispatch: ship the plan
+    rows = dsl.ref("https://example.com").doc().select_all(".row").collect()   # sync
+    rows = await dsl.ref(url).doc().select_all(".row").acollect()              # async
+    blob = dsl.ref(url).doc().select_all(".row").to_blob()                     # API
+    # actions return Self -> drive without snapshotting, join once with .doc():
+    #   dsl.ref(url).click("#more").type("#q", "x").doc().select_all(".row")
 """
 
 from __future__ import annotations
 
-from .engine import DSL, Lazy, run_blob
+from .engine import DSL, Crawl, Document, Reference, run_blob
 from .plan import Plan, Step
 
-__all__ = ["DSL", "Lazy", "run_blob", "Plan", "Step"]
+__all__ = ["DSL", "Reference", "Document", "Crawl", "run_blob", "Plan", "Step"]

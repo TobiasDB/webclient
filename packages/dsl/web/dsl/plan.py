@@ -1,10 +1,14 @@
-"""The Plan: a recorded chain of method calls, serialisable so it can run anywhere.
+"""The Plan: a recorded chain across surfaces, serialisable so it runs anywhere.
 
-A Plan is *a root + a list of steps*. The root says how to obtain the first object (here: a URL
-to resolve into a Document); each :class:`Step` is a method name plus its (JSON-serialisable)
-arguments. Because a Plan is pure data, the same recorded chain runs locally (sync/async) or is
-shipped to a server and run there (API/remote dispatch) -- that is the whole point of recording
-instead of calling.
+A Plan has three parts, one per surface it may cross:
+  * ``url``     -- the root reference (what to load),
+  * ``actions`` -- Reference-DSL steps that DRIVE the page (click / type / wait); they return
+    Self in the surface, so a chain of them snapshots nothing until the join,
+  * ``reads``   -- Document-DSL steps applied after the ``.doc()`` join (select / text / ...).
+
+Because it is pure data, the same recorded chain runs locally (sync/async) or ships to a
+server (API/remote dispatch). ``actions`` and ``reads`` being separate lists is the recorded
+form of the surface boundary: everything before ``.doc()`` drives, everything after reads.
 """
 
 from __future__ import annotations
@@ -15,22 +19,18 @@ from pydantic import BaseModel
 
 
 class Step(BaseModel):
-    """One recorded method call: ``op(*args, **kwargs)`` against the running object."""
+    """One recorded call: ``op(*args)`` -- a Reference action or a Document read."""
 
     op: str
     args: list[Any] = []
-    kwargs: dict[str, Any] = {}
 
 
 class Plan(BaseModel):
-    """A root URL to resolve, then a chain of method calls to apply to the result."""
+    """A root URL, the Reference actions that drive it, and the Document reads after ``.doc()``."""
 
     url: str
-    steps: list[Step] = []
-
-    def then(self, op: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> "Plan":
-        """A new Plan with one more step appended (Plans are immutable -- recording forks)."""
-        return Plan(url=self.url, steps=[*self.steps, Step(op=op, args=list(args), kwargs=kwargs)])
+    actions: list[Step] = []
+    reads: list[Step] = []
 
     def to_blob(self) -> str:
         """Serialise to JSON -- what API/remote dispatch ships over the wire."""
