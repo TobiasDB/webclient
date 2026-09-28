@@ -197,3 +197,24 @@ def test_json_dotted_path_and_skeleton() -> None:
     assert doc.at("data.missing") is None and doc.at("data.results[9]") is None
     sk = doc.json_skeleton()
     assert "results: [2]" in sk and "name: string" in sk and "age: number" in sk  # merged element shape
+
+
+def test_skeleton_marks_records_and_interactive() -> None:
+    html = (b"<html><body>"
+            b"<div onclick='x()' class='card'>clickme</div>"      # a non-obvious control (div)
+            b"<ul class=list>"
+            + b"".join(b"<li class=item><span class=t>x</span></li>" for _ in range(4))
+            + b"</ul></body></html>")
+    doc = parse(html, content_type="text/html")
+    sk = doc.skeleton()
+    assert "← RECORD LIST" in sk and 'select_all("li.item")' in sk   # dataset flagged in place
+    assert "← clickable" in sk                                        # the onclick div flagged
+    # a native <a>/<button> is obvious and must NOT be marked clickable
+    assert "a  ← clickable" not in doc.skeleton()
+
+
+def test_skeleton_drop_chrome_omits_nav() -> None:
+    html = b"<html><body><nav><a href=/x>menu</a></nav><main><p>content</p></main></body></html>"
+    doc = parse(html, content_type="text/html")
+    assert "nav" not in doc.skeleton(drop_chrome=True)
+    assert "nav" in doc.skeleton(drop_chrome=False)

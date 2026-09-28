@@ -162,9 +162,13 @@ class Document:
         """Every ``pattern`` match in the document text, each reduced to ``group``."""
         return _regex_mod.regex_all(self, pattern, group=group, flags=flags)
 
-    def skeleton(self, *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30) -> str:
-        """A token-lean indented open-tag outline of the DOM (for cheap selector authoring)."""
-        return _structure.skeleton(self, max_lines=max_lines, text_chars=text_chars, max_depth=max_depth)
+    def skeleton(self, *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30,
+                 mark_records: bool = True, mark_interactive: bool = True, drop_chrome: bool = False) -> str:
+        """A token-lean indented open-tag outline of the DOM (for cheap selector authoring), with the
+        record list + non-obvious controls flagged in place (see :mod:`.structure`)."""
+        return _structure.skeleton(self, max_lines=max_lines, text_chars=text_chars, max_depth=max_depth,
+                                   mark_records=mark_records, mark_interactive=mark_interactive,
+                                   drop_chrome=drop_chrome)
 
     def outline(self) -> "list[Heading]":
         """The document's heading tree (``<h1>``..``<h6>``) in order."""

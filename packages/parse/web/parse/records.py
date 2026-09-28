@@ -102,13 +102,12 @@ def _item_selector(members: "list[Node]") -> str:
     return tag
 
 
-def find_records(doc: "Document", *, min_items: int = 3, top_k: int = 3) -> "list[RecordRegion]":
-    """The most dataset-like repeating regions in a markup document, best first (up to ``top_k``).
-    A region is a container plus a group of >= ``min_items`` structurally-identical children; scored
-    so a long, content-rich, non-chrome list outranks a short nav menu."""
+def scan(doc: "Document", *, min_items: int = 3) -> "list[tuple[Node, RecordRegion]]":
+    """Every qualifying region as (container node, :class:`RecordRegion`), best first -- the shared
+    search behind :func:`find_records` and the skeleton's record marks (which need the node)."""
     if not doc._markup():
         return []
-    found: list[RecordRegion] = []
+    found: list[tuple[Node, RecordRegion]] = []
     for container in doc._root().iter():
         if _tag(container) in _DRAWING or any(_tag(a) in _DRAWING for a in container.iterancestors()):
             continue
@@ -123,13 +122,20 @@ def find_records(doc: "Document", *, min_items: int = 3, top_k: int = 3) -> "lis
             if len(members) < min_items:
                 continue
             score = len(members) * (1.0 + _richness(members)) * penalty
-            found.append(RecordRegion(
+            found.append((container, RecordRegion(
                 item_selector=_item_selector(members), count=len(members),
                 container_tag=_tag(container), container_id=container.get("id") or "",
                 score=round(score, 3),
-            ))
-    found.sort(key=lambda r: r.score, reverse=True)
-    return found[:top_k]
+            )))
+    found.sort(key=lambda pair: pair[1].score, reverse=True)
+    return found
 
 
-__all__ = ["RecordRegion", "find_records"]
+def find_records(doc: "Document", *, min_items: int = 3, top_k: int = 3) -> "list[RecordRegion]":
+    """The most dataset-like repeating regions in a markup document, best first (up to ``top_k``).
+    A region is a container plus a group of >= ``min_items`` structurally-identical children; scored
+    so a long, content-rich, non-chrome list outranks a short nav menu."""
+    return [region for _node, region in scan(doc, min_items=min_items)][:top_k]
+
+
+__all__ = ["RecordRegion", "find_records", "scan"]

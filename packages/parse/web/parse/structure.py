@@ -15,13 +15,19 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel
 
 from .classes import semantic_classes
+from .index import interactive as _interactive
 from .nodes import Node, classes as _all_classes, tag as _tag
+from .records import scan as _scan
 
 if TYPE_CHECKING:
     from .document import Document
 
 #: subtrees that are noise in a structural outline -- skipped whole.
 _SKIP = frozenset({"script", "style", "noscript", "template", "svg", "path", "link", "meta"})
+#: page-chrome landmarks dropped when ``drop_chrome`` (so records aren't buried under menus).
+_CHROME = frozenset({"nav", "header", "footer", "aside"})
+#: native controls whose interactivity is obvious from the tag -- not worth a ``← clickable`` mark.
+_OBVIOUS = frozenset({"a", "button", "input", "select", "textarea", "summary", "label", "option"})
 
 
 class Heading(BaseModel):
@@ -48,30 +54,45 @@ def _signature(node: Node) -> str:
     return out
 
 
-def skeleton(doc: "Document", *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30) -> str:
+def skeleton(doc: "Document", *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30,
+             mark_records: bool = True, mark_interactive: bool = True, drop_chrome: bool = False) -> str:
     """A token-lean indented open-tag outline of the DOM (ids + semantic classes kept, hashed build
-    classes + script/style/svg dropped, leaf text hinted to ``text_chars``). Empty for non-markup."""
+    classes + script/style/svg dropped, leaf text hinted to ``text_chars``). Empty for non-markup.
+
+    Enrichments (each on by default, each a no-op when its data is absent): ``mark_records`` flags
+    the repeating dataset region in place (``← RECORD LIST · N · select_all("li.item")``);
+    ``mark_interactive`` flags NON-obvious controls (a div/span made clickable via role/onclick/
+    tabindex) ``← clickable``; ``drop_chrome`` omits nav/header/footer/aside so a big page's records
+    aren't buried under menus."""
     if not doc._markup():
         return ""
+    marks: dict[int, str] = {}
+    if mark_records:
+        for node, region in _scan(doc)[:2]:
+            marks[id(node)] = f'  ← RECORD LIST · {region.count} · select_all("{region.item_selector}")'
     lines: list[str] = []
-    _emit(doc._root(), 0, lines, max_lines=max_lines, text_chars=text_chars, max_depth=max_depth)
+    _emit(doc._root(), 0, lines, marks=marks, mark_interactive=mark_interactive, drop_chrome=drop_chrome,
+          max_lines=max_lines, text_chars=text_chars, max_depth=max_depth)
     return "\n".join(lines[:max_lines])
 
 
-def _emit(node: Node, depth: int, lines: list[str], *, max_lines: int, text_chars: int, max_depth: int) -> None:
-    if len(lines) >= max_lines or depth > max_depth or _tag(node) in _SKIP:
+def _emit(node: Node, depth: int, lines: list[str], *, marks: dict[int, str], mark_interactive: bool,
+          drop_chrome: bool, max_lines: int, text_chars: int, max_depth: int) -> None:
+    tag = _tag(node)
+    if len(lines) >= max_lines or depth > max_depth or tag in _SKIP or (drop_chrome and tag in _CHROME):
         return
-    indent = "  " * depth
-    line = indent + _signature(node)
+    line = "  " * depth + _signature(node)
     own = " ".join((node.text or "").split())
     kids = [c for c in node if _tag(c) not in _SKIP]
-    if not kids and own:  # a leaf: hint its text
+    if own and (not kids or len(own) > 1):  # hint a leaf's (or a short container's) own text
         line += f"  {own[:text_chars]!r}"
-    elif own and len(own) > 1:
-        line += f"  {own[:text_chars]!r}"
+    if mark_interactive and tag not in _OBVIOUS and _interactive(node):
+        line += "  ← clickable"
+    line += marks.get(id(node), "")  # a record-list container marker, if this is one
     lines.append(line)
     for child in kids:
-        _emit(child, depth + 1, lines, max_lines=max_lines, text_chars=text_chars, max_depth=max_depth)
+        _emit(child, depth + 1, lines, marks=marks, mark_interactive=mark_interactive,
+              drop_chrome=drop_chrome, max_lines=max_lines, text_chars=text_chars, max_depth=max_depth)
 
 
 def outline(doc: "Document") -> "list[Heading]":
