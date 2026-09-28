@@ -38,27 +38,35 @@ from .llm import _ask_json, _fields_line
 # --------------------------------------------------------------------------- #
 
 
+#: query params that only page/window a result set (not a distinct resource). REUSES the crawl's
+#: canonical pagination set (:data:`webclient.core.crawl.canon._PAGINATION_PARAMS`, which correctly
+#: EXCLUDES ``p`` -- too often a post/id param, ``?p=123``) so the frontier and the crawl backing
+#: (which dedups every URL through ``_canon``) collapse pages the SAME way, plus a few frontier-only
+#: pagination-ish keys. No second param list to drift from canon's.
+def _page_params() -> "frozenset[str]":
+    from ...core.crawl.canon import _PAGINATION_PARAMS
+
+    return _PAGINATION_PARAMS | {"limit", "per_page", "cursor"}
+
+
+_PAGE_PARAMS = _page_params()
+
+
 def _frontier_key(url: str) -> "tuple[str, str, frozenset[str]]":
-    """A dedup key that collapses a paginated set and repeated calls to one API: the
-    host + the path with any ``/page/N`` segment stripped + the set of query-param
-    KEYS (ignoring their values). So ``?page=1`` / ``?page=2`` and ``/list/page/3``
-    collapse to one, while distinct resources (``/item/1`` vs ``/item/2``) stay apart."""
-    import re
+    """A dedup key that collapses a paginated set and repeated calls to one API: the host + the path
+    with any ``/page/N`` pagination segment stripped (canon's ``_strip_pagination_path``) + the set of
+    query-param KEYS (ignoring their values, minus pagination params). So ``?page=1`` / ``?page=2`` and
+    ``/list/page/3`` collapse to one, while distinct resources (``/item/1`` vs ``/item/2``, ``?p=123`` vs
+    ``?p=124``) stay apart. The novel part vs canon is the query-key-SHAPE collapse; the pagination
+    stripping is canon's, shared."""
     from urllib.parse import parse_qsl, urlsplit
 
+    from ...core.crawl.canon import _strip_pagination_path
+
     parts = urlsplit(url)
-    path = re.sub(r"/(?:page|p)/\d+", "", parts.path).rstrip("/") or "/"
-    # ignore pagination params so ?page=1 / ?page=2 / /page/3 all collapse together
-    keys = frozenset(
-        k for k, _ in parse_qsl(parts.query) if k.lower() not in _PAGE_PARAMS
-    )
+    path = _strip_pagination_path(parts.path).rstrip("/") or "/"
+    keys = frozenset(k for k, _ in parse_qsl(parts.query) if k.lower() not in _PAGE_PARAMS)
     return (parts.netloc, path, keys)
-
-
-#: query params that only page/window a result set (not a distinct resource).
-_PAGE_PARAMS = {
-    "page", "p", "pg", "pagenum", "offset", "start", "limit", "per_page", "cursor",
-}
 
 #: path fragments that mark a page as API / product DOCUMENTATION rather than data. A
 #: docs page is never a scrapable dataset, so it is HARD-BANNED from the crawl (never
