@@ -1,18 +1,14 @@
-"""Pagination as middleware -- one more policy in the resolve chain, beside retry and escalate.
+"""Pagination middleware implementations -- more policies over fetch's framework.
 
-A pagination middleware resolves the whole page sequence and returns ONE merged Document, so it
-honours the ``Request -> Document`` contract: ``resolver.resolve(req)`` gives you the full
-dataset. Each inner page fetch goes through ``next`` (the chain below), so retry / escalate /
-rate-limit still apply per page.
-
-"The next page" comes from three places, so there are three middleware implementations that
-share the same shape (loop, collect, :func:`_merge`):
-  * :func:`paginate_links`  -- follow the ``rel=next`` link (extracted from the DOM),
+Each is a ``web.fetch.Middleware`` that resolves the whole page sequence and returns ONE merged
+Snapshot (the Resolver parses it once). Inner page fetches go through ``next``, so retry / rate_limit
+below still apply per page. Three implementations, one per source of "the next page":
+  * :func:`paginate_links`  -- follow the ``rel=next`` link (parsed from the page),
   * :func:`paginate_param`  -- increment a query parameter (computed from the URL),
   * :func:`paginate_clicks` -- click a Load-more / Next control on a live page (no new URL).
 
-The stop condition is a plain, composable ``until`` (see :mod:`.stops`) -- an empty page is only
-one of many (item budget, id/date cutoff, loop guard, last-page marker), usually combined.
+These are REFERENCE implementations. A consumer writes their own the same way -- a cursor
+paginator, an API-envelope paginator -- and stacks it in a profile; the framework does not care.
 """
 
 from __future__ import annotations
@@ -21,23 +17,22 @@ import asyncio
 from collections.abc import Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from web.fetch import BrowserFetcher, Request
-from web.parse import Document, parse, parse_bytes
-
-from .base import Handler, Middleware
+from web.fetch import BrowserFetcher, Handler, Middleware, Request, Snapshot
+from web.parse import Document, parse
 
 #: stop the unfold after a page when this holds (see :mod:`.stops`).
 Until = Callable[[Document], bool]
 
 
-def _merge(pages: list[Document]) -> Document:
-    """Combine resolved pages into one Document (concatenated markup), so a downstream
-    ``select_all`` spans every page. A single page is returned unchanged."""
-    if len(pages) == 1:
-        return pages[0]
-    first = pages[0]
-    body = b"".join(p.content for p in pages)
-    return parse_bytes(body, content_type="text/html", url=first.url, status=first.status, error=first.error)
+def _merge(snaps: list[Snapshot]) -> Snapshot:
+    """Combine resolved pages into one Snapshot (concatenated markup + accumulated events), so a
+    downstream parse+select_all spans every page. A single page is returned unchanged."""
+    if len(snaps) == 1:
+        return snaps[0]
+    return snaps[0].model_copy(update={
+        "content": b"".join(s.content for s in snaps),
+        "events": [e for s in snaps for e in s.events],
+    })
 
 
 def _next_link(doc: Document) -> "str | None":
@@ -59,35 +54,36 @@ def _bump(url: str, name: str, step: int) -> str:
 def paginate_links(*, until: "Until | None" = None, max_pages: int = 20) -> Middleware:
     """LINK strategy: follow the ``rel=next`` link from page to page, merging the results."""
 
-    async def mw(request: Request, nxt: Handler) -> Document:
-        doc = await nxt(request)
-        pages, seen = [doc], {request.url}
+    async def mw(request: Request, nxt: Handler) -> Snapshot:
+        snap = await nxt(request)
+        snaps, seen = [snap], {request.url}
         for _ in range(max_pages - 1):
+            doc = parse(snap)
             nxt_url = _next_link(doc)
-            if not doc.ok or nxt_url is None or nxt_url in seen or (until and until(doc)):
+            if not snap.ok or nxt_url is None or nxt_url in seen or (until and until(doc)):
                 break
             seen.add(nxt_url)
-            doc = await nxt(request.model_copy(update={"url": nxt_url}))
-            pages.append(doc)
-        return _merge(pages)
+            snap = await nxt(request.model_copy(update={"url": nxt_url}))
+            snaps.append(snap)
+        return _merge(snaps)
 
     return mw
 
 
 def paginate_param(name: str = "page", *, step: int = 1, until: "Until | None" = None, max_pages: int = 20) -> Middleware:
-    """PARAM strategy: increment a query parameter (``?page=2``). No next link, so ``until``
-    (or ``max_pages``) decides where to stop -- an out-of-range page returns no items, not an error."""
+    """PARAM strategy: increment a query parameter (``?page=2``). No next link, so ``until`` (or
+    ``max_pages``) decides where to stop -- an out-of-range page returns no items, not an error."""
 
-    async def mw(request: Request, nxt: Handler) -> Document:
-        doc, url = await nxt(request), request.url
-        pages = [doc]
+    async def mw(request: Request, nxt: Handler) -> Snapshot:
+        snap, url = await nxt(request), request.url
+        snaps = [snap]
         for _ in range(max_pages - 1):
-            if not doc.ok or (until and until(doc)):
+            if not snap.ok or (until and until(parse(snap))):
                 break
             url = _bump(url, name, step)
-            doc = await nxt(request.model_copy(update={"url": url}))
-            pages.append(doc)
-        return _merge(pages)
+            snap = await nxt(request.model_copy(update={"url": url}))
+            snaps.append(snap)
+        return _merge(snaps)
 
     return mw
 
@@ -96,20 +92,21 @@ def paginate_clicks(
     browser: BrowserFetcher, more: str, *,
     until: "Until | None" = None, settle: float = 0.3, max_clicks: int = 20,
 ) -> Middleware:
-    """CLICK strategy: drive ONE live page, clicking the ``more`` control (Load-more / Next) and
-    re-rendering in place until it is gone, then return the final accumulated Document. There is
-    no new URL, so this middleware handles the request via the browser and ignores ``next``."""
+    """CLICK strategy: drive ONE live page, clicking the ``more`` control until it is gone, then
+    return the final accumulated Snapshot. No new URL, so this middleware handles the request via
+    the browser and ignores ``next``."""
 
-    async def mw(request: Request, nxt: Handler) -> Document:
+    async def mw(request: Request, nxt: Handler) -> Snapshot:
         page = await browser.open(request)
         try:
             for _ in range(max_clicks):
-                doc = parse(await page.snapshot())
+                snap = await page.snapshot()
+                doc = parse(snap)
                 if (until and until(doc)) or doc.select(more) is None:
                     break
                 await page.click(more)
                 await asyncio.sleep(settle)
-            return parse(await page.snapshot())
+            return await page.snapshot()
         finally:
             await page.close()
 

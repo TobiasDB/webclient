@@ -21,8 +21,10 @@ from .browser import BrowserFetcher, LivePage
 from .events import DOMEvent, NetworkEvent
 from .script import DOM_RECORDER, Script
 from .http import HttpFetcher
+from .middleware import Handler, Middleware, stack
 from .request import Request
 from .snapshot import Snapshot
 
 __all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "LivePage",
-           "Script", "DOM_RECORDER", "NetworkEvent", "DOMEvent"]
+           "Script", "DOM_RECORDER", "NetworkEvent", "DOMEvent",
+           "Middleware", "Handler", "stack"]

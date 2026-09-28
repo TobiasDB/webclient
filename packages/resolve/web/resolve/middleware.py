@@ -1,9 +1,8 @@
-"""The built-in resolve policies, as middleware. Each is a small factory returning a
-:class:`~web.resolve.base.Middleware`. Compose them in a Resolver's chain (outermost first).
+"""The middleware implementations -- retry, rate_limit, escalate -- over fetch's framework.
 
-Browser escalation (static -> rendered on a JS-gated page) is another middleware, added once
-the fetch layer grows a browser Fetcher; the chain is the extension point, so it needs no
-change here.
+Each is a ``web.fetch.Middleware`` (``async (request, next) -> Snapshot``). retry and rate_limit
+are pure transport policies; escalate inspects PARSED content (that is why it lives here, above
+parse, not in fetch). Compose them into a per-vendor profile and hand it to a Resolver.
 """
 
 from __future__ import annotations
@@ -11,45 +10,43 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import urlparse
 
-from web.fetch import Fetcher, Request
-from web.parse import Document, parse
+from web.fetch import Fetcher, Handler, Middleware, Request, Snapshot
+from web.parse import parse
 
-from .base import Handler, Middleware
 from .signals import detect
 
 _RETRIABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
-def _retriable(doc: Document) -> bool:
-    """A transport failure or a retriable server status -- worth another attempt."""
-    if doc.error is not None and doc.error.code == "fetch.transport":
+def _retriable(snap: Snapshot) -> bool:
+    if snap.error is not None and snap.error.code == "fetch.transport":
         return True
-    return doc.status in _RETRIABLE_STATUS
+    return snap.status in _RETRIABLE_STATUS
 
 
 def retry(max_attempts: int = 3, backoff: float = 0.2) -> Middleware:
-    """Retry the request while the Document is retriable, up to ``max_attempts``, with
-    exponential backoff. Returns the last Document either way (a failure is data)."""
+    """Retry the SAME request while the Snapshot is retriable (transport error / 429 / 5xx),
+    up to ``max_attempts`` with exponential backoff. Returns the last Snapshot either way."""
 
-    async def mw(request: Request, nxt: Handler) -> Document:
-        doc = await nxt(request)
+    async def mw(request: Request, nxt: Handler) -> Snapshot:
+        snap = await nxt(request)
         attempt = 1
-        while attempt < max_attempts and _retriable(doc):
+        while attempt < max_attempts and _retriable(snap):
             await asyncio.sleep(backoff * (2 ** (attempt - 1)))
-            doc = await nxt(request)
+            snap = await nxt(request)
             attempt += 1
-        return doc
+        return snap
 
     return mw
 
 
 def rate_limit(min_interval: float) -> Middleware:
     """Keep at least ``min_interval`` seconds between requests to the same host (politeness).
-    Reserves each host's next slot, then waits outside the lock so other hosts are unaffected."""
+    Reserves each host's slot then waits outside the lock, so other hosts are unaffected."""
     last: dict[str, float] = {}
     lock = asyncio.Lock()
 
-    async def mw(request: Request, nxt: Handler) -> Document:
+    async def mw(request: Request, nxt: Handler) -> Snapshot:
         host = urlparse(request.url).hostname or ""
         loop = asyncio.get_running_loop()
         async with lock:
@@ -63,16 +60,16 @@ def rate_limit(min_interval: float) -> Middleware:
 
 
 def escalate(browser: Fetcher, *, when: tuple[str, ...] = ("spa",)) -> Middleware:
-    """The signals -> policy payoff: after a static resolve, if a render-worthy signal fired
-    (``spa`` by default -- the page is a JS-gated shell), re-fetch through ``browser`` (a
-    render-capable Fetcher) and re-parse. A page that renders server-side skips the browser, so
-    the expensive tier is used only when the evidence says it is needed (the adaptive rule)."""
+    """Re-issue the SAME request on a DIFFERENT transport: after a static fetch, parse the
+    Snapshot and, if a render-worthy signal fired (``spa`` -- a JS-gated shell), re-fetch it via
+    ``browser``. The expensive tier runs only when the evidence says so (the adaptive rule)."""
 
-    async def mw(request: Request, nxt: Handler) -> Document:
-        doc = await nxt(request)
+    async def mw(request: Request, nxt: Handler) -> Snapshot:
+        snap = await nxt(request)
+        doc = parse(snap)
         if doc.kind == "html" and {s.name for s in detect(doc)} & set(when):
-            return parse(await browser.fetch(request))
-        return doc
+            return await browser.fetch(request)
+        return snap
 
     return mw
 
