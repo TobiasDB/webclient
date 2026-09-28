@@ -1,0 +1,19 @@
+[project]
+name = "web-dsl"
+version = "0.1.0"
+description = "web-* dsl: the lazy execution engine on top — record a Plan, dispatch sync/async/lazy/API over the plain layers."
+requires-python = ">=3.12"
+dependencies = ["web-kernel", "web-fetch", "web-parse", "web-resolve", "pydantic>=2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["web"]
+
+[tool.uv.sources]
+web-kernel = { path = "../kernel", editable = true }
+web-fetch = { path = "../fetch", editable = true }
+web-parse = { path = "../parse", editable = true }
+web-resolve = { path = "../resolve", editable = true }
