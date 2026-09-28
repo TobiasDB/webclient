@@ -213,3 +213,19 @@ def test_robots_honours_wildcards_and_longest_match() -> None:
     assert not rob.allowed("https://ex.com/report.pdf")       # /*.pdf$ wildcard honoured
     assert rob.allowed("https://ex.com/report.pdf?x=1")       # $ anchors end -> query not blocked
     assert not rob.allowed("https://ex.com/a/b/secret")       # mid-path * honoured
+
+
+def test_sitemap_handles_gzipped_files(httpserver: HTTPServer) -> None:
+    import gzip
+    # a sitemap index pointing at a GZIPPED child sitemap (served as application/gzip, not encoded)
+    child = (f"<urlset><url><loc>{httpserver.url_for('/p1')}</loc></url>"
+             f"<url><loc>{httpserver.url_for('/p2')}</loc></url></urlset>").encode()
+    idx = f"<sitemapindex><sitemap><loc>{httpserver.url_for('/sm-1.xml.gz')}</loc></sitemap></sitemapindex>".encode()
+    httpserver.expect_request("/sitemap.xml").respond_with_data(idx, content_type="application/xml")
+    httpserver.expect_request("/sm-1.xml.gz").respond_with_data(gzip.compress(child), content_type="application/gzip")
+
+    async def go() -> list[str]:
+        return await sitemap_urls(Resolver(), httpserver.url_for("/"))
+
+    urls = _run(go())
+    assert urls == [httpserver.url_for("/p1"), httpserver.url_for("/p2")]  # gz child decompressed
