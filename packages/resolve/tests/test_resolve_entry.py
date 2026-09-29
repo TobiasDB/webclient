@@ -7,7 +7,8 @@ from typing import Any
 
 from pytest_httpserver import HTTPServer
 
-from web.resolve import resolve
+from web.fetch import Profile as FetchProfile
+from web.resolve import Profile, resolve
 
 
 def _run(coro: Any) -> Any:
@@ -48,3 +49,16 @@ def test_resolve_pagination_is_a_plain_kwarg(httpserver: HTTPServer) -> None:
         return [e.text for e in doc.select_all("article.row")]
 
     assert _run(go()) == ["p1", "p2"]
+
+
+def test_resolve_profile_uses_fetch_profiles_in_its_ladder(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/").respond_with_data(b"<title>Vendor</title>", content_type="text/html")
+    # the resolve profile owns policy (retry/escalation); its ladder is FETCH profiles (transport
+    # identity per tier) -- http base, escalate to a browser tier on a block signal
+    vendor = Profile(ladder=(FetchProfile(), FetchProfile(browser=True)), retry=2)
+
+    async def go() -> str:
+        doc = await resolve(httpserver.url_for("/"), profile=vendor)  # http tier serves; browser unused
+        return doc.metadata().title or ""
+
+    assert _run(go()) == "Vendor"

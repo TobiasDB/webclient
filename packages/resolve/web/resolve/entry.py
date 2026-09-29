@@ -15,10 +15,10 @@ the one-shot/session pattern is identical at both layers.
 
 from __future__ import annotations
 
-from web.fetch import Entry, Fetcher, Middleware, Request
+from web.fetch import Entry, Middleware, Request
 from web.parse import Document
 
-from .base import Profile, Resolver
+from .base import Profile, Resolver, Tier
 from .paginate import paginate_param
 
 
@@ -49,7 +49,7 @@ class ResolveSession:
 def resolve(request: "Request | str", *, profile: "Profile | None" = None,
             paginate: "str | Middleware | None" = None, max_pages: int = 20,
             rate_limit: "float | Middleware | None" = None, retry: "int | Middleware | None" = None,
-            ladder: "tuple[Fetcher, ...] | None" = None,
+            ladder: "tuple[Tier, ...] | None" = None,
             middleware: "tuple[Middleware, ...]" = ()) -> "Entry[Document, ResolveSession]":
     """Resolve ``request`` (a URL or a :class:`~web.fetch.Request`) to a Document. ``await`` it for a
     one-shot Document, or ``async with resolve(...) as session:`` for a persistent session. Pagination

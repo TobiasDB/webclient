@@ -19,10 +19,11 @@ kwarg overrides the profile.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from typing import Any, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Protocol, TypeAlias, runtime_checkable
 
 from web.fetch import Fetcher, HttpFetcher, Middleware, Request, stack
+from web.fetch import Profile as FetchProfile
 from web.parse import Document
 from .document import document
 
@@ -30,25 +31,55 @@ from .middleware import escalate as _escalate
 from .middleware import rate_limit as _rate_limit
 from .middleware import retry as _retry
 
+#: a transport ladder tier: a ready :class:`~web.fetch.Fetcher`, or a fetch :class:`Profile`
+#: (materialised to its fetcher) -- so a resolve profile's escalation ladder is written as fetch
+#: profiles (an HTTP tier, a browser tier, ...).
+Tier: TypeAlias = Fetcher | FetchProfile
+
+
+class _Keep:
+    """The 'unchanged' sentinel for :meth:`Profile.with_` (so a slot can be cleared to ``None``)."""
+
+
+_KEEP = _Keep()
+
 
 @dataclass(frozen=True)
 class Profile:
-    """A reusable, named middleware configuration -- combine a vendor's transport ladder +
-    politeness + retry + pagination once, then apply via ``Resolver(profile=...)``. Combinable
-    with ``.with_(...)``; a per-slot Resolver kwarg overrides it."""
+    """A reusable, named POLICY bundle -- a vendor's transport ladder (fetch profiles/fetchers) +
+    politeness + retry + escalation + pagination, combined once and applied via
+    ``Resolver(profile=...)`` / ``resolve(profile=...)``. Combinable with ``.with_(...)``; a per-slot
+    kwarg overrides it. The ladder holds fetch profiles, so the transport identity (proxy /
+    fingerprint / browser per tier) is defined once at the fetch layer and reused here."""
 
-    ladder: "tuple[Fetcher, ...] | None" = None
+    ladder: "tuple[Tier, ...] | None" = None
     rate_limit: "float | Middleware | None" = None
     retry: "int | Middleware | None" = None
     paginate: "Middleware | None" = None
-    middleware: tuple[Middleware, ...] = ()
+    middleware: "tuple[Middleware, ...]" = ()
 
-    def with_(self, **overrides: Any) -> "Profile":  # Any: a passthrough to dataclasses.replace
-        """A copy with some slots overridden -- combine or adjust a base profile."""
-        return replace(self, **overrides)
+    def with_(self, *, ladder: "tuple[Tier, ...] | None | _Keep" = _KEEP,
+              rate_limit: "float | Middleware | None | _Keep" = _KEEP,
+              retry: "int | Middleware | None | _Keep" = _KEEP,
+              paginate: "Middleware | None | _Keep" = _KEEP,
+              middleware: "tuple[Middleware, ...] | _Keep" = _KEEP) -> "Profile":
+        """A copy with some slots overridden (the rest inherited) -- combine or adjust a base profile."""
+        return Profile(
+            ladder=self.ladder if isinstance(ladder, _Keep) else ladder,
+            rate_limit=self.rate_limit if isinstance(rate_limit, _Keep) else rate_limit,
+            retry=self.retry if isinstance(retry, _Keep) else retry,
+            paginate=self.paginate if isinstance(paginate, _Keep) else paginate,
+            middleware=self.middleware if isinstance(middleware, _Keep) else middleware,
+        )
 
 
 _EMPTY = Profile()
+
+
+def _as_fetcher(tier: "Tier") -> Fetcher:
+    """Materialise a ladder tier to a Fetcher: a fetch :class:`Profile` becomes its fetcher, a ready
+    Fetcher passes through."""
+    return tier.fetcher() if isinstance(tier, FetchProfile) else tier
 
 
 @runtime_checkable
@@ -72,7 +103,7 @@ class Resolver:
     def __init__(
         self,
         *,
-        ladder: "tuple[Fetcher, ...] | None" = None,
+        ladder: "tuple[Tier, ...] | None" = None,
         profile: "Profile | None" = None,
         rate_limit: "float | Middleware | None" = None,
         retry: "int | Middleware | None" = None,
@@ -81,7 +112,8 @@ class Resolver:
     ) -> None:
         p = profile or _EMPTY
         chosen = ladder if ladder is not None else p.ladder
-        self._tiers: tuple[Fetcher, ...] = tuple(chosen) if chosen else (HttpFetcher(),)  # empty/None -> default
+        # materialise fetch profiles -> fetchers; empty/None -> the default HTTP tier
+        self._tiers: tuple[Fetcher, ...] = tuple(_as_fetcher(t) for t in chosen) if chosen else (HttpFetcher(),)
         # keep the resolved slots so session() can rebuild the same chain over persistent tiers
         self._rl = rate_limit if rate_limit is not None else p.rate_limit
         self._rt = retry if retry is not None else p.retry

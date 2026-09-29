@@ -95,6 +95,13 @@ class Profile:
             browser=self.browser if isinstance(browser, _Keep) else browser,
         )
 
+    def fetcher(self) -> "BrowserFetcher | HttpFetcher":
+        """The backend this transport identity describes -- so a fetch profile can be used directly
+        as a tier in a resolve profile's escalation ladder (an HTTP tier, a browser tier, ...)."""
+        if self.browser:
+            return BrowserFetcher(proxy=self.proxy, fingerprint=self.fingerprint)
+        return HttpFetcher(proxy=self.proxy, fingerprint=self.fingerprint)
+
 
 _EMPTY = Profile()
 
@@ -113,12 +120,14 @@ def fetch(request: "Request | str", *, browser: bool = False, profile: "Profile 
     request and owns its page; an HTTP session holds a cookie jar). ``profile`` supplies the
     transport identity; ``browser`` / ``proxy`` / ``fingerprint`` override it per call."""
     prof = profile or _EMPTY
-    use_proxy = proxy if proxy is not None else prof.proxy
-    use_fp = fingerprint if fingerprint is not False else prof.fingerprint
-    backend: "BrowserFetcher | HttpFetcher" = (
-        BrowserFetcher(proxy=use_proxy, fingerprint=use_fp) if (browser or prof.browser)
-        else HttpFetcher(proxy=use_proxy, fingerprint=use_fp))
-    req = as_request(request, prof.headers)
+    eff = Profile(
+        proxy=proxy if proxy is not None else prof.proxy,
+        fingerprint=fingerprint if fingerprint is not False else prof.fingerprint,
+        headers=prof.headers,
+        browser=browser or prof.browser,
+    )
+    backend = eff.fetcher()
+    req = as_request(request, eff.headers)
 
     async def one_shot() -> Snapshot:
         try:
