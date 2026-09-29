@@ -44,8 +44,17 @@ class Element:
 
     @property
     def html(self) -> str:
-        """This element serialised back to markup."""
+        """This element serialised back to markup (its own tag included)."""
         return etree.tostring(self._node, encoding="unicode")
+
+    @property
+    def inner_html(self) -> str:
+        """This element's CHILDREN serialised (its own tag excluded) -- e.g. a ``<body>``'s content
+        without the ``<body>`` wrapper, so several can be combined under one root."""
+        parts = [self._node.text or ""]
+        for child in self._node:
+            parts.append(etree.tostring(child, encoding="unicode"))
+        return "".join(parts)
 
     def attr(self, name: str) -> "str | None":
         """An attribute value, or ``None``. ``attr('href')`` / ``attr('src')`` are resolved

@@ -251,3 +251,29 @@ def test_retry_retries_real_transient_errors_not_persistent_ones() -> None:
     # persistent errors must NOT be retried (a retry can't help)
     for code in ("fetch.tls", "fetch.url", "fetch.redirects"):
         assert _retriable(Snapshot(request=Request(url="https://x/"), error=err(code, "x"))) is False
+
+
+def test_paginate_param_aggregates_rows_across_full_html_pages(httpserver: HTTPServer) -> None:
+    # each page is a FULL <html> document; the merged Document must span ALL pages (regression:
+    # concatenating whole docs kept only page 1's rows)
+    def handler(req):
+        from werkzeug.wrappers import Response
+        page = int(req.args.get("page", "1"))
+        if page > 3:
+            return Response(b"<html><body><ul></ul></body></html>", content_type="text/html")
+        items = "".join(f"<li class=row>p{page}-{i}</li>" for i in range(2))
+        return Response(f"<html><body><ul>{items}</ul></body></html>".encode(), content_type="text/html")
+    httpserver.expect_request("/list").respond_with_handler(handler)
+
+    async def go() -> list[str]:
+        from web.resolve import until_empty
+        from web.resolve import paginate_param, until_empty
+        r = Resolver(paginate=paginate_param("page", until=until_empty("li.row"), max_pages=5))
+        try:
+            doc = await r.resolve(Request(url=httpserver.url_for("/list")))
+            return [e.text for e in doc.select_all("li.row")]
+        finally:
+            await r.aclose()
+
+    rows = _run(go())
+    assert rows == ["p1-0", "p1-1", "p2-0", "p2-1", "p3-0", "p3-1"]  # all 3 pages aggregated

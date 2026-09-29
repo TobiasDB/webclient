@@ -30,12 +30,19 @@ Until = Callable[[Document], bool]
 
 
 def _merge(snaps: list[Snapshot]) -> Snapshot:
-    """Combine resolved pages into one Snapshot (concatenated markup + accumulated events), so a
-    downstream parse+select_all spans every page. A single page is returned unchanged."""
+    """Combine resolved pages into ONE Snapshot whose parsed Document spans every page. Each page's
+    ``<body>`` INNER html is concatenated under a single root -- concatenating whole ``<html>``
+    documents does NOT work (lxml keeps only the first root, silently dropping later pages). A single
+    page is returned unchanged. Events accumulate across pages."""
     if len(snaps) == 1:
         return snaps[0]
+    parts: list[str] = []
+    for s in snaps:
+        body = document(s).select("body")
+        parts.append(body.inner_html if body is not None else s.content.decode("utf-8", "replace"))
+    combined = ("<!doctype html><html><body>" + "".join(parts) + "</body></html>").encode("utf-8")
     return snaps[0].model_copy(update={
-        "content": b"".join(s.content for s in snaps),
+        "content": combined,
         "events": [e for s in snaps for e in s.events],
     })
 
