@@ -43,9 +43,9 @@ def test_crawl_follows_same_origin_links_bfs(httpserver: HTTPServer) -> None:
     assert not any("other.example" in u for u in seen)  # off-origin not followed
 
 
-def test_frontier_policy_picks_which_edges_to_expand(httpserver: HTTPServer) -> None:
-    # a turn-based policy: expand the seed, then ONLY /b -- /a and /c are pruned (never fetched).
-    from web.crawl import FrontierItem
+def test_frontier_middleware_picks_which_edges_to_expand(httpserver: HTTPServer) -> None:
+    # a turn-based frontier MIDDLEWARE: expand the seed, then ONLY /b -- /a and /c are pruned.
+    from web.crawl import FrontierItem, Select
 
     httpserver.expect_request("/").respond_with_data(
         b"<a href='/a'>a</a><a href='/b'>b</a><a href='/c'>c</a>", content_type="text/html"
@@ -55,9 +55,9 @@ def test_frontier_policy_picks_which_edges_to_expand(httpserver: HTTPServer) -> 
             f"<p>{p}</p>".encode(), content_type="text/html"
         )
 
-    async def pick(items: "tuple[FrontierItem, ...]") -> list[str]:
-        # expand the seed to discover links; thereafter only the /b edge
-        return [it.url for it in items if it.depth == 0 or it.url.endswith("/b")]
+    async def only_b(pending: "tuple[FrontierItem, ...]", nxt: Select) -> "list[FrontierItem]":
+        # pick directly (ignore nxt): the seed to discover links; thereafter only the /b edge
+        return [it for it in pending if it.depth == 0 or it.url.endswith("/b")]
 
     async def go() -> list[str]:
         c = Crawler(Resolver())
@@ -65,7 +65,7 @@ def test_frontier_policy_picks_which_edges_to_expand(httpserver: HTTPServer) -> 
             return [
                 doc.url
                 async for doc in c.crawl(
-                    Goal(start=httpserver.url_for("/"), max_pages=10, frontier=pick)
+                    Goal(start=httpserver.url_for("/"), max_pages=10, frontier=(only_b,))
                 )
             ]
         finally:

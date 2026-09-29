@@ -20,16 +20,9 @@ from web.fetch import Request, emit
 from web.parse import Document
 from web.resolve import Resolver, document, flags
 
-from .models import (
-    Collect,
-    CrawlEvent,
-    Follow,
-    Frontier,
-    FrontierItem,
-    Goal,
-    by_score,
-    same_origin,
-)
+from .frontier import FrontierMiddleware, Select, by_score, fifo
+from .frontier import stack as _frontier
+from .models import Collect, CrawlEvent, Follow, FrontierItem, Goal, same_origin
 from .robots import Robots, parse_robots, robots
 from .sitemap import sitemap_urls
 from .urls import canonical
@@ -43,18 +36,15 @@ class Crawler:
     def __init__(self, resolver: Resolver) -> None:
         self._resolver = resolver
 
-    async def _select(self, pending: "list[FrontierItem]", goal: Goal) -> "list[FrontierItem]":
-        """This round's batch to expand: the frontier policy's picks (in its order; a subset PRUNES
-        the rest, ``[]`` stops), else the single oldest item (plain breadth-first)."""
-        if goal.frontier is None:
-            return [pending.pop(0)]
-        order = await goal.frontier(tuple(pending))
-        batch: list[FrontierItem] = []
-        for url in order:
-            hit = next((it for it in pending if it.url == url), None)
+    async def _select(self, pending: "list[FrontierItem]", select: Select) -> "list[FrontierItem]":
+        """This round's batch to expand -- the frontier middleware chain's picks (a subset PRUNES the
+        rest, ``[]`` stops); the returned items are removed from the frontier. Default chain = FIFO.
+        """
+        batch = list(await select(tuple(pending)))
+        for it in batch:
+            hit = next((p for p in pending if p.url == it.url), None)
             if hit is not None:
                 pending.remove(hit)
-                batch.append(hit)
         return batch
 
     async def crawl(self, goal: Goal) -> AsyncIterator[Document]:
@@ -87,10 +77,11 @@ class Crawler:
         for s in seeds:  # seeds sit UNFETCHED in the frontier -- a policy can evaluate/prune them
             admit(s, 0, "")
 
+        select = _frontier(fifo, goal.frontier)  # the frontier middleware chain (default: FIFO)
         yielded: set[str] = set()
         fetched = 0
         while pending and fetched < goal.max_pages:
-            batch = await self._select(pending, goal)
+            batch = await self._select(pending, select)
             if not batch:  # the policy pruned everything -> stop
                 break
             for item in batch:
@@ -145,9 +136,11 @@ __all__ = [
     "CrawlEvent",
     "Follow",
     "Collect",
-    "Frontier",
     "FrontierItem",
+    "FrontierMiddleware",
+    "Select",
     "by_score",
+    "fifo",
     "same_origin",
     "canonical",
     "robots",

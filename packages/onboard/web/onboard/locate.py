@@ -24,7 +24,7 @@ from web.fetch import NetworkEvent, Request
 from web.parse import Document, parse
 from web.resolve import Flag, Resolver, flags
 
-from web.crawl import Crawler, Frontier, Goal
+from web.crawl import Crawler, FrontierMiddleware, Goal
 
 from .models import LocateBrief, Reference
 
@@ -219,7 +219,7 @@ async def locate(
     *,
     resolver: Resolver,
     search: "Search | None" = None,
-    frontier: "Frontier | None" = None,
+    frontier: "tuple[FrontierMiddleware, ...]" = (),
 ) -> "Reference | None":
     """Find the best source for the goal and return a :class:`Reference` (or ``None`` if nothing
     holds the dataset). Pass a bare goal string for the common case. Seeds come from the brief,

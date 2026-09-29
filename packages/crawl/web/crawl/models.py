@@ -6,12 +6,16 @@ Pure data + the small traversal-scope predicates a Goal is configured with. The 
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from pydantic import BaseModel
 from web.parse import Document
+
+if TYPE_CHECKING:  # only for Goal's annotation -- frontier.py imports FrontierItem from here
+    from .frontier import FrontierMiddleware
 
 
 class CrawlEvent(BaseModel):
@@ -44,22 +48,6 @@ class FrontierItem:
     parent: str = ""
 
 
-#: a TURN-BASED frontier policy: given the pending frontier, return the URLs to expand next in
-#: priority order -- a returned SUBSET prunes the rest, ``[]`` stops the crawl. Async, so an LLM can
-#: score / choose which links to follow each turn. Default (``None``) is breadth-first (FIFO).
-Frontier = Callable[[Sequence["FrontierItem"]], Awaitable[Sequence[str]]]
-
-
-def by_score(score: "Callable[[FrontierItem], float]") -> Frontier:
-    """Turn a per-item scorer into a :data:`Frontier` policy -- expand highest-score first (a cheap,
-    synchronous alternative to an LLM policy)."""
-
-    async def policy(items: "Sequence[FrontierItem]") -> "Sequence[str]":
-        return [it.url for it in sorted(items, key=lambda i: -score(i))]
-
-    return policy
-
-
 def same_origin(doc: Document, link: str) -> bool:
     """Default scope: stay on the document's host."""
     return urlparse(link).hostname == urlparse(doc.url).hostname
@@ -69,29 +57,21 @@ def same_origin(doc: Document, link: str) -> bool:
 class Goal:
     """What to crawl. ``start`` is the entry point(s); ``scope`` decides which links to follow;
     ``collect`` (optional) decides which resolved documents are RESULTS (default: all of them);
-    ``max_pages`` bounds how many pages are fetched. ``frontier`` is a turn-based policy that picks
-    which pending URLs to expand next (an LLM / heuristic; default breadth-first FIFO). ``assess``
-    computes each page's flags for its :class:`CrawlEvent` (observability; costs a ``flags()`` per
-    page). ``sitemap`` also seeds from the site's sitemap(s); ``respect_robots`` honours robots.txt
-    (and seeds from its ``Sitemap:`` lines). Seeds/frontier are derived from this."""
+    ``max_pages`` bounds how many pages are fetched. ``frontier`` is a chain of turn-based
+    :data:`~web.crawl.frontier.FrontierMiddleware` that picks which pending URLs to expand next (an
+    LLM / a heuristic; default = empty = breadth-first). ``assess`` computes each page's flags for
+    its :class:`CrawlEvent` (observability; costs a ``flags()`` per page). ``sitemap`` also seeds
+    from the site's sitemap(s); ``respect_robots`` honours robots.txt (and seeds from its
+    ``Sitemap:`` lines). Seeds/frontier are derived from this."""
 
     start: "str | list[str]"
     scope: Follow = same_origin
     collect: "Collect | None" = None
     max_pages: int = 50
-    frontier: "Frontier | None" = None
+    frontier: "tuple[FrontierMiddleware, ...]" = ()
     assess: bool = False
     sitemap: bool = False
     respect_robots: bool = False
 
 
-__all__ = [
-    "Goal",
-    "CrawlEvent",
-    "Follow",
-    "Collect",
-    "Frontier",
-    "FrontierItem",
-    "by_score",
-    "same_origin",
-]
+__all__ = ["Goal", "CrawlEvent", "Follow", "Collect", "FrontierItem", "same_origin"]
