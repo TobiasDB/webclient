@@ -46,7 +46,7 @@ def test_onboard_crawls_authors_once_and_aggregates(httpserver: HTTPServer) -> N
 
 
 # -- the LLM tier now lives in onboard: llm_driver (bridges Llm -> agent.Driver) + AnthropicLlm --
-from web.agent import Author  # noqa: E402
+from web.onboard.agent import Author  # noqa: E402
 from web.onboard import AnthropicLlm, llm_driver  # noqa: E402
 from web.parse import parse  # noqa: E402
 

@@ -1,9 +1,9 @@
 [project]
 name = "web-onboard"
 version = "0.1.0"
-description = "web-* onboard: the capstone — goal -> dataset, composing crawl + agent + llm."
+description = "web-* onboard: the capstone — goal -> dataset, composing crawl + the agent tier + llm."
 requires-python = ">=3.12"
-dependencies = ["web-fetch", "web-parse", "web-resolve", "web-crawl", "web-agent", "web-dsl", "pydantic>=2"]
+dependencies = ["web-fetch", "web-parse", "web-resolve", "web-crawl", "web-dsl", "pydantic>=2"]
 
 [build-system]
 requires = ["hatchling"]
@@ -17,5 +17,4 @@ web-fetch = { path = "../fetch", editable = true }
 web-parse = { path = "../parse", editable = true }
 web-resolve = { path = "../resolve", editable = true }
 web-crawl = { path = "../crawl", editable = true }
-web-agent = { path = "../agent", editable = true }
 web-dsl = { path = "../dsl", editable = true }

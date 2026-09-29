@@ -1,4 +1,4 @@
-"""An LLM-backed :class:`~web.agent.extract.Driver` -- the intelligence for extraction authoring.
+"""An LLM-backed :class:`~web.onboard.agent.extract.Driver` -- the intelligence for extraction authoring.
 
 It turns a :class:`.llm.Llm` into a driver: each round it prompts the model with the goal, the
 page, and the rows the last :class:`Selection` produced, and parses the reply into the next
@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 
-from web.agent import Done, Driver, Selection
+from .agent import Done, Driver, Selection
 from web.parse import Document
 
 from .llm import Llm

@@ -1,13 +1,13 @@
 """web.onboard -- the capstone: ``goal -> dataset``, and the LLM tier.
 
 Composes the whole stack. Given a goal and seed URL(s): crawl for candidate pages (web.crawl over
-a web.resolve Resolver), author a row extraction on the first page that yields data (web.agent's
+a web.resolve Resolver), author a row extraction on the first page that yields data (web.onboard.agent's
 loop driven by an :class:`Llm`), then apply that one Selection across every crawled page and
 aggregate the rows -- each tagged with its source. One page's shape, reused; the model authors once.
 
 The LLM itself lives here (not a separate layer): the :class:`Llm` protocol + :class:`AnthropicLlm`
 client (:mod:`.llm`) and :func:`llm_driver` (:mod:`.llm_driver`, which bridges an ``Llm`` to
-web.agent's pluggable ``Driver``). web.agent stays LLM-agnostic -- it takes any ``Driver`` callable.
+web.onboard.agent's pluggable ``Driver``). web.onboard.agent stays LLM-agnostic -- it takes any ``Driver`` callable.
 
     from web.onboard import onboard, AnthropicLlm
     result = await onboard("board members and their roles", "https://acme.com/board",
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from web.agent import Author, Selection, extract
+from .agent import Author, Selection, extract
 from web.crawl import Crawler, Goal
 from web.resolve import Resolver
 

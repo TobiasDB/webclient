@@ -29,8 +29,8 @@ takes the ideas, not the code.
 ## The stack
 
 ```
-web.onboard   goal → dataset (crawl + author + aggregate) · the LLM tier (Llm/Anthropic + driver)  ← crawl, agent, resolve
-web.agent     observe→decide→apply loop; extraction authoring (LLM-AGNOSTIC — takes any Driver)   ← parse, fetch
+web.onboard   goal → dataset (locate + author + aggregate) · the LLM tier + the AGENT tier
+              (web.onboard.agent: an observe→decide→apply loop, extraction authoring)   ← crawl, resolve, dsl
 web.dsl       lazy engine, 4 dispatch modes (sync / async / lazy / API)   ← all below
 web.crawl     Goal → Documents                                            ← …, resolve
 web.resolve   Request → Document  · middleware impls · tiers · signals · sessions   ← fetch, parse
@@ -83,6 +83,12 @@ backend just fetches (and maybe holds state).
 - **Shared backend concepts** — every backend takes the same cross-cutting settings (`proxy`,
   `fingerprint`) and can open a **session** — a stateful handle that OWNS its resources. (Real
   TLS/JA3 impersonation is a heavier `fingerprint` that plugs into the HTTP backend.)
+- **Backends are POOLED, not per-call.** A `ClientPool` keeps a long-lived backend per transport
+  `Profile` and hands out the SHARED one on `lease(profile)` — so a browser is launched ONCE and
+  reused (not relaunched per fetch), and httpx connections are pooled. The functional `fetch()` /
+  `resolve()` lease from a process `default_pool()`; a `WebClient` owns its own pool (closed with
+  it). Backends multiplex, so a lease is the shared instance, not an exclusive checkout; the pool
+  owns their lifetime (`pool.aclose()` shuts the browser).
 - **Sessions own their state.** `backend.session() -> Session`; `session.fetch(request)` persists
   state across calls; `session.aclose()` releases it. **Page ownership lives on the session** (a
   key lesson from the old client): a live browser page belongs to a `BrowserSession` and dies with
@@ -165,7 +171,7 @@ The opinionated orchestration over fetch's framework. Owns everything policy.
 
 ---
 
-### web.agent — the agent tier: a resumable `observe → decide → apply` loop
+### web.onboard.agent — the agent tier (inside onboard): a resumable `observe → decide → apply` loop
 This is where `BoundedLoop` belongs — its **interrupt / resume** is what an agent needs (the
 simple loops below don't). `decide` may return an `Ask` instead of a decision; the loop stops
 `waiting` and the caller `resume`s it with a human answer, continuing from the same round.
@@ -181,8 +187,8 @@ simple loops below don't). `decide` may return an `Ask` instead of a decision; t
 - The LLM lives HERE, not in a separate layer (it is the LLM-driven tier): `Llm` (protocol,
   `async complete(prompt) -> str` — stubs cleanly, no vendor lock) + `AnthropicLlm(*, model, auth,
   ...)` over httpx (API/transport failures raise a structured `WebException`, never leak), and
-  `llm_driver(llm, goal)` which bridges an `Llm` to web.agent's pluggable `Driver` (it prompts with
-  the record-marked skeleton + detected record selectors). web.agent stays LLM-agnostic.
+  `llm_driver(llm, goal)` which bridges an `Llm` to web.onboard.agent's pluggable `Driver` (it prompts with
+  the record-marked skeleton + detected record selectors). the agent tier stays LLM-agnostic.
 - `onboard(goal, seeds, *, resolver, llm, max_pages=20) -> Onboarded` — crawl the seeds, author a
   row extraction on the first page that yields data (agent's loop + `llm_driver`), then apply that
   one `Selection` across every crawled page and aggregate the rows (each tagged with `_source`).

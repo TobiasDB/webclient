@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from web.agent import Ask, Author, BoundedLoop, Done, Selection
+from web.onboard.agent import Ask, Author, BoundedLoop, Done, Selection
 from web.parse import parse
 
 
@@ -75,7 +75,7 @@ def test_author_asks_then_resumes_with_a_human_selection() -> None:
 # -- the interaction agent: drive a live page toward a goal --
 from pytest_httpserver import HTTPServer  # noqa: E402
 
-from web.agent import Click, Done as _Done, Observation, Type, drive  # noqa: E402
+from web.onboard.agent import Click, Done as _Done, Observation, Type, drive  # noqa: E402
 from web.fetch import BrowserFetcher, Request  # noqa: E402
 
 
@@ -107,7 +107,7 @@ def test_interaction_agent_drives_a_live_page(httpserver: HTTPServer) -> None:
     assert b'data-done="hello"' in _run(go())  # the typed+clicked actions actually ran
 
 
-from web.agent import Scroll  # noqa: E402
+from web.onboard.agent import Scroll  # noqa: E402
 
 
 def test_drive_does_not_falsely_stall_past_max_stalls(httpserver: HTTPServer) -> None:
