@@ -15,7 +15,7 @@ in web.resolve, and it just hands over the bytes.
 from __future__ import annotations
 
 from .document import Document, Element
-from .jsonpath import dig
+from .jsonpath import JSON, dig
 from .metadata import Metadata, metadata
 from .records import RecordRegion, find_records
 from .sniff import Kind, sniff_charset, sniff_kind
@@ -37,6 +37,7 @@ __all__ = [
     "parse",
     "Document",
     "Element",
+    "JSON",
     "dig",
     "Metadata",
     "metadata",

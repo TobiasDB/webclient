@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Iterator, NoReturn, TypeVar, cast
 from pydantic import JsonValue
 
 from .plan import Arg, Plan, Step
+from .run import arun
 
 if TYPE_CHECKING:
     from web.resolve import Resolver
@@ -157,8 +158,6 @@ class Expr:
         a single field -> its value). ``root`` roots a context plan (a URL / Document); a
         ``reference(url)`` plan needs none. ``resolver`` fetches (a transient one is used + closed
         when omitted)."""
-        from .run import arun
-
         return await arun(self._plan, root, resolver=resolver or self._bound)
 
     def collect(self, root: object = None, *, resolver: "Resolver | None" = None) -> object:

@@ -25,7 +25,7 @@ from typing import (
 
 from pydantic import JsonValue
 
-from .expr import Expr
+from .expr import Expr, to_arg
 from .plan import Plan, Step
 from .values import Collection, Field, Ref
 
@@ -37,8 +37,6 @@ if TYPE_CHECKING:
 #: ``LazyCollection[str]`` is usable where a ``LazyCollection[object]`` -- e.g. an extract column --
 #: is expected).
 T = TypeVar("T", covariant=True)
-#: an extract column / filter predicate: any recorded sub-expression, or a literal constant column.
-Sub = "LazyField | LazyCollection[object] | LazyDocument | LazyReference | JsonValue"
 
 
 @runtime_checkable
@@ -239,8 +237,6 @@ class _WhenExpr(Expr):
     """
 
     def __init__(self, cond: object, then: object, otherwise: object = None) -> None:
-        from .expr import to_arg
-
         step = Step(kind="when", args=[to_arg(cond), to_arg(then), to_arg(otherwise)])
         super().__init__(Plan(steps=[step]))
         object.__setattr__(self, "_cond", cond)
@@ -313,6 +309,7 @@ __all__ = [
     "LazyDocument",
     "LazyCollection",
     "LazyField",
+    "LazyThen",
     "Collection",
     "Field",
     "Ref",

@@ -16,12 +16,13 @@ from pydantic import JsonValue
 #: callers narrow by isinstance) -- reused rather than hand-rolling the union.
 JSON = JsonValue
 
-_INDEX = re.compile(r"^(.*?)\[(\d+)\]$")  # a path segment with a trailing [n]
+_INDEX = re.compile(r"^(.*?)\[(-?\d+)\]$")  # a path segment with a trailing [n] (n may be negative)
 
 
 def dig(value: JSON, path: str) -> JSON:
-    """Follow a dotted path into a JSON value: ``"a.b"`` keys, ``"items[0]"`` indexes, ``""`` the
-    value itself. A missing key / wrong type / out-of-range index yields ``None``."""
+    """Follow a dotted path into a JSON value: ``"a.b"`` keys, ``"items[0]"`` / ``"items[-1]"``
+    indexes, ``""`` the value itself. A missing key / wrong type / out-of-range index yields ``None``.
+    """
     if not path:
         return value
     for seg in path.split("."):
@@ -116,4 +117,4 @@ def skeleton(
     return "\n".join(lines[:max_lines])
 
 
-__all__ = ["dig", "leaves", "skeleton"]
+__all__ = ["JSON", "dig", "leaves", "skeleton"]
