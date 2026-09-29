@@ -1,24 +1,33 @@
-"""web.dsl -- the lazy execution engine on top: clean surfaces with clean joins.
+"""web.dsl -- the lazy query DSL: the SAME surface as the monolith (``wq`` + typed
+``Collection`` / ``Field``), lean-reimplemented on the packages cores.
 
-Reference (drive) -> .doc() -> Document (read); Crawl (reach). Record a chain into a
-serialisable Plan, then dispatch it in one mode from that ONE recording: sync (collect),
-async (acollect), lazy (the surface itself), API/remote (to_blob + run_blob). The plain
-layers below know nothing of this.
+``wq`` is the recorder: ``wq.reference(url)`` / ``wq.ref`` / ``wq.doc`` are lazy roots, each op
+appends a step to a serialisable :class:`~web.dsl.plan.Plan`, and nothing runs until a terminal.
+One recording, four dispatch modes:
 
-    from web.fetch import HttpFetcher
-    from web.resolve import Resolver
-    from web.dsl import DSL
-    dsl = DSL(Resolver(HttpFetcher()))
-    rows = dsl.ref("https://example.com").doc().select_all(".row").collect()   # sync
-    rows = await dsl.ref(url).doc().select_all(".row").acollect()              # async
-    blob = dsl.ref(url).doc().select_all(".row").to_blob()                     # API
-    # actions return Self -> drive without snapshotting, join once with .doc():
-    #   dsl.ref(url).click("#more").type("#q", "x").doc().select_all(".row")
+    rows = await (wq.reference(url).resolve().select_all(".card")
+                  .extract(title=wq.doc.select(".title").attr("text"),
+                           price=wq.doc.select(".price").attr("text").number())
+                  .filter(wq.doc.field("price") != "")
+                  .acollect())                      # async -> list[dict] (smart: no explicit project)
+    rows = (...).collect()                          # sync
+    blob = (...).to_blob()                          # service / API
+    rows = await run_blob(blob)                     # remote (server side)
+
+Results are typed (:class:`~web.dsl.values.Field` / :class:`~web.dsl.values.Collection`), never
+``object`` / ``Any``. :class:`WebClient` is the context-managed DSL entry (``async with WebClient()
+as wc: await wc.resolve(url).doc()``) that owns the resolver lifecycle.
 """
 
 from __future__ import annotations
 
-from .engine import DSL, Crawl, Document, Reference, run_blob
-from .plan import Plan, Step
+from .expr import Expr, from_blob, from_plan
+from .facade import WebClient
+from .plan import Arg, Plan, Step
+from .run import run_blob
+from .surface import LazyCollection, LazyDocument, LazyField, LazyReference, LazyValues, wq
+from .values import Collection, Field
 
-__all__ = ["DSL", "Reference", "Document", "Crawl", "run_blob", "Plan", "Step"]
+__all__ = ["wq", "WebClient", "Expr", "from_blob", "from_plan", "run_blob", "Plan", "Step", "Arg",
+           "Collection", "Field", "LazyReference", "LazyDocument", "LazyCollection", "LazyValues",
+           "LazyField"]

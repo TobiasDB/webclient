@@ -109,8 +109,18 @@ class Resolver:
         )
         return stack(base_tier, chain)
 
-    async def resolve(self, request: Request) -> Document:
-        return document(await self._fetcher.fetch(request))
+    async def resolve(self, request: "Request | str") -> Document:
+        """``Request -> Document`` (a bare URL string is accepted as a shorthand ``Request`` -- the
+        clean entry, no hand-built request)."""
+        req = Request(url=request) if isinstance(request, str) else request
+        return document(await self._fetcher.fetch(req))
+
+    async def __aenter__(self) -> "Resolver":
+        """Enter a resolver scope -- ``async with Resolver(...) as rs:`` (closes on exit)."""
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        await self.aclose()
 
     async def session(self) -> "Resolver":
         """A stateful resolver: open a persistent SESSION on each tier (a cookie jar / browser
