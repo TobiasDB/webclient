@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from ..proxy import Proxy
+from .display import display_needed
 
 if TYPE_CHECKING:
     from playwright.async_api import Browser, Playwright
@@ -81,6 +82,12 @@ class BrowserSupply(Protocol):
     #: leak-patched fork). The manager starts the matching runtime; the supply just names it.
     driver: str
 
+    @property
+    def needs_display(self) -> bool:
+        """Whether this supply's browser needs a virtual display started first (a HEADED launch on a
+        displayless Linux host). The manager reads it and brings up Xvfb before connecting."""
+        ...
+
     async def connect(self, pw: "Playwright") -> "Browser": ...
 
     def key(self) -> object:
@@ -100,24 +107,43 @@ class LaunchSupply:
     driver: str = "playwright"
     owns_process: bool = field(default=True, init=False)
 
+    @property
+    def needs_display(self) -> bool:
+        # a headed launch on a displayless Linux host needs Xvfb; the manager provides it.
+        return not self.headless and display_needed()
+
+    def _executable(self) -> "str | None":
+        if self.executable_path is not None:
+            return self.executable_path
+        if self.channel != "chromium":
+            # a real channel (chrome/msedge) -> resolve the GENUINE installed binary (ANTI-BOT.md §5);
+            # None falls back to Playwright's own channel resolution below.
+            return real_chrome_path()
+        if self.driver == _LEAK_PATCHED_DRIVER:
+            # patchright pins its own Chromium build; point it at the installed one (the patch is in
+            # the driver, not the browser) so there is no extra download.
+            return _installed_chromium()
+        return None
+
     async def connect(self, pw: "Playwright") -> "Browser":
-        executable = self.executable_path
-        # the leak-patched driver pins its own Chromium build; point it at the installed one so it
-        # drives the same binary (the patch is in the driver, not the browser) with no extra download.
-        if (
-            executable is None
-            and self.driver == _LEAK_PATCHED_DRIVER
-            and self.channel == "chromium"
-        ):
-            executable = _installed_chromium()
+        executable = self._executable()
+        # a resolved binary overrides the channel; keep the channel only when nothing was resolved
+        # (so Playwright still tries to find e.g. a real Chrome install itself).
+        channel = None if (self.channel == "chromium" or executable is not None) else self.channel
+        # a HEADED browser must see DISPLAY: pass the current env EXPLICITLY so the browser doesn't
+        # depend on the driver process's env, which was captured when the driver started -- possibly
+        # before the manager brought up Xvfb and set DISPLAY.
+        launch_env: "dict[str, str | float | bool] | None" = (
+            {k: v for k, v in os.environ.items()} if not self.headless else None
+        )
         return await pw.chromium.launch(
             headless=self.headless,
-            # "chromium" = the bundled build; a real channel launches the genuine installed browser.
-            channel=None if self.channel == "chromium" else self.channel,
-            executable_path=executable,  # an explicit binary overrides the channel
+            channel=channel,
+            executable_path=executable,
             proxy=self.proxy.playwright() if self.proxy else None,
             args=list(_STEALTH_ARGS),
             ignore_default_args=list(_DROP_DEFAULT_ARGS),
+            env=launch_env,
         )
 
     def key(self) -> object:
@@ -141,6 +167,8 @@ class CdpSupply:
     endpoint: str
     driver: str = "playwright"
     owns_process: bool = field(default=False, init=False)
+    #: attaching to an already-running browser -- IT owns its display, so we never start one.
+    needs_display: bool = field(default=False, init=False)
 
     async def connect(self, pw: "Playwright") -> "Browser":
         return await pw.chromium.connect_over_cdp(self.endpoint)

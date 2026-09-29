@@ -26,6 +26,7 @@ from .chrome import (
     real_chrome_path,
     supply_for,
 )
+from .display import VirtualDisplay, display_needed
 from .manager import BrowserManager
 from .script import DEEP_DOM, DOM_RECORDER, OPEN_SHADOW, ScriptRegistry, default_scripts
 from .wait import apply_wait
@@ -34,6 +35,8 @@ __all__ = [
     "BrowserFetcher",
     "BrowserSession",
     "BrowserManager",
+    "VirtualDisplay",
+    "display_needed",
     "BrowserSupply",
     "LaunchSupply",
     "CdpSupply",

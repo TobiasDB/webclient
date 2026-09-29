@@ -16,10 +16,12 @@ browser abstraction -- centralised process lifecycle -- kept inside fetch, with 
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from .chrome import BrowserSupply
+from .display import VirtualDisplay, astart
 
 if TYPE_CHECKING:
     from playwright.async_api import Browser, Playwright
@@ -62,11 +64,14 @@ class BrowserManager:
         #: one Playwright runtime PER DRIVER (stock vs leak-patched), started lazily and shared.
         self._runtimes: "dict[str, Playwright]" = {}
         self._leases: "dict[object, _Lease]" = {}
+        #: the virtual display (Xvfb) for headed launches on a displayless Linux host; started lazily.
+        self._display = VirtualDisplay()
         self._lock = asyncio.Lock()
 
     async def acquire(self, supply: BrowserSupply) -> "Browser":
         """The browser for ``supply`` -- launched/attached on first use, reused (ref-count bumped)
-        thereafter. Starts the runtime for the supply's driver lazily on first use."""
+        thereafter. Starts the runtime for the supply's driver, and a virtual display for a headed
+        launch that needs one, lazily on first use."""
         async with self._lock:
             runtime = self._runtimes.get(supply.driver)
             if runtime is None:
@@ -75,6 +80,10 @@ class BrowserManager:
             key = supply.key()
             lease = self._leases.get(key)
             if lease is None:
+                if supply.needs_display:  # a headed browser on a server -> bring up Xvfb first
+                    display = await astart(self._display)
+                    if display is not None:
+                        os.environ["DISPLAY"] = display  # the browser subprocess inherits it
                 browser = await supply.connect(runtime)
                 self._leases[key] = _Lease(browser=browser, refs=1, supply=supply)
                 return browser
@@ -113,6 +122,12 @@ class BrowserManager:
             for runtime in self._runtimes.values():
                 await runtime.stop()
             self._runtimes.clear()
+            # tear down the Xvfb virtual display, if we started one, and clear the DISPLAY we set --
+            # otherwise a stale DISPLAY points at a dead server and a later headed launch crashes.
+            started = self._display.display
+            self._display.stop()
+            if started is not None and os.environ.get("DISPLAY") == started:
+                os.environ.pop("DISPLAY", None)
 
 
 __all__ = ["BrowserManager"]

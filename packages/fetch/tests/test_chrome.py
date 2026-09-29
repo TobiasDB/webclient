@@ -4,6 +4,8 @@ with a fake Playwright so no real browser is launched."""
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 
 from web.fetch import (
     BrowserFetcher,
@@ -56,6 +58,7 @@ class _FakeSupply:
     def __init__(self, owns: bool, key: str = "k") -> None:
         self.owns_process = owns
         self.driver = "playwright"
+        self.needs_display = False
         self._key = key
         self.browser = _FakeBrowser()
 
@@ -164,3 +167,23 @@ def test_real_chrome_path_returns_a_path_or_none() -> None:
     # resolves a genuine Chrome (not the bundled Chrome-for-Testing); None when none is installed.
     p = real_chrome_path()
     assert p is None or isinstance(p, str)
+
+
+def test_headed_needs_a_display_only_on_a_displayless_linux_host() -> None:
+    from web.fetch.browser import VirtualDisplay, display_needed
+
+    assert LaunchSupply(headless=True).needs_display is False  # headless never needs one
+    if os.environ.get("DISPLAY") or sys.platform != "linux":
+        # a real display (this WSLg host) or non-Linux -> no virtual display, headed uses it as-is
+        assert display_needed() is False
+        assert LaunchSupply(headless=False).needs_display is False
+        assert VirtualDisplay().start() is None  # no-op when a display already exists
+
+
+def test_real_channel_resolves_the_genuine_binary(monkeypatch: "object") -> None:
+    import web.fetch.browser.chrome as chrome
+
+    monkeypatch.setattr(chrome, "real_chrome_path", lambda: "/usr/bin/google-chrome")  # type: ignore[attr-defined]
+    assert LaunchSupply(channel="chrome")._executable() == "/usr/bin/google-chrome"
+    # a bundled Chromium under stock Playwright resolves no explicit binary (channel handles it)
+    assert LaunchSupply(channel="chromium", driver="playwright")._executable() is None
