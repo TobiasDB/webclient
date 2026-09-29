@@ -16,6 +16,7 @@ Deterministic and LLM-free; a model, if any, plugs in only as the ``search`` cal
 
 from __future__ import annotations
 
+import re
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 
@@ -194,22 +195,38 @@ def _reference(doc: Document, by: "dict[str, Flag]") -> Reference:
     )
 
 
+def _field_bonus(doc: Document, fields: "list[str]") -> float:
+    """A small score boost when the page actually SHOWS the fields the brief's schema asks for --
+    so Locate recognises the RIGHT dataset among several record lists (the schema is SHARED: Author
+    extracts these fields, Locate uses them to find them). A tiebreaker, capped so record-presence
+    still dominates; matched as whole words in the page/JSON text."""
+    if not fields:
+        return 0.0
+    hay = doc.text.lower()
+    tokens = set(re.findall(r"[a-z0-9]+", hay))
+    hits = sum(1 for f in fields if all(t in tokens for t in re.findall(r"[a-z0-9]+", f.lower())))
+    return min(2.0, hits * 0.5)
+
+
 async def locate(
     brief: "LocateBrief | str", *, resolver: Resolver, search: "Search | None" = None
 ) -> "Reference | None":
     """Find the best source for the goal and return a :class:`Reference` (or ``None`` if nothing
     holds the dataset). Pass a bare goal string for the common case. Seeds come from the brief,
     else ``search``; candidates from the brief, else a crawl; the winner is the highest dataset
-    score, then the XHR/data-API preference is applied."""
+    score (record-likeness + a schema-match bonus for the brief's fields), then the XHR/data-API
+    preference is applied. An explicit source (seeds/candidates/start_url) makes ``search``
+    irrelevant -- it is only used when none is given."""
     lb = LocateBrief(goal=brief) if isinstance(brief, str) else brief
     seeds = list(lb.seeds)
     if lb.start_url and lb.start_url not in seeds:  # a known source to seed the crawl from
         seeds.append(lb.start_url)
-    if not lb.candidates and not seeds:
+    if (
+        not lb.candidates and not seeds
+    ):  # no explicit source -> search (the qualifier, else the goal)
         if search is None:
             raise ValueError("locate needs seeds, candidates, or a search callable")
-        query = f"{lb.goal} {lb.search}".strip() if lb.search else lb.goal  # brief search qualifier
-        seeds = await search(query)
+        seeds = await search(lb.search or lb.goal)
 
     if lb.candidates:
         docs = [await resolver.resolve(Request(url=u)) for u in lb.candidates]
@@ -224,6 +241,7 @@ async def locate(
         score = _score(doc, by)
         if score <= 0.0:
             continue
+        score += _field_bonus(doc, lb.fields)  # schema-match tiebreaker (the brief's fields)
         if best is None or score > best_score:
             best, best_page, best_score = _reference(doc, by), doc, score
 

@@ -252,11 +252,36 @@ class _ClosableLlm(ScriptedLlm):
         return None
 
 
+_REPLY = (
+    'wq.doc.select_all("li.row").extract('
+    'name=wq.doc.select(".name").attr("text"), role=wq.doc.select(".role").attr("text"))'
+)
+
+
+def _brief_file(tmp_path: object, url: str) -> str:
+    """A temp brief markdown that points Locate at ``url`` (candidates: no search/crawl) with a
+    name/role schema -- so the CLI (now brief-only) can be exercised offline."""
+    from pathlib import Path
+
+    text = (
+        "---\n"
+        "name: team\n"
+        f'candidates: ["{url}"]\n'
+        "schema:\n  - name\n  - role\n"
+        "---\n"
+        "team members\n"
+    )
+    path = Path(str(tmp_path)) / "team.md"
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
 def test_cli_locate_emits_serialised_reference(
-    httpserver: HTTPServer, capsys: "pytest.CaptureFixture[str]"
+    httpserver: HTTPServer, capsys: "pytest.CaptureFixture[str]", tmp_path: object
 ) -> None:
     httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
-    rc = main(["locate", "--goal", "team", "--candidate", httpserver.url_for("/people")])
+    brief = _brief_file(tmp_path, httpserver.url_for("/people"))
+    rc = main(["locate", brief, "--no-cache"])
     out = capsys.readouterr()
     assert rc == 0
     ref = Reference.model_validate_json(out.out.strip())  # stdout is the serialised Reference
@@ -264,48 +289,60 @@ def test_cli_locate_emits_serialised_reference(
     assert "flags:" in out.err and "records:" in out.err  # reasoning went to stderr
 
 
-def test_cli_author_emits_blob_and_runs(
+def test_cli_author_locates_from_the_brief_and_runs(
     httpserver: HTTPServer,
     capsys: "pytest.CaptureFixture[str]",
     monkeypatch: "pytest.MonkeyPatch",
+    tmp_path: object,
 ) -> None:
+    # brief-only: `web author <brief>` with no cached reference locates from the brief itself.
     httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
-    reply = (
-        'wq.doc.select_all("li.row").extract('
-        'name=wq.doc.select(".name").attr("text"), role=wq.doc.select(".role").attr("text"))'
-    )
-    monkeypatch.setattr("web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(reply))
-    rc = main(
-        [
-            "author",
-            httpserver.url_for("/people"),
-            "--field",
-            "name",
-            "--field",
-            "role",
-            "--run",
-        ]
-    )
+    brief = _brief_file(tmp_path, httpserver.url_for("/people"))
+    monkeypatch.setattr("web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(_REPLY))
+    rc = main(["author", brief, "--run", "--no-cache"])
     out = capsys.readouterr()
     assert rc == 0
     Plan.from_blob(out.out.strip())  # stdout is a rebuildable wq blob
     assert "query:" in out.err and "rows:" in out.err  # reasoning + sample went to stderr
 
 
+def test_cli_locate_then_author_chain_via_cache(
+    httpserver: HTTPServer,
+    capsys: "pytest.CaptureFixture[str]",
+    monkeypatch: "pytest.MonkeyPatch",
+    tmp_path: object,
+) -> None:
+    # the run-separately chain: locate caches the Reference; author picks it up (no piping, no --ref).
+    from pathlib import Path
+
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(Path(str(tmp_path)) / "cache"))
+    brief = _brief_file(tmp_path, httpserver.url_for("/people"))
+
+    assert main(["locate", brief]) == 0  # writes the cache
+    assert "cached →" in capsys.readouterr().err
+
+    monkeypatch.setattr("web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(_REPLY))
+    assert main(["author", brief]) == 0  # reads the cached reference
+    out = capsys.readouterr()
+    assert "using the located reference" in out.err and Plan.from_blob(out.out.strip())
+
+
 def test_cli_locate_pipes_into_author(
     httpserver: HTTPServer,
     capsys: "pytest.CaptureFixture[str]",
     monkeypatch: "pytest.MonkeyPatch",
+    tmp_path: object,
 ) -> None:
-    # the composition: locate's stdout (a Reference JSON) is exactly what author --ref - consumes.
+    # the pipe form: locate's stdout (a Reference JSON) is exactly what `author --ref -` consumes.
     httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
-    rc = main(["locate", "--goal", "team", "--candidate", httpserver.url_for("/people")])
+    brief = _brief_file(tmp_path, httpserver.url_for("/people"))
+    rc = main(["locate", brief, "--no-cache"])
     located = capsys.readouterr().out.strip()
     assert rc == 0
     monkeypatch.setattr("sys.stdin", type("S", (), {"read": staticmethod(lambda: located)})())
-    reply = 'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
-    monkeypatch.setattr("web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(reply))
-    rc = main(["author", "--ref", "-", "--field", "name"])
+    monkeypatch.setattr("web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(_REPLY))
+    rc = main(["author", brief, "--ref", "-", "--no-cache"])
     assert rc == 0 and Plan.from_blob(capsys.readouterr().out.strip())
 
 

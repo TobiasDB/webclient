@@ -1,20 +1,22 @@
-"""The ``web`` CLI -- the Locate and Author phases as two composable subcommands.
+"""The ``web`` CLI -- Locate and Author, driven entirely by a BRIEF.
 
-    web locate [find-brief options]        find WHERE the dataset is  -> a Reference
-    web author (<url> | --ref -) [shape]   write the wq query that extracts it -> a query
+    web locate <brief> [entity]     find WHERE the dataset is  -> a Reference
+    web author <brief> [entity]     write the wq query that extracts it -> a query
 
-Each subcommand takes its slice of the brief as options (the FIND slice for ``locate``, the SHAPE
-slice for ``author``), mirroring :class:`~web.onboard.models.Brief`. Each prints its serialised
-ARTIFACT to **stdout** (the Reference as JSON / the query as a portable ``wq`` blob) and the
-human-readable REASONING to **stderr** (the flags with their evidence, the field schema, the query
-rendered as a chain, the advisory notes). So the two compose cleanly over a pipe -- stdout carries
-only the machine artifact::
+The brief (a packaged name -- ``news`` / ``products`` / ``people`` -- or a markdown file with YAML
+frontmatter) is the single source of truth for WHAT to get and HOW: goal + schema (shared),
+find-slice (seeds/candidates/search/…) for Locate, shape-slice (selectors/optional/hints/…) for
+Author. The optional ``entity`` targets a specific instance -- a company/site -- by folding into the
+brief's search qualifier (``web locate news BBC`` searches for BBC's news).
 
-    web locate --goal "board members" --seed https://acme.com/board \\
-      | web author --ref - --field name --field role --run
+Chaining is two easy ways:
+  * run separately -- ``web locate news BBC`` caches the located Reference; ``web author news BBC``
+    then picks it up automatically (no piping). Inspect the located source in between.
+  * pipe -- ``web locate news BBC | web author news --ref -`` (stdout is the Reference JSON).
 
-The code interface is :func:`web.onboard.locate` + :func:`web.onboard.author`; this is a thin
-wrapper over them. The model comes from ``--model`` / ``ANTHROPIC_API_KEY``.
+Each subcommand prints its serialised ARTIFACT to stdout (the Reference JSON / the wq blob) and the
+human-readable REASONING + live progress to stderr. The code interface is :func:`web.onboard.locate`
++ :func:`web.onboard.author`. The model comes from ``--model`` / ``ANTHROPIC_API_KEY``.
 """
 
 from __future__ import annotations
@@ -22,6 +24,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
+import re
 import sys
 import time
 from importlib.resources import files
@@ -88,6 +92,73 @@ class _Progress:
         return time.monotonic() - self._start
 
 
+# -- brief + entity + reference cache -------------------------------------------------------------
+
+
+def _packaged_briefs() -> "list[str]":
+    """The names of the briefs bundled with the package (``web/onboard/briefs/*.md``)."""
+    try:
+        root = files("web.onboard").joinpath("briefs")
+        return sorted(p.name[:-3] for p in root.iterdir() if p.name.endswith(".md"))
+    except Exception:
+        return []
+
+
+def _load_brief(arg: str) -> Brief:
+    """Resolve the ``<brief>`` positional: a path to a markdown file, else a packaged brief by name
+    (``web/onboard/briefs/<name>.md``; ``-``/``_`` interchangeable). See :func:`_packaged_briefs`.
+    """
+    if Path(arg).is_file():
+        return Brief.load(arg)
+    for name in {arg, arg.replace("-", "_"), arg.replace("_", "-")}:
+        res = files("web.onboard").joinpath(f"briefs/{name}.md")
+        if res.is_file():
+            return Brief.from_markdown(res.read_text(encoding="utf-8"))
+    raise SystemExit(
+        f"no brief {arg!r}: not a file, and no packaged briefs/{arg}.md. "
+        f"Available packaged briefs: {', '.join(_packaged_briefs()) or '(none)'}"
+    )
+
+
+def _apply_entity(brief: Brief, entity: "str | None") -> Brief:
+    """Fold a target ENTITY (a company/site) into the brief's search qualifier, so ``web locate news
+    BBC`` searches for BBC's news. A ``{entity}`` placeholder in the brief's ``search`` is
+    substituted; otherwise the entity is prepended to the search qualifier (else the goal). No-op
+    without an entity. (An explicit source -- seeds/candidates/start_url -- still makes search
+    irrelevant, so the entity only matters when the brief searches.)"""
+    if not entity:
+        return brief
+    if "{entity}" in brief.search:
+        search = brief.search.replace("{entity}", entity)
+    else:
+        search = f"{entity} {brief.search or brief.goal}".strip()
+    return brief.model_copy(update={"search": search})
+
+
+def _slug(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "brief"
+
+
+def _cache_path(brief: Brief, brief_arg: str, entity: "str | None") -> Path:
+    """Where a located Reference is cached, keyed by brief + entity -- so ``author`` picks up what
+    ``locate`` found. Under ``$XDG_CACHE_HOME`` (else ``~/.cache``)/``web-onboard``."""
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    key = _slug(brief.name or Path(brief_arg).stem)
+    name = key + (f"__{_slug(entity)}" if entity else "")
+    return Path(base) / "web-onboard" / f"{name}.json"
+
+
+def _reference_from_ref(ref: str) -> Reference:
+    """A Reference from ``--ref``: ``-`` reads locate's JSON from stdin (the pipe form), else a file."""
+    if ref == "-":
+        return Reference.model_validate_json(sys.stdin.read())
+    with open(ref, encoding="utf-8") as fh:
+        return Reference.model_validate_json(fh.read())
+
+
+# -- transport / resolver -------------------------------------------------------------------------
+
+
 def _resolver(
     profile_name: str, proxy: "str | None", browser_path: "str | None" = None
 ) -> Resolver:
@@ -119,42 +190,17 @@ def _resolver(
     return Resolver(profile=profile)
 
 
-def _packaged_briefs() -> "list[str]":
-    """The names of the briefs bundled with the package (``web/onboard/briefs/*.md``)."""
-    try:
-        root = files("web.onboard").joinpath("briefs")
-        return sorted(p.name[:-3] for p in root.iterdir() if p.name.endswith(".md"))
-    except Exception:
-        return []
-
-
-def _load_brief(arg: str) -> Brief:
-    """Resolve ``--brief``: a path to a markdown file, else a packaged brief by name
-    (``web/onboard/briefs/<name>.md``; ``-``/``_`` interchangeable). See :func:`_packaged_briefs`.
-    """
-    if Path(arg).is_file():
-        return Brief.load(arg)
-    for name in {arg, arg.replace("-", "_"), arg.replace("_", "-")}:
-        res = files("web.onboard").joinpath(f"briefs/{name}.md")
-        if res.is_file():
-            return Brief.from_markdown(res.read_text(encoding="utf-8"))
-    raise SystemExit(
-        f"no brief {arg!r}: not a file, and no packaged briefs/{arg}.md. "
-        f"Available packaged briefs: {', '.join(_packaged_briefs()) or '(none)'}"
-    )
-
-
-def _pairs(items: "Sequence[str] | None") -> "dict[str, str]":
-    """Parse repeated ``NAME=VALUE`` options into a mapping (a missing ``=`` maps to empty)."""
-    out: dict[str, str] = {}
-    for item in items or []:
-        name, _, value = item.partition("=")
-        out[name.strip()] = value.strip()
-    return out
-
-
 def _transport_args(sub: argparse.ArgumentParser) -> None:
-    """The transport options shared by both subcommands (profile + proxy)."""
+    """Operational options shared by both subcommands (transport + progress) -- NOT brief content."""
+    sub.add_argument(
+        "brief", help="a packaged brief name (news/products/people) or a markdown file"
+    )
+    sub.add_argument(
+        "entity",
+        nargs="?",
+        default=None,
+        help="optional: a specific target (e.g. a company) -- folds into the brief's search",
+    )
     sub.add_argument(
         "--profile",
         default="basic",
@@ -169,15 +215,16 @@ def _transport_args(sub: argparse.ArgumentParser) -> None:
         help="shorthand for --profile full_browser",
     )
     sub.add_argument(
-        "--proxy",
-        default=None,
-        help="proxy URL for all traffic (http://[user:pass@]host:port)",
+        "--proxy", default=None, help="proxy URL for all traffic (http://[user:pass@]host:port)"
     )
     sub.add_argument(
         "--browser-path",
         default=None,
         metavar="EXE",
         help="an explicit browser binary (driver/executable) for any browser tier to launch",
+    )
+    sub.add_argument(
+        "--no-cache", action="store_true", help="do not read/write the located-reference cache"
     )
     sub.add_argument(
         "-v",
@@ -218,43 +265,25 @@ def _explain_reference(ref: Reference) -> None:
         )
 
 
-def _locate_brief(args: argparse.Namespace) -> Brief:
-    """The FIND-slice Brief: a ``--brief`` markdown file (frontmatter) as the base, with any
-    explicitly-given CLI option overriding it (so a file supplies defaults, flags tune them).
-    """
-    base = _load_brief(args.brief) if args.brief else Brief()
-    updates: dict[str, object] = {}
-    if args.goal:
-        updates["goal"] = args.goal
-    if args.seed:
-        updates["seeds"] = args.seed
-    if args.candidate:
-        updates["candidates"] = args.candidate
-    if args.start_url:
-        updates["start_url"] = args.start_url
-    if args.search:
-        updates["search"] = args.search
-    if args.look:
-        updates["look"] = args.look
-    if args.ignore:
-        updates["ignore"] = args.ignore
-    if args.max_pages != 40:
-        updates["max_pages"] = args.max_pages  # 40 is the shared default
-    if args.no_prefer_api:
-        updates["prefer_api"] = False
-    return base.model_copy(update=updates)
+def _entity_arg(entity: "str | None") -> str:
+    """The entity as it would be retyped on the command line (quoted if it has spaces)."""
+    return "" if not entity else (f'"{entity}"' if " " in entity else entity)
 
 
 async def _locate(args: argparse.Namespace) -> int:
-    brief = _locate_brief(args)
+    brief = _apply_entity(_load_brief(args.brief), args.entity)
     resolver = _resolver(args.profile, args.proxy, args.browser_path)
     seeded = bool(brief.seeds or brief.candidates or brief.start_url)
+    tag = f"{brief.name or args.brief}" + (f" · {args.entity}" if args.entity else "")
     _err(
-        f"locating: {'crawling seeds' if seeded else f'searching {brief.search or brief.goal!r}'} "
-        f"then evaluating candidates (max {brief.max_pages} pages)…"
+        f"locating [{tag}]: "
+        + (
+            "crawling the brief's sources"
+            if seeded
+            else f"searching {brief.search or brief.goal!r}"
+        )
+        + f" then evaluating candidates (max {brief.max_pages} pages)…"
     )
-    # a default web-search backend (ddgs): only used when the brief gives no seeds/candidates, so
-    # `--search "BBC latest news"` (or a company in --goal) turns into seed URLs.
     try:
         with _Progress(args.verbose) as prog:
             reference = await locate(brief, resolver=resolver, search=DdgSearch(k=args.search_k))
@@ -268,31 +297,22 @@ async def _locate(args: argparse.Namespace) -> int:
     )
     if reference is None:
         _err(
-            "no source holds the dataset (nothing scored above zero); "
-            "try --seed/--candidate, or a --search term."
+            "no source holds the dataset; add seeds/candidates/start_url to the brief, "
+            "or give an entity to search for."
         )
         return 1
     _explain_reference(reference)  # reasoning -> stderr
-    print(
-        reference.model_dump_json()
-    )  # the serialised Reference -> stdout (pipe into `author --ref -`)
+    if not args.no_cache:
+        path = _cache_path(brief, args.brief, args.entity)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(reference.model_dump_json(), encoding="utf-8")
+        nxt = f"web author {args.brief}" + (f" {_entity_arg(args.entity)}" if args.entity else "")
+        _err(f"  cached →   {path}", f"  next:      {nxt}   (authors over this reference)")
+    print(reference.model_dump_json())  # the serialised Reference -> stdout (also pipeable)
     return 0
 
 
 # -- web author -----------------------------------------------------------------------------------
-
-
-def _reference_arg(args: argparse.Namespace) -> Reference:
-    """The Reference to author over: ``--ref -`` reads a locate Reference (JSON) from stdin; ``--ref
-    FILE`` from a file; else the positional URL builds a minimal Reference (Author resolves it and
-    computes its own flags, so a bare URL works -- piping locate's Reference just carries its hints).
-    """
-    if args.ref == "-":
-        return Reference.model_validate_json(sys.stdin.read())
-    if args.ref:
-        with open(args.ref, encoding="utf-8") as fh:
-            return Reference.model_validate_json(fh.read())
-    return Reference(url=args.url)
 
 
 def _explain_query(
@@ -324,36 +344,36 @@ def _explain_query(
         _err(f"  note:      {note}   (advisory: the static query cannot express this)")
 
 
-def _author_brief(args: argparse.Namespace) -> Brief:
-    """The SHAPE-slice Brief: a ``--brief`` markdown file (frontmatter, incl. its ``schema:`` ->
-    fields + descriptions) as the base, with any explicitly-given CLI option overriding it.
-    """
-    base = _load_brief(args.brief) if args.brief else Brief()
-    updates: dict[str, object] = {}
-    if args.goal:
-        updates["goal"] = args.goal
-    if args.field:
-        updates["fields"] = args.field
-    if args.describe:
-        updates["descriptions"] = _pairs(args.describe)
-    if args.select:
-        updates["selectors"] = _pairs(args.select)
-    if args.optional:
-        updates["optional"] = args.optional
-    if args.hints:
-        updates["hints"] = args.hints
-    if args.download:
-        updates["download"] = True
-    return base.model_copy(update=updates)
+async def _reference_for_author(
+    args: argparse.Namespace, brief: Brief, resolver: Resolver
+) -> "Reference | None":
+    """The Reference to author over, easiest-first: an explicit ``--ref`` (stdin/file, the pipe
+    form); else the cached Reference from a prior ``web locate <brief> [entity]`` (the run-separately
+    form); else locate it now (so ``web author`` works standalone). ``brief`` already has the entity
+    applied."""
+    if args.ref:
+        return _reference_from_ref(args.ref)
+    path = _cache_path(brief, args.brief, args.entity)
+    if not args.no_cache and path.is_file():
+        _err(f"  using the located reference: {path}")
+        return Reference.model_validate_json(path.read_text(encoding="utf-8"))
+    _err(
+        "  no located reference cached — locating first (run `web locate` to inspect it separately)…"
+    )
+    with _Progress(args.verbose):
+        return await locate(brief, resolver=resolver, search=DdgSearch())
 
 
 async def _author(args: argparse.Namespace) -> int:
-    reference = _reference_arg(args)
-    brief = _author_brief(args)
+    brief = _apply_entity(_load_brief(args.brief), args.entity)
     resolver = _resolver(args.profile, args.proxy, args.browser_path)
     llm = _build_llm(args)
-    _err(f"authoring: resolving {_short(reference.url)} then asking the model for the query…")
     try:
+        reference = await _reference_for_author(args, brief, resolver)
+        if reference is None:
+            _err("no source located to author over (nothing scored above zero).")
+            return 1
+        _err(f"authoring: resolving {_short(reference.url)} then asking the model for the query…")
         with _Progress(args.verbose):
             query, engine, notes = await build_query(reference, brief, resolver=resolver, llm=llm)
         _explain_query(reference, brief, engine, query.describe(), notes)  # reasoning -> stderr
@@ -401,120 +421,25 @@ def _build_llm(args: argparse.Namespace) -> AnthropicLlm:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="web", description="Locate a dataset and author its query."
+        prog="web",
+        description="Locate a dataset and author its query -- driven by a brief.",
+        epilog="e.g. web locate news BBC   then   web author news BBC --run",
     )
     subs = parser.add_subparsers(dest="cmd", required=True)
 
     loc = subs.add_parser("locate", help="find WHERE the dataset is (-> a Reference)")
-    loc.add_argument(
-        "--brief",
-        default=None,
-        metavar="FILE|NAME",
-        help="a brief markdown file (YAML frontmatter), or a packaged name "
-        "(news/products/people), as the base; options override it",
-    )
-    loc.add_argument("--goal", default=None, help="the dataset to find (free text)")
-    loc.add_argument(
-        "--seed",
-        action="append",
-        default=[],
-        metavar="URL",
-        help="seed URL to crawl (repeatable)",
-    )
-    loc.add_argument(
-        "--candidate",
-        action="append",
-        default=[],
-        metavar="URL",
-        help="evaluate exactly this URL, skip crawling (repeatable)",
-    )
-    loc.add_argument("--start-url", default=None, help="one known source to seed the crawl from")
-    loc.add_argument(
-        "--search",
-        default=None,
-        help="a web-search query/qualifier (e.g. a company) -- searched (with the goal) via ddgs "
-        "to seed the crawl when no --seed/--candidate is given",
-    )
+    _transport_args(loc)  # adds the `brief` + `entity` positionals too
     loc.add_argument(
         "--search-k", type=int, default=6, metavar="N", help="how many search results to seed from"
     )
-    loc.add_argument(
-        "--look",
-        action="append",
-        default=[],
-        metavar="TEXT",
-        help="page guide: prefer (repeatable)",
-    )
-    loc.add_argument(
-        "--ignore",
-        action="append",
-        default=[],
-        metavar="TEXT",
-        help="page guide: avoid (repeatable)",
-    )
-    loc.add_argument(
-        "--max-pages",
-        type=int,
-        default=40,
-        metavar="N",
-        help="crawl page budget (default 40)",
-    )
-    loc.add_argument(
-        "--no-prefer-api",
-        action="store_true",
-        help="do not prefer a live XHR/data-API over the page",
-    )
-    _transport_args(loc)
 
     aut = subs.add_parser("author", help="write the wq query that extracts the dataset")
-    aut.add_argument(
-        "--brief",
-        default=None,
-        metavar="FILE|NAME",
-        help="a brief markdown file (YAML frontmatter, incl. schema:), or a packaged name "
-        "(news/products/people), as the base; options override it",
-    )
-    aut.add_argument("url", nargs="?", help="the source URL (or use --ref)")
+    _transport_args(aut)
     aut.add_argument(
         "--ref",
         default=None,
         metavar="FILE",
-        help="a locate Reference as JSON: '-' for stdin, else a file",
-    )
-    aut.add_argument("--goal", default=None, help="what to extract (free text)")
-    aut.add_argument(
-        "--field",
-        action="append",
-        default=[],
-        metavar="NAME",
-        help="a record field (repeatable)",
-    )
-    aut.add_argument(
-        "--describe",
-        action="append",
-        default=[],
-        metavar="NAME=DESC",
-        help="what a field is (repeatable)",
-    )
-    aut.add_argument(
-        "--select",
-        action="append",
-        default=[],
-        metavar="NAME=CSS",
-        help="an explicit selector override for a field (repeatable)",
-    )
-    aut.add_argument(
-        "--optional",
-        action="append",
-        default=[],
-        metavar="NAME",
-        help="a field that may be absent (repeatable)",
-    )
-    aut.add_argument("--hints", default=None, help="structural guidance for the query author")
-    aut.add_argument(
-        "--download",
-        action="store_true",
-        help="harvest the file link(s), not parsed rows",
+        help="use this Reference instead of the cache: '-' reads locate's JSON from stdin, else a file",
     )
     aut.add_argument("--model", default=None, help="LLM model id (else the default)")
     aut.add_argument(
@@ -532,11 +457,7 @@ def _parser() -> argparse.ArgumentParser:
         help="input price ($/million tokens) -- for the spend report",
     )
     aut.add_argument(
-        "--price-output",
-        type=float,
-        default=0.0,
-        metavar="USD",
-        help="output price ($/M tokens)",
+        "--price-output", type=float, default=0.0, metavar="USD", help="output price ($/M tokens)"
     )
     aut.add_argument(
         "--price-cache-read",
@@ -553,26 +474,16 @@ def _parser() -> argparse.ArgumentParser:
         help="cache-write price ($/M tokens)",
     )
     aut.add_argument(
-        "--run",
-        action="store_true",
-        help="run the authored query and print a sample of rows",
+        "--run", action="store_true", help="run the authored query and print a sample of rows"
     )
     aut.add_argument(
-        "--sample",
-        type=int,
-        default=5,
-        metavar="N",
-        help="how many rows to print (default 5)",
+        "--sample", type=int, default=5, metavar="N", help="how many rows to print (default 5)"
     )
-    _transport_args(aut)
     return parser
 
 
 def main(argv: "Sequence[str] | None" = None) -> int:
     args = _parser().parse_args(argv)
-    if args.cmd == "author" and not args.url and not args.ref:
-        print("web author: give a URL or --ref", file=sys.stderr)
-        return 2
     runner = {"locate": _locate, "author": _author}[args.cmd]
     return asyncio.run(runner(args))
 

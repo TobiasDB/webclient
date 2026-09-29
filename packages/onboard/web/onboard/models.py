@@ -1,14 +1,25 @@
 """The typed value models the Locate/Author split flows through -- pure data, no behaviour.
 
-  * :class:`Brief`     -- the full onboarding spec (loadable from a markdown file with YAML
-    frontmatter): what dataset to FIND (goal / seeds / start_url / search / look / ignore) AND the
-    SHAPE wanted (fields / descriptions / selectors / optional / hints / download). Locate reads its
-    find-slice, Author its shape-slice.
+  * :class:`Brief`     -- the ONE onboarding spec both phases read (loadable from a markdown file
+    with YAML frontmatter). Its keys fall into three sections:
+
+      SHARED (both phases)  ``goal`` (the dataset, free text -- the markdown BODY fills it) and the
+                            ``schema`` = ``fields`` + ``descriptions``. Author EXTRACTS those fields;
+                            Locate USES them to recognise the right dataset (a page showing them
+                            scores higher). So the schema is not just an Author concern.
+      LOCATE (find WHERE)   ``seeds`` / ``candidates`` / ``start_url`` (explicit sources), ``search``
+                            (a web-search qualifier -- used ONLY when no explicit source is given, so
+                            a reference URL / resolve options make ``search`` irrelevant), ``look`` /
+                            ``ignore`` (page guides), ``max_pages``, ``prefer_api``.
+      AUTHOR (how to EXTRACT) ``selectors`` (field -> css/JSON-path override), ``optional`` (fields
+                            that may be absent), ``hints`` (structural guidance), ``download`` (the
+                            file(s) themselves, not parsed rows).
+
   * :class:`Reference` -- Locate's output / Author's input: WHERE the dataset is, plus hints.
 
-``LocateBrief`` / ``DatasetBrief`` are back-compat ALIASES of :class:`Brief` (one spec, one file).
-Keeping these as small pydantic models (not ad-hoc dicts) is what lets Locate and Author be
-independent, testable units.
+``LocateBrief`` / ``DatasetBrief`` are back-compat ALIASES of :class:`Brief` (one spec, one file):
+Locate reads the SHARED + LOCATE keys, Author the SHARED + AUTHOR keys. Keeping this a small
+pydantic model (not an ad-hoc dict) is what lets Locate and Author stay independent, testable units.
 """
 
 from __future__ import annotations
@@ -20,34 +31,36 @@ from pydantic import BaseModel, JsonValue
 
 
 class Brief(BaseModel):
-    """The onboarding spec. FIND slice (Locate): ``goal`` (free-text ask), ``seeds`` (skip web
-    search), ``candidates`` (skip crawling -- evaluate exactly these), ``start_url`` (one known
-    source to seed from), ``search`` (a web-search qualifier appended after a company name),
-    ``look`` / ``ignore`` (natural-language page guides), ``max_pages`` (crawl bound),
-    ``prefer_api`` (the XHR/data-API preference). SHAPE slice (Author): ``fields`` (record fields),
-    ``descriptions`` (field -> what it is), ``selectors`` (field -> css/JSON-path override),
-    ``optional`` (fields that may be absent), ``hints`` (structural guidance for the query author),
-    ``download`` (the file(s) themselves, not parsed rows). ``name`` / ``title`` identify it;
-    ``exit_when`` is an advisory clean-exit condition."""
+    """The onboarding spec, in three sections (see the module docstring). SHARED: ``goal`` +
+    ``fields``/``descriptions`` (the schema). LOCATE: ``seeds``/``candidates``/``start_url``/
+    ``search``/``look``/``ignore``/``max_pages``/``prefer_api``. AUTHOR: ``selectors``/``optional``/
+    ``hints``/``download``. ``name``/``title`` identify it; ``exit_when`` is an advisory exit hint.
+    """
 
-    goal: str = ""
-    # -- FIND (Locate) --
-    seeds: list[str] = []
-    candidates: list[str] = []
-    start_url: str = ""
-    search: str = ""
-    look: list[str] = []
-    ignore: list[str] = []
-    max_pages: int = 40
-    prefer_api: bool = True
-    # -- SHAPE (Author) --
-    fields: list[str] = []
-    descriptions: dict[str, str] = {}
-    selectors: dict[str, str] = {}
-    optional: list[str] = []
-    hints: str = ""
-    download: bool = False
-    # -- identity / advisory --
+    # ── SHARED (both Locate and Author read these) ──────────────────────────────────────────────
+    goal: str = ""  # the dataset, free text (the markdown body fills this)
+    fields: list[str] = []  # the record fields wanted -- Author extracts them; Locate finds them
+    descriptions: dict[str, str] = {}  # field -> what it is (a `schema:` list fills both)
+
+    # ── LOCATE (find WHERE the dataset is) ──────────────────────────────────────────────────────
+    seeds: list[str] = []  # known sources to crawl (an explicit source makes `search` irrelevant)
+    candidates: list[str] = []  # evaluate EXACTLY these URLs (skip crawling)
+    start_url: str = ""  # one known source to seed the crawl from
+    search: str = (
+        ""  # a web-search qualifier -- used ONLY when no seed/candidate/start_url is given
+    )
+    look: list[str] = []  # natural-language "prefer" page guide
+    ignore: list[str] = []  # natural-language "avoid" page guide
+    max_pages: int = 40  # crawl page bound
+    prefer_api: bool = True  # prefer a live XHR/data-API over the HTML page
+
+    # ── AUTHOR (how to EXTRACT it) ──────────────────────────────────────────────────────────────
+    selectors: dict[str, str] = {}  # field -> css/JSON-path override
+    optional: list[str] = []  # fields that may legitimately be absent
+    hints: str = ""  # structural guidance for the query author
+    download: bool = False  # harvest the file(s) themselves, not parsed rows
+
+    # ── identity / advisory ─────────────────────────────────────────────────────────────────────
     name: str = ""
     title: str = ""
     exit_when: str = ""
