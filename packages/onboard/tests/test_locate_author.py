@@ -155,6 +155,11 @@ def test_locate_llm_review_can_veto_the_only_candidate(httpserver: HTTPServer) -
     ref_yes, llm_yes = cast("tuple[Reference | None, _VerdictLlm]", _run(go("YES")))
     assert ref_yes is not None
     assert "Acme Corp" in llm_yes.prompts[0]  # the entity is handed to the model as context
+    # the review judges SOURCE fit, not single-page field completeness: a listing/index of the
+    # records is a valid source even when per-record detail is a link away (regression: a correct
+    # events listing was being rejected for not showing every field / the archived section here).
+    p = llm_yes.prompts[0]
+    assert "RIGHT SOURCE" in p and "LISTS or indexes" in p and "do not reject for truncation" in p
     ref_no, _ = cast("tuple[Reference | None, _VerdictLlm]", _run(go("NO")))
     assert ref_no is None  # model vetoed -> Locate fails (allowed)
 

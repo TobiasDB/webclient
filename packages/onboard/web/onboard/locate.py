@@ -322,17 +322,34 @@ async def _llm_review(llm: Llm, lb: "LocateBrief", page: Document, entity: str) 
     score. The verdict streams as a :class:`ReasonEvent`. On a model error, default to accept (an LLM
     outage must not sink an otherwise plausible source)."""
     skel = (
-        page.json_skeleton(max_lines=60)
+        page.json_skeleton(max_lines=120)
         if page.kind == "json"
-        else page.skeleton(max_lines=60, drop_chrome=True)
+        else page.skeleton(max_lines=120, drop_chrome=True)
     )
     want = lb.goal or "the target dataset"
     scope = f" It must be {entity}'s OWN data, not a third party's page ABOUT it." if entity else ""
     fields = ("\nExpected fields per record: " + ", ".join(lb.fields)) if lb.fields else ""
+    # Judge SOURCE fit, not single-page field completeness: a listing/index of the records IS the
+    # right source even when per-record detail (documents, long descriptions) or a secondary section
+    # (e.g. archived vs upcoming) is one link/sibling away -- the extractor follows those. Rejecting a
+    # correct listing for "not every field is visible here" is the failure this guards against; the
+    # entity check (own data vs a third party's page about it) stays.
     prompt = (
-        f"You are validating a data source. We need this dataset: {want}.{scope}{fields}\n\n"
+        f"You are choosing the SOURCE PAGE to extract a dataset from. We need this dataset: "
+        f"{want}.{scope}{fields}\n\n"
         f"Candidate page ({page.url}):\n{skel}\n\n"
-        f"Does this page actually hold the requested dataset"
+        "Judge whether this is the RIGHT SOURCE -- NOT whether every field is already visible here:\n"
+        "- ACCEPT a page that LISTS or indexes the target records (a listing, calendar, table, or "
+        "archive of them), even if the full per-record detail (documents, long descriptions, extra "
+        "values) is reached by following each record's link, and even if a secondary section (e.g. "
+        "archived vs upcoming) lives on a linked or sibling page -- the extractor follows those, you "
+        "are only picking the entry page.\n"
+        "- REJECT a page that shows only ONE record's detail when the goal asks for a set of them, a "
+        "third party's page ABOUT the entity rather than its own data, or a page unrelated to the "
+        "dataset.\n"
+        "- Truncated HTML is expected -- do not reject for truncation or for detail that would live on "
+        "a linked page.\n\n"
+        f"Is this the right source page to extract '{want}' from"
         f"{f' for {entity}' if entity else ''}? Answer YES or NO on the first line, then one short "
         f"sentence why."
     )
