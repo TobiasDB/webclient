@@ -25,11 +25,17 @@ class Step(BaseModel):
 
 
 class Plan(BaseModel):
-    """A root URL, the Reference actions that drive it, and the Document reads after ``.doc()``."""
+    """A root URL, the Reference actions that drive it, and the Document reads after ``.doc()``.
+
+    ``follow`` + ``doc_reads`` record a ``documents(column)`` join: after ``reads`` produce rows,
+    each row's ``follow`` column is a URL to resolve, and ``doc_reads`` are applied to each resolved
+    detail Document (results concatenated). ``follow=""`` means no such join (the common case)."""
 
     url: str
     actions: list[Step] = []
     reads: list[Step] = []
+    follow: str = ""            # a row column holding a detail-page URL to resolve+extract per row
+    doc_reads: list[Step] = []  # reads applied to each resolved detail Document
 
     def to_blob(self) -> str:
         """Serialise to JSON -- what API/remote dispatch ships over the wire."""

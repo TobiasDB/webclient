@@ -81,8 +81,10 @@ class Document:
         return self._read("attr", name)
 
     def project(self, **selectors: str) -> "Document":
-        """Over a ``select_all`` collection, map each element to a row dict -- each field is the
-        text of its sub-selector (``project(title='.t', price='.p')`` -> ``list[dict]``)."""
+        """Over a ``select_all`` collection, map each element to a row dict. Each field is the text
+        of its sub-selector (``project(title='.t')``), or an ATTRIBUTE with a trailing ``@attr``
+        (``project(url='a@href')`` -> that element's href, resolved absolute). ``@attr`` with no css
+        (``project(id='@data-id')``) reads the attribute off the row element itself."""
         fields: "dict[str, JsonValue]" = dict(selectors)
         return self._read("project", fields)
 
@@ -127,7 +129,17 @@ class Document:
         """Reduce each value to a regex match (``group`` of it), optionally one ``field``."""
         return self._read("regex", {"field": field, "pattern": pattern, "group": group})
 
+    def documents(self, column: str) -> "Document":
+        """Follow a URL column into detail pages: each row's ``column`` (a URL, e.g. from
+        ``project(url='a@href')``) is resolved, and the reads chained AFTER this apply to each
+        resolved Document, their results concatenated (flatMap). So a list page + its detail pages
+        extract in one plan: ``...project(url='a@href').documents('url').select_all('h1').text()``."""
+        frozen = Plan(url=self._plan.url, actions=self._plan.actions, reads=list(self._reads), follow=column)
+        return Document(self._engine, frozen, ())  # a fresh reads list -> the per-detail-doc reads
+
     def _full(self) -> Plan:
+        if self._plan.follow:  # documents() mode: plan already holds the row reads + follow column
+            return self._plan.model_copy(update={"doc_reads": list(self._reads)})
         return Plan(url=self._plan.url, actions=self._plan.actions, reads=list(self._reads))
 
     def collect(self) -> object:
@@ -190,12 +202,30 @@ class DSL:
             await session.aclose()
 
     async def run(self, plan: Plan) -> object:
-        """Execute a plan: obtain the root Document, then apply the Document reads. Reads are
-        pure/sync; a read applied to a collection (a ``select_all`` result) maps over it."""
+        """Execute a plan: obtain the root Document, apply the Document reads, then -- if this is a
+        ``documents(column)`` plan -- follow each row's URL column into a detail Document and apply
+        ``doc_reads`` to each, concatenating (flatMap)."""
         obj: object = await self._root(plan)
         for r in plan.reads:
             obj = _apply_read(obj, r)
+        if plan.follow:
+            obj = await self._follow(obj, plan.follow, plan.doc_reads)
         return obj
+
+    async def _follow(self, rows: object, column: str, doc_reads: "list[Step]") -> "list[object]":
+        """Resolve each row's ``column`` URL to a Document, apply ``doc_reads`` to it, and
+        concatenate the per-document results (flatMap). Non-list input / rows without a usable URL
+        contribute nothing."""
+        out: list[object] = []
+        for row in rows if isinstance(rows, list) else []:
+            url = row.get(column) if isinstance(row, dict) else None
+            if not isinstance(url, str) or not url:
+                continue
+            value: object = await self.resolver.resolve(Request(url=url))
+            for r in doc_reads:
+                value = _apply_read(value, r)
+            out.extend(value) if isinstance(value, list) else out.append(value)
+        return out
 
     async def aclose(self) -> None:
         await self.resolver.aclose()
@@ -213,18 +243,28 @@ def _one(obj: object, step: Step) -> object:
 
 def _project(obj: object, fields: "dict[str, JsonValue]") -> "list[dict[str, object]]":
     """Map each element of a ``select_all`` collection to a row: field -> the text of its
-    sub-selector (a per-record extraction)."""
+    sub-selector, or the ``@attr`` attribute when the spec has a trailing ``@attr`` (``a@href``);
+    an empty css before ``@`` reads the attribute off the row element itself."""
     rows = obj if isinstance(obj, list) else [obj]
     out: list[dict[str, object]] = []
     for el in rows:
         if not isinstance(el, ParsedElement):
             continue
         row: dict[str, object] = {}
-        for key, selector in fields.items():
-            sub = el.select(selector) if isinstance(selector, str) else None
-            row[key] = sub.text if sub is not None else None
+        for key, spec in fields.items():
+            row[key] = _field(el, spec) if isinstance(spec, str) else None
         out.append(row)
     return out
+
+
+def _field(el: ParsedElement, spec: str) -> "str | None":
+    """One projected field: ``"css"`` -> the sub-element's text; ``"css@attr"`` -> its attribute
+    (href/src resolved absolute); ``"@attr"`` -> the row element's own attribute."""
+    css, sep, attr = spec.partition("@")
+    target = el.select(css) if css else el
+    if target is None:
+        return None
+    return target.attr(attr) if sep else target.text
 
 
 def _apply_read(obj: object, step: Step) -> object:

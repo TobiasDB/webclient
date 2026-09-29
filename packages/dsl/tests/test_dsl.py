@@ -233,3 +233,66 @@ def test_distinct_key_tolerates_unhashable_values() -> None:
     assert isinstance(out, list)
     keyed = _apply(rows, "distinct", ["tags"])  # key = "tags" (a list-valued column)
     assert keyed == [{"tags": ["a", "b"], "id": 1}, {"tags": ["c"], "id": 3}]  # deduped by list value
+
+
+# -- project @attr + documents() follow-links (flatMap) --
+
+def test_project_at_attr_extracts_attribute(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/l").respond_with_data(
+        b"<ul><li class=item><a class=k href='/d/1'>One</a></li>"
+        b"<li class=item><a class=k href='/d/2'>Two</a></li></ul>", content_type="text/html")
+
+    async def go() -> list:
+        d = _dsl()
+        try:
+            return await (d.ref(httpserver.url_for("/l")).doc()
+                          .select_all("li.item").project(name="a.k", url="a.k@href").acollect())
+        finally:
+            await d.aclose()
+
+    rows = _run(go())
+    assert rows[0]["name"] == "One"
+    assert rows[0]["url"] == httpserver.url_for("/d/1")   # @href resolved absolute
+    assert rows[1]["url"] == httpserver.url_for("/d/2")
+
+
+def test_documents_follows_url_column_and_flatmaps(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/l").respond_with_data(
+        b"<ul><li class=item><a href='/d/1'>a</a></li><li class=item><a href='/d/2'>b</a></li></ul>",
+        content_type="text/html")
+    httpserver.expect_request("/d/1").respond_with_data(
+        b"<html><body><h1 class=t>Detail One</h1></body></html>", content_type="text/html")
+    httpserver.expect_request("/d/2").respond_with_data(
+        b"<html><body><h1 class=t>Detail Two</h1></body></html>", content_type="text/html")
+
+    async def go() -> list:
+        d = _dsl()
+        try:
+            return await (d.ref(httpserver.url_for("/l")).doc()
+                          .select_all("li.item").project(url="a@href")
+                          .documents("url")                 # follow each detail URL
+                          .select_all("h1.t").text()        # applied per detail page
+                          .acollect())
+        finally:
+            await d.aclose()
+
+    assert _run(go()) == ["Detail One", "Detail Two"]      # concatenated across detail pages
+
+
+def test_documents_plan_roundtrips_through_blob(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/l").respond_with_data(
+        b"<ul><li class=item><a href='/d/1'>a</a></li></ul>", content_type="text/html")
+    httpserver.expect_request("/d/1").respond_with_data(
+        b"<html><body><h1 class=t>Only</h1></body></html>", content_type="text/html")
+    blob = (_dsl().ref(httpserver.url_for("/l")).doc()
+            .select_all("li.item").project(url="a@href").documents("url")
+            .select_all("h1.t").text().to_blob())
+
+    async def server() -> list:
+        r = Resolver()
+        try:
+            return await run_blob(blob, r)
+        finally:
+            await r.aclose()
+
+    assert _run(server()) == ["Only"]   # follow + doc_reads survived serialisation
