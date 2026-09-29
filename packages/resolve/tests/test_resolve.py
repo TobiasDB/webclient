@@ -142,7 +142,17 @@ def test_rate_limit_spaces_same_host_requests() -> None:
 
 from web.parse import parse  # noqa: E402
 
-from web.resolve import Signal, js_challenge, login_wall, pagination, spa  # noqa: E402
+from web.resolve import (  # noqa: E402
+    Signal,
+    consent_wall,
+    iframe,
+    infinite_scroll,
+    js_challenge,
+    login_wall,
+    pagination,
+    server_error,
+    spa,
+)
 
 
 def _d(html: bytes):  # a parsed Document from bytes
@@ -161,6 +171,16 @@ def test_spa_signal_on_a_client_rendered_shell() -> None:
 def test_login_and_pagination_detectors() -> None:
     assert login_wall(_d(b"<form><input type='password'></form>")) is not None
     assert pagination(_d(b"<a rel='next' href='/2'>next</a>")) is not None
+
+
+def test_consent_scroll_iframe_and_server_error_detectors() -> None:
+    assert (
+        consent_wall(_d(b"<body><div id='cookie-consent'>Accept cookies</div></body>")) is not None
+    )
+    assert infinite_scroll(_d(b"<body><div class='infinite-scroll'></div></body>")) is not None
+    assert iframe(_d(b"<body><iframe src='/framed'></iframe></body>")) is not None
+    assert server_error(Snapshot(request=Request(url="https://x/"), status=503)) is not None
+    assert server_error(Snapshot(request=Request(url="https://x/"), status=200)) is None
 
 
 def test_js_challenge_reads_wall_copy() -> None:

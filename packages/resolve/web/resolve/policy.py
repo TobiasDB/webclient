@@ -18,6 +18,12 @@ from web.fetch import ClientPool, Fetcher, Fingerprint, Middleware
 from web.fetch import Profile as FetchProfile
 from web.fetch import Snapshot
 
+from .middleware import escalate as _escalate
+from .middleware import rate_limit as _rate_limit
+from .middleware import retry as _retry
+from .middleware import rotate as _rotate
+from .paginate import paginate_param
+
 
 @runtime_checkable
 class Policy(Protocol):
@@ -26,13 +32,6 @@ class Policy(Protocol):
     """
 
     def build(self, pool: ClientPool) -> Middleware: ...
-
-
-from .middleware import escalate as _escalate
-from .middleware import rate_limit as _rate_limit
-from .middleware import retry as _retry
-from .middleware import rotate as _rotate
-from .paginate import paginate_param
 
 
 class RetryPolicy(BaseModel):

@@ -53,15 +53,21 @@ def _next_link(doc: Document) -> "str | None":
     return el.attr("href") if el is not None else None
 
 
-def _bump(url: str, name: str, step: int) -> str:
+def _set_param(url: str, name: str, value: str) -> str:
+    """Set (or replace) one query-string parameter on ``url``, preserving the others."""
     parts = urlsplit(url)
     q = dict(parse_qsl(parts.query))
+    q[name] = value
+    return urlunsplit(parts._replace(query=urlencode(q)))
+
+
+def _bump(url: str, name: str, step: int) -> str:
+    """Advance a numeric page parameter by ``step`` (defaulting a missing/garbage value to page 1)."""
     try:
-        cur = int(q.get(name, "1"))
+        cur = int(dict(parse_qsl(urlsplit(url).query)).get(name, "1"))
     except ValueError:
         cur = 1
-    q[name] = str(cur + step)
-    return urlunsplit(parts._replace(query=urlencode(q)))
+    return _set_param(url, name, str(cur + step))
 
 
 def paginate_links(*, until: "Until | None" = None, max_pages: int = 20) -> Middleware:
@@ -170,7 +176,7 @@ def paginate_cursor(
             doc = document(snap)
             try:
                 doc.json()  # validate JSON before navigating; non-JSON ends the unfold
-            except (ValueError, _json.JSONDecodeError):
+            except ValueError:  # json.JSONDecodeError is a ValueError subclass
                 break
             page_items = doc.at(items_path)  # dotted-path dig (shared with parse -- no fork)
             if isinstance(page_items, list):
@@ -180,7 +186,7 @@ def paginate_cursor(
             cursor = doc.at(cursor_path)
             if not cursor or (until and until(doc)):
                 break
-            url = _bump_param(request.url, param, str(cursor))
+            url = _set_param(request.url, param, str(cursor))
             snap = await nxt(request.model_copy(update={"url": url}))
             last = snap
         merged = _json.dumps(items).encode("utf-8")
@@ -193,13 +199,6 @@ def paginate_cursor(
         )
 
     return mw
-
-
-def _bump_param(url: str, name: str, value: str) -> str:
-    parts = urlsplit(url)
-    q = dict(parse_qsl(parts.query))
-    q[name] = value
-    return urlunsplit(parts._replace(query=urlencode(q)))
 
 
 __all__ = [

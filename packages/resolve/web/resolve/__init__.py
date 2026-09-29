@@ -4,9 +4,13 @@ The middleware FRAMEWORK lives in web.fetch (the ``Middleware`` type + ``stack``
 owns the IMPLEMENTATIONS and composes them into per-vendor profiles. A :class:`Resolver` stacks a
 middleware chain around a base Fetcher and parses the resulting Snapshot into a Document.
 
-    from web.fetch import HttpFetcher, BrowserFetcher, Request
-    from web.resolve import Resolver, profile, rate_limit, retry, escalate, paginate_links
-    acme = Profile(ladder=(HttpFetcher(), BrowserFetcher()), rate_limit=0.5, retry=3, paginate=paginate_links())
+    from web.fetch import Request, profiles as fp
+    from web.resolve import Resolver, Profile, EscalationPolicy, RetryPolicy, RatePolicy
+    acme = Profile(
+        escalation=EscalationPolicy(tiers=(fp.BASIC, fp.BROWSER)),
+        retry=RetryPolicy(max_attempts=2),
+        rate=RatePolicy(per_host=0.5),
+    )
     doc = await Resolver(profile=acme).resolve(Request(url="https://acme.com"))
 
 The provided middlewares (retry / rate_limit / escalate / paginate_*) are REFERENCE
@@ -64,7 +68,6 @@ from .signals import (
     tabbed,
 )
 from .stops import any_of, first_n, until_empty, until_match, until_repeat
-from .tiers import ladder
 
 __all__ = [
     "Resolver",
@@ -89,7 +92,6 @@ __all__ = [
     "escalate",
     "rotate",
     "transport_remedy",
-    "ladder",
     "paginate_links",
     "paginate_param",
     "paginate_clicks",

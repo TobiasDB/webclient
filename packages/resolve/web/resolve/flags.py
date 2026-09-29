@@ -194,6 +194,11 @@ def flag_for(
         if (sig := c(doc)) is not None:
             conf *= 1.0 - min(1.0, max(0.0, sig.confidence))
             positive.append(sig)
+    # surface the supporting evidence's detail at the flag level (e.g. record_list's item_selector /
+    # count), so a caller acting on the flag has it without walking `signals`.
+    detail: dict[str, JsonValue] = {}
+    for s in positive:
+        detail.update(s.detail)
     return Flag(
         name=concl.name,
         present=conf >= threshold,
@@ -201,6 +206,7 @@ def flag_for(
         description=concl.description,
         remedy=concl.remedy,
         signals=positive,
+        detail=detail,
     )
 
 
