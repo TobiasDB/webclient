@@ -23,7 +23,7 @@ from web.dsl import WebClient, from_blob, run_blob, wq
 from web.fetch import Profile as FetchProfile
 from web.fetch import Request, fetch
 from web.onboard import onboard
-from web.resolve import Profile as ResolveProfile
+from web.resolve import EscalationPolicy, PaginatePolicy, Profile as ResolveProfile, RetryPolicy
 from web.resolve import Resolver, flags, resolve
 
 _INDEX = b"""<!doctype html><html><head>
@@ -140,9 +140,9 @@ async def sessions(base: str) -> None:
 
 
 async def pagination(base: str) -> None:
-    """Param pagination as a plain kwarg on ``resolve`` -- the merged multi-page document."""
-    _h("pagination (a plain kwarg)")
-    paged = await resolve(base + "/feed", paginate="page", max_pages=2)
+    """Param pagination as a Policy on ``resolve`` -- the merged multi-page document."""
+    _h("pagination (a policy)")
+    paged = await resolve(base + "/feed", paginate=PaginatePolicy(param="page", max_pages=2))
     print("rows across pages:", [e.text for e in paged.select_all("article.row")])
 
 
@@ -158,10 +158,11 @@ async def profiles(base: str) -> None:
     polite = bot.with_(headers={"user-agent": "acme-bot/2.0"})  # inherit + override one slot
     tagged = await fetch(base + "/echo", profile=polite)
     print("custom fetch profile:", tagged.content.decode())     # the profile's UA header was sent
-    # a resolve profile = policy; its ladder is fetch profiles (http base + browser escalation tier)
-    vendor = ResolveProfile(ladder=(bot, bot.with_(browser=True)), retry=2)
+    # a resolve profile = a POLICY bundle; escalation is the ladder of fetch identities, retry a policy
+    vendor = ResolveProfile(escalation=EscalationPolicy(tiers=(bot, bot.with_(browser=True))),
+                            retry=RetryPolicy(max_attempts=2))
     doc = await resolve(base + "/", profile=vendor)
-    print("resolve profile:", doc.metadata().title, "| ladder=http+browser(inherits UA), retry=2")
+    print("resolve profile:", doc.metadata().title, "| escalation=http+browser(inherits UA), retry=2")
 
 
 def lazy_plans(base: str) -> str:

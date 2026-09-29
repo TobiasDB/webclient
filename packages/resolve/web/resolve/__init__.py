@@ -21,8 +21,9 @@ from __future__ import annotations
 from web.fetch import Handler, Middleware, stack
 
 from . import profiles  # named default resolve policies (web.resolve.profiles.BASIC / FULL_BROWSER / ...)
-from .base import Profile, Resolver, Tier
+from .base import Profile, Resolver, Slot, Tier
 from .document import document
+from .policy import (EscalationPolicy, PaginatePolicy, Policy, RatePolicy, RetryPolicy, RotationPolicy)
 from .entry import ResolveSession, resolve
 from .models import ResolveEvent
 from .flags import Flag, flags
@@ -35,7 +36,9 @@ from .stops import any_of, first_n, until_empty, until_match, until_repeat
 from .tiers import ladder
 
 __all__ = [
-    "Resolver", "resolve", "ResolveSession", "Profile", "profiles", "Tier", "Middleware", "Handler", "stack",
+    "Resolver", "resolve", "ResolveSession", "Profile", "profiles", "Slot", "Tier",
+    "Policy", "RetryPolicy", "RatePolicy", "RotationPolicy", "PaginatePolicy", "EscalationPolicy",
+    "Middleware", "Handler", "stack",
     # middleware implementations (consumer-pluggable; these are the reference ones)
     "retry", "rate_limit", "escalate", "rotate", "ladder",
     "paginate_links", "paginate_param", "paginate_clicks", "paginate_cursor", "Until",

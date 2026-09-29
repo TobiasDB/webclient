@@ -19,7 +19,7 @@ from pydantic import JsonValue
 
 from web.fetch import Request, WebException, err
 from web.parse import Document, Element, dig
-from web.resolve import Resolver, paginate_param, profiles as _profiles
+from web.resolve import PaginatePolicy, RatePolicy, Resolver, RetryPolicy, RotationPolicy, profiles as _profiles
 
 #: the resolve-step keywords that carry a per-step POLICY (build a Resolver for that fetch); any
 #: other keyword (e.g. optional) is not a policy.
@@ -154,11 +154,11 @@ def _effective_resolver(rs: "Resolver", call: "Step | None") -> "Resolver":
     pager = opts.get("paginate")
     return Resolver(
         profile=_profiles.get(str(name)) if isinstance(name, str) else None,
-        paginate=paginate_param(pager, max_pages=int(_num(opts.get("max_pages"), 20)))
+        paginate=PaginatePolicy(param=pager, max_pages=int(_num(opts.get("max_pages"), 5)))
                  if isinstance(pager, str) else None,
-        rate_limit=_num(opts["rate_limit"], 0.0) if "rate_limit" in opts else None,
-        retry=int(_num(opts["retry"], 0)) if "retry" in opts else None,
-        rotate=bool(opts["rotate"]) if "rotate" in opts else None,
+        rate=RatePolicy(per_host=_num(opts["rate_limit"], 0.0)) if "rate_limit" in opts else None,
+        retry=RetryPolicy(max_attempts=int(_num(opts["retry"], 0))) if "retry" in opts else None,
+        rotate=RotationPolicy() if opts.get("rotate") else None,
         raise_on_error=bool(opts["raise_on_error"]) if "raise_on_error" in opts else None,
         pool=rs.pool,
     )

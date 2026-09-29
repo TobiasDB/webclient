@@ -8,7 +8,7 @@ from pytest_httpserver import HTTPServer
 
 from web.fetch import HttpFetcher, Request, Snapshot
 from web.parse import Document
-from web.resolve import Resolver, rate_limit, retry
+from web.resolve import RatePolicy, Resolver, RotationPolicy, rate_limit, retry
 
 
 def _run(coro):
@@ -89,7 +89,7 @@ def test_rate_limit_spaces_same_host_requests() -> None:
     fetcher = _FlakyFetcher(fail=0)
 
     async def go() -> float:
-        r = Resolver(ladder=(fetcher,), rate_limit=0.05)
+        r = Resolver(ladder=(fetcher,), rate=RatePolicy(per_host=0.05))
         loop = asyncio.get_running_loop()
         t0 = loop.time()
         await r.resolve(Request(url="https://x/a"))
@@ -301,10 +301,27 @@ def test_rotate_middleware_presents_fleet_identities(httpserver: HTTPServer) -> 
 
     async def go() -> None:
         async with ClientPool() as pool:  # rotation re-leases a fresh-identity backend per request
-            rs = Resolver(rotate=(fp1, fp2), pool=pool)
+            rs = Resolver(rotate=RotationPolicy(fleet=(fp1, fp2)), pool=pool)
             for _ in range(6):
                 await rs.resolve(Request(url=httpserver.url_for("/")))
 
     _run(go())
     seen = {req.headers.get("User-Agent", "") for req, _ in httpserver.log}
     assert seen and seen <= {"Agent/1", "Agent/2"}  # every request presented a fleet identity
+
+
+def test_policies_are_serialisable_and_build_middleware() -> None:
+    from web.fetch import ClientPool, profiles as fp
+    from web.resolve import EscalationPolicy, Profile, RatePolicy, RetryPolicy
+
+    # a policy is a plain (pydantic) model -> a Profile bundling them is fully serialisable
+    prof = Profile(escalation=EscalationPolicy(tiers=(fp.BASIC, fp.BROWSER), on=("403",)),
+                   retry=RetryPolicy(max_attempts=5), rate=RatePolicy(per_host=1.0))
+    assert '"max_attempts":5' in prof.retry.model_dump_json()  # type: ignore[union-attr]
+    assert prof.escalation is not None and prof.escalation.on == ("403",)
+
+    async def go() -> bool:
+        async with ClientPool() as pool:  # .build(pool) turns a policy into its middleware
+            return callable(RetryPolicy(max_attempts=2).build(pool))
+
+    assert _run(go())

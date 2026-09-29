@@ -18,8 +18,8 @@ from __future__ import annotations
 from web.fetch import ClientPool, Entry, Middleware, Request
 from web.parse import Document
 
-from .base import Profile, Resolver, Rotate, Tier
-from .paginate import paginate_param
+from .base import Profile, Resolver, Slot
+from .policy import EscalationPolicy
 
 
 class ResolveSession:
@@ -47,20 +47,19 @@ class ResolveSession:
 
 
 def resolve(request: "Request | str", *, profile: "Profile | None" = None,
-            paginate: "str | Middleware | None" = None, max_pages: int = 20,
-            rate_limit: "float | Middleware | None" = None, retry: "int | Middleware | None" = None,
-            ladder: "tuple[Tier, ...] | None" = None, middleware: "tuple[Middleware, ...]" = (),
-            rotate: "Rotate | None" = None, raise_on_error: bool = True,
+            escalation: "EscalationPolicy | None" = None, retry: "Slot | None" = None,
+            rate: "Slot | None" = None, paginate: "Slot | None" = None, rotate: "Slot | None" = None,
+            middleware: "tuple[Middleware, ...]" = (), raise_on_error: bool = True,
             pool: "ClientPool | None" = None) -> "Entry[Document, ResolveSession]":
     """Resolve ``request`` (a URL or a :class:`~web.fetch.Request`) to a Document. ``await`` it for a
-    one-shot Document, or ``async with resolve(...) as session:`` for a persistent session. Pagination
-    is a plain kwarg: ``paginate="page"`` walks the ``?page=N`` param up to ``max_pages`` (pass a
-    ready pagination middleware for other shapes). ``profile`` supplies the vendor policy bundle; the
-    politeness/retry/ladder slots override it per call. The backend is LEASED from ``pool`` (or the
-    process default) -- reused across calls, so a browser tier is not relaunched per resolve."""
-    pager = paginate_param(paginate, max_pages=max_pages) if isinstance(paginate, str) else paginate
-    resolver = Resolver(profile=profile, paginate=pager, rate_limit=rate_limit, retry=retry,
-                        ladder=ladder, middleware=middleware, rotate=rotate,
+    one-shot Document, or ``async with resolve(...) as session:`` for a persistent session. Every
+    slot is a declarative :class:`~web.resolve.policy.Policy` -- ``escalation=EscalationPolicy(...)``
+    (the transport ladder), ``retry=RetryPolicy(...)``, ``rate=RatePolicy(...)``,
+    ``paginate=PaginatePolicy(...)``, ``rotate=RotationPolicy(...)`` -- so the config stays clean and
+    serialisable; ``profile`` supplies a bundle and a per-slot kwarg overrides it. The backend is
+    LEASED from ``pool`` (or the process default), reused across calls."""
+    resolver = Resolver(profile=profile, escalation=escalation, retry=retry, rate=rate,
+                        paginate=paginate, rotate=rotate, middleware=middleware,
                         raise_on_error=raise_on_error, pool=pool)
     req = Request(url=request) if isinstance(request, str) else request
 

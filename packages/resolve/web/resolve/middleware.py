@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from urllib.parse import urlparse
 
 from web.fetch import ClientPool, Fetcher, Fingerprint, Handler, Middleware, Profile, Request, Snapshot
@@ -77,7 +77,7 @@ def _blocked(snap: Snapshot) -> bool:
     return spa(doc) is not None or anti_bot(doc) is not None
 
 
-def escalate(tiers: "list[Fetcher]", *, blocked: "Callable[[Snapshot], bool] | None" = None) -> Middleware:
+def escalate(tiers: "Sequence[Fetcher]", *, blocked: "Callable[[Snapshot], bool] | None" = None) -> Middleware:
     """Walk the escalation LADDER: after the base fetch (via ``next``), if the result looks
     blocked/insufficient, re-issue the SAME request on the next tier, and so on until one succeeds
     or the ladder is exhausted. ``tiers`` are the tiers ABOVE the base; each tier just fetches --
