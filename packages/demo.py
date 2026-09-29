@@ -20,9 +20,9 @@ from threading import Thread
 from urllib.parse import parse_qs, urlparse
 
 from web.dsl import WebClient, from_blob, run_blob, wq
-from web.fetch import Request
+from web.fetch import Request, fetch
 from web.onboard import onboard
-from web.resolve import Resolver, flags, paginate_param
+from web.resolve import Resolver, flags, resolve
 
 _INDEX = b"""<!doctype html><html><head>
   <title>Acme Widgets</title><meta name="description" content="the finest widgets">
@@ -90,18 +90,21 @@ def references(base: str) -> None:
 
 
 async def fetch_and_crawl(wc: WebClient, base: str) -> None:
-    """The context-managed WebClient IS the DSL: resolve one page, and crawl the small site."""
-    _h("fetch + crawl (WebClient owns the resolver)")
-    home = await wc.resolve(base + "/").doc().acollect()   # a resolved Document
+    """The functional entry: ``fetch(url)`` / ``resolve(url)`` -- one call, no object to build.
+    Crawl the small site through the WebClient (which owns a resolver for the session)."""
+    _h("fetch + resolve + crawl (functional entry)")
+    snap = await fetch(base + "/")                         # one-shot Snapshot (transport)
+    print("fetched:", snap.status, f"{len(snap.content)}b", snap.headers.get("content-type"))
+    home = await resolve(base + "/")                       # one-shot Document (transport + parse + policy)
     print("resolved:", home.metadata().title, "| flags:", [f.name for f in flags(home)])
     docs = await wc.crawl(base + "/", max_pages=5)
     print("crawled:", sorted((d.url.replace(base, "") or "/") for d in docs))
 
 
-async def selection_and_render(wc: WebClient, base: str) -> None:
-    """Selection + the render surfaces + JSON navigation, off a resolved Document."""
+async def selection_and_render(base: str) -> None:
+    """Selection + the render surfaces + JSON navigation, off a one-shot ``resolve(url)`` Document."""
     _h("selection + render")
-    home = await wc.resolve(base + "/").doc().acollect()
+    home = await resolve(base + "/")
     for card in home.select_all("li.product"):
         title = card.select(".name")
         price = card.select(".price")
@@ -109,27 +112,29 @@ async def selection_and_render(wc: WebClient, base: str) -> None:
     print("table:", home.tables("table"))
     print("markdown:", home.markdown(main_content_only=True).splitlines()[0])
     print("skeleton:", home.skeleton(max_lines=3, drop_chrome=True).replace("\n", " | "))
-    api = await wc.resolve(base + "/api").doc().acollect()
+    api = await resolve(base + "/api")
     print("json at('items[0].sku'):", api.at("items[0].sku"))
 
 
 async def sessions(base: str) -> None:
-    """A Resolver is a scope (``async with``); ``.session()`` opens a persistent session (cookie jar
-    / connection reuse) that survives across resolves and closes with the scope."""
-    _h("sessions (a resolver scope + a persistent session)")
-    async with Resolver() as rs:
-        session = await rs.session()
-        a = await session.resolve(base + "/about")
-        b = await session.resolve(base + "/")
-        print("session reused across:", a.metadata().title, "+", b.metadata().title)
+    """The SAME entry as a session: ``async with resolve(url) as session:`` opens a persistent
+    session (cookie jar / connection reuse) and closes it on exit -- no ``Resolver`` to construct,
+    no ``try/finally``. The fetch layer's ``fetch(url)`` has the identical one-shot/session shape."""
+    _h("sessions (one call: one-shot OR a session)")
+    async with resolve(base + "/about") as session:
+        a = await session.doc()                # the entry URL
+        b = await session.resolve(base + "/")  # more, sharing the session's state
+        print("resolve session reused across:", a.metadata().title, "+", b.metadata().title)
+    async with fetch(base + "/about") as fs:   # same shape at the transport layer
+        again = await fs.fetch(Request(url=base + "/"))
+        print("fetch session second hop:", again.status)
 
 
 async def pagination(base: str) -> None:
-    """Param pagination as a resolver policy: the merged multi-page document."""
-    _h("pagination (a resolver policy)")
-    async with Resolver(paginate=paginate_param("page", max_pages=2)) as rp:
-        paged = await rp.resolve(base + "/feed")
-        print("rows across pages:", [e.text for e in paged.select_all("article.row")])
+    """Param pagination as a plain kwarg on ``resolve`` -- the merged multi-page document."""
+    _h("pagination (a plain kwarg)")
+    paged = await resolve(base + "/feed", paginate="page", max_pages=2)
+    print("rows across pages:", [e.text for e in paged.select_all("article.row")])
 
 
 def lazy_plans(base: str) -> str:
@@ -198,7 +203,7 @@ async def main() -> None:
         references(base)
         async with WebClient() as wc:  # the DSL entry owns the resolver for the whole session
             await fetch_and_crawl(wc, base)
-            await selection_and_render(wc, base)
+            await selection_and_render(base)
             await sessions(base)
             await pagination(base)
             blob = lazy_plans(base)

@@ -1,0 +1,14 @@
+{
+  "venvPath": ".",
+  "venv": "env",
+  "extraPaths": [
+    "packages/kernel",
+    "packages/fetch",
+    "packages/parse",
+    "packages/resolve",
+    "packages/crawl",
+    "packages/dsl",
+    "packages/agent",
+    "packages/onboard"
+  ]
+}

@@ -22,6 +22,7 @@ from web.fetch import Handler, Middleware, stack
 
 from .base import Profile, Resolver
 from .document import document
+from .entry import ResolveSession, resolve
 from .events import ResolveEvent
 from .flags import Flag, flags
 from .middleware import escalate, rate_limit, retry
@@ -33,7 +34,7 @@ from .stops import any_of, first_n, until_empty, until_match, until_repeat
 from .tiers import ladder
 
 __all__ = [
-    "Resolver", "Profile", "Middleware", "Handler", "stack",
+    "Resolver", "resolve", "ResolveSession", "Profile", "Middleware", "Handler", "stack",
     # middleware implementations (consumer-pluggable; these are the reference ones)
     "retry", "rate_limit", "escalate", "ladder",
     "paginate_links", "paginate_param", "paginate_clicks", "paginate_cursor", "Until",

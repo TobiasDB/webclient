@@ -30,8 +30,9 @@ from .proxy import Proxy
 from .request import Request
 from .snapshot import Snapshot
 from .wait import Wait
+from .entry import Entry, Profile, fetch  # the functional entry (depends on the backends above)
 
 __all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "BrowserSession", "HttpSession", "Session",
-           "Script", "ScriptRegistry", "Proxy", "Pool", "Fingerprint", "CHROME", "Wait", "DOM_RECORDER",
-           "NetworkEvent", "DOMEvent", "FetchEvent", "ConsoleEvent", "Middleware", "Handler", "stack",
+           "fetch", "Entry", "Profile", "Script", "ScriptRegistry", "Proxy", "Pool", "Fingerprint", "CHROME", "Wait",
+           "DOM_RECORDER", "NetworkEvent", "DOMEvent", "FetchEvent", "ConsoleEvent", "Middleware", "Handler", "stack",
            "Recorder", "ReplayBackend"]
