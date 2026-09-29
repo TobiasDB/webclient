@@ -79,9 +79,12 @@ def _causes(exc: BaseException) -> list[BaseException]:
 
 
 def _playwright_code(exc: BaseException) -> "str | None":
-    """Classify a playwright error by type name + Chromium ``net::`` code, without importing
-    playwright (an optional dependency)."""
-    if not type(exc).__module__.startswith("playwright"):
+    """Classify a Playwright/patchright error by type name + Chromium ``net::`` code, without
+    importing either optional driver. patchright (the leak-patched fork) raises the same error
+    shapes from its own module, so both prefixes count -- otherwise a browser nav failure on the
+    default stealth profiles miscodes as the generic ``fetch.transport`` and can't be branched on.
+    """
+    if not type(exc).__module__.startswith(("playwright", "patchright")):
         return None
     if type(exc).__name__ == "TimeoutError":
         return "fetch.timeout"

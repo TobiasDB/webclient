@@ -7,8 +7,9 @@ context + page** and their whole lifecycle -- navigate with ``goto`` / ``fetch``
 with ``snapshot``, and ``aclose`` to release the page + context. Nothing outside the session
 opens or closes its page; that ownership is the point.
 
-``BrowserFetcher.fetch(request)`` is a one-shot: open a session, fetch, close. Playwright is
-imported lazily, so importing web.fetch never requires it.
+``BrowserFetcher.fetch(request)`` is a one-shot: open a session, fetch, close. This module never
+imports Playwright itself -- it delegates obtaining the browser to the shared :class:`BrowserManager`
+(``.manager``), which starts the runtime lazily, so importing web.fetch never requires it.
 """
 
 from __future__ import annotations
@@ -37,13 +38,12 @@ from .manager import BrowserManager
 from .script import ScriptRegistry, default_scripts
 from .wait import apply_wait
 
-if TYPE_CHECKING:  # playwright is an optional extra; imported lazily at runtime in _browser_ready
+if TYPE_CHECKING:  # playwright is an optional extra; the runtime is started by the BrowserManager
     from playwright.async_api import (
         Browser,
         BrowserContext,
         ConsoleMessage,
         Page,
-        Playwright,
         Response,
     )
 

@@ -6,6 +6,10 @@ Everything that drives a real browser lives here, separated from the plain-HTTP 
     :class:`BrowserSession` (a live, owned page you interact with).
   - :mod:`.chrome`   -- the browser SUPPLY: launch a local process vs attach a remote Chrome over
     CDP, plus binary resolution (:func:`real_chrome_path`, :func:`ensure_chromium`).
+  - :mod:`.manager`  -- :class:`BrowserManager`, the process-management layer: one Playwright runtime
+    per driver + a ref-counted pool of browser processes keyed by launch identity.
+  - :mod:`.display`  -- :class:`VirtualDisplay` / :func:`display_needed`: Xvfb for a headed launch on
+    a displayless Linux host.
   - :mod:`.script`   -- the page scripts the backend injects (DOM recorder, deep-DOM shadow/frame
     inlining) and the :class:`ScriptRegistry`.
   - :mod:`.wait`     -- browser readiness (``apply_wait`` / dom-stable).

@@ -55,6 +55,16 @@ class _Lease:
     supply: BrowserSupply
 
 
+async def _close_owned(lease: _Lease) -> None:
+    """Close a lease's browser IF this manager launched it (never an attached one), swallowing a
+    close error -- a browser already gone must not break teardown."""
+    if lease.supply.owns_process:
+        try:
+            await lease.browser.close()
+        except Exception:
+            pass
+
+
 class BrowserManager:
     """Owns the single Playwright runtime and a ref-counted pool of browser processes, shared across
     every :class:`BrowserFetcher` that uses this manager. Thread-safe over one event loop via an
@@ -102,22 +112,14 @@ class BrowserManager:
             lease.refs -= 1
             if lease.refs <= 0:
                 del self._leases[key]
-                if lease.supply.owns_process:
-                    try:
-                        await lease.browser.close()
-                    except Exception:  # a browser already gone must not break teardown
-                        pass
+                await _close_owned(lease)
 
     async def aclose(self) -> None:
         """Shut the whole layer: close every launched process this manager still holds (leaving any
         attached one running) and stop every driver runtime. Idempotent."""
         async with self._lock:
             for lease in self._leases.values():
-                if lease.supply.owns_process:
-                    try:
-                        await lease.browser.close()
-                    except Exception:
-                        pass
+                await _close_owned(lease)
             self._leases.clear()
             for runtime in self._runtimes.values():
                 await runtime.stop()

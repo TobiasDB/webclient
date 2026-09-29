@@ -1,4 +1,5 @@
-"""web.kernel unit tests -- the layer in isolation (it imports nothing but pydantic)."""
+"""web.fetch bus + errors unit tests -- the shared substrate (relocated from the removed web.kernel)
+in isolation."""
 
 from __future__ import annotations
 
@@ -8,15 +9,15 @@ from web.fetch import Event, EventBus, WebError, WebException, err
 
 
 class _Ev(BaseModel):
-    """A layer's event is a plain model with a topic -- it does NOT inherit a kernel base; the bus
-    routes it structurally (it satisfies the :class:`~web.kernel.Event` Protocol)."""
+    """A layer's event is a plain model with a topic -- it does NOT inherit a base class; the bus
+    routes it structurally (it satisfies the :class:`~web.fetch.Event` Protocol)."""
 
     topic: str
 
 
 def test_layer_event_satisfies_the_event_protocol_without_inheriting() -> None:
     assert isinstance(_Ev(topic="fetch"), Event)  # runtime_checkable Protocol: just needs `topic`
-    assert Event not in _Ev.__mro__  # and it does NOT inherit the kernel -- structural only
+    assert Event not in _Ev.__mro__  # and it does NOT inherit a base -- structural only
 
 
 def test_weberror_is_data_and_exception_carries_it() -> None:

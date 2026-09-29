@@ -313,6 +313,18 @@ def test_http_backend_classifies_failure_modes() -> None:
     assert codes == {"url": "fetch.url", "dns": "fetch.dns", "connect": "fetch.connect"}
 
 
+def test_classify_handles_both_playwright_and_patchright_errors() -> None:
+    # patchright (the leak-patched fork used by the default stealth profiles) raises the same error
+    # SHAPES from its OWN module -- both must classify, not fall through to generic fetch.transport.
+    from web.fetch.errors import classify
+
+    for module in ("playwright._impl._errors", "patchright._impl._errors"):
+        exc = type("Error", (Exception,), {"__module__": module})("net::ERR_NAME_NOT_RESOLVED")
+        assert classify(exc, url="https://x/").code == "fetch.dns"
+        timeout = type("TimeoutError", (Exception,), {"__module__": module})("Timeout exceeded")
+        assert classify(timeout, url="https://x/").code == "fetch.timeout"
+
+
 def test_browser_backend_never_raises_on_nav_failure() -> None:
     async def go() -> Snapshot:
         bf = BrowserFetcher()
