@@ -14,12 +14,10 @@ import time
 import httpx
 
 from .bus import emit
-
 from .errors import classify
-from .models import FetchEvent
 from .fingerprint import Fingerprint, as_fingerprint
+from .models import FetchEvent, Request, Snapshot
 from .proxy import Proxy, as_proxy
-from .models import Request, Snapshot
 
 
 class HttpFetcher:
@@ -31,12 +29,17 @@ class HttpFetcher:
     -- and this class is where it would plug in.)"""
 
     def __init__(
-        self, *, verify: bool = True, proxy: "str | Proxy | None" = None,
+        self,
+        *,
+        verify: bool = True,
+        proxy: "str | Proxy | None" = None,
         fingerprint: "bool | Fingerprint" = False,
     ) -> None:
         self._verify = verify
         self._proxy = as_proxy(proxy)
-        self._client = httpx.AsyncClient(verify=verify, proxy=self._proxy.httpx() if self._proxy else None)
+        self._client = httpx.AsyncClient(
+            verify=verify, proxy=self._proxy.httpx() if self._proxy else None
+        )
         fp = as_fingerprint(fingerprint)
         self._base_headers = fp.http_headers() if fp else {}
 
@@ -47,7 +50,12 @@ class HttpFetcher:
     async def session(self) -> "HttpSession":
         """A stateful session over its OWN httpx client (a persistent cookie jar). Async so every
         backend's ``session()`` has one shape (the browser's must be)."""
-        return HttpSession(httpx.AsyncClient(verify=self._verify, proxy=self._proxy.httpx() if self._proxy else None), self._base_headers)
+        return HttpSession(
+            httpx.AsyncClient(
+                verify=self._verify, proxy=self._proxy.httpx() if self._proxy else None
+            ),
+            self._base_headers,
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -62,15 +70,20 @@ class HttpSession:
         self._base_headers = base_headers
 
     async def fetch(self, request: Request) -> Snapshot:
-        return await _perform(self._client, request, self._base_headers)  # jar persists (not cleared)
+        return await _perform(
+            self._client, request, self._base_headers
+        )  # jar persists (not cleared)
 
     async def aclose(self) -> None:
         await self._client.aclose()
 
 
-async def _perform(client: httpx.AsyncClient, request: Request, base_headers: dict[str, str]) -> Snapshot:
+async def _perform(
+    client: httpx.AsyncClient, request: Request, base_headers: dict[str, str]
+) -> Snapshot:
     """Perform one request on ``client`` and build the Snapshot -- shared by the backend and the
-    session. Never raises for a transport failure (it is classified onto ``snapshot.error``)."""
+    session. Never raises for a transport failure (it is classified onto ``snapshot.error``).
+    """
     start = time.perf_counter()
     headers = {**base_headers, **request.headers} if base_headers else request.headers
     try:
@@ -83,11 +96,20 @@ async def _perform(client: httpx.AsyncClient, request: Request, base_headers: di
             follow_redirects=request.follow_redirects,
             timeout=request.timeout,
         )
-    except Exception as exc:  # classify; CancelledError is a BaseException, so it still propagates
-        return Snapshot(request=request, url=request.url, elapsed=time.perf_counter() - start,
-                        error=classify(exc, url=request.url))
+    except (
+        Exception
+    ) as exc:  # classify; CancelledError is a BaseException, so it still propagates
+        return Snapshot(
+            request=request,
+            url=request.url,
+            elapsed=time.perf_counter() - start,
+            error=classify(exc, url=request.url),
+        )
     set_cookies: dict[str, str] = {}
-    for hop in (*resp.history, resp):  # Set-Cookie from every hop, not just the final one
+    for hop in (
+        *resp.history,
+        resp,
+    ):  # Set-Cookie from every hop, not just the final one
         set_cookies.update(dict(hop.cookies))
     snap = Snapshot(
         request=request,
@@ -99,7 +121,11 @@ async def _perform(client: httpx.AsyncClient, request: Request, base_headers: di
         set_cookies=set_cookies,
         redirects=[str(h.url) for h in resp.history],
     )
-    emit(FetchEvent(url=snap.url, status=snap.status, elapsed=snap.elapsed, source="http"))
+    emit(
+        FetchEvent(
+            url=snap.url, status=snap.status, elapsed=snap.elapsed, source="http"
+        )
+    )
     return snap
 
 

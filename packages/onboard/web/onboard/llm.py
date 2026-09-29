@@ -16,7 +16,6 @@ from typing import Protocol, runtime_checkable
 
 import httpx
 from pydantic import BaseModel
-
 from web.fetch import WebException, err
 
 
@@ -39,9 +38,12 @@ class Usage(BaseModel):
     cache_write: int = 0
 
     def __add__(self, other: "Usage") -> "Usage":
-        return Usage(input=self.input + other.input, output=self.output + other.output,
-                     cache_read=self.cache_read + other.cache_read,
-                     cache_write=self.cache_write + other.cache_write)
+        return Usage(
+            input=self.input + other.input,
+            output=self.output + other.output,
+            cache_read=self.cache_read + other.cache_read,
+            cache_write=self.cache_write + other.cache_write,
+        )
 
 
 class Pricing(BaseModel):
@@ -56,8 +58,12 @@ class Pricing(BaseModel):
 
     def cost(self, usage: Usage) -> float:
         """The USD cost of ``usage`` at these prices."""
-        return (usage.input * self.input + usage.output * self.output
-                + usage.cache_read * self.cache_read + usage.cache_write * self.cache_write) / 1_000_000
+        return (
+            usage.input * self.input
+            + usage.output * self.output
+            + usage.cache_read * self.cache_read
+            + usage.cache_write * self.cache_write
+        ) / 1_000_000
 
 
 class RateLimit(BaseModel):
@@ -84,12 +90,20 @@ class AnthropicLlm:
     :class:`~web.fetch.WebException` (``llm.request`` / ``llm.api``)."""
 
     def __init__(
-        self, *, model: str = "claude-sonnet-5", auth: str | None = None,
-        max_tokens: int = 1024, base_url: str = "https://api.anthropic.com",
-        system: str | None = None, rate: "RateLimit | None" = None, pricing: "Pricing | None" = None,
+        self,
+        *,
+        model: str = "claude-sonnet-5",
+        auth: str | None = None,
+        max_tokens: int = 1024,
+        base_url: str = "https://api.anthropic.com",
+        system: str | None = None,
+        rate: "RateLimit | None" = None,
+        pricing: "Pricing | None" = None,
     ) -> None:
         self._model = model
-        self._auth = auth if auth is not None else os.environ.get("ANTHROPIC_API_KEY", "")
+        self._auth = (
+            auth if auth is not None else os.environ.get("ANTHROPIC_API_KEY", "")
+        )
         self._max_tokens = max_tokens
         self._system = system
         self._rate = rate or RateLimit()
@@ -115,9 +129,12 @@ class AnthropicLlm:
     def _meter(self, data: object) -> None:
         """Fold one response's ``usage`` into the running totals + spend."""
         raw = data.get("usage") if isinstance(data, dict) else None
-        one = Usage(input=_int(raw, "input_tokens"), output=_int(raw, "output_tokens"),
-                    cache_read=_int(raw, "cache_read_input_tokens"),
-                    cache_write=_int(raw, "cache_creation_input_tokens"))
+        one = Usage(
+            input=_int(raw, "input_tokens"),
+            output=_int(raw, "output_tokens"),
+            cache_read=_int(raw, "cache_read_input_tokens"),
+            cache_write=_int(raw, "cache_creation_input_tokens"),
+        )
         self.usage = self.usage + one
         self.spent_usd += self._pricing.cost(one)
         self.calls += 1
@@ -140,13 +157,18 @@ class AnthropicLlm:
         except httpx.HTTPError as exc:
             raise WebException(err("llm.request", str(exc))) from exc
         if resp.status_code != 200:
-            raise WebException(err("llm.api", f"HTTP {resp.status_code}", body=resp.text[:500]))
+            raise WebException(
+                err("llm.api", f"HTTP {resp.status_code}", body=resp.text[:500])
+            )
         data: object = resp.json()
         self._meter(data)
         content = data.get("content", []) if isinstance(data, dict) else []
         parts = [
-            block["text"] for block in content
-            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
+            block["text"]
+            for block in content
+            if isinstance(block, dict)
+            and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
         ]
         return "".join(parts)
 

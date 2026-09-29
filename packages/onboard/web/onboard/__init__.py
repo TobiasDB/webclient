@@ -19,11 +19,10 @@ web.onboard.agent's pluggable ``Driver``). web.onboard.agent stays LLM-agnostic 
 from __future__ import annotations
 
 from pydantic import BaseModel
-
-from .agent import Author, Selection, extract
 from web.crawl import Crawler, Goal
 from web.resolve import Resolver
 
+from .agent import Author, Selection, extract
 from .author import Authored as AuthoredQuery
 from .author import author, authored, build_query
 from .behaviours import Behaviour, apply_behaviours, behaviour, register_behaviour
@@ -45,11 +44,19 @@ class Onboarded(BaseModel):
 
 
 async def onboard(
-    goal: str, seeds: "str | list[str]", *, resolver: Resolver, llm: Llm, max_pages: int = 40,
+    goal: str,
+    seeds: "str | list[str]",
+    *,
+    resolver: Resolver,
+    llm: Llm,
+    max_pages: int = 40,
 ) -> Onboarded:
     """Crawl the seeds, author a row extraction (agent + llm) on the first page that yields data,
     then apply it across every crawled page and aggregate the rows."""
-    docs = [doc async for doc in Crawler(resolver).crawl(Goal(start=seeds, max_pages=max_pages))]
+    docs = [
+        doc
+        async for doc in Crawler(resolver).crawl(Goal(start=seeds, max_pages=max_pages))
+    ]
 
     selection: "Selection | None" = None
     for doc in docs:  # author once, on the first page that produces rows
@@ -61,15 +68,23 @@ async def onboard(
         return Onboarded(pages=len(docs))
 
     rows: list[dict[str, "str | None"]] = []
-    for doc in docs:  # apply the one Selection everywhere; non-matching pages contribute nothing
+    for (
+        doc
+    ) in (
+        docs
+    ):  # apply the one Selection everywhere; non-matching pages contribute nothing
         for row in extract(doc, selection):
             rows.append({**row, "_source": doc.url})
     return Onboarded(rows=rows, selection=selection, pages=len(docs))
 
 
 async def locate_and_author(
-    goal: "str | LocateBrief", brief: "DatasetBrief | None" = None, *,
-    resolver: Resolver, llm: Llm, search: "Search | None" = None,
+    goal: "str | LocateBrief",
+    brief: "DatasetBrief | None" = None,
+    *,
+    resolver: Resolver,
+    llm: Llm,
+    search: "Search | None" = None,
 ) -> "Query | None":
     """The thin composition ``author ∘ locate``: find the best source for ``goal`` (:func:`locate`,
     deterministic) and, if one is found, write the extraction query for it (:func:`author`, driven
@@ -81,11 +96,38 @@ async def locate_and_author(
     return await author(reference, brief, resolver=resolver, llm=llm)
 
 
-__all__ = ["onboard", "Onboarded", "Llm", "AnthropicLlm", "Usage", "Pricing", "RateLimit", "llm_driver",
-           # the reusable Locate + Author phases and their value models
-           "locate", "author", "authored", "build_query", "locate_and_author",
-           "Reference", "Brief", "LocateBrief", "DatasetBrief", "AuthoredQuery", "Search", "data_api_endpoints",
-           # the natural-language patterns knowledge + the safe query compiler
-           "PATTERNS_GUIDE", "author_prompt", "Query", "QueryError", "parse_query", "reroot",
-           # the flag/signal-keyed behaviours (advisory notes over the authored query)
-           "Behaviour", "behaviour", "register_behaviour", "apply_behaviours"]
+__all__ = [
+    "onboard",
+    "Onboarded",
+    "Llm",
+    "AnthropicLlm",
+    "Usage",
+    "Pricing",
+    "RateLimit",
+    "llm_driver",
+    # the reusable Locate + Author phases and their value models
+    "locate",
+    "author",
+    "authored",
+    "build_query",
+    "locate_and_author",
+    "Reference",
+    "Brief",
+    "LocateBrief",
+    "DatasetBrief",
+    "AuthoredQuery",
+    "Search",
+    "data_api_endpoints",
+    # the natural-language patterns knowledge + the safe query compiler
+    "PATTERNS_GUIDE",
+    "author_prompt",
+    "Query",
+    "QueryError",
+    "parse_query",
+    "reroot",
+    # the flag/signal-keyed behaviours (advisory notes over the authored query)
+    "Behaviour",
+    "behaviour",
+    "register_behaviour",
+    "apply_behaviours",
+]

@@ -23,7 +23,16 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from web.fetch import ClientPool, Entry, Fetcher, Middleware, Request, Snapshot, WebException, err
+from web.fetch import (
+    ClientPool,
+    Entry,
+    Fetcher,
+    Middleware,
+    Request,
+    Snapshot,
+    WebException,
+    err,
+)
 from web.parse import Document
 
 from .base import Profile, Resolver, Slot
@@ -54,16 +63,24 @@ class ResolveSession:
 
     def __init__(self, resolver: Resolver, live: Fetcher, request: Request) -> None:
         self._resolver = resolver
-        self._live = live  # the base tier's live fetch session (a browser session == a _Page)
+        self._live = (
+            live  # the base tier's live fetch session (a browser session == a _Page)
+        )
         self._request = request
-        self._doc: "Document | None" = None  # memo for the HTTP (no-live-page) case only
+        self._doc: "Document | None" = (
+            None  # memo for the HTTP (no-live-page) case only
+        )
 
     def _page(self) -> _Page:
         """The live page, or a clear error when this session's base transport is not a browser."""
         if isinstance(self._live, _Page):
             return self._live
-        raise WebException(err("resolve.no_browser",
-                               "interaction needs a browser-base profile (this session is HTTP-only)"))
+        raise WebException(
+            err(
+                "resolve.no_browser",
+                "interaction needs a browser-base profile (this session is HTTP-only)",
+            )
+        )
 
     async def doc(self) -> Document:
         """The session's CURRENT page as a Document -- the resolve analogue of a fetch session's
@@ -81,7 +98,9 @@ class ResolveSession:
 
     async def goto(self, request: "Request | str") -> "ResolveSession":
         """Navigate the live page to ``request`` (chainable). Then ``doc()`` / interact."""
-        await self._page().goto(Request(url=request) if isinstance(request, str) else request)
+        await self._page().goto(
+            Request(url=request) if isinstance(request, str) else request
+        )
         return self
 
     async def click(self, selector: str, *, human: bool = False) -> "ResolveSession":
@@ -108,11 +127,19 @@ class ResolveSession:
         await self._resolver.aclose()
 
 
-def resolve(request: "Request | str", *, profile: "Profile | None" = None,
-            escalation: "EscalationPolicy | None" = None, retry: "Slot | None" = None,
-            rate: "Slot | None" = None, paginate: "Slot | None" = None, rotate: "Slot | None" = None,
-            middleware: "tuple[Middleware, ...]" = (), raise_on_error: bool = True,
-            pool: "ClientPool | None" = None) -> "Entry[Document, ResolveSession]":
+def resolve(
+    request: "Request | str",
+    *,
+    profile: "Profile | None" = None,
+    escalation: "EscalationPolicy | None" = None,
+    retry: "Slot | None" = None,
+    rate: "Slot | None" = None,
+    paginate: "Slot | None" = None,
+    rotate: "Slot | None" = None,
+    middleware: "tuple[Middleware, ...]" = (),
+    raise_on_error: bool = True,
+    pool: "ClientPool | None" = None,
+) -> "Entry[Document, ResolveSession]":
     """Resolve ``request`` (a URL or a :class:`~web.fetch.Request`) to a Document. ``await`` it for a
     one-shot Document, or ``async with resolve(...) as session:`` for a persistent session. Every
     slot is a declarative :class:`~web.resolve.policy.Policy` -- ``escalation=EscalationPolicy(...)``
@@ -120,9 +147,17 @@ def resolve(request: "Request | str", *, profile: "Profile | None" = None,
     ``paginate=PaginatePolicy(...)``, ``rotate=RotationPolicy(...)`` -- so the config stays clean and
     serialisable; ``profile`` supplies a bundle and a per-slot kwarg overrides it. The backend is
     LEASED from ``pool`` (or the process default), reused across calls."""
-    resolver = Resolver(profile=profile, escalation=escalation, retry=retry, rate=rate,
-                        paginate=paginate, rotate=rotate, middleware=middleware,
-                        raise_on_error=raise_on_error, pool=pool)
+    resolver = Resolver(
+        profile=profile,
+        escalation=escalation,
+        retry=retry,
+        rate=rate,
+        paginate=paginate,
+        rotate=rotate,
+        middleware=middleware,
+        raise_on_error=raise_on_error,
+        pool=pool,
+    )
     req = Request(url=request) if isinstance(request, str) else request
 
     async def one_shot() -> Document:
@@ -133,8 +168,12 @@ def resolve(request: "Request | str", *, profile: "Profile | None" = None,
 
     async def open_session() -> ResolveSession:
         session_resolver = await resolver.session()
-        live = session_resolver.base  # the base tier's live fetch session (a browser == a _Page)
-        if isinstance(live, _Page):  # position the live page at the entry URL (mirrors `fetch()`)
+        live = (
+            session_resolver.base
+        )  # the base tier's live fetch session (a browser == a _Page)
+        if isinstance(
+            live, _Page
+        ):  # position the live page at the entry URL (mirrors `fetch()`)
             await live.goto(req)
         return ResolveSession(session_resolver, live, req)
 

@@ -19,10 +19,9 @@ from collections.abc import Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import JsonValue
-
-from web.fetch import BrowserFetcher, Handler, Middleware, Request, Snapshot
-from web.fetch import err
+from web.fetch import BrowserFetcher, Handler, Middleware, Request, Snapshot, err
 from web.parse import Document
+
 from .document import document
 
 #: stop the unfold after a page when this holds (see :mod:`.stops`).
@@ -39,12 +38,20 @@ def _merge(snaps: list[Snapshot]) -> Snapshot:
     parts: list[str] = []
     for s in snaps:
         body = document(s).select("body")
-        parts.append(body.inner_html if body is not None else s.content.decode("utf-8", "replace"))
-    combined = ("<!doctype html><html><body>" + "".join(parts) + "</body></html>").encode("utf-8")
-    return snaps[0].model_copy(update={
-        "content": combined,
-        "events": [e for s in snaps for e in s.events],
-    })
+        parts.append(
+            body.inner_html
+            if body is not None
+            else s.content.decode("utf-8", "replace")
+        )
+    combined = (
+        "<!doctype html><html><body>" + "".join(parts) + "</body></html>"
+    ).encode("utf-8")
+    return snaps[0].model_copy(
+        update={
+            "content": combined,
+            "events": [e for s in snaps for e in s.events],
+        }
+    )
 
 
 def _next_link(doc: Document) -> "str | None":
@@ -72,7 +79,12 @@ def paginate_links(*, until: "Until | None" = None, max_pages: int = 20) -> Midd
         for _ in range(max_pages - 1):
             doc = document(snap)
             nxt_url = _next_link(doc)
-            if not snap.ok or nxt_url is None or nxt_url in seen or (until and until(doc)):
+            if (
+                not snap.ok
+                or nxt_url is None
+                or nxt_url in seen
+                or (until and until(doc))
+            ):
                 break
             seen.add(nxt_url)
             snap = await nxt(request.model_copy(update={"url": nxt_url}))
@@ -82,9 +94,16 @@ def paginate_links(*, until: "Until | None" = None, max_pages: int = 20) -> Midd
     return mw
 
 
-def paginate_param(name: str = "page", *, step: int = 1, until: "Until | None" = None, max_pages: int = 20) -> Middleware:
+def paginate_param(
+    name: str = "page",
+    *,
+    step: int = 1,
+    until: "Until | None" = None,
+    max_pages: int = 20,
+) -> Middleware:
     """PARAM strategy: increment a query parameter (``?page=2``). No next link, so ``until`` (or
-    ``max_pages``) decides where to stop -- an out-of-range page returns no items, not an error."""
+    ``max_pages``) decides where to stop -- an out-of-range page returns no items, not an error.
+    """
 
     async def mw(request: Request, nxt: Handler) -> Snapshot:
         snap, url = await nxt(request), request.url
@@ -101,8 +120,12 @@ def paginate_param(name: str = "page", *, step: int = 1, until: "Until | None" =
 
 
 def paginate_clicks(
-    browser: BrowserFetcher, more: str, *,
-    until: "Until | None" = None, settle: float = 0.3, max_clicks: int = 20,
+    browser: BrowserFetcher,
+    more: str,
+    *,
+    until: "Until | None" = None,
+    settle: float = 0.3,
+    max_clicks: int = 20,
 ) -> Middleware:
     """CLICK strategy: drive ONE live page, clicking the ``more`` control until it is gone, then
     return the final accumulated Snapshot. No new URL, so this middleware handles the request via
@@ -112,7 +135,9 @@ def paginate_clicks(
         try:
             session = await browser.session()  # the session owns the page
         except Exception as exc:
-            return Snapshot(request=request, url=request.url, error=err("fetch.transport", str(exc)))
+            return Snapshot(
+                request=request, url=request.url, error=err("fetch.transport", str(exc))
+            )
         try:
             await session.goto(request)
             for _ in range(max_clicks):
@@ -123,7 +148,9 @@ def paginate_clicks(
                 await asyncio.sleep(settle)
             return await session.snapshot()
         except Exception as exc:  # a nav/interaction failure is data, not a raise
-            return Snapshot(request=request, url=request.url, error=err("fetch.transport", str(exc)))
+            return Snapshot(
+                request=request, url=request.url, error=err("fetch.transport", str(exc))
+            )
         finally:
             await session.aclose()
 
@@ -131,7 +158,12 @@ def paginate_clicks(
 
 
 def paginate_cursor(
-    *, cursor_path: str, param: str, items_path: str = "", until: "Until | None" = None, max_pages: int = 50,
+    *,
+    cursor_path: str,
+    param: str,
+    items_path: str = "",
+    until: "Until | None" = None,
+    max_pages: int = 50,
 ) -> Middleware:
     """CURSOR strategy for JSON APIs: read a next-cursor token from the response envelope
     (``cursor_path``, a dotted path) and re-issue with it as the ``param`` query parameter, until
@@ -151,7 +183,9 @@ def paginate_cursor(
                 doc.json()  # validate JSON before navigating; non-JSON ends the unfold
             except (ValueError, _json.JSONDecodeError):
                 break
-            page_items = doc.at(items_path)  # dotted-path dig (shared with parse -- no fork)
+            page_items = doc.at(
+                items_path
+            )  # dotted-path dig (shared with parse -- no fork)
             if isinstance(page_items, list):
                 items.extend(page_items)
             elif page_items is not None:
@@ -163,8 +197,13 @@ def paginate_cursor(
             snap = await nxt(request.model_copy(update={"url": url}))
             last = snap
         merged = _json.dumps(items).encode("utf-8")
-        return last.model_copy(update={"content": merged, "url": request.url,
-                                       "headers": {**last.headers, "content-type": "application/json"}})
+        return last.model_copy(
+            update={
+                "content": merged,
+                "url": request.url,
+                "headers": {**last.headers, "content-type": "application/json"},
+            }
+        )
 
     return mw
 
@@ -176,4 +215,10 @@ def _bump_param(url: str, name: str, value: str) -> str:
     return urlunsplit(parts._replace(query=urlencode(q)))
 
 
-__all__ = ["paginate_links", "paginate_param", "paginate_clicks", "paginate_cursor", "Until"]
+__all__ = [
+    "paginate_links",
+    "paginate_param",
+    "paginate_clicks",
+    "paginate_cursor",
+    "Until",
+]

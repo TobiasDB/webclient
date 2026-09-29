@@ -33,7 +33,9 @@ def _match_len(pattern: str, path: str) -> int:
 class Robots:
     """Parsed robots rules for our agent: ``(allow, path-pattern)`` rules + advertised sitemap URLs."""
 
-    rules: list[tuple[bool, str]] = field(default_factory=list)  # (is_allow, path_pattern)
+    rules: list[tuple[bool, str]] = field(
+        default_factory=list
+    )  # (is_allow, path_pattern)
     sitemaps: list[str] = field(default_factory=list)
 
     def allowed(self, url: str) -> bool:
@@ -41,7 +43,9 @@ class Robots:
         Allow; no match means allowed (robots defaults to permit)."""
         parts = urlsplit(url)
         path = parts.path or "/"
-        if parts.query:  # robots matches against path + query (so /*.pdf$ won't block /a.pdf?x=1)
+        if (
+            parts.query
+        ):  # robots matches against path + query (so /*.pdf$ won't block /a.pdf?x=1)
             path += "?" + parts.query
         best_len, best_allow = -1, True
         for is_allow, pattern in self.rules:
@@ -80,7 +84,9 @@ def parse_robots(text: str, *, agent: str = "*") -> Robots:
 async def robots(resolver: Resolver, base: str, *, agent: str = "*") -> Robots:
     """Fetch and parse ``/robots.txt`` for ``base``'s origin (an empty/failed fetch = no rules)."""
     parts = urlsplit(base)
-    doc = await resolver.resolve(Request(url=urljoin(f"{parts.scheme}://{parts.netloc}", "/robots.txt")))
+    doc = await resolver.resolve(
+        Request(url=urljoin(f"{parts.scheme}://{parts.netloc}", "/robots.txt"))
+    )
     return parse_robots(doc.text, agent=agent)
 
 

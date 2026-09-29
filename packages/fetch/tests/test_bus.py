@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pydantic import BaseModel
-
 from web.fetch import Event, EventBus, WebError, WebException, err
 
 
@@ -15,8 +14,12 @@ class _Ev(BaseModel):
 
 
 def test_layer_event_satisfies_the_event_protocol_without_inheriting() -> None:
-    assert isinstance(_Ev(topic="fetch"), Event)  # runtime_checkable Protocol: just needs `topic`
-    assert Event not in _Ev.__mro__  # and it does NOT inherit the kernel -- structural only
+    assert isinstance(
+        _Ev(topic="fetch"), Event
+    )  # runtime_checkable Protocol: just needs `topic`
+    assert (
+        Event not in _Ev.__mro__
+    )  # and it does NOT inherit the kernel -- structural only
 
 
 def test_weberror_is_data_and_exception_carries_it() -> None:
@@ -33,7 +36,9 @@ def test_bus_delivers_by_prefix_and_swallows_handler_errors() -> None:
     bus = EventBus()
     seen: list[str] = []
     bus.subscribe("fetch", lambda ev: seen.append(ev.topic))
-    bus.subscribe("", lambda ev: (_ for _ in ()).throw(RuntimeError("boom")))  # never breaks emit
+    bus.subscribe(
+        "", lambda ev: (_ for _ in ()).throw(RuntimeError("boom"))
+    )  # never breaks emit
     all_seen: list[str] = []
     sub = bus.subscribe("", lambda ev: all_seen.append(ev.topic))
 

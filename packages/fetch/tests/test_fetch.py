@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 
 from pytest_httpserver import HTTPServer
-
 from web.fetch import Fetcher, HttpFetcher, Request, Snapshot
 
 
@@ -76,7 +75,8 @@ def test_browser_executes_js_a_static_fetch_cannot(httpserver: HTTPServer) -> No
     httpserver.expect_request("/j").respond_with_data(
         b"<html><body><div id='root'></div>"
         b"<script>document.getElementById('root').textContent='REND'+'ERED'</script></body></html>",
-        content_type="text/html")  # the string is BUILT at runtime -> not literally in the source
+        content_type="text/html",
+    )  # the string is BUILT at runtime -> not literally in the source
 
     async def go() -> tuple[bytes, bytes]:
         static = await HttpFetcher().fetch(Request(url=httpserver.url_for("/j")))
@@ -89,21 +89,25 @@ def test_browser_executes_js_a_static_fetch_cannot(httpserver: HTTPServer) -> No
 
     static_c, rendered_c = _run(go())
     assert b"RENDERED" not in static_c  # httpx sees the empty shell
-    assert b"RENDERED" in rendered_c    # the browser ran the script
+    assert b"RENDERED" in rendered_c  # the browser ran the script
 
 
 def test_live_page_actions_return_self_and_snapshot(httpserver: HTTPServer) -> None:
     httpserver.expect_request("/f").respond_with_data(
         b"<html><body><input id='q'>"
         b"<button id='go' onclick=\"document.body.setAttribute('data-done', document.getElementById('q').value)\">go</button>"
-        b"</body></html>", content_type="text/html")
+        b"</body></html>",
+        content_type="text/html",
+    )
 
     async def go() -> bytes:
         bf = BrowserFetcher()
         try:
             session = await bf.session()  # the session owns the page
             await session.goto(Request(url=httpserver.url_for("/f")))
-            driven = await (await session.type("#q", "hello")).click("#go")  # actions return Self
+            driven = await (await session.type("#q", "hello")).click(
+                "#go"
+            )  # actions return Self
             assert isinstance(driven, BrowserSession)
             snap = await driven.snapshot()
             await session.aclose()  # closing the session closes the page it owns
@@ -120,7 +124,9 @@ from web.fetch import DOMEvent, NetworkEvent  # noqa: E402
 
 
 def test_browser_fetch_captures_network_events(httpserver: HTTPServer) -> None:
-    httpserver.expect_request("/n").respond_with_data(b"<html><body>hi</body></html>", content_type="text/html")
+    httpserver.expect_request("/n").respond_with_data(
+        b"<html><body>hi</body></html>", content_type="text/html"
+    )
 
     async def go() -> list[NetworkEvent]:
         bf = BrowserFetcher()
@@ -131,13 +137,16 @@ def test_browser_fetch_captures_network_events(httpserver: HTTPServer) -> None:
         return [e for e in snap.events if isinstance(e, NetworkEvent)]
 
     nets = _run(go())
-    assert any(e.url.endswith("/n") and e.status == 200 for e in nets)  # the main navigation captured
+    assert any(
+        e.url.endswith("/n") and e.status == 200 for e in nets
+    )  # the main navigation captured
 
 
 def test_actions_are_recorded_as_dom_events(httpserver: HTTPServer) -> None:
     httpserver.expect_request("/d").respond_with_data(
         b"<html><body><button id='go' onclick=\"document.body.appendChild(document.createElement('p'))\">go</button></body></html>",
-        content_type="text/html")
+        content_type="text/html",
+    )
 
     async def go() -> list[DOMEvent]:
         bf = BrowserFetcher()  # default DOM_RECORDER installed
@@ -152,15 +161,20 @@ def test_actions_are_recorded_as_dom_events(httpserver: HTTPServer) -> None:
         return [e for e in snap.events if isinstance(e, DOMEvent)]
 
     doms = _run(go())
-    assert doms and any(r["type"] == "childList" and r["added"] >= 1 for e in doms for r in e.records)
+    assert doms and any(
+        r["type"] == "childList" and r["added"] >= 1 for e in doms for r in e.records
+    )
 
 
 def test_http_fingerprint_sends_browser_headers(httpserver: HTTPServer) -> None:
     seen = {}
+
     def echo(req):
         from werkzeug.wrappers import Response
+
         seen["ua"] = req.headers.get("User-Agent", "")
         return Response(b"ok", content_type="text/html")
+
     httpserver.expect_request("/f").respond_with_handler(echo)
 
     async def go(fingerprint: bool) -> str:
@@ -171,19 +185,23 @@ def test_http_fingerprint_sends_browser_headers(httpserver: HTTPServer) -> None:
         finally:
             await f.aclose()
 
-    assert "Chrome" in _run(go(True))       # fingerprint backend sends a browser UA
+    assert "Chrome" in _run(go(True))  # fingerprint backend sends a browser UA
     assert "Chrome" not in _run(go(False))  # plain backend does not
 
 
 def test_custom_fingerprint_drives_ua_and_client_hints(httpserver: HTTPServer) -> None:
     from web.fetch import Fingerprint
+
     seen: dict[str, str] = {}
+
     def echo(req):
         from werkzeug.wrappers import Response
+
         seen["ua"] = req.headers.get("User-Agent", "")
         seen["lang"] = req.headers.get("Accept-Language", "")
         seen["plat"] = req.headers.get("Sec-Ch-Ua-Platform", "")
         return Response(b"ok", content_type="text/html")
+
     httpserver.expect_request("/f").respond_with_handler(echo)
 
     fp = Fingerprint(user_agent="MyBot/2.0", accept_language="fr-FR", platform="Linux")
@@ -196,20 +214,22 @@ def test_custom_fingerprint_drives_ua_and_client_hints(httpserver: HTTPServer) -
             await f.aclose()
 
     _run(go())
-    assert seen["ua"] == "MyBot/2.0"          # the identity's own UA, not the Chrome default
+    assert seen["ua"] == "MyBot/2.0"  # the identity's own UA, not the Chrome default
     assert seen["lang"] == "fr-FR"
-    assert seen["plat"] == '"Linux"'          # client hints stay coherent with the identity
+    assert seen["plat"] == '"Linux"'  # client hints stay coherent with the identity
 
 
 # -- replay: record a live run's network stream, re-serve it offline (no HAR) --
 
-from web.fetch import Recorder, ReplayBackend  # noqa: E402
 from web.fetch import NetworkEvent  # noqa: E402
 from web.fetch import Trace  # noqa: E402
+from web.fetch import Recorder, ReplayBackend  # noqa: E402
 
 
 def test_record_then_replay_offline(httpserver: HTTPServer) -> None:
-    httpserver.expect_request("/p").respond_with_data(b"<h1>recorded</h1>", content_type="text/html")
+    httpserver.expect_request("/p").respond_with_data(
+        b"<h1>recorded</h1>", content_type="text/html"
+    )
 
     async def record() -> list[NetworkEvent]:
         rec = Recorder(HttpFetcher())
@@ -225,18 +245,27 @@ def test_record_then_replay_offline(httpserver: HTTPServer) -> None:
 
     async def replay() -> tuple[bytes, int]:
         rb = ReplayBackend(events)
-        hit = await rb.fetch(Request(url=httpserver.url_for("/p")))     # served from the recording
-        miss = await rb.fetch(Request(url="https://drifted.example/x"))  # not recorded -> drift
+        hit = await rb.fetch(
+            Request(url=httpserver.url_for("/p"))
+        )  # served from the recording
+        miss = await rb.fetch(
+            Request(url="https://drifted.example/x")
+        )  # not recorded -> drift
         return hit.content, miss.status
 
     content, miss_status = _run(replay())
-    assert content == b"<h1>recorded</h1>"  # offline, deterministic (no second server hit)
+    assert (
+        content == b"<h1>recorded</h1>"
+    )  # offline, deterministic (no second server hit)
     assert miss_status == 599  # drift is visible, not a silent real fetch
 
 
 def test_replay_backend_is_a_fetcher() -> None:
     from web.fetch import Fetcher
-    assert isinstance(ReplayBackend([]), Fetcher) and isinstance(Recorder(HttpFetcher()), Fetcher)
+
+    assert isinstance(ReplayBackend([]), Fetcher) and isinstance(
+        Recorder(HttpFetcher()), Fetcher
+    )
 
 
 def test_http_backend_classifies_failure_modes() -> None:
@@ -244,9 +273,15 @@ def test_http_backend_classifies_failure_modes() -> None:
         f = HttpFetcher()
         out = {}
         try:  # each distinct failure -> a distinct, stable code (never raises)
-            out["url"] = (await f.fetch(Request(url="ftp://nope/x"))).error.code            # unsupported scheme
-            out["dns"] = (await f.fetch(Request(url="http://no.such.host.invalid/x", timeout=2.0))).error.code
-            out["connect"] = (await f.fetch(Request(url="http://127.0.0.1:9/x", timeout=2.0))).error.code
+            out["url"] = (
+                await f.fetch(Request(url="ftp://nope/x"))
+            ).error.code  # unsupported scheme
+            out["dns"] = (
+                await f.fetch(Request(url="http://no.such.host.invalid/x", timeout=2.0))
+            ).error.code
+            out["connect"] = (
+                await f.fetch(Request(url="http://127.0.0.1:9/x", timeout=2.0))
+            ).error.code
         finally:
             await f.aclose()
         return out
@@ -264,7 +299,11 @@ def test_browser_backend_never_raises_on_nav_failure() -> None:
             await bf.aclose()
 
     snap = _run(go())
-    assert not snap.ok and snap.error is not None and snap.error.code in ("fetch.connect", "fetch.dns")
+    assert (
+        not snap.ok
+        and snap.error is not None
+        and snap.error.code in ("fetch.connect", "fetch.dns")
+    )
 
 
 # -- sessions: state ownership (http cookie jar; the browser session owns its page) --
@@ -272,14 +311,18 @@ def test_browser_backend_never_raises_on_nav_failure() -> None:
 from web.fetch import HttpSession, Session  # noqa: E402
 
 
-def test_http_session_persists_cookies_but_one_shot_fetch_does_not(httpserver: HTTPServer) -> None:
+def test_http_session_persists_cookies_but_one_shot_fetch_does_not(
+    httpserver: HTTPServer,
+) -> None:
     from werkzeug.wrappers import Response
 
     httpserver.expect_request("/login").respond_with_response(
-        Response(b"ok", headers={"Set-Cookie": "sid=abc; Path=/"}))
+        Response(b"ok", headers={"Set-Cookie": "sid=abc; Path=/"})
+    )
 
     def echo(req: object) -> "Response":
         return Response(("sid=" + req.cookies.get("sid", "")).encode(), content_type="text/plain")  # type: ignore[attr-defined]
+
     httpserver.expect_request("/me").respond_with_handler(echo)
 
     async def session_flow() -> bytes:
@@ -287,8 +330,10 @@ def test_http_session_persists_cookies_but_one_shot_fetch_does_not(httpserver: H
         s = await f.session()  # stateful: the jar persists
         assert isinstance(s, (HttpSession, Session))
         try:
-            await s.fetch(Request(url=httpserver.url_for("/login")))   # sets sid
-            me = await s.fetch(Request(url=httpserver.url_for("/me")))  # jar sends it back
+            await s.fetch(Request(url=httpserver.url_for("/login")))  # sets sid
+            me = await s.fetch(
+                Request(url=httpserver.url_for("/me"))
+            )  # jar sends it back
             return me.content
         finally:
             await s.aclose()
@@ -304,7 +349,7 @@ def test_http_session_persists_cookies_but_one_shot_fetch_does_not(httpserver: H
             await f.aclose()
 
     assert _run(session_flow()) == b"sid=abc"  # session carried the cookie
-    assert _run(one_shot_flow()) == b"sid="    # one-shot did not
+    assert _run(one_shot_flow()) == b"sid="  # one-shot did not
 
 
 # -- script registry: enable/disable capture without rebuilding the backend --
@@ -315,7 +360,8 @@ from web.fetch import ScriptRegistry  # noqa: E402
 def test_script_registry_disables_capture(httpserver: HTTPServer) -> None:
     httpserver.expect_request("/d").respond_with_data(
         b"<html><body><button id='go' onclick=\"document.body.appendChild(document.createElement('p'))\">go</button></body></html>",
-        content_type="text/html")
+        content_type="text/html",
+    )
 
     async def go(enabled: bool) -> list[DOMEvent]:
         bf = BrowserFetcher()
@@ -331,19 +377,28 @@ def test_script_registry_disables_capture(httpserver: HTTPServer) -> None:
             await bf.aclose()
         return [e for e in snap.events if isinstance(e, DOMEvent)]
 
-    assert _run(go(enabled=True))    # recorder on -> DOM events captured
+    assert _run(go(enabled=True))  # recorder on -> DOM events captured
     assert _run(go(enabled=False)) == []  # disabled -> nothing captured
 
 
 def test_proxy_renders_for_each_backend() -> None:
     from web.fetch import BrowserFetcher, HttpFetcher, Proxy
 
-    p = Proxy(server="http://gw:8080", username="u", password="p@ss", bypass="localhost")
-    assert p.httpx() == "http://u:p%40ss@gw:8080"                      # auth embedded, percent-encoded
-    assert p.playwright() == {"server": "http://gw:8080", "username": "u",
-                              "password": "p@ss", "bypass": "localhost"}
+    p = Proxy(
+        server="http://gw:8080", username="u", password="p@ss", bypass="localhost"
+    )
+    assert p.httpx() == "http://u:p%40ss@gw:8080"  # auth embedded, percent-encoded
+    assert p.playwright() == {
+        "server": "http://gw:8080",
+        "username": "u",
+        "password": "p@ss",
+        "bypass": "localhost",
+    }
     # backends accept a Proxy (or a bare string) without error
-    assert HttpFetcher(proxy=p) is not None and HttpFetcher(proxy="http://gw:8080") is not None
+    assert (
+        HttpFetcher(proxy=p) is not None
+        and HttpFetcher(proxy="http://gw:8080") is not None
+    )
     assert BrowserFetcher(proxy=p) is not None
 
 
@@ -351,18 +406,26 @@ def test_pool_bounds_concurrency() -> None:
     from web.fetch import Pool
 
     class _Slow:  # a backend that tracks how many fetches overlap
-        def __init__(self): self.max_overlap = 0; self.now = 0
+        def __init__(self):
+            self.max_overlap = 0
+            self.now = 0
+
         async def fetch(self, request: Request) -> Snapshot:
-            self.now += 1; self.max_overlap = max(self.max_overlap, self.now)
+            self.now += 1
+            self.max_overlap = max(self.max_overlap, self.now)
             await asyncio.sleep(0.02)
             self.now -= 1
             return Snapshot(request=request, status=200)
-        async def aclose(self): pass
+
+        async def aclose(self):
+            pass
 
     async def go() -> tuple[int, int]:
         slow = _Slow()
         pool = Pool(slow, limit=2)
-        await asyncio.gather(*[pool.fetch(Request(url=f"https://x/{i}")) for i in range(8)])
+        await asyncio.gather(
+            *[pool.fetch(Request(url=f"https://x/{i}")) for i in range(8)]
+        )
         await pool.aclose()
         return slow.max_overlap, pool.peak
 
@@ -375,14 +438,18 @@ def test_pool_bounds_concurrency() -> None:
 from web.fetch import ConsoleEvent, Wait  # noqa: E402
 
 
-def test_wait_selector_catches_late_content_domcontentloaded_misses(httpserver: HTTPServer) -> None:
+def test_wait_selector_catches_late_content_domcontentloaded_misses(
+    httpserver: HTTPServer,
+) -> None:
     # content is injected 400ms after parse; a 'selector' wait blocks for it, domcontentloaded is
     # too early. The rendered element is quoted (<p class="row">), the script's literal is not, so
     # this marker is present ONLY when the injection actually rendered.
     httpserver.expect_request("/spa").respond_with_data(
         b"<html><body><div id=app></div><script>"
         b"setTimeout(()=>{document.getElementById('app').innerHTML='<p class=row>late</p>'},400)"
-        b"</script></body></html>", content_type="text/html")
+        b"</script></body></html>",
+        content_type="text/html",
+    )
 
     async def go(wait):
         bf = BrowserFetcher(wait=wait)
@@ -391,13 +458,19 @@ def test_wait_selector_catches_late_content_domcontentloaded_misses(httpserver: 
         finally:
             await bf.aclose()
 
-    assert b'<p class="row">late' in _run(go(Wait(until="selector", selector=".row")))  # waited -> present
-    assert b'<p class="row">late' not in _run(go(Wait(until="domcontentloaded")))        # too early -> shell
+    assert b'<p class="row">late' in _run(
+        go(Wait(until="selector", selector=".row"))
+    )  # waited -> present
+    assert b'<p class="row">late' not in _run(
+        go(Wait(until="domcontentloaded"))
+    )  # too early -> shell
 
 
 def test_wait_dom_stable_returns_on_a_static_page(httpserver: HTTPServer) -> None:
     # dom_stable settles once the node count holds; a static page settles quickly and snapshots fine
-    httpserver.expect_request("/s").respond_with_data(b"<html><body><h1>done</h1></body></html>", content_type="text/html")
+    httpserver.expect_request("/s").respond_with_data(
+        b"<html><body><h1>done</h1></body></html>", content_type="text/html"
+    )
 
     async def go():
         bf = BrowserFetcher(wait=Wait(until="dom_stable", quiet=0.2))
@@ -410,11 +483,15 @@ def test_wait_dom_stable_returns_on_a_static_page(httpserver: HTTPServer) -> Non
 
 
 def test_captures_xhr_bodies_and_console(httpserver: HTTPServer) -> None:
-    httpserver.expect_request("/api").respond_with_data(b'{"n": 42}', content_type="application/json")
+    httpserver.expect_request("/api").respond_with_data(
+        b'{"n": 42}', content_type="application/json"
+    )
     httpserver.expect_request("/x").respond_with_data(
         b"<html><body><script>"
         b"console.log('hello-console'); fetch('/api').then(r=>r.json());"
-        b"</script></body></html>", content_type="text/html")
+        b"</script></body></html>",
+        content_type="text/html",
+    )
 
     async def go():
         bf = BrowserFetcher(wait=Wait(until="networkidle"))
@@ -426,28 +503,30 @@ def test_captures_xhr_bodies_and_console(httpserver: HTTPServer) -> None:
     snap = _run(go())
     nets = [e for e in snap.events if isinstance(e, NetworkEvent)]
     api = [e for e in nets if e.url.endswith("/api")]
-    assert api and b'"n": 42' in api[0].body                     # xhr/fetch response body captured
+    assert api and b'"n": 42' in api[0].body  # xhr/fetch response body captured
     consoles = [e for e in snap.events if isinstance(e, ConsoleEvent)]
-    assert any("hello-console" in e.text for e in consoles)      # console message captured
+    assert any("hello-console" in e.text for e in consoles)  # console message captured
 
 
 def test_live_actions_scroll_evaluate_screenshot(httpserver: HTTPServer) -> None:
     httpserver.expect_request("/p").respond_with_data(
-        b"<html><body style='height:3000px'><h1>tall</h1></body></html>", content_type="text/html")
+        b"<html><body style='height:3000px'><h1>tall</h1></body></html>",
+        content_type="text/html",
+    )
 
     async def go():
         bf = BrowserFetcher()
         try:
             s = await bf.session()
             await s.goto(Request(url=httpserver.url_for("/p")))
-            await s.scroll()                                     # to the bottom
-            y = await s.evaluate("window.scrollY")               # a read returns the JS value
-            png = await s.screenshot()                           # bytes
+            await s.scroll()  # to the bottom
+            y = await s.evaluate("window.scrollY")  # a read returns the JS value
+            png = await s.screenshot()  # bytes
             await s.aclose()
             return y, png
         finally:
             await bf.aclose()
 
     y, png = _run(go())
-    assert y > 0                                                # the page actually scrolled
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"                       # a real PNG
+    assert y > 0  # the page actually scrolled
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"  # a real PNG

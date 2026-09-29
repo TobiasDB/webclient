@@ -21,13 +21,16 @@ from web.dsl import LazyCollection, wq
 from .models import DatasetBrief, Reference
 
 #: a query modifier sees the recorded collection plus the reference/brief context.
-_Modify = Callable[[LazyCollection[object], Reference, DatasetBrief], LazyCollection[object]]
+_Modify = Callable[
+    [LazyCollection[object], Reference, DatasetBrief], LazyCollection[object]
+]
 
 
 @dataclass(frozen=True)
 class Behaviour:
     """A flag/signal -> a query modifier and/or an advisory note. ``modify`` reshapes the query
-    (``None`` = advice only); ``note`` is guidance Author surfaces (a pager / interaction needed)."""
+    (``None`` = advice only); ``note`` is guidance Author surfaces (a pager / interaction needed).
+    """
 
     flag: str
     note: str = ""
@@ -45,14 +48,18 @@ def register_behaviour(b: Behaviour) -> Behaviour:
 
 def behaviour(flag: str, note: str = "") -> "Callable[[_Modify], _Modify]":
     """Register a query-MODIFYING behaviour for ``flag`` (decorates the modifier)."""
+
     def deco(fn: _Modify) -> _Modify:
         register_behaviour(Behaviour(flag, note, fn))
         return fn
+
     return deco
 
 
 @behaviour("record_list")
-def _drop_empty_rows(q: LazyCollection[object], reference: Reference, brief: DatasetBrief) -> LazyCollection[object]:
+def _drop_empty_rows(
+    q: LazyCollection[object], reference: Reference, brief: DatasetBrief
+) -> LazyCollection[object]:
     """A detected record region often includes blank scaffolding siblings -- drop rows whose first
     requested field came back empty, so the dataset is the records, not the frame."""
     if brief.fields:
@@ -61,21 +68,49 @@ def _drop_empty_rows(q: LazyCollection[object], reference: Reference, brief: Dat
 
 
 # advisory-only behaviours: the remedy is resolver- or browser-side, not a static-plan change.
-register_behaviour(Behaviour("paginated", note="the listing is paginated -- resolve with a "
-                             "paginating profile (paginate_links / paginate_param) to span pages"))
-register_behaviour(Behaviour("infinite_scroll", note="the listing grows on scroll -- use a "
-                             "browser profile with a scroll/Load-more loop (paginate_clicks)"))
-register_behaviour(Behaviour("consent_wall", note="a consent banner may overlay the content -- "
-                             "dismiss it first (a browser interaction) before reading"))
-register_behaviour(Behaviour("tabbed", note="some records sit behind tabs that populate on click "
-                             "-- drive each tab (a browser interaction) to capture them all"))
-register_behaviour(Behaviour("iframe", note="the content sits in an iframe -- descend into the "
-                             "framed source (a browser render inlines it)"))
+register_behaviour(
+    Behaviour(
+        "paginated",
+        note="the listing is paginated -- resolve with a "
+        "paginating profile (paginate_links / paginate_param) to span pages",
+    )
+)
+register_behaviour(
+    Behaviour(
+        "infinite_scroll",
+        note="the listing grows on scroll -- use a "
+        "browser profile with a scroll/Load-more loop (paginate_clicks)",
+    )
+)
+register_behaviour(
+    Behaviour(
+        "consent_wall",
+        note="a consent banner may overlay the content -- "
+        "dismiss it first (a browser interaction) before reading",
+    )
+)
+register_behaviour(
+    Behaviour(
+        "tabbed",
+        note="some records sit behind tabs that populate on click "
+        "-- drive each tab (a browser interaction) to capture them all",
+    )
+)
+register_behaviour(
+    Behaviour(
+        "iframe",
+        note="the content sits in an iframe -- descend into the "
+        "framed source (a browser render inlines it)",
+    )
+)
 
 
-def apply_behaviours(q: LazyCollection[object], reference: Reference, brief: DatasetBrief) -> "tuple[LazyCollection[object], list[str]]":
+def apply_behaviours(
+    q: LazyCollection[object], reference: Reference, brief: DatasetBrief
+) -> "tuple[LazyCollection[object], list[str]]":
     """Apply every registered behaviour whose flag/signal fired on ``reference``: run its query
-    modifier (if any) and collect its note. Returns the modified query and the advisory notes."""
+    modifier (if any) and collect its note. Returns the modified query and the advisory notes.
+    """
     fired = set(reference.flags) | set(reference.signals)
     notes: list[str] = []
     for b in _BEHAVIOURS:

@@ -33,6 +33,7 @@ class Request(BaseModel):
 # -- capture events: what a browser fetch records onto a Snapshot (plain models with a ``topic``,
 # routed structurally by the bus -- they do NOT inherit a base). --------------------------------
 
+
 class FetchEvent(BaseModel):
     """One fetch a backend performed: the URL, resulting status, and how long it took. ``source``
     names the backend (e.g. ``"http"`` / ``"browser"``)."""
@@ -46,7 +47,8 @@ class FetchEvent(BaseModel):
 
 class NetworkEvent(BaseModel):
     """One response seen during a fetch (method, URL, status, resource type). Carries the response
-    ``body`` when recorded, which is what makes the network stream replayable -- no separate HAR."""
+    ``body`` when recorded, which is what makes the network stream replayable -- no separate HAR.
+    """
 
     topic: str = "network"
     method: str = ""
@@ -83,7 +85,8 @@ class Snapshot(BaseModel):
     """The raw result of performing a :class:`Request`: request + response bytes + transport
     metadata + captured events. Pure data -- no ``httpx``/``playwright`` type crosses it, and it
     does NOT sniff the kind or decode a charset (that is web.parse). ``error`` is set only on a
-    TRANSPORT failure (no response) -- a 404 is a valid Snapshot with ``error is None``."""
+    TRANSPORT failure (no response) -- a 404 is a valid Snapshot with ``error is None``.
+    """
 
     request: Request
     url: str = ""  # the final URL after redirects (== request.url when there were none)
@@ -93,7 +96,9 @@ class Snapshot(BaseModel):
     elapsed: float = 0.0
     set_cookies: dict[str, str] = {}
     redirects: list[str] = []  # the intermediate URLs, in order
-    events: list[CaptureEvent] = []  # captured during the fetch (browser: network/DOM/console)
+    events: list[CaptureEvent] = (
+        []
+    )  # captured during the fetch (browser: network/DOM/console)
     error: WebError | None = None
 
     @property
@@ -131,7 +136,8 @@ class Script(BaseModel):
 class Fetcher(Protocol):
     """Performs one request and returns its Snapshot. Never raises for a transport failure (that
     becomes ``snapshot.error``); does transport only. HTTP / Browser / Replay all implement it, so
-    callers depend on the interface, not on httpx/playwright. Close with :meth:`aclose`."""
+    callers depend on the interface, not on httpx/playwright. Close with :meth:`aclose`.
+    """
 
     async def fetch(self, request: Request) -> Snapshot: ...
 
@@ -143,12 +149,25 @@ class Session(Protocol):
     """A stateful, resource-owning fetch handle. ``fetch`` performs a request within the session
     (state persists); ``aclose`` releases everything it owns. Page ownership lives on the session
     (the key lesson from the old client): a live browser page belongs to a session and dies with
-    it. A backend's one-shot ``fetch`` is a session opened and closed for one request."""
+    it. A backend's one-shot ``fetch`` is a session opened and closed for one request.
+    """
 
     async def fetch(self, request: Request) -> Snapshot: ...
 
     async def aclose(self) -> None: ...
 
 
-__all__ = ["Request", "Snapshot", "Wait", "Until", "Script", "Fetcher", "Session",
-           "FetchEvent", "NetworkEvent", "DOMEvent", "ConsoleEvent", "CaptureEvent"]
+__all__ = [
+    "Request",
+    "Snapshot",
+    "Wait",
+    "Until",
+    "Script",
+    "Fetcher",
+    "Session",
+    "FetchEvent",
+    "NetworkEvent",
+    "DOMEvent",
+    "ConsoleEvent",
+    "CaptureEvent",
+]

@@ -47,8 +47,11 @@ def _run_sync(coro: "Coroutine[object, object, object]") -> object:
     return out[0]
 
 
-def _drain(coro: "Coroutine[object, object, object]", out: "list[object]",
-           err: "list[BaseException]") -> None:
+def _drain(
+    coro: "Coroutine[object, object, object]",
+    out: "list[object]",
+    err: "list[BaseException]",
+) -> None:
     """The worker body: run ``coro`` on its own loop, capturing the result or the exception."""
     try:
         out.append(asyncio.run(coro))
@@ -89,8 +92,13 @@ class Expr:
 
     def __call__(self, *args: object, **kwargs: object) -> "Expr":
         """Record a call step (its args/kwargs captured as plan args)."""
-        return self._extend(Step(kind="call", args=[to_arg(a) for a in args],
-                                 kwargs={k: to_arg(v) for k, v in kwargs.items()}))
+        return self._extend(
+            Step(
+                kind="call",
+                args=[to_arg(a) for a in args],
+                kwargs={k: to_arg(v) for k, v in kwargs.items()},
+            )
+        )
 
     def _op(self, name: str, other: object = _MISSING) -> "Expr":
         """Record a binary/unary operator as an ``op`` step -- the shared builder behind the dunders."""
@@ -128,8 +136,10 @@ class Expr:
 
     def _coerce(self, what: str) -> NoReturn:
         """The shared error for a Python coercion (truth/len/iter) attempted on a lazy expr."""
-        raise TypeError(f"a lazy expression has no {what}: it records, it does not run. "
-                        "Use it inside extract(...) / filter(...) or with `& | ~`.")
+        raise TypeError(
+            f"a lazy expression has no {what}: it records, it does not run. "
+            "Use it inside extract(...) / filter(...) or with `& | ~`."
+        )
 
     def __bool__(self) -> bool:
         return self._coerce("truth value")
@@ -141,7 +151,9 @@ class Expr:
         return self._coerce("iterator")
 
     # -- evaluation: the four dispatch modes ---------------------------------
-    async def acollect(self, root: object = None, *, resolver: "Resolver | None" = None) -> object:
+    async def acollect(
+        self, root: object = None, *, resolver: "Resolver | None" = None
+    ) -> object:
         """ASYNC dispatch: walk the plan on the caller's loop and return the materialised result --
         smart about its shape (extracted rows -> ``list[dict]``, a field chain -> a list of values,
         a single field -> its value). ``root`` roots a context plan (a URL / Document); a
@@ -151,14 +163,17 @@ class Expr:
 
         return await arun(self._plan, root, resolver=resolver or self._bound)
 
-    def collect(self, root: object = None, *, resolver: "Resolver | None" = None) -> object:
+    def collect(
+        self, root: object = None, *, resolver: "Resolver | None" = None
+    ) -> object:
         """SYNC dispatch: :meth:`acollect` run to completion (blocks). Works from any context --
         plain code or inside a running loop (see :func:`_run_sync`)."""
         return _run_sync(self.acollect(root, resolver=resolver))
 
     def to_blob(self) -> str:
         """SERVICE/API dispatch: this expression's plan as a portable blob (see
-        :meth:`~web.dsl.plan.Plan.to_blob`); rebuild + run it with :func:`~web.dsl.run.run_blob`."""
+        :meth:`~web.dsl.plan.Plan.to_blob`); rebuild + run it with :func:`~web.dsl.run.run_blob`.
+        """
         return self._plan.to_blob()
 
     def describe(self) -> str:
@@ -174,7 +189,9 @@ def to_arg(value: object) -> Arg:
     (evaluated per element at run time), any other value a literal arg."""
     if isinstance(value, Expr):
         return Arg(plan=value._plan)
-    return Arg(value=cast(JsonValue, value))  # a literal arg must be JSON (it rides the wire blob)
+    return Arg(
+        value=cast(JsonValue, value)
+    )  # a literal arg must be JSON (it rides the wire blob)
 
 
 def lazy(cls: type[T], *, plan: Plan | None = None) -> T:
@@ -184,7 +201,8 @@ def lazy(cls: type[T], *, plan: Plan | None = None) -> T:
 
 def from_plan(plan: "Plan | dict[str, object] | str") -> Expr:
     """Rebuild an ``Expr`` from its wire form -- a ``Plan``, its dict, or a ``to_blob`` string --
-    validating its names first (the wire safety boundary for the service/remote modes)."""
+    validating its names first (the wire safety boundary for the service/remote modes).
+    """
     if isinstance(plan, str):
         plan = Plan.from_blob(plan)
     elif isinstance(plan, dict):
@@ -195,7 +213,8 @@ def from_plan(plan: "Plan | dict[str, object] | str") -> Expr:
 
 def from_blob(blob: str) -> Expr:
     """Rebuild an ``Expr`` from a :meth:`~web.dsl.plan.Plan.to_blob` string, validated -- the
-    LLM-authoring path: write a plan, encode it, rebuild + validate + pretty-print before running."""
+    LLM-authoring path: write a plan, encode it, rebuild + validate + pretty-print before running.
+    """
     return from_plan(blob)
 
 

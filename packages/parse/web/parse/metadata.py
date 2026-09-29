@@ -26,9 +26,9 @@ class Metadata(BaseModel):
     title: str | None = None
     description: str | None = None
     canonical: str | None = None
-    og: dict[str, str] = {}          # OpenGraph (og:*) properties
-    ld_json: list[JSON] = []         # parsed application/ld+json blocks
-    feeds: list[str] = []            # RSS/Atom feed URLs (absolute)
+    og: dict[str, str] = {}  # OpenGraph (og:*) properties
+    ld_json: list[JSON] = []  # parsed application/ld+json blocks
+    feeds: list[str] = []  # RSS/Atom feed URLs (absolute)
 
 
 def _content(doc: "Document", css: str) -> str | None:
@@ -60,12 +60,20 @@ def metadata(doc: "Document") -> Metadata:
     return Metadata(
         title=title,
         description=_content(doc, "meta[name=description]") or og.get("og:description"),
-        canonical=urljoin(doc.url, canonical_el.attr("href")) if canonical_el is not None and canonical_el.attr("href") else None,
+        canonical=(
+            urljoin(doc.url, canonical_el.attr("href"))
+            if canonical_el is not None and canonical_el.attr("href")
+            else None
+        ),
         og=og,
         ld_json=ld,
-        feeds=[urljoin(doc.url, e.attr("href") or "")
-               for e in doc.select_all("link[type='application/rss+xml'], link[type='application/atom+xml']")
-               if e.attr("href")],
+        feeds=[
+            urljoin(doc.url, e.attr("href") or "")
+            for e in doc.select_all(
+                "link[type='application/rss+xml'], link[type='application/atom+xml']"
+            )
+            if e.attr("href")
+        ],
     )
 
 

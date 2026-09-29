@@ -13,7 +13,15 @@ lazy surfaces -- same DSL, hand-written compact for the packages layer.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Literal, Protocol, TypeVar, cast, overload, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Literal,
+    Protocol,
+    TypeVar,
+    cast,
+    overload,
+    runtime_checkable,
+)
 
 from pydantic import JsonValue
 
@@ -38,16 +46,41 @@ class LazyField(Protocol):
     """A recorded scalar-leaf chain (a value read). Collects to its value."""
 
     def number(self, default: object = None) -> "LazyField": ...
-    def date(self, format: str | None = None, *, dayfirst: bool = False, default: object = None) -> "LazyField": ...
-    def datetime(self, format: str | None = None, *, dayfirst: bool = False, default: object = None) -> "LazyField": ...
-    def split(self, sep: str | None = None, maxsplit: int = -1, *, regex: bool = False,
-              strip: bool = True, keep_empty: bool = False) -> "LazyCollection[str]": ...
-    def map(self, mapping: "dict[str, JsonValue]", default: object = None) -> "LazyField": ...
+    def date(
+        self,
+        format: str | None = None,
+        *,
+        dayfirst: bool = False,
+        default: object = None,
+    ) -> "LazyField": ...
+    def datetime(
+        self,
+        format: str | None = None,
+        *,
+        dayfirst: bool = False,
+        default: object = None,
+    ) -> "LazyField": ...
+    def split(
+        self,
+        sep: str | None = None,
+        maxsplit: int = -1,
+        *,
+        regex: bool = False,
+        strip: bool = True,
+        keep_empty: bool = False,
+    ) -> "LazyCollection[str]": ...
+    def map(
+        self, mapping: "dict[str, JsonValue]", default: object = None
+    ) -> "LazyField": ...
     def link(self, base: str | None = None) -> "LazyField": ...
     def is_ok(self) -> "LazyField": ...
     def is_empty(self) -> "LazyField": ...
-    def collect(self, root: object = None, *, resolver: "Resolver | None" = None) -> JsonValue: ...
-    async def acollect(self, root: object = None, *, resolver: "Resolver | None" = None) -> JsonValue: ...
+    def collect(
+        self, root: object = None, *, resolver: "Resolver | None" = None
+    ) -> JsonValue: ...
+    async def acollect(
+        self, root: object = None, *, resolver: "Resolver | None" = None
+    ) -> JsonValue: ...
     def to_blob(self) -> str: ...
     def describe(self) -> str: ...
     def __eq__(self, o: object) -> "LazyField": ...  # type: ignore[override]
@@ -68,7 +101,9 @@ class LazyCollection(Protocol[T]):
     smart terminal ``collect`` returns ``list[T]`` (extracted rows project automatically -- no
     explicit ``.project()`` needed)."""
 
-    def select(self, selector: str, *, optional: bool = False) -> "LazyCollection[Element]": ...
+    def select(
+        self, selector: str, *, optional: bool = False
+    ) -> "LazyCollection[Element]": ...
     def select_all(self, selector: str) -> "LazyCollection[Element]": ...
     @overload
     def attr(self, name: "Literal['href', 'src']") -> "LazyCollection[Ref]": ...  # type: ignore[overload-overlap]
@@ -76,22 +111,48 @@ class LazyCollection(Protocol[T]):
     def attr(self, name: str) -> "LazyCollection[str]": ...
     def text(self) -> "LazyCollection[str]": ...
     def links(self) -> "LazyCollection[Ref]": ...
-    def resolve(self, *, profile: str | None = None, paginate: str | None = None, max_pages: int = 20,
-                rate_limit: float | None = None, retry: int | None = None, rotate: bool | None = None,
-                raise_on_error: bool = True, optional: bool = False) -> "LazyCollection[Document]": ...  # follow refs
+    def resolve(
+        self,
+        *,
+        profile: str | None = None,
+        paginate: str | None = None,
+        max_pages: int = 20,
+        rate_limit: float | None = None,
+        retry: int | None = None,
+        rotate: bool | None = None,
+        raise_on_error: bool = True,
+        optional: bool = False,
+    ) -> "LazyCollection[Document]": ...  # follow refs
     def number(self, default: object = None) -> "LazyCollection[JsonValue]": ...
-    def date(self, format: str | None = None, *, dayfirst: bool = False, default: object = None) -> "LazyCollection[JsonValue]": ...
-    def extract(self, **columns: "LazyField | LazyCollection[object] | LazyDocument | LazyReference | JsonValue") -> "LazyCollection[dict[str, JsonValue]]": ...
-    def filter(self, *predicates: "LazyField | LazyCollection[object] | JsonValue") -> "LazyCollection[T]": ...
-    def project(self, *, flatten: bool = False, sep: str = ".", distinct: bool = False) -> "LazyCollection[dict[str, JsonValue]]": ...
+    def date(
+        self,
+        format: str | None = None,
+        *,
+        dayfirst: bool = False,
+        default: object = None,
+    ) -> "LazyCollection[JsonValue]": ...
+    def extract(
+        self,
+        **columns: "LazyField | LazyCollection[object] | LazyDocument | LazyReference | JsonValue",
+    ) -> "LazyCollection[dict[str, JsonValue]]": ...
+    def filter(
+        self, *predicates: "LazyField | LazyCollection[object] | JsonValue"
+    ) -> "LazyCollection[T]": ...
+    def project(
+        self, *, flatten: bool = False, sep: str = ".", distinct: bool = False
+    ) -> "LazyCollection[dict[str, JsonValue]]": ...
     def merge(self) -> "LazyField": ...
     def documents(self, column: str) -> "LazyCollection[Document]": ...
     def limit(self, n: int) -> "LazyCollection[T]": ...
     def distinct(self) -> "LazyCollection[T]": ...
     def reference(self, name: str) -> "LazyReference": ...
     def field(self, name: str) -> "LazyField": ...
-    def collect(self, root: object = None, *, resolver: "Resolver | None" = None) -> "Sequence[T]": ...
-    async def acollect(self, root: object = None, *, resolver: "Resolver | None" = None) -> "Sequence[T]": ...
+    def collect(
+        self, root: object = None, *, resolver: "Resolver | None" = None
+    ) -> "Sequence[T]": ...
+    async def acollect(
+        self, root: object = None, *, resolver: "Resolver | None" = None
+    ) -> "Sequence[T]": ...
     def to_blob(self) -> str: ...
     def describe(self) -> str: ...
 
@@ -111,38 +172,70 @@ class LazyDocument(Protocol):
     def links(self) -> "LazyCollection[Ref]": ...
     def reference(self, name: str) -> "LazyReference": ...
     def field(self, name: str) -> "LazyField": ...
+
     # the parse-Document read methods, exposed lazily with their real signatures (they run via the
     # executor's method dispatch); each collects to its value.
     def markdown(self, *, main_content_only: bool = False) -> "LazyField": ...
     def readable(self, *, main_content_only: bool = True) -> "LazyField": ...
-    def tables(self, selector: "str | None" = None, *, transpose: bool = False) -> "LazyField": ...
-    def skeleton(self, *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30,
-                 mark_records: bool = True, mark_interactive: bool = True, drop_chrome: bool = False) -> "LazyField": ...
-    def regex(self, pattern: str, *, group: "int | str" = 0, flags: int = 0) -> "LazyField": ...
+    def tables(
+        self, selector: "str | None" = None, *, transpose: bool = False
+    ) -> "LazyField": ...
+    def skeleton(
+        self,
+        *,
+        max_lines: int = 400,
+        text_chars: int = 40,
+        max_depth: int = 30,
+        mark_records: bool = True,
+        mark_interactive: bool = True,
+        drop_chrome: bool = False,
+    ) -> "LazyField": ...
+    def regex(
+        self, pattern: str, *, group: "int | str" = 0, flags: int = 0
+    ) -> "LazyField": ...
     def at(self, path: str) -> "LazyField": ...
     def metadata(self) -> "LazyField": ...
     def records(self, *, min_items: int = 3, top_k: int = 3) -> "LazyField": ...
-    def collect(self, root: object = None, *, resolver: "Resolver | None" = None) -> "Document": ...
-    async def acollect(self, root: object = None, *, resolver: "Resolver | None" = None) -> "Document": ...
+    def collect(
+        self, root: object = None, *, resolver: "Resolver | None" = None
+    ) -> "Document": ...
+    async def acollect(
+        self, root: object = None, *, resolver: "Resolver | None" = None
+    ) -> "Document": ...
     def to_blob(self) -> str: ...
     def describe(self) -> str: ...
 
 
 class LazyReference(Protocol):
     """A recorded reference chain (a request spec / a link from ``attr('href')``). ``resolve()``
-    fetches it into a document; collected without resolving, it reads as a :class:`~web.dsl.Ref`."""
+    fetches it into a document; collected without resolving, it reads as a :class:`~web.dsl.Ref`.
+    """
 
-    def resolve(self, *, profile: str | None = None, paginate: str | None = None, max_pages: int = 20,
-                rate_limit: float | None = None, retry: int | None = None, rotate: bool | None = None,
-                raise_on_error: bool = True, optional: bool = False) -> "LazyDocument":
+    def resolve(
+        self,
+        *,
+        profile: str | None = None,
+        paginate: str | None = None,
+        max_pages: int = 20,
+        rate_limit: float | None = None,
+        retry: int | None = None,
+        rotate: bool | None = None,
+        raise_on_error: bool = True,
+        optional: bool = False,
+    ) -> "LazyDocument":
         """Fetch this reference into a document. ``profile`` names a default resolve policy
         (``"basic"`` / ``"basic_browser"`` / ``"full_browser"``); ``paginate`` / ``max_pages`` /
         ``rate_limit`` / ``retry`` / ``rotate`` / ``raise_on_error`` are the per-step policy;
         ``optional`` tolerates a miss / transport failure (-> ``None``). All args are JSON-safe so
         the plan stays serialisable."""
         ...
-    def collect(self, root: object = None, *, resolver: "Resolver | None" = None) -> "Ref": ...
-    async def acollect(self, root: object = None, *, resolver: "Resolver | None" = None) -> "Ref": ...
+
+    def collect(
+        self, root: object = None, *, resolver: "Resolver | None" = None
+    ) -> "Ref": ...
+    async def acollect(
+        self, root: object = None, *, resolver: "Resolver | None" = None
+    ) -> "Ref": ...
     def to_blob(self) -> str: ...
     def describe(self) -> str: ...
 
@@ -156,7 +249,8 @@ class LazyThen(LazyField, Protocol):
 
 class _WhenExpr(Expr):
     """The recorded ``when`` branch: an :class:`Expr` (so it works as a column / predicate straight
-    after ``.then(...)``, with a ``None`` else), plus ``.otherwise(...)`` to set the else-branch."""
+    after ``.then(...)``, with a ``None`` else), plus ``.otherwise(...)`` to set the else-branch.
+    """
 
     def __init__(self, cond: object, then: object, otherwise: object = None) -> None:
         from .expr import to_arg
@@ -207,8 +301,11 @@ class _Wq:
         """Start a conditional: ``when(cond).then(a).otherwise(b)``."""
         return _When(cond)
 
-    def filter(self, collection: "LazyCollection[T]",
-               *predicates: "LazyField | LazyCollection[object] | JsonValue") -> "LazyCollection[T]":
+    def filter(
+        self,
+        collection: "LazyCollection[T]",
+        *predicates: "LazyField | LazyCollection[object] | JsonValue",
+    ) -> "LazyCollection[T]":
         """Free-function form of the collection filter: ``filter(coll, pred)`` == ``coll.filter(pred)``."""
         return collection.filter(*predicates)
 
@@ -224,5 +321,13 @@ class _Wq:
 wq = _Wq()
 
 
-__all__ = ["wq", "LazyReference", "LazyDocument", "LazyCollection", "LazyField", "Collection",
-           "Field", "Ref"]
+__all__ = [
+    "wq",
+    "LazyReference",
+    "LazyDocument",
+    "LazyCollection",
+    "LazyField",
+    "Collection",
+    "Field",
+    "Ref",
+]

@@ -16,7 +16,9 @@ if TYPE_CHECKING:
     from playwright.async_api import Page
 
 
-def human_path(x1: float, y1: float, x2: float, y2: float, *, steps: int = 24) -> "list[tuple[float, float]]":
+def human_path(
+    x1: float, y1: float, x2: float, y2: float, *, steps: int = 24
+) -> "list[tuple[float, float]]":
     """A curved cursor path from (x1,y1) to (x2,y2): a quadratic Bezier through one jittered
     control point, sampled into ``steps`` points."""
     cx = (x1 + x2) / 2 + random.uniform(-1, 1) * abs(x2 - x1) * 0.3
@@ -33,7 +35,8 @@ def human_path(x1: float, y1: float, x2: float, y2: float, *, steps: int = 24) -
 
 async def move_along(page: "Page", x: float, y: float, *, steps: int = 24) -> None:
     """Move ``page``'s mouse from its current spot to (x,y) along a human path, with easing pauses.
-    Starts from the viewport centre (Playwright does not expose the current cursor position)."""
+    Starts from the viewport centre (Playwright does not expose the current cursor position).
+    """
     vp = page.viewport_size or {"width": 1280, "height": 800}
     for px, py in human_path(vp["width"] / 2, vp["height"] / 2, x, y, steps=steps):
         await page.mouse.move(px, py)

@@ -18,11 +18,13 @@ from .document import Document, Element
 from .jsonpath import dig
 from .metadata import Metadata, metadata
 from .records import RecordRegion, find_records
-from .structure import Heading, outline, skeleton
 from .sniff import Kind, sniff_charset, sniff_kind
+from .structure import Heading, outline, skeleton
 
 
-def parse(content: bytes, *, content_type: str | None = None, url: str = "") -> Document:
+def parse(
+    content: bytes, *, content_type: str | None = None, url: str = ""
+) -> Document:
     """Interpret bytes into a :class:`Document`: sniff the kind and charset from ``content_type``
     + the bytes, keeping ``url`` as the base for relative-link resolution."""
     return Document(
@@ -33,5 +35,19 @@ def parse(content: bytes, *, content_type: str | None = None, url: str = "") -> 
     )
 
 
-__all__ = ["parse", "Document", "Element", "dig", "Metadata", "metadata", "RecordRegion", "find_records",
-           "Heading", "outline", "skeleton", "Kind", "sniff_kind", "sniff_charset"]
+__all__ = [
+    "parse",
+    "Document",
+    "Element",
+    "dig",
+    "Metadata",
+    "metadata",
+    "RecordRegion",
+    "find_records",
+    "Heading",
+    "outline",
+    "skeleton",
+    "Kind",
+    "sniff_kind",
+    "sniff_charset",
+]

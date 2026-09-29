@@ -15,25 +15,84 @@ not this layer's.
 
 from __future__ import annotations
 
-from .models import (ConsoleEvent, DOMEvent, Fetcher, FetchEvent, NetworkEvent, Request, Script,
-                     Session, Snapshot, Wait)  # the plain data models + interfaces
+from . import (
+    profiles,
+)  # named default transport identities (web.fetch.profiles.BASIC / BROWSER / ...)
 from .browser import BrowserFetcher, BrowserSession
 from .bus import Event, EventBus, Subscription, Trace, emit, topic_matches, using
+from .entry import (
+    ClientPool,
+    Entry,
+    Profile,  # functional entry + pool
+    aclose_default_pool,
+    default_pool,
+    fetch,
+)
 from .errors import WebError, WebException, err
 from .fingerprint import CHROME, Fingerprint, fleet, generate
-from .script import DOM_RECORDER, ScriptRegistry
 from .http import HttpFetcher, HttpSession
 from .middleware import Handler, Middleware, stack
-from .replay import Recorder, ReplayBackend
+from .models import (
+    ConsoleEvent,  # the plain data models + interfaces
+    DOMEvent,
+    Fetcher,
+    FetchEvent,
+    NetworkEvent,
+    Request,
+    Script,
+    Session,
+    Snapshot,
+    Wait,
+)
 from .pool import Pool
 from .proxy import Proxy
-from .entry import ClientPool, Entry, Profile, aclose_default_pool, default_pool, fetch  # functional entry + pool
-from . import profiles  # named default transport identities (web.fetch.profiles.BASIC / BROWSER / ...)
+from .replay import Recorder, ReplayBackend
+from .script import DOM_RECORDER, ScriptRegistry
 
-__all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "BrowserSession", "HttpSession", "Session",
-           "fetch", "Entry", "Profile", "profiles", "ClientPool", "default_pool", "aclose_default_pool",
-           "Script", "ScriptRegistry", "Proxy", "Pool", "Fingerprint", "CHROME", "fleet", "generate", "Wait",
-           "DOM_RECORDER", "NetworkEvent", "DOMEvent", "FetchEvent", "ConsoleEvent", "Middleware", "Handler", "stack",
-           "Recorder", "ReplayBackend",
-           # the shared substrate (relocated from the removed web.kernel bottom layer)
-           "WebError", "WebException", "err", "Event", "EventBus", "Subscription", "topic_matches", "emit", "using", "Trace"]
+__all__ = [
+    "Request",
+    "Snapshot",
+    "Fetcher",
+    "HttpFetcher",
+    "BrowserFetcher",
+    "BrowserSession",
+    "HttpSession",
+    "Session",
+    "fetch",
+    "Entry",
+    "Profile",
+    "profiles",
+    "ClientPool",
+    "default_pool",
+    "aclose_default_pool",
+    "Script",
+    "ScriptRegistry",
+    "Proxy",
+    "Pool",
+    "Fingerprint",
+    "CHROME",
+    "fleet",
+    "generate",
+    "Wait",
+    "DOM_RECORDER",
+    "NetworkEvent",
+    "DOMEvent",
+    "FetchEvent",
+    "ConsoleEvent",
+    "Middleware",
+    "Handler",
+    "stack",
+    "Recorder",
+    "ReplayBackend",
+    # the shared substrate (relocated from the removed web.kernel bottom layer)
+    "WebError",
+    "WebException",
+    "err",
+    "Event",
+    "EventBus",
+    "Subscription",
+    "topic_matches",
+    "emit",
+    "using",
+    "Trace",
+]

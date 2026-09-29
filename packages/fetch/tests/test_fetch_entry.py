@@ -6,7 +6,6 @@ import asyncio
 from typing import Any
 
 from pytest_httpserver import HTTPServer
-
 from web.fetch import BrowserFetcher, ClientPool, Profile, Request, fetch
 
 
@@ -18,8 +17,10 @@ def test_pool_leases_one_shared_backend_per_profile() -> None:
     async def go() -> tuple[bool, bool]:
         async with ClientPool() as pool:
             a = pool.lease(Profile())
-            b = pool.lease(Profile())                       # same profile -> SAME backend (reused)
-            c = pool.lease(Profile(headers={"x": "y"}))     # different profile -> its own backend
+            b = pool.lease(Profile())  # same profile -> SAME backend (reused)
+            c = pool.lease(
+                Profile(headers={"x": "y"})
+            )  # different profile -> its own backend
             return a is b, a is c
 
     same, different = _run(go())
@@ -30,10 +31,13 @@ def test_browser_profile_carries_an_executable_path() -> None:
     base = Profile(browser=True)
     pinned = base.with_(executable_path="/opt/chromium/chrome")
     assert pinned.executable_path == "/opt/chromium/chrome"
-    assert base.executable_path is None                       # inherited copy, base unchanged
-    assert base.key() != pinned.key()                         # a different binary -> its own backend
+    assert base.executable_path is None  # inherited copy, base unchanged
+    assert base.key() != pinned.key()  # a different binary -> its own backend
     fetcher = pinned.fetcher()
-    assert isinstance(fetcher, BrowserFetcher) and fetcher._executable == "/opt/chromium/chrome"
+    assert (
+        isinstance(fetcher, BrowserFetcher)
+        and fetcher._executable == "/opt/chromium/chrome"
+    )
 
 
 def test_fetch_reuses_the_pooled_backend_across_calls(httpserver: HTTPServer) -> None:
@@ -41,8 +45,12 @@ def test_fetch_reuses_the_pooled_backend_across_calls(httpserver: HTTPServer) ->
 
     async def go() -> tuple[bytes, bytes, int]:
         async with ClientPool() as pool:
-            first = await fetch(httpserver.url_for("/"), pool=pool)   # leases + keeps the backend
-            second = await fetch(httpserver.url_for("/"), pool=pool)  # reuses it (not relaunched)
+            first = await fetch(
+                httpserver.url_for("/"), pool=pool
+            )  # leases + keeps the backend
+            second = await fetch(
+                httpserver.url_for("/"), pool=pool
+            )  # reuses it (not relaunched)
             return first.content, second.content, len(pool._backends)
 
     a, b, n = _run(go())
@@ -50,10 +58,12 @@ def test_fetch_reuses_the_pooled_backend_across_calls(httpserver: HTTPServer) ->
 
 
 def test_fetch_one_shot_returns_a_snapshot(httpserver: HTTPServer) -> None:
-    httpserver.expect_request("/").respond_with_data(b"hello", content_type="text/plain")
+    httpserver.expect_request("/").respond_with_data(
+        b"hello", content_type="text/plain"
+    )
 
     async def go() -> tuple[int, bytes]:
-        snap = await fetch(httpserver.url_for("/"))   # awaited -> one-shot Snapshot
+        snap = await fetch(httpserver.url_for("/"))  # awaited -> one-shot Snapshot
         return snap.status, snap.content
 
     status, content = _run(go())
@@ -65,7 +75,9 @@ def test_fetch_as_session_does_multiple_hops(httpserver: HTTPServer) -> None:
     httpserver.expect_request("/b").respond_with_data(b"B")
 
     async def go() -> tuple[bytes, bytes]:
-        async with fetch(httpserver.url_for("/a")) as session:   # same call, as a session
+        async with fetch(
+            httpserver.url_for("/a")
+        ) as session:  # same call, as a session
             first = await session.fetch(Request(url=httpserver.url_for("/a")))
             second = await session.fetch(Request(url=httpserver.url_for("/b")))
             return first.content, second.content

@@ -100,6 +100,12 @@ bug classes are section 5 below.
 - [ ] Every bug fix ships a **regression test** that fails before and passes after.
 - [ ] Tests are offline/deterministic (`pytest_httpserver`, canned bytes; inner `async def` +
       `asyncio.run`, no `pytest.mark.asyncio`).
-- [ ] Full gate green before commit: **`mypy --strict` + `pyright` (per package) + `pytest`**, and
-      `packages/demo.py` still runs (it exercises the whole stack end-to-end).
+- [ ] **Formatted with `isort` then `black`** before commit — non-negotiable, the tree is kept
+      black-clean. Config lives in each package's `pyproject.toml` (`[tool.black] line-length = 100`;
+      `[tool.isort] profile = "black" line_length = 100`), so run them from the repo root:
+      `env/bin/python -m isort packages/ && env/bin/black packages/` (add `--check --diff` in CI /
+      to verify without writing). isort first (it reorders imports), then black (it owns line wrapping
+      + spacing). `isort`/`black` are dev tools — install into the env with `uv pip install isort black`.
+- [ ] Full gate green before commit: **`isort` + `black` + `mypy --strict` + `pyright` (per package)
+      + `pytest`**, and `packages/demo.py` still runs (it exercises the whole stack end-to-end).
 - [ ] Never leave the tree broken; commit small green steps.

@@ -18,7 +18,8 @@ def tag(node: Node) -> str:
 
 def raw_text(node: Node) -> str:
     """All descendant text of ``node``, VERBATIM (no whitespace collapse) -- for content whose
-    internal whitespace is significant, e.g. the JSON inside a ``<script type=ld+json>``."""
+    internal whitespace is significant, e.g. the JSON inside a ``<script type=ld+json>``.
+    """
     return "".join(t.decode() if isinstance(t, bytes) else t for t in node.itertext())
 
 

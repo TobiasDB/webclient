@@ -12,10 +12,25 @@ from __future__ import annotations
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 #: query parameters that never change WHICH page you get -- analytics / ad click ids.
-_TRACKING = frozenset({
-    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-    "fbclid", "gclid", "dclid", "gclsrc", "msclkid", "mc_cid", "mc_eid", "_ga", "ref", "ref_src",
-})
+_TRACKING = frozenset(
+    {
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "fbclid",
+        "gclid",
+        "dclid",
+        "gclsrc",
+        "msclkid",
+        "mc_cid",
+        "mc_eid",
+        "_ga",
+        "ref",
+        "ref_src",
+    }
+)
 _DEFAULT_PORTS = {"http": "80", "https": "443"}
 
 
@@ -27,9 +42,13 @@ def canonical(url: str) -> str:
     netloc = host
     if parts.port is not None and str(parts.port) != _DEFAULT_PORTS.get(scheme):
         netloc = f"{host}:{parts.port}"
-    query = urlencode(sorted(
-        (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() not in _TRACKING
-    ))
+    query = urlencode(
+        sorted(
+            (k, v)
+            for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if k.lower() not in _TRACKING
+        )
+    )
     path = parts.path or "/"
     if len(path) > 1 and path.endswith("/"):  # /p/ == /p (but keep the root "/")
         path = path.rstrip("/")

@@ -16,7 +16,8 @@ from pydantic import BaseModel, JsonValue
 
 class Arg(BaseModel):
     """A call/operator argument: a plain ``value`` or a sub-expression ``plan`` (evaluated against
-    the surrounding element/context at run time -- this is how ``extract(title=<sub-expr>)`` works)."""
+    the surrounding element/context at run time -- this is how ``extract(title=<sub-expr>)`` works).
+    """
 
     value: JsonValue = None
     plan: "Plan | None" = None
@@ -41,15 +42,25 @@ OPERATORS = frozenset({"eq", "ne", "lt", "le", "gt", "ge", "and", "or", "not"})
 FUNCTIONS = frozenset({"is_empty", "is_ok"})
 
 #: op name -> its Python symbol, so ``describe`` renders as the ``wq`` chain that recorded it.
-_OP_SYM = {"eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">=",
-           "and": "&", "or": "|", "not": "~"}
+_OP_SYM = {
+    "eq": "==",
+    "ne": "!=",
+    "lt": "<",
+    "le": "<=",
+    "gt": ">",
+    "ge": ">=",
+    "and": "&",
+    "or": "|",
+    "not": "~",
+}
 #: the token for the empty (evaluation-context) root in ``describe`` output.
 _CTX = "_"
 
 
 class Plan(BaseModel):
     """A recorded chain: an optional ``root`` type name, an optional ``source`` (the request URL a
-    ``reference(url)`` root starts from), and its ``steps``. Immutable -- recording copies."""
+    ``reference(url)`` root starts from), and its ``steps``. Immutable -- recording copies.
+    """
 
     version: int = 1
     root: str = ""
@@ -62,9 +73,13 @@ class Plan(BaseModel):
 
     def to_blob(self) -> str:
         """A portable, self-describing blob: compact JSON of the non-default fields (plain JSON, no
-        compression -- an LLM can author, pass around, rebuild and validate a plan as one string)."""
-        return json.dumps(self.model_dump(exclude_defaults=True, exclude_none=True),
-                          separators=(",", ":"), sort_keys=True)
+        compression -- an LLM can author, pass around, rebuild and validate a plan as one string).
+        """
+        return json.dumps(
+            self.model_dump(exclude_defaults=True, exclude_none=True),
+            separators=(",", ":"),
+            sort_keys=True,
+        )
 
     @classmethod
     def from_blob(cls, blob: str) -> "Plan":
@@ -81,7 +96,8 @@ class Plan(BaseModel):
     def validate_names(self) -> "Plan":
         """Reject a plan that could not have been legitimately recorded: an unknown root, a private
         (``_``) name, an unknown operator/function. The ``_``-refusal is the one safety boundary
-        (any other public name is allowed) -- the wire guard for the service/remote modes."""
+        (any other public name is allowed) -- the wire guard for the service/remote modes.
+        """
         if self.root not in ROOTS:
             raise ValueError(f"unknown plan root {self.root!r}")
         for step in self.steps:
@@ -100,15 +116,25 @@ class Plan(BaseModel):
         """A canonical, readable rendering of the chain as a Python-like expression -- for logs and
         the demo. Roots render as ``reference("url")`` (sourced) or the type name; operators as
         their symbols, so the whole thing reads as the ``wq`` chain that recorded it."""
-        out = f"reference({self.source!r})" if self.source is not None else (self.root or _CTX)
+        out = (
+            f"reference({self.source!r})"
+            if self.source is not None
+            else (self.root or _CTX)
+        )
         for s in self.steps:
-            args = ", ".join([*map(_show, s.args), *(f"{k}={_show(v)}" for k, v in s.kwargs.items())])
+            args = ", ".join(
+                [*map(_show, s.args), *(f"{k}={_show(v)}" for k, v in s.kwargs.items())]
+            )
             if s.kind == "get":
                 out = f"{out}.{s.name}"
             elif s.kind == "call":
                 out = f"{out}({args})"
             elif s.kind == "op":
-                out = f"~{out}" if s.name == "not" else f"({out} {_OP_SYM[s.name]} {args})"
+                out = (
+                    f"~{out}"
+                    if s.name == "not"
+                    else f"({out} {_OP_SYM[s.name]} {args})"
+                )
             elif s.kind == "fn":
                 out = f"{s.name}({out}{', ' + args if args else ''})"
             else:  # when

@@ -16,7 +16,8 @@ _CHARSET = re.compile(rb"charset=([\w-]+)", re.I)
 
 def _known(name: str) -> str:
     """``name`` if it is a registered codec, else ``"utf-8"`` -- so a mislabelled/typo charset
-    (``charset=bogus``) can never make ``Document.text``'s ``decode()`` raise LookupError."""
+    (``charset=bogus``) can never make ``Document.text``'s ``decode()`` raise LookupError.
+    """
     try:
         codecs.lookup(name)
         return name
@@ -27,7 +28,8 @@ def _known(name: str) -> str:
 def sniff_kind(content_type: str | None, content: bytes) -> Kind:
     """The resource kind. A declared, specific ``Content-Type`` wins; otherwise the leading
     bytes decide (``{``/``[`` -> json, an html marker -> html, ``<`` -> xml, decodable ->
-    text, else binary). ``application/octet-stream`` is treated as "unknown" and sniffed."""
+    text, else binary). ``application/octet-stream`` is treated as "unknown" and sniffed.
+    """
     ct = (content_type or "").split(";")[0].strip().lower()
     if ct and ct != "application/octet-stream":
         if ct in ("text/html", "application/xhtml+xml"):
@@ -48,7 +50,9 @@ def sniff_kind(content_type: str | None, content: bytes) -> Kind:
     if head[:1] == b"<":
         return "xml"
     try:  # an INCREMENTAL decoder buffers a multibyte char split at the 512-byte cut (final=False),
-        codecs.getincrementaldecoder("utf-8")().decode(content[:512])  # so valid text isn't mis-sniffed
+        codecs.getincrementaldecoder("utf-8")().decode(
+            content[:512]
+        )  # so valid text isn't mis-sniffed
         return "text"
     except UnicodeDecodeError:
         return "binary"

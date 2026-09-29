@@ -22,7 +22,9 @@ from web.resolve import Flag
 from .models import DatasetBrief
 
 #: the query-writing guide (markdown + worked examples), rendered into every author prompt.
-PATTERNS_GUIDE: str = files("web.onboard").joinpath("patterns.md").read_text(encoding="utf-8")
+PATTERNS_GUIDE: str = (
+    files("web.onboard").joinpath("patterns.md").read_text(encoding="utf-8")
+)
 
 
 def _flags_line(flags: "list[Flag]") -> str:
@@ -32,9 +34,15 @@ def _flags_line(flags: "list[Flag]") -> str:
     present = [f for f in flags if f.present]
     if not present:
         return "PAGE SIGNALS: none fired (a plain static page)."
-    lines = [f"  - {f.name} (remedy: {f.remedy}; evidence: "
-             f"{', '.join(s.name for s in f.signals) or 'n/a'})" for f in present]
-    return "PAGE SIGNALS (hardcoded detections about this page -- account for them):\n" + "\n".join(lines)
+    lines = [
+        f"  - {f.name} (remedy: {f.remedy}; evidence: "
+        f"{', '.join(s.name for s in f.signals) or 'n/a'})"
+        for f in present
+    ]
+    return (
+        "PAGE SIGNALS (hardcoded detections about this page -- account for them):\n"
+        + "\n".join(lines)
+    )
 
 
 def _fields_line(brief: DatasetBrief) -> str:
@@ -54,16 +62,25 @@ def _fields_line(brief: DatasetBrief) -> str:
     return "Fields (the columns each record should carry): " + "; ".join(parts)
 
 
-def author_prompt(brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, kind: str) -> str:
+def author_prompt(
+    brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, kind: str
+) -> str:
     """The prompt that asks the model to write the extraction query: the patterns guide, the ask
     (goal + fields), the page's hardcoded signals/flags, and the page skeleton. ``kind`` is the
     document kind (``json`` steers the model to the dotted-path form)."""
     goal = brief.goal or "the repeating dataset on this page"
-    pager = ("\nThis page is PAGINATED -- write the query for ONE page exactly as normal; the "
-             "pipeline follows the pagination. Do NOT add a 'next' field."
-             if any(f.name in ("paginated", "infinite_scroll") and f.present for f in flags) else "")
-    kind_note = ("\nThis is a JSON document -- use dotted paths in select/select_all and read keys "
-                 "with .attr(\"<key>\")." if kind == "json" else "")
+    pager = (
+        "\nThis page is PAGINATED -- write the query for ONE page exactly as normal; the "
+        "pipeline follows the pagination. Do NOT add a 'next' field."
+        if any(f.name in ("paginated", "infinite_scroll") and f.present for f in flags)
+        else ""
+    )
+    kind_note = (
+        "\nThis is a JSON document -- use dotted paths in select/select_all and read keys "
+        'with .attr("<key>").'
+        if kind == "json"
+        else ""
+    )
     hints = f"\nAuthor guidance: {brief.hints}" if brief.hints else ""
     return (
         f"{PATTERNS_GUIDE}\n\n"

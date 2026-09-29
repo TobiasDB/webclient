@@ -30,14 +30,17 @@ async def apply_wait(page: "Page", wait: Wait) -> None:
         except Exception:
             pass
     if wait.until == "selector" and wait.selector:
-        await page.wait_for_selector(wait.selector, timeout=ms)  # a real miss raises (loud)
+        await page.wait_for_selector(
+            wait.selector, timeout=ms
+        )  # a real miss raises (loud)
     elif wait.until == "dom_stable":
         await _dom_stable(page, wait.timeout, wait.quiet)
 
 
 async def _dom_stable(page: "Page", timeout: float, quiet: float) -> None:
     """Return once the DOM node count stops changing for ``quiet`` seconds, or the budget is hit
-    (a settle, not a failure) -- the safe general wait for a page that rewrites its own DOM."""
+    (a settle, not a failure) -- the safe general wait for a page that rewrites its own DOM.
+    """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     last, stable_since = -1, None

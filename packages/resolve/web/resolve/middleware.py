@@ -12,8 +12,18 @@ import random
 from collections.abc import Callable, Sequence
 from urllib.parse import urlparse
 
-from web.fetch import ClientPool, Fetcher, Fingerprint, Handler, Middleware, Profile, Request, Snapshot
-from web.fetch import emit, fleet as _default_fleet
+from web.fetch import (
+    ClientPool,
+    Fetcher,
+    Fingerprint,
+    Handler,
+    Middleware,
+    Profile,
+    Request,
+    Snapshot,
+    emit,
+)
+from web.fetch import fleet as _default_fleet
 
 from .document import document
 from .models import ResolveEvent
@@ -22,8 +32,16 @@ from .signals import anti_bot, spa
 _RETRIABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 #: TRANSIENT transport errors worth retrying the same request for. NOT here: tls (cert),
 #: url (malformed), redirects (loop), protocol -- those are persistent, a retry can't help.
-_RETRIABLE_ERRORS = frozenset({"fetch.timeout", "fetch.connect", "fetch.dns", "fetch.proxy",
-                               "fetch.aborted", "fetch.transport"})
+_RETRIABLE_ERRORS = frozenset(
+    {
+        "fetch.timeout",
+        "fetch.connect",
+        "fetch.dns",
+        "fetch.proxy",
+        "fetch.aborted",
+        "fetch.transport",
+    }
+)
 
 
 def _retriable(snap: Snapshot) -> bool:
@@ -34,13 +52,18 @@ def _retriable(snap: Snapshot) -> bool:
 
 def retry(max_attempts: int = 3, backoff: float = 0.2) -> Middleware:
     """Retry the SAME request while the Snapshot is retriable (transport error / 429 / 5xx),
-    up to ``max_attempts`` with exponential backoff. Returns the last Snapshot either way."""
+    up to ``max_attempts`` with exponential backoff. Returns the last Snapshot either way.
+    """
 
     async def mw(request: Request, nxt: Handler) -> Snapshot:
         snap = await nxt(request)
         attempt = 1
         while attempt < max_attempts and _retriable(snap):
-            emit(ResolveEvent(phase="retry", url=request.url, detail={"attempt": attempt}))
+            emit(
+                ResolveEvent(
+                    phase="retry", url=request.url, detail={"attempt": attempt}
+                )
+            )
             await asyncio.sleep(backoff * (2 ** (attempt - 1)))
             snap = await nxt(request)
             attempt += 1
@@ -51,7 +74,8 @@ def retry(max_attempts: int = 3, backoff: float = 0.2) -> Middleware:
 
 def rate_limit(min_interval: float) -> Middleware:
     """Keep at least ``min_interval`` seconds between requests to the same host (politeness).
-    Reserves each host's slot then waits outside the lock, so other hosts are unaffected."""
+    Reserves each host's slot then waits outside the lock, so other hosts are unaffected.
+    """
     last: dict[str, float] = {}
     lock = asyncio.Lock()
 
@@ -70,14 +94,17 @@ def rate_limit(min_interval: float) -> Middleware:
 
 def _blocked(snap: Snapshot) -> bool:
     """The default 'this tier was insufficient, climb' rule: a bad TRANSPORT status (a block), or
-    a content signal -- an anti-bot wall or a JS-gated shell (a static tier sees an empty page)."""
+    a content signal -- an anti-bot wall or a JS-gated shell (a static tier sees an empty page).
+    """
     if not snap.ok:  # transport-level block (401/403/429/5xx)
         return True
     doc = document(snap)
     return spa(doc) is not None or anti_bot(doc) is not None
 
 
-def escalate(tiers: "Sequence[Fetcher]", *, blocked: "Callable[[Snapshot], bool] | None" = None) -> Middleware:
+def escalate(
+    tiers: "Sequence[Fetcher]", *, blocked: "Callable[[Snapshot], bool] | None" = None
+) -> Middleware:
     """Walk the escalation LADDER: after the base fetch (via ``next``), if the result looks
     blocked/insufficient, re-issue the SAME request on the next tier, and so on until one succeeds
     or the ladder is exhausted. ``tiers`` are the tiers ABOVE the base; each tier just fetches --
@@ -90,14 +117,18 @@ def escalate(tiers: "Sequence[Fetcher]", *, blocked: "Callable[[Snapshot], bool]
         for i, tier in enumerate(tiers):
             if not check(snap):
                 break
-            emit(ResolveEvent(phase="escalate", url=request.url, detail={"tier": i + 1}))
+            emit(
+                ResolveEvent(phase="escalate", url=request.url, detail={"tier": i + 1})
+            )
             snap = await tier.fetch(request)
         return snap
 
     return mw
 
 
-def rotate(pool: ClientPool, fleet: "tuple[Fingerprint, ...] | None" = None) -> Middleware:
+def rotate(
+    pool: ClientPool, fleet: "tuple[Fingerprint, ...] | None" = None
+) -> Middleware:
     """Present a fresh identity per request: lease a differently-fingerprinted backend from ``pool``
     (a browserforge ``fleet``) and fetch through IT, so repeated requests do not all look identical.
     The fingerprint-rotation POLICY -- unlike retry (which re-issues on the same backend), it

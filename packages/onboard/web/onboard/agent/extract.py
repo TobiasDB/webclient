@@ -17,7 +17,6 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel
-
 from web.parse import Document
 
 from .loop import Ask, BoundedLoop, Done, Verdict
@@ -49,7 +48,9 @@ _Obs = tuple[Document, "list[dict[str, str | None]]"]
 #: a driver looks at the page and the last rows and decides the next move -- sync or async (an
 #: LLM driver is async; the loop awaits it).
 _Decision = Selection | Done | Ask
-Driver = Callable[[Document, list[dict[str, "str | None"]]], "_Decision | Awaitable[_Decision]"]
+Driver = Callable[
+    [Document, list[dict[str, "str | None"]]], "_Decision | Awaitable[_Decision]"
+]
 
 
 class Authored(BaseModel):
@@ -82,7 +83,9 @@ class Author:
         )
 
     def _apply(self, state: _State, decision: "Selection | Done") -> None:
-        if isinstance(decision, Selection):  # Done never reaches apply (done() catches it first)
+        if isinstance(
+            decision, Selection
+        ):  # Done never reaches apply (done() catches it first)
             state.selection = decision
             state.rows = extract(state.doc, decision)
 
@@ -93,7 +96,9 @@ class Author:
         return self._result(await self._loop.resume(selection))
 
     def _result(self, verdict: Verdict) -> Authored:
-        return Authored(rows=self._state.rows, selection=self._state.selection, verdict=verdict)
+        return Authored(
+            rows=self._state.rows, selection=self._state.selection, verdict=verdict
+        )
 
 
 __all__ = ["Selection", "Done", "Driver", "Author", "Authored", "extract"]

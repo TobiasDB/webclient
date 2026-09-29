@@ -10,7 +10,6 @@ to make policy decisions (escalate on ``spa``; a ``login_wall`` has no transport
 from __future__ import annotations
 
 from pydantic import BaseModel, JsonValue
-
 from web.fetch import Snapshot
 from web.parse import Document
 
@@ -25,12 +24,15 @@ class Signal(BaseModel):
 
 def spa(doc: Document) -> "Signal | None":
     """A client-rendered shell: a mount node and scripts but little server-rendered text -- the
-    content arrives via JS, so a static fetch sees an empty page (escalate to a browser)."""
+    content arrives via JS, so a static fetch sees an empty page (escalate to a browser).
+    """
     if doc.kind != "html":
         return None
     body = doc.select("body")
     visible = len(body.text) if body is not None else 0
-    mounts = doc.select("#root, #app, [data-reactroot], [data-server-rendered], [ng-version]")
+    mounts = doc.select(
+        "#root, #app, [data-reactroot], [data-server-rendered], [ng-version]"
+    )
     if visible < 200 and mounts is not None and doc.select("script") is not None:
         return Signal(name="spa", confidence=0.8, detail={"visible_chars": visible})
     return None
@@ -46,7 +48,13 @@ def login_wall(doc: Document) -> "Signal | None":
 
 def pagination(doc: Document) -> "Signal | None":
     """The document is one page of many: a rel=next or a pagination control is present."""
-    if doc.kind == "html" and doc.select("a[rel~=next], link[rel=next], .pagination a, nav.pager a, [aria-label=Next]") is not None:
+    if (
+        doc.kind == "html"
+        and doc.select(
+            "a[rel~=next], link[rel=next], .pagination a, nav.pager a, [aria-label=Next]"
+        )
+        is not None
+    ):
         return Signal(name="pagination")
     return None
 
@@ -57,8 +65,15 @@ def anti_bot(doc: Document) -> "Signal | None":
     if doc.kind != "html":
         return None
     text = doc.text.lower()
-    markers = ("captcha", "cf-challenge", "verify you are human", "unusual traffic",
-               "access denied", "are you a robot", "checking your browser")
+    markers = (
+        "captcha",
+        "cf-challenge",
+        "verify you are human",
+        "unusual traffic",
+        "access denied",
+        "are you a robot",
+        "checking your browser",
+    )
     if any(m in text for m in markers):
         return Signal(name="anti_bot", confidence=0.7)
     return None
@@ -69,8 +84,10 @@ def consent_wall(doc: Document) -> "Signal | None":
     dismissed (the remedy is an interaction, not a transport change)."""
     if doc.kind != "html":
         return None
-    hit = doc.select("#onetrust-banner-sdk, #cookie-consent, [id*=cookie-banner], "
-                     "[class*=cookie-consent], [aria-label*=consent], [data-consent]")
+    hit = doc.select(
+        "#onetrust-banner-sdk, #cookie-consent, [id*=cookie-banner], "
+        "[class*=cookie-consent], [aria-label*=consent], [data-consent]"
+    )
     if hit is not None:
         return Signal(name="consent_wall", confidence=0.6)
     return None
@@ -81,15 +98,21 @@ def infinite_scroll(doc: Document) -> "Signal | None":
     is present (the remedy is a scroll loop on a live page, not a URL walk)."""
     if doc.kind != "html":
         return None
-    if doc.select("[data-infinite-scroll], .infinite-scroll, [data-infinite], "
-                  "[class*=infinite-scroll], .load-more[data-scroll]") is not None:
+    if (
+        doc.select(
+            "[data-infinite-scroll], .infinite-scroll, [data-infinite], "
+            "[class*=infinite-scroll], .load-more[data-scroll]"
+        )
+        is not None
+    ):
         return Signal(name="infinite_scroll", confidence=0.6)
     return None
 
 
 def empty(doc: Document) -> "Signal | None":
     """A near-empty document: almost no readable text (a failed render, a blank shell, or a body
-    that never populated). Distinct from ``spa`` -- this is 'nothing here', regardless of scripts."""
+    that never populated). Distinct from ``spa`` -- this is 'nothing here', regardless of scripts.
+    """
     if doc.kind != "html":
         return None
     body = doc.select("body")
@@ -103,17 +126,29 @@ def blocked_status(snap: Snapshot) -> "Signal | None":
     """A transport-level block by STATUS -- 401/403 (denied), 429 (rate-limited). A Snapshot fact,
     not content: the remedy differs (backoff for 429; a stronger tier/proxy for 403)."""
     if snap.status in (401, 403):
-        return Signal(name="blocked_status", confidence=0.9, detail={"status": snap.status})
+        return Signal(
+            name="blocked_status", confidence=0.9, detail={"status": snap.status}
+        )
     if snap.status == 429:
-        return Signal(name="blocked_status", confidence=0.8, detail={"status": 429, "rate_limited": True})
+        return Signal(
+            name="blocked_status",
+            confidence=0.8,
+            detail={"status": 429, "rate_limited": True},
+        )
     return None
 
 
 def server_error(snap: Snapshot) -> "Signal | None":
     """A 5xx or a transport failure -- transient, worth a retry rather than a tier climb."""
     if snap.error is not None or 500 <= snap.status < 600:
-        return Signal(name="server_error", confidence=0.9,
-                      detail={"status": snap.status, "error": snap.error.code if snap.error else None})
+        return Signal(
+            name="server_error",
+            confidence=0.9,
+            detail={
+                "status": snap.status,
+                "error": snap.error.code if snap.error else None,
+            },
+        )
     return None
 
 
@@ -129,10 +164,16 @@ def structured_data(doc: Document) -> "Signal | None":
 
 def data_api(doc: Document) -> "Signal | None":
     """The page carries its data as an inlined JSON blob (a ``__NEXT_DATA__`` / state island /
-    ``application/json`` script) rather than only as DOM -- read the island, don't render."""
+    ``application/json`` script) rather than only as DOM -- read the island, don't render.
+    """
     if doc.kind != "html":
         return None
-    if doc.select("script#__NEXT_DATA__, script[type='application/json'], script[id*=state]") is not None:
+    if (
+        doc.select(
+            "script#__NEXT_DATA__, script[type='application/json'], script[id*=state]"
+        )
+        is not None
+    ):
         return Signal(name="data_api", confidence=0.7)
     return None
 
@@ -146,8 +187,11 @@ def record_list(doc: Document) -> "Signal | None":
     if not regions:
         return None
     top = regions[0]
-    return Signal(name="record_list", confidence=min(0.95, 0.5 + top.count * 0.02),
-                  detail={"item_selector": top.item_selector, "count": top.count})
+    return Signal(
+        name="record_list",
+        confidence=min(0.95, 0.5 + top.count * 0.02),
+        detail={"item_selector": top.item_selector, "count": top.count},
+    )
 
 
 def tabbed(doc: Document) -> "Signal | None":
@@ -155,7 +199,10 @@ def tabbed(doc: Document) -> "Signal | None":
     remedy is an interaction, not a URL walk)."""
     if doc.kind != "html":
         return None
-    if doc.select("[role=tablist], [role=tab], [data-tabs], [data-tab], .tab-content") is not None:
+    if (
+        doc.select("[role=tablist], [role=tab], [data-tabs], [data-tab], .tab-content")
+        is not None
+    ):
         return Signal(name="tabbed", confidence=0.6)
     return None
 
@@ -171,6 +218,20 @@ def iframe(doc: Document) -> "Signal | None":
     return None
 
 
-__all__ = ["Signal", "spa", "login_wall", "pagination", "anti_bot", "consent_wall", "infinite_scroll",
-           "empty", "blocked_status", "server_error", "structured_data", "data_api", "record_list",
-           "tabbed", "iframe"]
+__all__ = [
+    "Signal",
+    "spa",
+    "login_wall",
+    "pagination",
+    "anti_bot",
+    "consent_wall",
+    "infinite_scroll",
+    "empty",
+    "blocked_status",
+    "server_error",
+    "structured_data",
+    "data_api",
+    "record_list",
+    "tabbed",
+    "iframe",
+]

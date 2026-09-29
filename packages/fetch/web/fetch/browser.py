@@ -16,32 +16,54 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Literal
 
-from .bus import emit
-
 from . import mouse
+from .bus import emit
 from .errors import classify
-from .models import CaptureEvent, ConsoleEvent, DOMEvent, FetchEvent, NetworkEvent
 from .fingerprint import Fingerprint, as_fingerprint
+from .models import (
+    CaptureEvent,
+    ConsoleEvent,
+    DOMEvent,
+    FetchEvent,
+    NetworkEvent,
+    Request,
+    Script,
+    Snapshot,
+    Wait,
+)
 from .proxy import Proxy, as_proxy
-from .models import Request, Script
 from .script import ScriptRegistry, default_scripts
-from .models import Snapshot, Wait
 from .wait import apply_wait
 
-if TYPE_CHECKING:  # playwright is an optional extra; imported lazily at runtime in _browser_ready
-    from playwright.async_api import Browser, BrowserContext, ConsoleMessage, Page, Playwright, Response
+if (
+    TYPE_CHECKING
+):  # playwright is an optional extra; imported lazily at runtime in _browser_ready
+    from playwright.async_api import (
+        Browser,
+        BrowserContext,
+        ConsoleMessage,
+        Page,
+        Playwright,
+        Response,
+    )
 
 _STEALTH = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
 _BODY_CAP = 512_000  # per-response body captured (text/data responses only)
-_BODIES_MAX = 60     # how many response bodies to drain per snapshot
+_BODIES_MAX = 60  # how many response bodies to drain per snapshot
 
 
 class BrowserSession:
     """A browser session: it OWNS a Playwright context + page. Actions mutate the page and return
-    Self; ``snapshot`` materialises a Snapshot; ``aclose`` closes the context (and its page)."""
+    Self; ``snapshot`` materialises a Snapshot; ``aclose`` closes the context (and its page).
+    """
 
-    def __init__(self, context: "BrowserContext", page: "Page", scripts: tuple[Script, ...],
-                 wait: "Wait | None" = None) -> None:
+    def __init__(
+        self,
+        context: "BrowserContext",
+        page: "Page",
+        scripts: tuple[Script, ...],
+        wait: "Wait | None" = None,
+    ) -> None:
         self._context = context
         self._page = page
         self._scripts = scripts
@@ -49,7 +71,9 @@ class BrowserSession:
         self._request = Request(url=page.url or "about:blank")
         self._status = 0
         self._headers: dict[str, str] = {}
-        self._responses: "list[Response]" = []  # raw Response objects; bodies drained in snapshot()
+        self._responses: "list[Response]" = (
+            []
+        )  # raw Response objects; bodies drained in snapshot()
         self._console: list[ConsoleEvent] = []
         page.on("response", self._record_response)
         page.on("console", self._record_console)
@@ -60,17 +84,26 @@ class BrowserSession:
     def _record_console(self, message: "ConsoleMessage") -> None:
         self._console.append(ConsoleEvent(level=message.type, text=message.text))
 
-    async def goto(self, request: Request, *, wait: "Wait | None" = None) -> "BrowserSession":
+    async def goto(
+        self, request: Request, *, wait: "Wait | None" = None
+    ) -> "BrowserSession":
         """Navigate the owned page to ``request`` and settle per ``wait`` (else the session default);
-        returns Self so navigation and actions chain. Installs the ``load`` recorders after render."""
+        returns Self so navigation and actions chain. Installs the ``load`` recorders after render.
+        """
         self._request = request
         self._responses.clear()
         w = wait or self._wait
-        nav: Literal["domcontentloaded", "load"] = "domcontentloaded" if w.until == "domcontentloaded" else "load"
-        resp = await self._page.goto(request.url, wait_until=nav, timeout=request.timeout * 1000)
+        nav: Literal["domcontentloaded", "load"] = (
+            "domcontentloaded" if w.until == "domcontentloaded" else "load"
+        )
+        resp = await self._page.goto(
+            request.url, wait_until=nav, timeout=request.timeout * 1000
+        )
         self._status = resp.status if resp is not None else 0
         self._headers = dict(resp.headers) if resp is not None else {}
-        await apply_wait(self._page, w)  # settle further (networkidle / dom_stable / selector)
+        await apply_wait(
+            self._page, w
+        )  # settle further (networkidle / dom_stable / selector)
         for s in self._scripts:
             if s.on == "load":
                 await self._page.evaluate(s.js)
@@ -83,7 +116,11 @@ class BrowserSession:
             el = await self._page.query_selector(selector)
             box = await el.bounding_box() if el is not None else None
             if box:
-                await mouse.move_along(self._page, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                await mouse.move_along(
+                    self._page,
+                    box["x"] + box["width"] / 2,
+                    box["y"] + box["height"] / 2,
+                )
         await self._page.click(selector)
         return self
 
@@ -134,10 +171,19 @@ class BrowserSession:
                     if raw and len(raw) <= _BODY_CAP:
                         body = raw
                     drained += 1
-                except Exception:  # body gone / stream consumed -> skip, don't fail the snapshot
+                except (
+                    Exception
+                ):  # body gone / stream consumed -> skip, don't fail the snapshot
                     pass
-            out.append(NetworkEvent(method=r.request.method, url=r.url, status=r.status,
-                                    resource_type=rtype, body=body))
+            out.append(
+                NetworkEvent(
+                    method=r.request.method,
+                    url=r.url,
+                    status=r.status,
+                    resource_type=rtype,
+                    body=body,
+                )
+            )
         return out
 
     async def snapshot(self) -> Snapshot:
@@ -154,8 +200,14 @@ class BrowserSession:
                 if records:
                     events.append(DOMEvent(script=s.name, records=records))
         headers = self._headers or {"content-type": "text/html; charset=utf-8"}
-        return Snapshot(request=self._request, url=self._page.url, status=self._status,
-                        headers=headers, content=content.encode("utf-8"), events=events)
+        return Snapshot(
+            request=self._request,
+            url=self._page.url,
+            status=self._status,
+            headers=headers,
+            content=content.encode("utf-8"),
+            events=events,
+        )
 
     async def fetch(self, request: Request) -> Snapshot:
         """Navigate + snapshot -- the Fetcher protocol within the session. Never raises: a nav
@@ -164,8 +216,12 @@ class BrowserSession:
         try:
             await self.goto(request)
         except Exception as exc:
-            return Snapshot(request=request, url=request.url, elapsed=time.perf_counter() - start,
-                            error=classify(exc, url=request.url))
+            return Snapshot(
+                request=request,
+                url=request.url,
+                elapsed=time.perf_counter() - start,
+                error=classify(exc, url=request.url),
+            )
         return await self.snapshot()
 
     async def aclose(self) -> None:
@@ -178,14 +234,21 @@ class BrowserFetcher:
     :class:`BrowserSession`; ``fetch`` is a one-shot session."""
 
     def __init__(
-        self, *, headless: bool = True, channel: str = "chromium",
-        proxy: "str | Proxy | None" = None, fingerprint: "bool | Fingerprint" = False,
-        cdp: "str | None" = None, wait: "Wait | None" = None,
+        self,
+        *,
+        headless: bool = True,
+        channel: str = "chromium",
+        proxy: "str | Proxy | None" = None,
+        fingerprint: "bool | Fingerprint" = False,
+        cdp: "str | None" = None,
+        wait: "Wait | None" = None,
         executable_path: "str | None" = None,
         scripts: "tuple[Script, ...] | ScriptRegistry | None" = None,
     ) -> None:
         self._headless = headless
-        self._channel = channel  # "chromium" = bundled; "chrome" = the real Chrome install
+        self._channel = (
+            channel  # "chromium" = bundled; "chrome" = the real Chrome install
+        )
         #: an explicit browser BINARY to launch (a driver/executable path), instead of the one the
         #: channel resolves to -- for a pinned/self-managed Chromium or a custom build.
         self._executable = executable_path
@@ -197,9 +260,13 @@ class BrowserFetcher:
         self._cdp = cdp
         #: a registry so a caller can enable/disable capture scripts; a bare tuple is wrapped.
         self.scripts: ScriptRegistry = (
-            default_scripts() if scripts is None
-            else scripts if isinstance(scripts, ScriptRegistry)
-            else ScriptRegistry(scripts)
+            default_scripts()
+            if scripts is None
+            else (
+                scripts
+                if isinstance(scripts, ScriptRegistry)
+                else ScriptRegistry(scripts)
+            )
         )
         self._pw: "Playwright | None" = None
         self._browser: "Browser | None" = None
@@ -210,7 +277,9 @@ class BrowserFetcher:
             from playwright.async_api import async_playwright
 
             self._pw = await async_playwright().start()
-            if self._cdp is not None:  # attach to an existing browser over the DevTools protocol
+            if (
+                self._cdp is not None
+            ):  # attach to an existing browser over the DevTools protocol
                 browser = await self._pw.chromium.connect_over_cdp(self._cdp)
             else:
                 browser = await self._pw.chromium.launch(
@@ -224,19 +293,27 @@ class BrowserFetcher:
 
     async def session(self) -> BrowserSession:
         """Open a session that OWNS a fresh context + page (isolated cookies/state). Applies the
-        fingerprint's context options + stealth pass and any ``init`` scripts before navigation."""
+        fingerprint's context options + stealth pass and any ``init`` scripts before navigation.
+        """
         browser = await self._browser_ready()
         fp = self._fingerprint
-        if fp is not None:  # apply the identity's context options (explicit, so no dict[str, Any])
+        if (
+            fp is not None
+        ):  # apply the identity's context options (explicit, so no dict[str, Any])
             w, h = fp.viewport
             context = await browser.new_context(
-                user_agent=fp.user_agent, viewport={"width": w, "height": h}, locale=fp.locale)
+                user_agent=fp.user_agent,
+                viewport={"width": w, "height": h},
+                locale=fp.locale,
+            )
         else:
             context = await browser.new_context()
         page = await context.new_page()
         scripts = self.scripts.enabled()  # only the enabled scripts install
         try:
-            if self._fingerprint:  # a light stealth pass (real anti-detect is a heavier backend)
+            if (
+                self._fingerprint
+            ):  # a light stealth pass (real anti-detect is a heavier backend)
                 await page.add_init_script(_STEALTH)
             for s in scripts:  # 'init' scripts run before any page script
                 if s.on == "init":
@@ -253,8 +330,12 @@ class BrowserFetcher:
         try:
             s = await self.session()
         except Exception as exc:
-            return Snapshot(request=request, url=request.url, elapsed=time.perf_counter() - start,
-                            error=classify(exc, url=request.url))
+            return Snapshot(
+                request=request,
+                url=request.url,
+                elapsed=time.perf_counter() - start,
+                error=classify(exc, url=request.url),
+            )
         try:
             return await s.fetch(request)
         finally:

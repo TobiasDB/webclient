@@ -17,7 +17,9 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel
 
 from .classes import is_noise_class
-from .nodes import Node, tag as _tag, text as _text
+from .nodes import Node
+from .nodes import tag as _tag
+from .nodes import text as _text
 
 if TYPE_CHECKING:
     from .document import Document
@@ -25,11 +27,35 @@ if TYPE_CHECKING:
 # -- interactivity: is this element a control? (static/semantic tier) --
 _CLICK_TAGS = frozenset({"button", "summary", "label", "option"})
 _FIELD_TAGS = frozenset({"input", "select", "textarea"})
-_CLICK_ROLES = frozenset({"button", "link", "tab", "menuitem", "menuitemcheckbox", "menuitemradio",
-                          "checkbox", "radio", "switch", "option", "combobox", "slider", "spinbutton"})
-_ROLE_BY_TAG = {"a": "link", "button": "button", "select": "combobox", "textarea": "textbox",
-                "summary": "disclosure", "label": "label", "option": "option"}
-_TEXTISH = frozenset({"text", "search", "email", "url", "tel", "password", "number", ""})
+_CLICK_ROLES = frozenset(
+    {
+        "button",
+        "link",
+        "tab",
+        "menuitem",
+        "menuitemcheckbox",
+        "menuitemradio",
+        "checkbox",
+        "radio",
+        "switch",
+        "option",
+        "combobox",
+        "slider",
+        "spinbutton",
+    }
+)
+_ROLE_BY_TAG = {
+    "a": "link",
+    "button": "button",
+    "select": "combobox",
+    "textarea": "textbox",
+    "summary": "disclosure",
+    "label": "label",
+    "option": "option",
+}
+_TEXTISH = frozenset(
+    {"text", "search", "email", "url", "tel", "password", "number", ""}
+)
 _VALUE_TYPES = frozenset({"submit", "button", "reset"})
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _SEP = re.compile(r"[-_./]+")
@@ -39,7 +65,8 @@ _HASHISH = re.compile(r"^(?=.*\d)(?=.*[a-z])(?=.*[A-Z]).{5,}$|^[0-9a-f]{6,}$", r
 class IndexedElement(BaseModel):
     """One entry in the numbered table -- what an agent reasons over without seeing classes.
     ``selector`` is the durable, class-free CSS the index resolves to; ``repeats`` > 1 marks a
-    member of a repeated structure (a record row), so a query agent can pick ``select_all``."""
+    member of a repeated structure (a record row), so a query agent can pick ``select_all``.
+    """
 
     index: int
     role: str = ""
@@ -54,9 +81,13 @@ def interactive(el: Node) -> bool:
     ``tabindex`` / ``contenteditable``."""
     tag, get = _tag(el), el.get
     return bool(
-        (tag == "a" and get("href") is not None) or tag in _CLICK_TAGS or tag in _FIELD_TAGS
+        (tag == "a" and get("href") is not None)
+        or tag in _CLICK_TAGS
+        or tag in _FIELD_TAGS
         or (get("role") or "").strip().lower() in _CLICK_ROLES
-        or get("onclick") is not None or get("tabindex") is not None or get("contenteditable") is not None
+        or get("onclick") is not None
+        or get("tabindex") is not None
+        or get("contenteditable") is not None
     )
 
 
@@ -81,14 +112,17 @@ def _wordlike(s: str) -> bool:
 
 def element_name(el: Node, *, max_len: int = 60) -> str:
     """A short human label for ``el`` -- aria-label / alt / title / placeholder / a control's value
-    / short visible text / a word-like humanized id -- or ``""`` (a hashed id yields nothing)."""
+    / short visible text / a word-like humanized id -- or ``""`` (a hashed id yields nothing).
+    """
     get = el.get
     for attr in ("aria-label", "alt", "title", "placeholder"):
         v = (get(attr) or "").strip()
         if v and _wordlike(v):
             return v[:max_len]
     tag = _tag(el)
-    if tag == "button" or (tag == "input" and (get("type") or "").lower() in _VALUE_TYPES):
+    if tag == "button" or (
+        tag == "input" and (get("type") or "").lower() in _VALUE_TYPES
+    ):
         v = (get("value") or "").strip()
         if v and _wordlike(v):
             return v[:max_len]
@@ -134,9 +168,12 @@ def durable_selector(el: Node, *, within: "Node | None" = None) -> str:
     return " > ".join(reversed(steps))
 
 
-def index_elements(doc: "Document", *, kind: "Literal['interactive', 'content']", limit: int = 200) -> "list[IndexedElement]":
+def index_elements(
+    doc: "Document", *, kind: "Literal['interactive', 'content']", limit: int = 200
+) -> "list[IndexedElement]":
     """The numbered element table for a markup document. ``interactive`` = the controls to drive;
-    ``content`` = text-bearing leaves, each ``repeats``-marked from the detected record regions."""
+    ``content`` = text-bearing leaves, each ``repeats``-marked from the detected record regions.
+    """
     if not doc._markup():
         return []
     root = doc._root()
@@ -148,16 +185,29 @@ def index_elements(doc: "Document", *, kind: "Literal['interactive', 'content']"
         if kind == "interactive":
             if not interactive(el):
                 continue
-            out.append(IndexedElement(index=len(out) + 1, role=role_of(el, True),
-                                      name=element_name(el) or _text(el)[:60], kind="interactive",
-                                      selector=durable_selector(el)))
+            out.append(
+                IndexedElement(
+                    index=len(out) + 1,
+                    role=role_of(el, True),
+                    name=element_name(el) or _text(el)[:60],
+                    kind="interactive",
+                    selector=durable_selector(el),
+                )
+            )
         else:
             txt = _text(el)
             if not txt or any(_tag(c) and _text(c) for c in el):
                 continue  # a container whose text comes from children -> not a leaf
-            out.append(IndexedElement(index=len(out) + 1, role=role_of(el, interactive(el)),
-                                      name=txt[:80], kind="content", selector=durable_selector(el),
-                                      repeats=repeats.get(id(el), 1)))
+            out.append(
+                IndexedElement(
+                    index=len(out) + 1,
+                    role=role_of(el, interactive(el)),
+                    name=txt[:80],
+                    kind="content",
+                    selector=durable_selector(el),
+                    repeats=repeats.get(id(el), 1),
+                )
+            )
         if len(out) >= limit:
             break
     return out
@@ -178,12 +228,22 @@ def record_options(doc: "Document", *, top_k: int = 5) -> "list[IndexedElement]"
     ``select_all`` container from. Each ``selector`` is the region's item selector."""
     out: list[IndexedElement] = []
     for region in doc.records(top_k=top_k):
-        out.append(IndexedElement(index=len(out) + 1, role="row", name=f"{region.count} records",
-                                  kind="content", selector=region.item_selector, repeats=region.count))
+        out.append(
+            IndexedElement(
+                index=len(out) + 1,
+                role="row",
+                name=f"{region.count} records",
+                kind="content",
+                selector=region.item_selector,
+                repeats=region.count,
+            )
+        )
     return out
 
 
-def field_options(doc: "Document", record_selector: str, *, limit: int = 40) -> "list[IndexedElement]":
+def field_options(
+    doc: "Document", record_selector: str, *, limit: int = 40
+) -> "list[IndexedElement]":
     """The text-bearing fields WITHIN one record, as numbered options with selectors RELATIVE to the
     record (so each evaluates per row) -- what a query agent picks each column from."""
     first = doc.select(record_selector)
@@ -197,8 +257,15 @@ def field_options(doc: "Document", record_selector: str, *, limit: int = 40) -> 
         txt = _text(el)
         if not txt or any(_tag(c) and _text(c) for c in el):
             continue
-        out.append(IndexedElement(index=len(out) + 1, role=role_of(el, False), name=txt[:80],
-                                  kind="content", selector=durable_selector(el, within=record)))
+        out.append(
+            IndexedElement(
+                index=len(out) + 1,
+                role=role_of(el, False),
+                name=txt[:80],
+                kind="content",
+                selector=durable_selector(el, within=record),
+            )
+        )
         if len(out) >= limit:
             break
     return out
@@ -209,5 +276,14 @@ def render_table(rows: "list[IndexedElement]") -> str:
     return "\n".join(f"[{r.index}] {r.role}: {r.name}" for r in rows)
 
 
-__all__ = ["IndexedElement", "interactive", "role_of", "element_name", "durable_selector",
-           "index_elements", "record_options", "field_options", "render_table"]
+__all__ = [
+    "IndexedElement",
+    "interactive",
+    "role_of",
+    "element_name",
+    "durable_selector",
+    "index_elements",
+    "record_options",
+    "field_options",
+    "render_table",
+]

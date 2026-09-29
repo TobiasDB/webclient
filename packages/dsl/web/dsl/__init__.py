@@ -28,6 +28,21 @@ from .run import run_blob
 from .surface import LazyCollection, LazyDocument, LazyField, LazyReference, wq
 from .values import Collection, Field, Ref
 
-__all__ = ["wq", "WebClient", "Expr", "from_blob", "from_plan", "run_blob", "Plan", "Step", "Arg",
-           "Collection", "Field", "Ref", "LazyReference", "LazyDocument", "LazyCollection",
-           "LazyField"]
+__all__ = [
+    "wq",
+    "WebClient",
+    "Expr",
+    "from_blob",
+    "from_plan",
+    "run_blob",
+    "Plan",
+    "Step",
+    "Arg",
+    "Collection",
+    "Field",
+    "Ref",
+    "LazyReference",
+    "LazyDocument",
+    "LazyCollection",
+    "LazyField",
+]

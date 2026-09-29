@@ -12,7 +12,9 @@ if TYPE_CHECKING:
     from .document import Document
 
 
-def regex(doc: "Document", pattern: str, *, group: "int | str" = 0, flags: int = 0) -> "str | None":
+def regex(
+    doc: "Document", pattern: str, *, group: "int | str" = 0, flags: int = 0
+) -> "str | None":
     """The FIRST match of ``pattern`` in the document's text, returning ``group`` (0 = whole match,
     an int/name = a capture group), or ``None`` if it does not match."""
     m = re.search(pattern, doc.text, flags)
@@ -24,7 +26,9 @@ def regex(doc: "Document", pattern: str, *, group: "int | str" = 0, flags: int =
         return None
 
 
-def regex_all(doc: "Document", pattern: str, *, group: "int | str" = 0, flags: int = 0) -> "list[str]":
+def regex_all(
+    doc: "Document", pattern: str, *, group: "int | str" = 0, flags: int = 0
+) -> "list[str]":
     """EVERY non-overlapping match of ``pattern``, each reduced to ``group``."""
     out: list[str] = []
     for m in re.finditer(pattern, doc.text, flags):

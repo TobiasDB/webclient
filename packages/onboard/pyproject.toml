@@ -21,3 +21,10 @@ web-parse = { path = "../parse", editable = true }
 web-resolve = { path = "../resolve", editable = true }
 web-crawl = { path = "../crawl", editable = true }
 web-dsl = { path = "../dsl", editable = true }
+
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+line_length = 100

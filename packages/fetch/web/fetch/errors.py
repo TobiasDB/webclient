@@ -42,7 +42,8 @@ from pydantic import BaseModel, JsonValue
 
 class WebError(BaseModel):
     """A structured, serialisable error. ``code`` is a stable dotted identifier a caller can branch
-    on; ``message`` is for humans; ``detail`` carries anything else (status, url, ...)."""
+    on; ``message`` is for humans; ``detail`` carries anything else (status, url, ...).
+    """
 
     code: str
     message: str = ""
@@ -58,7 +59,9 @@ class WebException(Exception):
     structured ``.error``."""
 
     def __init__(self, error: "WebError | str", message: str = "") -> None:
-        self.error = WebError(code=error, message=message) if isinstance(error, str) else error
+        self.error = (
+            WebError(code=error, message=message) if isinstance(error, str) else error
+        )
         super().__init__(str(self.error))
 
 
@@ -91,8 +94,12 @@ def _playwright_code(exc: BaseException) -> "str | None":
         return "fetch.tls"
     if "ERR_ABORTED" in m:
         return "fetch.aborted"
-    if ("ERR_CONNECTION" in m or "ERR_ADDRESS_UNREACHABLE" in m or "ERR_INTERNET_DISCONNECTED" in m
-            or "ERR_UNSAFE_PORT" in m):
+    if (
+        "ERR_CONNECTION" in m
+        or "ERR_ADDRESS_UNREACHABLE" in m
+        or "ERR_INTERNET_DISCONNECTED" in m
+        or "ERR_UNSAFE_PORT" in m
+    ):
         return "fetch.connect"
     return "fetch.browser"
 
@@ -120,15 +127,20 @@ def classify(exc: BaseException, *, url: str = "") -> WebError:
             code = "fetch.dns"
         else:
             code = "fetch.connect"
-    elif isinstance(exc, httpx.NetworkError):  # Read/Write/Close errors (base after ConnectError)
+    elif isinstance(
+        exc, httpx.NetworkError
+    ):  # Read/Write/Close errors (base after ConnectError)
         code = "fetch.connect"
     elif any(isinstance(c, ssl.SSLError) for c in causes):
         code = "fetch.tls"
 
     if code is None:
         code = _playwright_code(exc) or "fetch.transport"
-    return WebError(code=code, message=str(exc) or type(exc).__name__,
-                    detail={"url": url, "exc": type(exc).__name__})
+    return WebError(
+        code=code,
+        message=str(exc) or type(exc).__name__,
+        detail={"url": url, "exc": type(exc).__name__},
+    )
 
 
 __all__ = ["WebError", "WebException", "err", "classify"]

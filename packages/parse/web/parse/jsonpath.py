@@ -30,7 +30,11 @@ def dig(value: JSON, path: str) -> JSON:
         if key:
             value = value.get(key) if isinstance(value, dict) else None
         if idx is not None:
-            value = value[idx] if isinstance(value, list) and -len(value) <= idx < len(value) else None
+            value = (
+                value[idx]
+                if isinstance(value, list) and -len(value) <= idx < len(value)
+                else None
+            )
         if value is None:
             return None
     return value
@@ -79,9 +83,12 @@ def _merge_keys(items: "list[JSON]") -> "dict[str, JSON]":
     return merged
 
 
-def skeleton(value: JSON, *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30) -> str:
+def skeleton(
+    value: JSON, *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30
+) -> str:
     """A token-lean JSON shape outline: keys with value types, an array as ``[N]`` with its element
-    shape (object keys merged across items) -- so a query can be written by dotted path."""
+    shape (object keys merged across items) -- so a query can be written by dotted path.
+    """
     lines: list[str] = []
 
     def sample(v: JSON) -> str:

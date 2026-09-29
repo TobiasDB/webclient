@@ -14,17 +14,19 @@ from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel
-
-from web.fetch import ClientPool, Fetcher, Fingerprint, Middleware, Snapshot
+from web.fetch import ClientPool, Fetcher, Fingerprint, Middleware
 from web.fetch import Profile as FetchProfile
+from web.fetch import Snapshot
 
 
 @runtime_checkable
 class Policy(Protocol):
     """A slot policy: ``build(pool)`` turns this declarative config into a configured middleware.
-    (``EscalationPolicy`` is special -- it also supplies the base tier -- so it is not a ``Policy``.)"""
+    (``EscalationPolicy`` is special -- it also supplies the base tier -- so it is not a ``Policy``.)
+    """
 
     def build(self, pool: ClientPool) -> Middleware: ...
+
 
 from .middleware import escalate as _escalate
 from .middleware import rate_limit as _rate_limit
@@ -54,7 +56,8 @@ class RatePolicy(BaseModel):
 
 class RotationPolicy(BaseModel):
     """Present a fresh identity per request -- lease a differently-fingerprinted backend from the
-    pool (a browserforge ``fleet``; empty = the default fleet). Only sane WITH IP rotation."""
+    pool (a browserforge ``fleet``; empty = the default fleet). Only sane WITH IP rotation.
+    """
 
     fleet: "tuple[Fingerprint, ...]" = ()
 
@@ -108,4 +111,11 @@ def _triggers(on: "tuple[str, ...]") -> "Callable[[Snapshot], bool] | None":
     return blocked
 
 
-__all__ = ["Policy", "RetryPolicy", "RatePolicy", "RotationPolicy", "PaginatePolicy", "EscalationPolicy"]
+__all__ = [
+    "Policy",
+    "RetryPolicy",
+    "RatePolicy",
+    "RotationPolicy",
+    "PaginatePolicy",
+    "EscalationPolicy",
+]

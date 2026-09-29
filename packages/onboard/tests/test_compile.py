@@ -12,9 +12,8 @@ from typing import cast
 
 import pytest
 from pytest_httpserver import HTTPServer
-
-from web.resolve import Resolver
 from web.onboard.compile import QueryError, parse_query, query_code, reroot
+from web.resolve import Resolver
 
 
 def _run(coro: object) -> object:
@@ -24,10 +23,16 @@ def _run(coro: object) -> object:
 def test_parse_and_reroot_runs(httpserver: HTTPServer) -> None:
     httpserver.expect_request("/p").respond_with_data(
         b"<ul><li class='row'><span class='n'>Ada</span></li>"
-        b"<li class='row'><span class='n'>Bo</span></li></ul>", content_type="text/html")
-    chain = parse_query('wq.doc.select_all("li.row").extract(n=wq.doc.select(".n").attr("text"))')
+        b"<li class='row'><span class='n'>Bo</span></li></ul>",
+        content_type="text/html",
+    )
+    chain = parse_query(
+        'wq.doc.select_all("li.row").extract(n=wq.doc.select(".n").attr("text"))'
+    )
     query = reroot(chain, httpserver.url_for("/p"))
-    assert query.to_blob().count("reference") == 0  # source lives in the blob, not a literal call
+    assert (
+        query.to_blob().count("reference") == 0
+    )  # source lives in the blob, not a literal call
     rows = cast("list[dict[str, object]]", _run(query.acollect()))
     assert rows == [{"n": "Ada"}, {"n": "Bo"}]
 
@@ -35,18 +40,23 @@ def test_parse_and_reroot_runs(httpserver: HTTPServer) -> None:
 def test_query_code_strips_fence_prose_and_smart_quotes() -> None:
     reply = "Here is the query:\n```python\nquery = wq.doc.select_all(“.row”).extract()\n```"
     code = query_code(reply)
-    assert code == 'wq.doc.select_all(".row").extract()'  # starts at wq., ASCII quotes, no fence
+    assert (
+        code == 'wq.doc.select_all(".row").extract()'
+    )  # starts at wq., ASCII quotes, no fence
 
 
-@pytest.mark.parametrize("hostile", [
-    "wq.reference('u').__globals__['os']",   # reach the module globals
-    "wq.doc.__class__.__mro__",              # reach the type / builtins
-    "os.system('rm -rf /')",                 # a non-wq name
-    "wq.doc.select_all(*['a'])",             # starred args
-    "__import__('os').system('x')",          # a builtin call
-    "1 + 1",                                  # a stray expression
-    "",                                       # nothing
-])
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "wq.reference('u').__globals__['os']",  # reach the module globals
+        "wq.doc.__class__.__mro__",  # reach the type / builtins
+        "os.system('rm -rf /')",  # a non-wq name
+        "wq.doc.select_all(*['a'])",  # starred args
+        "__import__('os').system('x')",  # a builtin call
+        "1 + 1",  # a stray expression
+        "",  # nothing
+    ],
+)
 def test_parse_refuses_hostile_or_empty(hostile: str) -> None:
     with pytest.raises(QueryError):
         parse_query(hostile)

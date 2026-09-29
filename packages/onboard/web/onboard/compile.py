@@ -30,12 +30,24 @@ Query = LazyCollection[object] | LazyDocument
 #: literal constant kinds a query may contain (selectors, nth indices, map values, flags).
 _CONST = (str, int, float, bool, type(None))
 #: typographic characters a model sometimes emits instead of the ASCII forms ``ast.parse`` needs.
-_SMART = {"“": '"', "”": '"', "‘": "'", "’": "'",
-          "–": "-", "—": "-", "…": "...", " ": " "}
+_SMART = {
+    "“": '"',
+    "”": '"',
+    "‘": "'",
+    "’": "'",
+    "–": "-",
+    "—": "-",
+    "…": "...",
+    " ": " ",
+}
 #: comparison operators allowed inside a ``filter`` predicate.
 _CMP: dict[type[ast.cmpop], object] = {
-    ast.Eq: operator.eq, ast.NotEq: operator.ne, ast.Lt: operator.lt,
-    ast.LtE: operator.le, ast.Gt: operator.gt, ast.GtE: operator.ge,
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
 }
 
 
@@ -46,7 +58,8 @@ class QueryError(ValueError):
 def query_code(reply: str) -> str:
     """The query EXPRESSION from a model reply: drop any code fence / prose, start at the first
     ``wq.`` (so a ``query =`` preamble goes), cut a trailing fence, and normalise smart quotes /
-    dashes to the ASCII forms the parser needs -- so a stray typographic character does not fail."""
+    dashes to the ASCII forms the parser needs -- so a stray typographic character does not fail.
+    """
     text = reply.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[-1]
@@ -91,7 +104,9 @@ def _eval(node: ast.AST) -> object:
         return cast("object", func(*args, **kwargs))  # type: ignore[operator]
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):  # ~cond
         return ~_eval(node.operand)  # type: ignore[operator]
-    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.BitAnd, ast.BitOr)):  # a & b / a | b
+    if isinstance(node, ast.BinOp) and isinstance(
+        node.op, (ast.BitAnd, ast.BitOr)
+    ):  # a & b / a | b
         left, right = _eval(node.left), _eval(node.right)
         return left & right if isinstance(node.op, ast.BitAnd) else left | right  # type: ignore[operator]
     if isinstance(node, ast.Compare) and len(node.ops) == 1:  # a == b, a < b, ...
@@ -122,7 +137,8 @@ def parse_query(reply: str) -> Expr:
 def reroot(chain: Expr, url: str) -> Query:
     """Root a page-relative ``wq.doc`` chain at ``url`` by prepending ``reference(url).resolve()``
     -- composed through the DSL's public plan API so the result is one self-contained, portable
-    blob. A chain the model already rooted at a ``reference(...)`` (it has a source) is left as is."""
+    blob. A chain the model already rooted at a ``reference(...)`` (it has a source) is left as is.
+    """
     tail = Plan.from_blob(chain.to_blob())
     if tail.source is not None:  # already self-contained -- don't double-root
         return cast(Query, chain)

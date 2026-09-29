@@ -30,7 +30,9 @@ _DOM_RECORD_JS = """
 })();
 """
 
-_DOM_DRAIN_JS = "() => { const e = window.__wc_dom || []; window.__wc_dom = []; return e; }"
+_DOM_DRAIN_JS = (
+    "() => { const e = window.__wc_dom || []; window.__wc_dom = []; return e; }"
+)
 
 
 #: the default DOM recorder -- a MutationObserver installed after load; its drained mutations

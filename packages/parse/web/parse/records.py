@@ -13,13 +13,19 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel
 
 from .classes import semantic_classes
-from .nodes import Node, classes as _all_classes, tag as _tag
+from .nodes import Node
+from .nodes import classes as _all_classes
+from .nodes import tag as _tag
 
 if TYPE_CHECKING:
     from .document import Document
 
-_SKIP = frozenset({"script", "style", "noscript", "template", "svg", "path", "br", "hr"})
-_DRAWING = frozenset({"svg", "math", "canvas"})   # repetition here is geometry, not records
+_SKIP = frozenset(
+    {"script", "style", "noscript", "template", "svg", "path", "br", "hr"}
+)
+_DRAWING = frozenset(
+    {"svg", "math", "canvas"}
+)  # repetition here is geometry, not records
 _CHROME_TAGS = frozenset({"nav", "header", "footer", "aside"})
 _CHROME_ROLES = frozenset({"navigation", "banner", "contentinfo", "complementary"})
 _WRAPPER_TAGS = frozenset({"div", "span", "li", "section", "article"})
@@ -27,7 +33,8 @@ _WRAPPER_TAGS = frozenset({"div", "span", "li", "section", "article"})
 
 class RecordRegion(BaseModel):
     """A detected repeating region -- a dataset candidate. ``item_selector`` is a suggested
-    ``select_all`` target; ``score`` = count x richness x chrome-penalty (higher = more dataset-like)."""
+    ``select_all`` target; ``score`` = count x richness x chrome-penalty (higher = more dataset-like).
+    """
 
     item_selector: str
     count: int
@@ -46,7 +53,8 @@ def _kids(el: Node) -> "list[Node]":
 
 def _unwrap(el: Node) -> Node:
     """Descend through anonymous single-child wrappers (the SPA/Tailwind per-record ``<div>``) to
-    the semantic record inside, so records group by their inner shape, not a bare wrapper tag."""
+    the semantic record inside, so records group by their inner shape, not a bare wrapper tag.
+    """
     for _ in range(4):
         if _tag(el) not in _WRAPPER_TAGS or _classes(el):
             break
@@ -68,7 +76,10 @@ def _chromey(el: Node) -> bool:
     node: "Node | None" = el
     hops = 0
     while node is not None and hops < 25:
-        if _tag(node) in _CHROME_TAGS or (node.get("role") or "").lower() in _CHROME_ROLES:
+        if (
+            _tag(node) in _CHROME_TAGS
+            or (node.get("role") or "").lower() in _CHROME_ROLES
+        ):
             return True
         node = node.getparent()
         hops += 1
@@ -104,12 +115,15 @@ def _item_selector(members: "list[Node]") -> str:
 
 def scan(doc: "Document", *, min_items: int = 3) -> "list[tuple[Node, RecordRegion]]":
     """Every qualifying region as (container node, :class:`RecordRegion`), best first -- the shared
-    search behind :func:`find_records` and the skeleton's record marks (which need the node)."""
+    search behind :func:`find_records` and the skeleton's record marks (which need the node).
+    """
     if not doc._markup():
         return []
     found: list[tuple[Node, RecordRegion]] = []
     for container in doc._root().iter():
-        if _tag(container) in _DRAWING or any(_tag(a) in _DRAWING for a in container.iterancestors()):
+        if _tag(container) in _DRAWING or any(
+            _tag(a) in _DRAWING for a in container.iterancestors()
+        ):
             continue
         children = _kids(container)
         if len(children) < min_items:
@@ -122,16 +136,25 @@ def scan(doc: "Document", *, min_items: int = 3) -> "list[tuple[Node, RecordRegi
             if len(members) < min_items:
                 continue
             score = len(members) * (1.0 + _richness(members)) * penalty
-            found.append((container, RecordRegion(
-                item_selector=_item_selector(members), count=len(members),
-                container_tag=_tag(container), container_id=container.get("id") or "",
-                score=round(score, 3),
-            )))
+            found.append(
+                (
+                    container,
+                    RecordRegion(
+                        item_selector=_item_selector(members),
+                        count=len(members),
+                        container_tag=_tag(container),
+                        container_id=container.get("id") or "",
+                        score=round(score, 3),
+                    ),
+                )
+            )
     found.sort(key=lambda pair: pair[1].score, reverse=True)
     return found
 
 
-def find_records(doc: "Document", *, min_items: int = 3, top_k: int = 3) -> "list[RecordRegion]":
+def find_records(
+    doc: "Document", *, min_items: int = 3, top_k: int = 3
+) -> "list[RecordRegion]":
     """The most dataset-like repeating regions in a markup document, best first (up to ``top_k``).
     A region is a container plus a group of >= ``min_items`` structurally-identical children; scored
     so a long, content-rich, non-chrome list outranks a short nav menu."""

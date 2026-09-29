@@ -18,8 +18,7 @@ from collections import deque
 from collections.abc import AsyncIterator
 from urllib.parse import urlparse
 
-from web.fetch import Request
-from web.fetch import emit
+from web.fetch import Request, emit
 from web.parse import Document
 from web.resolve import Resolver
 
@@ -39,7 +38,8 @@ class Crawler:
         """Resolve the goal's entry point(s) and their in-scope links breadth-first, yielding each
         RESULT document once, until the frontier drains or ``max_pages`` pages are fetched. URLs are
         deduped by :func:`~web.crawl.urls.canonical` (so ``/p`` and ``/p?utm=x`` are one page), and
-        a result that declares a ``rel=canonical`` already yielded is not yielded again."""
+        a result that declares a ``rel=canonical`` already yielded is not yielded again.
+        """
         seeds = [goal.start] if isinstance(goal.start, str) else list(goal.start)
         seen: set[str] = set()
         frontier: deque[str] = deque()
@@ -70,7 +70,9 @@ class Crawler:
             fetched += 1
             emit(CrawlEvent(url=url, fetched=fetched))
             if goal.collect is None or goal.collect(doc):
-                key = canonical(_canonical_url(doc))  # the page's OWN identity (rel=canonical wins)
+                key = canonical(
+                    _canonical_url(doc)
+                )  # the page's OWN identity (rel=canonical wins)
                 if key not in yielded:
                     yielded.add(key)
                     yield doc
@@ -99,5 +101,16 @@ def _sitemap_sources(seeds: list[str], rob: "Robots | None") -> list[str]:
     return [seeds[0]] if seeds else []
 
 
-__all__ = ["Crawler", "Goal", "CrawlEvent", "Follow", "Collect", "same_origin",
-           "canonical", "robots", "parse_robots", "Robots", "sitemap_urls"]
+__all__ = [
+    "Crawler",
+    "Goal",
+    "CrawlEvent",
+    "Follow",
+    "Collect",
+    "same_origin",
+    "canonical",
+    "robots",
+    "parse_robots",
+    "Robots",
+    "sitemap_urls",
+]

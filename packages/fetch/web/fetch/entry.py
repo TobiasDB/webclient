@@ -20,8 +20,8 @@ from typing import Generic, Protocol, TypeVar, runtime_checkable
 from .browser import BrowserFetcher, BrowserSession
 from .fingerprint import Fingerprint
 from .http import HttpFetcher
-from .proxy import Proxy
 from .models import Request, Session, Snapshot
+from .proxy import Proxy
 
 V = TypeVar("V")
 
@@ -41,8 +41,12 @@ class Entry(Generic[V, S]):
 
     __slots__ = ("_one_shot", "_open", "_on_exit", "_session")
 
-    def __init__(self, one_shot: "Callable[[], Awaitable[V]]", open_session: "Callable[[], Awaitable[S]]",
-                 on_exit: "Callable[[], Awaitable[None]] | None" = None) -> None:
+    def __init__(
+        self,
+        one_shot: "Callable[[], Awaitable[V]]",
+        open_session: "Callable[[], Awaitable[S]]",
+        on_exit: "Callable[[], Awaitable[None]] | None" = None,
+    ) -> None:
         self._one_shot = one_shot
         self._open = open_session
         self._on_exit = on_exit
@@ -74,7 +78,8 @@ _KEEP = _Keep()
 @dataclass(frozen=True)
 class Profile:
     """A reusable transport identity: proxy + fingerprint + default headers + whether to drive a
-    browser. Combine once, inherit with ``.with_(...)``; a per-call ``fetch`` kwarg overrides it."""
+    browser. Combine once, inherit with ``.with_(...)``; a per-call ``fetch`` kwarg overrides it.
+    """
 
     proxy: "str | Proxy | None" = None
     fingerprint: "bool | Fingerprint" = False
@@ -84,32 +89,56 @@ class Profile:
     #: for a pinned/self-managed Chromium; ``None`` uses the bundled/channel browser.
     executable_path: "str | None" = None
 
-    def with_(self, *, proxy: "str | Proxy | None | _Keep" = _KEEP,
-              fingerprint: "bool | Fingerprint | _Keep" = _KEEP,
-              headers: "dict[str, str] | _Keep" = _KEEP,
-              browser: "bool | _Keep" = _KEEP,
-              executable_path: "str | None | _Keep" = _KEEP) -> "Profile":
+    def with_(
+        self,
+        *,
+        proxy: "str | Proxy | None | _Keep" = _KEEP,
+        fingerprint: "bool | Fingerprint | _Keep" = _KEEP,
+        headers: "dict[str, str] | _Keep" = _KEEP,
+        browser: "bool | _Keep" = _KEEP,
+        executable_path: "str | None | _Keep" = _KEEP,
+    ) -> "Profile":
         """A copy with some slots overridden (the rest inherited) -- adjust a base profile."""
         return Profile(
             proxy=self.proxy if isinstance(proxy, _Keep) else proxy,
-            fingerprint=self.fingerprint if isinstance(fingerprint, _Keep) else fingerprint,
+            fingerprint=(
+                self.fingerprint if isinstance(fingerprint, _Keep) else fingerprint
+            ),
             headers=self.headers if isinstance(headers, _Keep) else headers,
             browser=self.browser if isinstance(browser, _Keep) else browser,
-            executable_path=self.executable_path if isinstance(executable_path, _Keep) else executable_path,
+            executable_path=(
+                self.executable_path
+                if isinstance(executable_path, _Keep)
+                else executable_path
+            ),
         )
 
     def fetcher(self) -> "BrowserFetcher | HttpFetcher":
         """The backend this transport identity describes -- so a fetch profile can be used directly
-        as a tier in a resolve profile's escalation ladder (an HTTP tier, a browser tier, ...)."""
+        as a tier in a resolve profile's escalation ladder (an HTTP tier, a browser tier, ...).
+        """
         if self.browser:
-            return BrowserFetcher(proxy=self.proxy, fingerprint=self.fingerprint,
-                                  executable_path=self.executable_path)
+            return BrowserFetcher(
+                proxy=self.proxy,
+                fingerprint=self.fingerprint,
+                executable_path=self.executable_path,
+            )
         return HttpFetcher(proxy=self.proxy, fingerprint=self.fingerprint)
 
     def key(self) -> "tuple[object, ...]":
         """A hashable identity for pooling: two profiles with the same key share one backend."""
-        fp = self.fingerprint if isinstance(self.fingerprint, bool) else self.fingerprint.model_dump_json()
-        return (self.browser, str(self.proxy), fp, tuple(sorted(self.headers.items())), self.executable_path)
+        fp = (
+            self.fingerprint
+            if isinstance(self.fingerprint, bool)
+            else self.fingerprint.model_dump_json()
+        )
+        return (
+            self.browser,
+            str(self.proxy),
+            fp,
+            tuple(sorted(self.headers.items())),
+            self.executable_path,
+        )
 
 
 _EMPTY = Profile()
@@ -120,7 +149,8 @@ class ClientPool:
     so a browser is launched ONCE and reused across fetches (not relaunched per request), and httpx
     connections are pooled. Backends multiplex (httpx pools connections; a browser opens a context
     per session), so a lease is the shared instance, not an exclusive checkout. The pool OWNS the
-    backends' lifetimes -- ``aclose`` closes them all (that is what shuts the browser)."""
+    backends' lifetimes -- ``aclose`` closes them all (that is what shuts the browser).
+    """
 
     def __init__(self) -> None:
         self._backends: "dict[tuple[object, ...], BrowserFetcher | HttpFetcher]" = {}
@@ -153,7 +183,8 @@ _DEFAULT_POOL: "ClientPool | None" = None
 def default_pool() -> ClientPool:
     """The process-wide default pool the functional entries lease from when none is given -- so
     repeated ``fetch(url)`` / ``resolve(url)`` calls reuse one browser / httpx client. Long-lived;
-    close it with :func:`aclose_default_pool` (or own an explicit :class:`ClientPool`)."""
+    close it with :func:`aclose_default_pool` (or own an explicit :class:`ClientPool`).
+    """
     global _DEFAULT_POOL
     if _DEFAULT_POOL is None:
         _DEFAULT_POOL = ClientPool()
@@ -172,12 +203,22 @@ def as_request(request: "Request | str", headers: "dict[str, str]") -> Request:
     """A ``Request`` from a URL string or a ready request, with profile headers merged in (an
     explicit request's own headers win)."""
     req = Request(url=request) if isinstance(request, str) else request
-    return req.model_copy(update={"headers": {**headers, **req.headers}}) if headers else req
+    return (
+        req.model_copy(update={"headers": {**headers, **req.headers}})
+        if headers
+        else req
+    )
 
 
-def fetch(request: "Request | str", *, browser: bool = False, profile: "Profile | None" = None,
-          proxy: "str | Proxy | None" = None, fingerprint: "bool | Fingerprint" = False,
-          pool: "ClientPool | None" = None) -> "Entry[Snapshot, Session]":
+def fetch(
+    request: "Request | str",
+    *,
+    browser: bool = False,
+    profile: "Profile | None" = None,
+    proxy: "str | Proxy | None" = None,
+    fingerprint: "bool | Fingerprint" = False,
+    pool: "ClientPool | None" = None,
+) -> "Entry[Snapshot, Session]":
     """Fetch ``request`` (a URL or a :class:`Request`). ``await`` it for a one-shot Snapshot, or
     ``async with fetch(...) as session:`` for a live session (a browser session is navigated to the
     request and owns its page; an HTTP session holds a cookie jar). ``profile`` supplies the
@@ -196,15 +237,31 @@ def fetch(request: "Request | str", *, browser: bool = False, profile: "Profile 
     req = as_request(request, eff.headers)
 
     async def one_shot() -> Snapshot:
-        return await backend.fetch(req)  # the pool owns the backend -- do not close it here
+        return await backend.fetch(
+            req
+        )  # the pool owns the backend -- do not close it here
 
     async def open_session() -> Session:
-        session = await backend.session()  # a fresh context/page (browser) or cookie jar (http)
-        if isinstance(session, BrowserSession):  # position the page at the request; then click/snapshot
+        session = (
+            await backend.session()
+        )  # a fresh context/page (browser) or cookie jar (http)
+        if isinstance(
+            session, BrowserSession
+        ):  # position the page at the request; then click/snapshot
             await session.goto(req)
         return session
 
-    return Entry(one_shot, open_session)  # on exit: close the session only; the pooled backend lives
+    return Entry(
+        one_shot, open_session
+    )  # on exit: close the session only; the pooled backend lives
 
 
-__all__ = ["fetch", "Entry", "Profile", "ClientPool", "default_pool", "aclose_default_pool", "as_request"]
+__all__ = [
+    "fetch",
+    "Entry",
+    "Profile",
+    "ClientPool",
+    "default_pool",
+    "aclose_default_pool",
+    "as_request",
+]

@@ -16,7 +16,11 @@ def document(snap: Snapshot) -> Document:
     """Parse the Snapshot's bytes into a :class:`~web.parse.Document` (Content-Type looked up
     case-insensitively; the final URL is the link base)."""
     ci = {k.lower(): v for k, v in snap.headers.items()}
-    return parse(snap.content, content_type=ci.get("content-type"), url=snap.url or snap.request.url)
+    return parse(
+        snap.content,
+        content_type=ci.get("content-type"),
+        url=snap.url or snap.request.url,
+    )
 
 
 __all__ = ["document"]

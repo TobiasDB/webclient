@@ -38,7 +38,8 @@ async def _resolve(value: "_T | Awaitable[_T]") -> _T:
 
 class Done(BaseModel):
     """The shared terminal marker: a driver/policy returns it to end the loop successfully (the
-    current state is the answer). Loop vocabulary lives here, so every agent uses the one ``Done``."""
+    current state is the answer). Loop vocabulary lives here, so every agent uses the one ``Done``.
+    """
 
 
 class Ask(BaseModel):
@@ -52,7 +53,8 @@ class Ask(BaseModel):
 
 class Verdict(BaseModel):
     """Why the loop stopped. ``done`` (a decision was terminal), ``budget``/``stalled`` (bounds),
-    ``error`` (apply raised), or ``waiting`` (the driver asked -- ``ask`` holds the question)."""
+    ``error`` (apply raised), or ``waiting`` (the driver asked -- ``ask`` holds the question).
+    """
 
     reason: Reason
     rounds: int
@@ -73,7 +75,8 @@ _UNSET = _Unset()
 
 class BoundedLoop(Generic[S, O, D]):
     """A bounded, resumable ``observe -> decide -> apply`` loop. ``done`` marks a decision terminal;
-    ``progress`` (optional) maps state to a value compared across rounds for stall detection."""
+    ``progress`` (optional) maps state to a value compared across rounds for stall detection.
+    """
 
     _state: S  # set by arun() before _drive()/resume() ever read it
 
@@ -88,7 +91,12 @@ class BoundedLoop(Generic[S, O, D]):
         max_rounds: int = 20,
         max_stalls: int = 3,
     ) -> None:
-        self._observe, self._decide, self._apply, self._done = observe, decide, apply, done
+        self._observe, self._decide, self._apply, self._done = (
+            observe,
+            decide,
+            apply,
+            done,
+        )
         self._progress = progress
         self.max_rounds, self.max_stalls = max_rounds, max_stalls
         self.round = 0
@@ -121,8 +129,12 @@ class BoundedLoop(Generic[S, O, D]):
         while True:
             if self.round >= self.max_rounds:
                 return self._verdict("budget")
-            observation: O = await _resolve(self._observe(self._state))  # sync or async observe
-            decision: "D | Ask" = await _resolve(self._decide(observation))  # sync or async driver
+            observation: O = await _resolve(
+                self._observe(self._state)
+            )  # sync or async observe
+            decision: "D | Ask" = await _resolve(
+                self._decide(observation)
+            )  # sync or async driver
             if isinstance(decision, Ask):
                 self._waiting = True
                 return self._verdict("waiting", ask=decision)
@@ -150,7 +162,9 @@ class BoundedLoop(Generic[S, O, D]):
                 return self._verdict("stalled")
         return None
 
-    def _verdict(self, reason: Reason, *, error: str = "", ask: "Ask | None" = None) -> Verdict:
+    def _verdict(
+        self, reason: Reason, *, error: str = "", ask: "Ask | None" = None
+    ) -> Verdict:
         return Verdict(reason=reason, rounds=self.round, error=error, ask=ask)
 
 

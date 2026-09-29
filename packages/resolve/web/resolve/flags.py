@@ -18,7 +18,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, JsonValue
-
 from web.fetch import Snapshot
 from web.parse import Document
 
@@ -32,7 +31,8 @@ _SnapDetector = Callable[[Snapshot], "Signal | None"]
 
 class Flag(BaseModel):
     """A conclusion about a resolved page: whether it holds, the combined confidence, the evidence
-    that fired, and the ``remedy`` a caller can act on (``escalate:browser``, ``retry``, …)."""
+    that fired, and the ``remedy`` a caller can act on (``escalate:browser``, ``retry``, …).
+    """
 
     name: str
     present: bool
@@ -55,13 +55,22 @@ class _Conclusion:
 #: the conclusion table -- each rolls up its evidence into one actionable flag + remedy.
 _CONCLUSIONS: tuple[_Conclusion, ...] = (
     _Conclusion("needs_browser", "escalate:browser", doc_detectors=(_s.spa, _s.empty)),
-    _Conclusion("blocked", "escalate:proxy", doc_detectors=(_s.anti_bot,), snap_detectors=(_s.blocked_status,)),
+    _Conclusion(
+        "blocked",
+        "escalate:proxy",
+        doc_detectors=(_s.anti_bot,),
+        snap_detectors=(_s.blocked_status,),
+    ),
     _Conclusion("auth_required", "session:login", doc_detectors=(_s.login_wall,)),
     _Conclusion("consent_wall", "dismiss:consent", doc_detectors=(_s.consent_wall,)),
     _Conclusion("paginated", "paginate", doc_detectors=(_s.pagination,)),
-    _Conclusion("infinite_scroll", "paginate:scroll", doc_detectors=(_s.infinite_scroll,)),
+    _Conclusion(
+        "infinite_scroll", "paginate:scroll", doc_detectors=(_s.infinite_scroll,)
+    ),
     _Conclusion("server_error", "retry", snap_detectors=(_s.server_error,)),
-    _Conclusion("structured_data", "extract:jsonld", doc_detectors=(_s.structured_data,)),
+    _Conclusion(
+        "structured_data", "extract:jsonld", doc_detectors=(_s.structured_data,)
+    ),
     _Conclusion("data_api", "extract:json_island", doc_detectors=(_s.data_api,)),
     _Conclusion("record_list", "extract:records", doc_detectors=(_s.record_list,)),
     _Conclusion("tabbed", "interact:tabs", doc_detectors=(_s.tabbed,)),
@@ -77,7 +86,9 @@ def _noisy_or(confidences: "list[float]") -> float:
     return 1.0 - p
 
 
-def _collect(concl: _Conclusion, doc: Document, snap: "Snapshot | None") -> "list[Signal]":
+def _collect(
+    concl: _Conclusion, doc: Document, snap: "Snapshot | None"
+) -> "list[Signal]":
     hits: list[Signal] = []
     for d in concl.doc_detectors:
         if (sig := d(doc)) is not None:
@@ -89,7 +100,9 @@ def _collect(concl: _Conclusion, doc: Document, snap: "Snapshot | None") -> "lis
     return hits
 
 
-def flag_for(concl: _Conclusion, doc: Document, snap: "Snapshot | None", *, threshold: float) -> "Flag | None":
+def flag_for(
+    concl: _Conclusion, doc: Document, snap: "Snapshot | None", *, threshold: float
+) -> "Flag | None":
     positive = _collect(concl, doc, snap)
     if not positive:
         return None
@@ -99,15 +112,21 @@ def flag_for(concl: _Conclusion, doc: Document, snap: "Snapshot | None", *, thre
             conf *= 1.0 - min(1.0, max(0.0, sig.confidence))
             positive.append(sig)
     return Flag(
-        name=concl.name, present=conf >= threshold, confidence=round(conf, 4),
-        remedy=concl.remedy, signals=positive,
+        name=concl.name,
+        present=conf >= threshold,
+        confidence=round(conf, 4),
+        remedy=concl.remedy,
+        signals=positive,
     )
 
 
-def flags(doc: Document, snapshot: "Snapshot | None" = None, *, threshold: float = 0.5) -> "list[Flag]":
+def flags(
+    doc: Document, snapshot: "Snapshot | None" = None, *, threshold: float = 0.5
+) -> "list[Flag]":
     """Every conclusion that FIRES for a resolved page (``present`` at/above ``threshold``), each
     with its combined confidence, supporting signals, and remedy -- ordered most-confident first.
-    Pass the ``snapshot`` too for the transport-level conclusions (blocked-by-status, server error)."""
+    Pass the ``snapshot`` too for the transport-level conclusions (blocked-by-status, server error).
+    """
     out: list[Flag] = []
     for concl in _CONCLUSIONS:
         f = flag_for(concl, doc, snapshot, threshold=threshold)

@@ -12,14 +12,40 @@ from __future__ import annotations
 import re
 
 #: CSS-in-JS / CSS-module prefixes -- always generated, never a stable hook.
-_NOISE_PREFIX = ("css-", "sc-", "jsx-", "emotion-", "chakra-", "mui", "makestyles", "jss")
+_NOISE_PREFIX = (
+    "css-",
+    "sc-",
+    "jsx-",
+    "emotion-",
+    "chakra-",
+    "mui",
+    "makestyles",
+    "jss",
+)
 _HEX_SEG = re.compile(r"[0-9a-f]*[0-9][0-9a-f]*")
 #: unambiguous bare Tailwind utilities (ambiguous words like ``container``/``block`` are spared).
-_UTILITY_BARE = frozenset({
-    "flex", "grid", "hidden", "relative", "absolute", "fixed", "sticky", "inline-flex",
-    "inline-block", "truncate", "italic", "uppercase", "lowercase", "capitalize", "underline",
-    "antialiased", "transform", "transition",
-})
+_UTILITY_BARE = frozenset(
+    {
+        "flex",
+        "grid",
+        "hidden",
+        "relative",
+        "absolute",
+        "fixed",
+        "sticky",
+        "inline-flex",
+        "inline-block",
+        "truncate",
+        "italic",
+        "uppercase",
+        "lowercase",
+        "capitalize",
+        "underline",
+        "antialiased",
+        "transform",
+        "transition",
+    }
+)
 #: a Tailwind ``prop-value`` utility (``mt-6``/``px-4``/``text-center``/``bg-white``/``col-span-2``).
 _UTILITY_PREFIX = re.compile(
     r"^-?(?:[mp][trblxyse]?|w|h|min-w|max-w|min-h|max-h|size|gap|gap-[xy]|space-[xy]|inset|top|"
@@ -45,9 +71,15 @@ def is_noise_class(tok: str) -> bool:
         return False
     if tok.lower().startswith(_NOISE_PREFIX):
         return True
-    if any(c.isupper() for c in tok) and any(c.islower() for c in tok) and any(c.isdigit() for c in tok):
+    if (
+        any(c.isupper() for c in tok)
+        and any(c.islower() for c in tok)
+        and any(c.isdigit() for c in tok)
+    ):
         return True  # mixed-case + digit -> generated hash
-    return any(len(seg) >= 8 and _HEX_SEG.fullmatch(seg) for seg in re.split(r"[-_]", tok))
+    return any(
+        len(seg) >= 8 and _HEX_SEG.fullmatch(seg) for seg in re.split(r"[-_]", tok)
+    )
 
 
 def semantic_classes(classes: "list[str]") -> "list[str]":

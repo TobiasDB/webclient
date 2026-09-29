@@ -11,7 +11,6 @@ from __future__ import annotations
 from .entry import Profile
 from .proxy import Proxy
 
-
 #: HTTP transport with a realistic (browserforge) identity -- the cheap default.
 BASIC = Profile(fingerprint=True)
 #: a real browser render (Playwright) with a realistic identity -- for JS-gated pages.

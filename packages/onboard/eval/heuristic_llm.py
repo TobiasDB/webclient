@@ -20,7 +20,9 @@ import re
 
 _NOISE = frozenset({"th", "option", "meta", "link", "script"})
 _LINKISH = frozenset({"url", "link", "href", "detail", "source", "page", "profile"})
-_DATEISH = frozenset({"date", "published", "updated", "when", "time", "timestamp", "age"})
+_DATEISH = frozenset(
+    {"date", "published", "updated", "when", "time", "timestamp", "age"}
+)
 
 _MARK = re.compile(r'RECORD LIST · (\d+) · select_all\("([^"]+)"\)')
 _SUBMARK = re.compile(r'select_all\("([^"]+)"\)')
@@ -31,15 +33,23 @@ _ATTRS = re.compile(r"\[([\w-]+)(?:=([^\]]*))?\]")
 class _Line:
     __slots__ = ("indent", "tag", "classes", "attrs", "is_link", "sub", "text")
 
-    def __init__(self, indent: int, tag: str, classes: list[str], attrs: list[str],
-                 is_link: bool, sub: str, text: str) -> None:
+    def __init__(
+        self,
+        indent: int,
+        tag: str,
+        classes: list[str],
+        attrs: list[str],
+        is_link: bool,
+        sub: str,
+        text: str,
+    ) -> None:
         self.indent = indent
         self.tag = tag
         self.classes = classes
         self.attrs = attrs
         self.is_link = is_link
-        self.sub = sub        # a nested select_all(...) selector marked on this line, else ""
-        self.text = text      # the element's shown text (e.g. a header cell label), else ""
+        self.sub = sub  # a nested select_all(...) selector marked on this line, else ""
+        self.text = text  # the element's shown text (e.g. a header cell label), else ""
 
     def css(self) -> str:
         return f"{self.tag}.{self.classes[0]}" if self.classes else self.tag
@@ -55,14 +65,21 @@ def _parse_line(raw: str) -> "_Line | None":
     attrs = [a for a, _v in _ATTRS.findall(body)]
     sub = _SUBMARK.search(body)
     quoted = re.search(r"'([^']*)'", body)
-    return _Line(indent, m.group(1), classes, attrs, m.group(1) == "a" or "(href)" in body,
-                 sub.group(1) if sub else "", quoted.group(1) if quoted else "")
+    return _Line(
+        indent,
+        m.group(1),
+        classes,
+        attrs,
+        m.group(1) == "a" or "(href)" in body,
+        sub.group(1) if sub else "",
+        quoted.group(1) if quoted else "",
+    )
 
 
 def _section(prompt: str, start: str, end: str) -> str:
     i = prompt.find(start)
     j = prompt.find(end, i + 1) if i != -1 else -1
-    return prompt[i + len(start):j] if i != -1 and j != -1 else ""
+    return prompt[i + len(start) : j] if i != -1 and j != -1 else ""
 
 
 def _fields(prompt: str) -> list[str]:
@@ -84,7 +101,11 @@ def _record_selector(skeleton: str) -> str:
 
 
 def _lines(skeleton: str) -> list[_Line]:
-    return [pl for pl in (_parse_line(raw) for raw in skeleton.splitlines()) if pl is not None]
+    return [
+        pl
+        for pl in (_parse_line(raw) for raw in skeleton.splitlines())
+        if pl is not None
+    ]
 
 
 def _record_lines(all_lines: list[_Line], selector: str) -> list[_Line]:
@@ -93,7 +114,7 @@ def _record_lines(all_lines: list[_Line], selector: str) -> list[_Line]:
     for i, pl in enumerate(all_lines):
         if pl.tag == tag and (not cls or cls in pl.classes):
             kids: list[_Line] = []
-            for nxt in all_lines[i + 1:]:
+            for nxt in all_lines[i + 1 :]:
                 if nxt.indent <= pl.indent:
                     break
                 kids.append(nxt)
@@ -104,13 +125,20 @@ def _record_lines(all_lines: list[_Line], selector: str) -> list[_Line]:
 def _pick(field: str, kids: list[_Line]) -> "_Line | None":
     low = field.lower()
     exact = [k for k in kids if low in [c.lower() for c in k.classes]]
-    partial = sorted((k for k in kids if any(low in c.lower() for c in k.classes)),
-                     key=lambda k: k.indent, reverse=True)  # deepest (leaf-most) first
+    partial = sorted(
+        (k for k in kids if any(low in c.lower() for c in k.classes)),
+        key=lambda k: k.indent,
+        reverse=True,
+    )  # deepest (leaf-most) first
     if low in _LINKISH:
         links = [k for k in kids if k.is_link]
         if links:
             return links[0]
-    heading = [k for k in kids if k.tag in ("h1", "h2", "h3", "h4")] if low in ("title", "name", "heading") else []
+    heading = (
+        [k for k in kids if k.tag in ("h1", "h2", "h3", "h4")]
+        if low in ("title", "name", "heading")
+        else []
+    )
     tagmatch = [k for k in kids if k.tag == low]
     hits = exact or partial or heading or tagmatch
     return hits[0] if hits else None
@@ -118,7 +146,7 @@ def _pick(field: str, kids: list[_Line]) -> "_Line | None":
 
 def _column(field: str, line: "_Line") -> str:
     low = field.lower()
-    if line.sub:                                   # a nested marked list -> a JSON list of values
+    if line.sub:  # a nested marked list -> a JSON list of values
         acc = "href" if low in _LINKISH else "text"
         return f'{field}=wq.doc.select_all("{line.sub}").attr("{acc}")'
     # every field select is optional=True: loud-by-default select would RAISE on any record that
@@ -128,23 +156,34 @@ def _column(field: str, line: "_Line") -> str:
         return f'{field}=wq.doc.select("{line.css()}", optional=True).attr("href")'
     if low in _DATEISH and "datetime" in line.attrs:
         return f'{field}=wq.doc.select("{line.css()}", optional=True).attr("datetime")'
-    if low == "rating" and line.classes:           # a value carried in a class token
+    if low == "rating" and line.classes:  # a value carried in a class token
         return f'{field}=wq.doc.select("{line.css()}", optional=True).attr("class")'
     return f'{field}=wq.doc.select("{line.css()}", optional=True).attr("text")'
 
 
 def _html_query(record: str, fields: list[str], all_lines: list[_Line]) -> str:
     kids = _record_lines(all_lines, record)
-    is_table = record.split()[-1] == "tr"          # a plain header-column table (not tr.someclass)
+    is_table = (
+        record.split()[-1] == "tr"
+    )  # a plain header-column table (not tr.someclass)
     headers = [ln.text for ln in all_lines if ln.tag == "th"]
     cols: list[str] = []
     for i, f in enumerate(fields):
         line = _pick(f, kids)
         if line is not None and not (is_table and not line.classes):
             cols.append(_column(f, line))
-        elif is_table:                             # a header-column table: map the field to its column
-            col = next((h + 1 for h, label in enumerate(headers) if f.lower() in label.lower()), i + 1)
-            cols.append(f'{f}=wq.doc.select("td:nth-of-type({col})", optional=True).attr("text")')
+        elif is_table:  # a header-column table: map the field to its column
+            col = next(
+                (
+                    h + 1
+                    for h, label in enumerate(headers)
+                    if f.lower() in label.lower()
+                ),
+                i + 1,
+            )
+            cols.append(
+                f'{f}=wq.doc.select("td:nth-of-type({col})", optional=True).attr("text")'
+            )
     if not cols:
         cols.append('text=wq.doc.attr("text")')
     root = "tbody tr" if is_table else record
@@ -153,10 +192,11 @@ def _html_query(record: str, fields: list[str], all_lines: list[_Line]) -> str:
 
 # -- JSON ---------------------------------------------------------------------
 
+
 def _json_path(skeleton: str) -> "tuple[str, list[str]]":
     """The FULLY-QUALIFIED dotted path to the record array and its object's scalar keys."""
     lines = skeleton.splitlines()
-    stack: list[tuple[int, str]] = []             # (indent, key) ancestry of open objects
+    stack: list[tuple[int, str]] = []  # (indent, key) ancestry of open objects
     for i, raw in enumerate(lines):
         indent = len(raw) - len(raw.lstrip(" "))
         while stack and indent <= stack[-1][0]:
@@ -175,7 +215,7 @@ def _json_keys(lines: list[str], start: int, arr_indent: int) -> list[str]:
     keys: list[str] = []
     prefix = ""
     prefix_indent = -1
-    for raw in lines[start + 1:]:
+    for raw in lines[start + 1 :]:
         indent = len(raw) - len(raw.lstrip(" "))
         if raw.strip() and indent <= arr_indent:
             break
@@ -196,8 +236,11 @@ def _json_query(fields: list[str], path: str, keys: list[str]) -> str:
         match = next((k for k in keys if k.split(".")[-1].lower() == f.lower()), None)
         if match is None:
             continue
-        cols.append(f'{f}=wq.doc.select("{match}").attr("text")' if "." in match
-                    else f'{f}=wq.doc.attr("{match}")')
+        cols.append(
+            f'{f}=wq.doc.select("{match}").attr("text")'
+            if "." in match
+            else f'{f}=wq.doc.attr("{match}")'
+        )
     if not cols:
         cols = [f'{k.split(".")[-1]}=wq.doc.attr("{k}")' for k in keys if "." not in k]
     return f'wq.doc.select_all("{path}").extract({", ".join(cols)})'
@@ -215,12 +258,16 @@ class HeuristicLlm:
         self.prompt = prompt
         fields = _fields(prompt)
         skeleton = _section(prompt, "row selector):\n", "\n\nReply with ONLY")
-        if "This is a JSON document" in prompt:  # the author_prompt kind-note (not the guide's prose)
+        if (
+            "This is a JSON document" in prompt
+        ):  # the author_prompt kind-note (not the guide's prose)
             path, keys = _json_path(skeleton)
             self.reply = _json_query(fields, path, keys) if path else "wq.doc"
             return self.reply
         record = _record_selector(skeleton)
-        self.reply = _html_query(record, fields, _lines(skeleton)) if record else "wq.doc"
+        self.reply = (
+            _html_query(record, fields, _lines(skeleton)) if record else "wq.doc"
+        )
         return self.reply
 
 

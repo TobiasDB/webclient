@@ -21,9 +21,11 @@ from . import content as _content
 from . import regex as _regex_mod
 from . import structure as _structure
 from .index import IndexedElement, index_elements
-from .jsonpath import JSON, dig, leaves, skeleton as _json_skeleton
+from .jsonpath import JSON, dig, leaves
+from .jsonpath import skeleton as _json_skeleton
 from .metadata import Metadata, metadata
-from .nodes import Node, query, text as _node_text
+from .nodes import Node, query
+from .nodes import text as _node_text
 from .records import RecordRegion, find_records
 from .sniff import Kind
 from .structure import Heading
@@ -84,7 +86,9 @@ class Document:
     """A parsed resource's content. Construct via :func:`web.parse.parse`; read it with
     ``text`` / ``select`` / ``select_all`` / ``links`` / ``json`` per its ``kind``."""
 
-    def __init__(self, *, content: bytes, kind: Kind, url: str = "", encoding: str = "utf-8") -> None:
+    def __init__(
+        self, *, content: bytes, kind: Kind, url: str = "", encoding: str = "utf-8"
+    ) -> None:
         self.content = content
         self.kind = kind
         self.url = url  # the base for relative-link resolution only
@@ -104,7 +108,8 @@ class Document:
 
     def _root(self) -> Node:
         """The lazily-parsed lxml root, cached. Lenient: a malformed document (or empty bytes)
-        recovers to as much of a tree as possible, so a read never crashes on bad content."""
+        recovers to as much of a tree as possible, so a read never crashes on bad content.
+        """
         tree = self._tree
         if tree is None:
             try:
@@ -135,8 +140,11 @@ class Document:
         non-markup doc)."""
         if not self._markup():
             return []
-        return [urljoin(self.url, href) for a in query(self._root(), "a[href]")
-                if (href := a.get("href")) is not None]
+        return [
+            urljoin(self.url, href)
+            for a in query(self._root(), "a[href]")
+            if (href := a.get("href")) is not None
+        ]
 
     def json(self) -> JSON:
         """The parsed JSON value (JSON documents); cached. Raises on non-JSON."""
@@ -159,25 +167,45 @@ class Document:
         """The page rendered as markdown -- headings, links, lists, emphasis, code."""
         return _content.markdown(self, main_content_only=main_content_only)
 
-    def tables(self, selector: "str | None" = None, *, transpose: bool = False) -> "list[dict[str, str]]":
+    def tables(
+        self, selector: "str | None" = None, *, transpose: bool = False
+    ) -> "list[dict[str, str]]":
         """HTML ``<table>`` rows as header-keyed records, with rowspan/colspan expanded."""
         return _content.tables(self, selector, transpose=transpose)
 
-    def regex(self, pattern: str, *, group: "int | str" = 0, flags: int = 0) -> "str | None":
+    def regex(
+        self, pattern: str, *, group: "int | str" = 0, flags: int = 0
+    ) -> "str | None":
         """The first ``pattern`` match in the document text (``group`` of it), or ``None``."""
         return _regex_mod.regex(self, pattern, group=group, flags=flags)
 
-    def regex_all(self, pattern: str, *, group: "int | str" = 0, flags: int = 0) -> "list[str]":
+    def regex_all(
+        self, pattern: str, *, group: "int | str" = 0, flags: int = 0
+    ) -> "list[str]":
         """Every ``pattern`` match in the document text, each reduced to ``group``."""
         return _regex_mod.regex_all(self, pattern, group=group, flags=flags)
 
-    def skeleton(self, *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30,
-                 mark_records: bool = True, mark_interactive: bool = True, drop_chrome: bool = False) -> str:
+    def skeleton(
+        self,
+        *,
+        max_lines: int = 400,
+        text_chars: int = 40,
+        max_depth: int = 30,
+        mark_records: bool = True,
+        mark_interactive: bool = True,
+        drop_chrome: bool = False,
+    ) -> str:
         """A token-lean indented open-tag outline of the DOM (for cheap selector authoring), with the
         record list + non-obvious controls flagged in place (see :mod:`.structure`)."""
-        return _structure.skeleton(self, max_lines=max_lines, text_chars=text_chars, max_depth=max_depth,
-                                   mark_records=mark_records, mark_interactive=mark_interactive,
-                                   drop_chrome=drop_chrome)
+        return _structure.skeleton(
+            self,
+            max_lines=max_lines,
+            text_chars=text_chars,
+            max_depth=max_depth,
+            mark_records=mark_records,
+            mark_interactive=mark_interactive,
+            drop_chrome=drop_chrome,
+        )
 
     def outline(self) -> "list[Heading]":
         """The document's heading tree (``<h1>``..``<h6>``) in order."""
@@ -192,10 +220,15 @@ class Document:
         the mechanical answer to "where is the list?" (see :mod:`.records`)."""
         return find_records(self, min_items=min_items, top_k=top_k)
 
-    def index(self, *, kind: "Literal['interactive', 'content']" = "interactive",
-              limit: int = 200) -> "list[IndexedElement]":
+    def index(
+        self,
+        *,
+        kind: "Literal['interactive', 'content']" = "interactive",
+        limit: int = 200,
+    ) -> "list[IndexedElement]":
         """The numbered element table -- controls to drive (``interactive``) or text leaves to
-        extract (``content``), each with a durable class-free selector (see :mod:`.index`)."""
+        extract (``content``), each with a durable class-free selector (see :mod:`.index`).
+        """
         return index_elements(self, kind=kind, limit=limit)
 
     # -- JSON navigation (JSON documents; see :mod:`.jsonpath`) --

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 
 from pytest_httpserver import HTTPServer
-
 from web.fetch import HttpFetcher, Request, Snapshot
 from web.parse import Document
 from web.resolve import RatePolicy, Resolver, RotationPolicy, rate_limit, retry
@@ -16,7 +15,9 @@ def _run(coro):
 
 
 def test_resolver_fetches_and_parses(httpserver: HTTPServer) -> None:
-    httpserver.expect_request("/p").respond_with_data(b"<h1>hi</h1>", content_type="text/html")
+    httpserver.expect_request("/p").respond_with_data(
+        b"<h1>hi</h1>", content_type="text/html"
+    )
 
     async def go() -> Document:
         r = Resolver()
@@ -32,7 +33,9 @@ def test_resolver_fetches_and_parses(httpserver: HTTPServer) -> None:
 def test_snapshot_returns_the_raw_unparsed_snapshot(httpserver: HTTPServer) -> None:
     # snapshot() is what resolve() discards: the raw bytes + captured events, unparsed and
     # (unlike resolve) never raising on a transport failure -- Locate mines it for the XHR stream.
-    httpserver.expect_request("/p").respond_with_data(b'{"ok":true}', content_type="application/json")
+    httpserver.expect_request("/p").respond_with_data(
+        b'{"ok":true}', content_type="application/json"
+    )
 
     async def go() -> Snapshot:
         r = Resolver()
@@ -71,8 +74,12 @@ class _FlakyFetcher:
             from web.fetch import err
 
             return Snapshot(request=request, error=err("fetch.transport", "boom"))
-        return Snapshot(request=request, status=200, content=b"<p>ok</p>",
-                        headers={"content-type": "text/html"})
+        return Snapshot(
+            request=request,
+            status=200,
+            content=b"<p>ok</p>",
+            headers={"content-type": "text/html"},
+        )
 
     async def aclose(self) -> None:
         pass
@@ -86,18 +93,21 @@ def test_retry_middleware_recovers_from_transient_failure() -> None:
         return await r.resolve(Request(url="https://x/"))
 
     doc = _run(go())
-    assert fetcher.calls == 3 and doc.select_all("p")[0].text == "ok"  # 2 failures + 1 success
+    assert (
+        fetcher.calls == 3 and doc.select_all("p")[0].text == "ok"
+    )  # 2 failures + 1 success
     assert doc.select_all("p")[0].text == "ok"
 
 
 def test_retry_gives_up_then_the_policy_decides() -> None:
     import pytest
-
     from web.fetch import WebException
 
     # DEFAULT: a transport failure raises AFTER the retry middleware has run (obeying it first)
     async def raises() -> Document:
-        r = Resolver(ladder=(_FlakyFetcher(fail=99),), retry=retry(max_attempts=2, backoff=0.0))
+        r = Resolver(
+            ladder=(_FlakyFetcher(fail=99),), retry=retry(max_attempts=2, backoff=0.0)
+        )
         return await r.resolve(Request(url="https://x/"))
 
     with pytest.raises(WebException):
@@ -107,11 +117,17 @@ def test_retry_gives_up_then_the_policy_decides() -> None:
     fetcher = _FlakyFetcher(fail=99)
 
     async def returns() -> Document:
-        r = Resolver(ladder=(fetcher,), retry=retry(max_attempts=2, backoff=0.0), raise_on_error=False)
+        r = Resolver(
+            ladder=(fetcher,),
+            retry=retry(max_attempts=2, backoff=0.0),
+            raise_on_error=False,
+        )
         return await r.resolve(Request(url="https://x/"))
 
     doc = _run(returns())
-    assert fetcher.calls == 2 and doc.select("p") is None  # gave up -> empty content, no raise
+    assert (
+        fetcher.calls == 2 and doc.select("p") is None
+    )  # gave up -> empty content, no raise
 
 
 def test_rate_limit_spaces_same_host_requests() -> None:
@@ -140,10 +156,23 @@ def _d(html: bytes):  # a parsed Document from bytes
 
 
 def test_spa_signal_on_a_client_rendered_shell() -> None:
-    s = spa(_d(b"<html><body><div id='root'></div><script src='/app.js'></script></body></html>"))
+    s = spa(
+        _d(
+            b"<html><body><div id='root'></div><script src='/app.js'></script></body></html>"
+        )
+    )
     assert isinstance(s, Signal) and s.name == "spa"
     # a server-rendered page with real text does NOT fire spa
-    assert spa(_d(b"<html><body><div id='root'>" + b"content " * 60 + b"</div></body></html>")) is None
+    assert (
+        spa(
+            _d(
+                b"<html><body><div id='root'>"
+                + b"content " * 60
+                + b"</div></body></html>"
+            )
+        )
+        is None
+    )
 
 
 def test_login_and_pagination_detectors() -> None:
@@ -152,14 +181,19 @@ def test_login_and_pagination_detectors() -> None:
 
 
 def test_anti_bot_reads_content_markers() -> None:
-    assert anti_bot(_d(b"<html><body>Please verify you are human (captcha)</body></html>")) is not None
+    assert (
+        anti_bot(_d(b"<html><body>Please verify you are human (captcha)</body></html>"))
+        is not None
+    )
     assert anti_bot(_d(b"<html><body>normal page</body></html>")) is None
 
 
 def test_trace_captures_events_across_layers(httpserver: HTTPServer) -> None:
     from web.fetch import Trace
 
-    httpserver.expect_request("/p").respond_with_data(b"<h1>hi</h1>", content_type="text/html")
+    httpserver.expect_request("/p").respond_with_data(
+        b"<h1>hi</h1>", content_type="text/html"
+    )
     fetcher = _FlakyFetcher(fail=1)  # one transient failure -> a retry event too
 
     async def go_flaky() -> list[str]:
@@ -174,7 +208,9 @@ def test_trace_captures_events_across_layers(httpserver: HTTPServer) -> None:
         _run(go_flaky())
     topics = [e.topic for e in t.events]
     # the flaky fetcher isn't an http backend so no FetchEvent, but the retry policy emitted one
-    assert "resolve" in topics and any(getattr(e, "phase", "") == "retry" for e in t.events)
+    assert "resolve" in topics and any(
+        getattr(e, "phase", "") == "retry" for e in t.events
+    )
 
     # a real http fetch emits a FetchEvent
     async def go_http() -> None:
@@ -190,40 +226,63 @@ def test_trace_captures_events_across_layers(httpserver: HTTPServer) -> None:
 
 
 # -- flags: conclusions rolled up from signals, with remedies --
-from web.resolve import Flag, flags  # noqa: E402
 from web.resolve import paginate_cursor  # noqa: E402
+from web.resolve import Flag, flags  # noqa: E402
 
 
 def test_flags_roll_signals_into_conclusions_with_remedies() -> None:
-    doc = parse(b"<html><body><form><input type=password></form></body></html>", content_type="text/html")
+    doc = parse(
+        b"<html><body><form><input type=password></form></body></html>",
+        content_type="text/html",
+    )
     fs = flags(doc)
     by_name = {f.name: f for f in fs}
     assert "auth_required" in by_name
-    assert by_name["auth_required"].present and by_name["auth_required"].remedy == "session:login"
+    assert (
+        by_name["auth_required"].present
+        and by_name["auth_required"].remedy == "session:login"
+    )
     assert all(isinstance(f, Flag) for f in fs)
 
 
 def test_flags_use_the_snapshot_for_transport_conclusions() -> None:
-    doc = parse(b"<html><body>ok content here plenty of text to not look empty at all</body></html>",
-                content_type="text/html")
-    snap = Snapshot(request=Request(url="https://x/"), url="https://x/", status=429,
-                    headers={"content-type": "text/html"}, content=doc.content)
+    doc = parse(
+        b"<html><body>ok content here plenty of text to not look empty at all</body></html>",
+        content_type="text/html",
+    )
+    snap = Snapshot(
+        request=Request(url="https://x/"),
+        url="https://x/",
+        status=429,
+        headers={"content-type": "text/html"},
+        content=doc.content,
+    )
     names = {f.name for f in flags(doc, snap)}
     assert "blocked" in names  # 429 -> blocked_status evidence -> blocked conclusion
 
 
 def test_flags_noisy_or_combines_independent_evidence() -> None:
     # anti-bot content AND a 403 status both feed "blocked" -> combined confidence exceeds either
-    doc = parse(b"<html><body>Please verify you are human to continue</body></html>", content_type="text/html")
-    snap = Snapshot(request=Request(url="https://x/"), url="https://x/", status=403, content=doc.content)
+    doc = parse(
+        b"<html><body>Please verify you are human to continue</body></html>",
+        content_type="text/html",
+    )
+    snap = Snapshot(
+        request=Request(url="https://x/"),
+        url="https://x/",
+        status=403,
+        content=doc.content,
+    )
     blocked = next(f for f in flags(doc, snap) if f.name == "blocked")
     assert blocked.confidence > 0.9 and len(blocked.signals) == 2
 
 
 def test_paginate_cursor_concatenates_json_pages(httpserver: HTTPServer) -> None:
     import json
+
     def handler(req):
         from werkzeug.wrappers import Response
+
         cur = req.args.get("cursor")
         if cur is None:
             body = {"items": [1, 2], "next": "abc"}
@@ -232,10 +291,15 @@ def test_paginate_cursor_concatenates_json_pages(httpserver: HTTPServer) -> None
         else:
             body = {"items": [5], "next": None}
         return Response(json.dumps(body), content_type="application/json")
+
     httpserver.expect_request("/api").respond_with_handler(handler)
 
     async def go() -> Document:
-        r = Resolver(paginate=paginate_cursor(cursor_path="next", param="cursor", items_path="items"))
+        r = Resolver(
+            paginate=paginate_cursor(
+                cursor_path="next", param="cursor", items_path="items"
+            )
+        )
         try:
             return await r.resolve(Request(url=httpserver.url_for("/api")))
         finally:
@@ -250,24 +314,30 @@ from web.resolve import data_api, record_list, structured_data, tabbed  # noqa: 
 
 
 def test_structured_data_from_jsonld() -> None:
-    doc = parse(b'<html><head><script type="application/ld+json">{"@type":"Product"}</script></head><body>x</body></html>',
-                content_type="text/html")
+    doc = parse(
+        b'<html><head><script type="application/ld+json">{"@type":"Product"}</script></head><body>x</body></html>',
+        content_type="text/html",
+    )
     assert structured_data(doc) is not None
     assert "structured_data" in {f.name for f in flags(doc)}
 
 
 def test_data_api_json_island() -> None:
-    doc = parse(b'<html><body><script id="__NEXT_DATA__" type="application/json">{"props":{}}</script></body></html>',
-                content_type="text/html")
+    doc = parse(
+        b'<html><body><script id="__NEXT_DATA__" type="application/json">{"props":{}}</script></body></html>',
+        content_type="text/html",
+    )
     assert data_api(doc) is not None
     by = {f.name: f for f in flags(doc)}
     assert by["data_api"].remedy == "extract:json_island"
 
 
 def test_record_list_signal_carries_selector_and_count() -> None:
-    html = (b"<html><body><ul>"
-            + b"".join(b"<li class=item><span class=t>x</span></li>" for _ in range(5))
-            + b"</ul></body></html>")
+    html = (
+        b"<html><body><ul>"
+        + b"".join(b"<li class=item><span class=t>x</span></li>" for _ in range(5))
+        + b"</ul></body></html>"
+    )
     doc = parse(html, content_type="text/html")
     sig = record_list(doc)
     assert sig is not None
@@ -277,8 +347,10 @@ def test_record_list_signal_carries_selector_and_count() -> None:
 
 
 def test_tabbed_widget() -> None:
-    doc = parse(b'<html><body><div role="tablist"><button role="tab">A</button></div></body></html>',
-                content_type="text/html")
+    doc = parse(
+        b'<html><body><div role="tablist"><button role="tab">A</button></div></body></html>',
+        content_type="text/html",
+    )
     assert tabbed(doc) is not None
     assert "tabbed" in {f.name for f in flags(doc)}
 
@@ -288,29 +360,56 @@ def test_retry_retries_real_transient_errors_not_persistent_ones() -> None:
     from web.resolve.middleware import _retriable
 
     # the common transient transport errors must be retried (previously only "fetch.transport" was)
-    for code in ("fetch.timeout", "fetch.connect", "fetch.dns", "fetch.proxy", "fetch.transport"):
-        assert _retriable(Snapshot(request=Request(url="https://x/"), error=err(code, "x"))) is True
+    for code in (
+        "fetch.timeout",
+        "fetch.connect",
+        "fetch.dns",
+        "fetch.proxy",
+        "fetch.transport",
+    ):
+        assert (
+            _retriable(
+                Snapshot(request=Request(url="https://x/"), error=err(code, "x"))
+            )
+            is True
+        )
     # persistent errors must NOT be retried (a retry can't help)
     for code in ("fetch.tls", "fetch.url", "fetch.redirects"):
-        assert _retriable(Snapshot(request=Request(url="https://x/"), error=err(code, "x"))) is False
+        assert (
+            _retriable(
+                Snapshot(request=Request(url="https://x/"), error=err(code, "x"))
+            )
+            is False
+        )
 
 
-def test_paginate_param_aggregates_rows_across_full_html_pages(httpserver: HTTPServer) -> None:
+def test_paginate_param_aggregates_rows_across_full_html_pages(
+    httpserver: HTTPServer,
+) -> None:
     # each page is a FULL <html> document; the merged Document must span ALL pages (regression:
     # concatenating whole docs kept only page 1's rows)
     def handler(req):
         from werkzeug.wrappers import Response
+
         page = int(req.args.get("page", "1"))
         if page > 3:
-            return Response(b"<html><body><ul></ul></body></html>", content_type="text/html")
+            return Response(
+                b"<html><body><ul></ul></body></html>", content_type="text/html"
+            )
         items = "".join(f"<li class=row>p{page}-{i}</li>" for i in range(2))
-        return Response(f"<html><body><ul>{items}</ul></body></html>".encode(), content_type="text/html")
+        return Response(
+            f"<html><body><ul>{items}</ul></body></html>".encode(),
+            content_type="text/html",
+        )
+
     httpserver.expect_request("/list").respond_with_handler(handler)
 
     async def go() -> list[str]:
-        from web.resolve import until_empty
         from web.resolve import paginate_param, until_empty
-        r = Resolver(paginate=paginate_param("page", until=until_empty("li.row"), max_pages=5))
+
+        r = Resolver(
+            paginate=paginate_param("page", until=until_empty("li.row"), max_pages=5)
+        )
         try:
             doc = await r.resolve(Request(url=httpserver.url_for("/list")))
             return [e.text for e in doc.select_all("li.row")]
@@ -318,39 +417,59 @@ def test_paginate_param_aggregates_rows_across_full_html_pages(httpserver: HTTPS
             await r.aclose()
 
     rows = _run(go())
-    assert rows == ["p1-0", "p1-1", "p2-0", "p2-1", "p3-0", "p3-1"]  # all 3 pages aggregated
+    assert rows == [
+        "p1-0",
+        "p1-1",
+        "p2-0",
+        "p2-1",
+        "p3-0",
+        "p3-1",
+    ]  # all 3 pages aggregated
 
 
 def test_rotate_middleware_presents_fleet_identities(httpserver: HTTPServer) -> None:
     from web.fetch import ClientPool, Fingerprint
 
-    httpserver.expect_request("/").respond_with_data(b"<html></html>", content_type="text/html")
+    httpserver.expect_request("/").respond_with_data(
+        b"<html></html>", content_type="text/html"
+    )
     fp1 = Fingerprint(user_agent="Agent/1")
     fp2 = Fingerprint(user_agent="Agent/2")
 
     async def go() -> None:
-        async with ClientPool() as pool:  # rotation re-leases a fresh-identity backend per request
+        async with (
+            ClientPool() as pool
+        ):  # rotation re-leases a fresh-identity backend per request
             rs = Resolver(rotate=RotationPolicy(fleet=(fp1, fp2)), pool=pool)
             for _ in range(6):
                 await rs.resolve(Request(url=httpserver.url_for("/")))
 
     _run(go())
     seen = {req.headers.get("User-Agent", "") for req, _ in httpserver.log}
-    assert seen and seen <= {"Agent/1", "Agent/2"}  # every request presented a fleet identity
+    assert seen and seen <= {
+        "Agent/1",
+        "Agent/2",
+    }  # every request presented a fleet identity
 
 
 def test_policies_are_serialisable_and_build_middleware() -> None:
-    from web.fetch import ClientPool, profiles as fp
+    from web.fetch import ClientPool
+    from web.fetch import profiles as fp
     from web.resolve import EscalationPolicy, Profile, RatePolicy, RetryPolicy
 
     # a policy is a plain (pydantic) model -> a Profile bundling them is fully serialisable
-    prof = Profile(escalation=EscalationPolicy(tiers=(fp.BASIC, fp.BROWSER), on=("403",)),
-                   retry=RetryPolicy(max_attempts=5), rate=RatePolicy(per_host=1.0))
+    prof = Profile(
+        escalation=EscalationPolicy(tiers=(fp.BASIC, fp.BROWSER), on=("403",)),
+        retry=RetryPolicy(max_attempts=5),
+        rate=RatePolicy(per_host=1.0),
+    )
     assert '"max_attempts":5' in prof.retry.model_dump_json()  # type: ignore[union-attr]
     assert prof.escalation is not None and prof.escalation.on == ("403",)
 
     async def go() -> bool:
-        async with ClientPool() as pool:  # .build(pool) turns a policy into its middleware
+        async with (
+            ClientPool() as pool
+        ):  # .build(pool) turns a policy into its middleware
             return callable(RetryPolicy(max_attempts=2).build(pool))
 
     assert _run(go())

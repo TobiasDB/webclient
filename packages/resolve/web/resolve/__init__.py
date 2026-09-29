@@ -20,33 +20,102 @@ from __future__ import annotations
 # the framework, re-exported for ergonomics (it lives in web.fetch)
 from web.fetch import Handler, Middleware, stack
 
-from . import profiles  # named default resolve policies (web.resolve.profiles.BASIC / FULL_BROWSER / ...)
+from . import (
+    profiles,
+)  # named default resolve policies (web.resolve.profiles.BASIC / FULL_BROWSER / ...)
 from .base import Profile, Resolver, Slot, Tier
 from .document import document
-from .policy import (EscalationPolicy, PaginatePolicy, Policy, RatePolicy, RetryPolicy, RotationPolicy)
 from .entry import ResolveSession, resolve
-from .models import ResolveEvent
 from .flags import Flag, flags
 from .middleware import escalate, rate_limit, retry, rotate
-from .paginate import Until, paginate_clicks, paginate_cursor, paginate_links, paginate_param
-from .signals import (Signal, anti_bot, blocked_status, consent_wall, data_api, empty, iframe,
-                      infinite_scroll, login_wall, pagination, record_list, server_error, spa,
-                      structured_data, tabbed)
+from .models import ResolveEvent
+from .paginate import (
+    Until,
+    paginate_clicks,
+    paginate_cursor,
+    paginate_links,
+    paginate_param,
+)
+from .policy import (
+    EscalationPolicy,
+    PaginatePolicy,
+    Policy,
+    RatePolicy,
+    RetryPolicy,
+    RotationPolicy,
+)
+from .signals import (
+    Signal,
+    anti_bot,
+    blocked_status,
+    consent_wall,
+    data_api,
+    empty,
+    iframe,
+    infinite_scroll,
+    login_wall,
+    pagination,
+    record_list,
+    server_error,
+    spa,
+    structured_data,
+    tabbed,
+)
 from .stops import any_of, first_n, until_empty, until_match, until_repeat
 from .tiers import ladder
 
 __all__ = [
-    "Resolver", "resolve", "ResolveSession", "Profile", "profiles", "Slot", "Tier",
-    "Policy", "RetryPolicy", "RatePolicy", "RotationPolicy", "PaginatePolicy", "EscalationPolicy",
-    "Middleware", "Handler", "stack",
+    "Resolver",
+    "resolve",
+    "ResolveSession",
+    "Profile",
+    "profiles",
+    "Slot",
+    "Tier",
+    "Policy",
+    "RetryPolicy",
+    "RatePolicy",
+    "RotationPolicy",
+    "PaginatePolicy",
+    "EscalationPolicy",
+    "Middleware",
+    "Handler",
+    "stack",
     # middleware implementations (consumer-pluggable; these are the reference ones)
-    "retry", "rate_limit", "escalate", "rotate", "ladder",
-    "paginate_links", "paginate_param", "paginate_clicks", "paginate_cursor", "Until",
+    "retry",
+    "rate_limit",
+    "escalate",
+    "rotate",
+    "ladder",
+    "paginate_links",
+    "paginate_param",
+    "paginate_clicks",
+    "paginate_cursor",
+    "Until",
     # pagination stop conditions (composable, some stateful)
-    "until_empty", "until_match", "first_n", "until_repeat", "any_of",
+    "until_empty",
+    "until_match",
+    "first_n",
+    "until_repeat",
+    "any_of",
     # signals (evidence) + flags (conclusions with remedies)
-    "document", "ResolveEvent", "Signal", "spa", "login_wall", "pagination", "anti_bot",
-    "consent_wall", "infinite_scroll", "empty", "blocked_status", "server_error",
-    "structured_data", "data_api", "record_list", "tabbed", "iframe",
-    "Flag", "flags",
+    "document",
+    "ResolveEvent",
+    "Signal",
+    "spa",
+    "login_wall",
+    "pagination",
+    "anti_bot",
+    "consent_wall",
+    "infinite_scroll",
+    "empty",
+    "blocked_status",
+    "server_error",
+    "structured_data",
+    "data_api",
+    "record_list",
+    "tabbed",
+    "iframe",
+    "Flag",
+    "flags",
 ]

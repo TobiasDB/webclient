@@ -21,21 +21,34 @@ _MARK = {"PASS": "PASS", "PARTIAL": "PART", "FAIL": "FAIL"}
 
 
 def _table(results: list[Result]) -> str:
-    rows = ["| example | category | Locate | Author | rows | detail |",
-            "| --- | --- | --- | --- | --- | --- |"]
+    rows = [
+        "| example | category | Locate | Author | rows | detail |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
     for r in results:
-        rows.append(f"| `{r.name}` | {r.category} | {r.locate_grade} | {r.author_grade} | "
-                    f"{r.n_rows} | {r.detail} |")
+        rows.append(
+            f"| `{r.name}` | {r.category} | {r.locate_grade} | {r.author_grade} | "
+            f"{r.n_rows} | {r.detail} |"
+        )
     return "\n".join(rows)
 
 
 def _tally(results: list[Result], attr: str) -> str:
-    counts = {g: sum(1 for r in results if getattr(r, attr) == g) for g in ("PASS", "PARTIAL", "FAIL")}
-    return f"PASS {counts['PASS']} · PARTIAL {counts['PARTIAL']} · FAIL {counts['FAIL']}"
+    counts = {
+        g: sum(1 for r in results if getattr(r, attr) == g)
+        for g in ("PASS", "PARTIAL", "FAIL")
+    }
+    return (
+        f"PASS {counts['PASS']} · PARTIAL {counts['PARTIAL']} · FAIL {counts['FAIL']}"
+    )
 
 
 def _report(results: list[Result], *, key: bool) -> str:
-    engine = "AnthropicLlm (real model)" if key else "HeuristicLlm (deterministic stand-in, no API key)"
+    engine = (
+        "AnthropicLlm (real model)"
+        if key
+        else "HeuristicLlm (deterministic stand-in, no API key)"
+    )
     lines = [
         "# Onboard eval -- Locate + Author against the webclient lab",
         "",
@@ -102,10 +115,15 @@ async def _main() -> None:
     finally:
         srv.close()
     for r in results:
-        print(f"{r.name:12} {r.category:22} locate={_MARK[r.locate_grade]} "
-              f"author={_MARK[r.author_grade]}  {r.detail}")
+        print(
+            f"{r.name:12} {r.category:22} locate={_MARK[r.locate_grade]} "
+            f"author={_MARK[r.author_grade]}  {r.detail}"
+        )
     out = Path(__file__).with_name("RESULTS.md")
-    out.write_text(_report(results, key=bool(os.environ.get("ANTHROPIC_API_KEY"))), encoding="utf-8")
+    out.write_text(
+        _report(results, key=bool(os.environ.get("ANTHROPIC_API_KEY"))),
+        encoding="utf-8",
+    )
     print(f"\nwrote {out}")
 
 

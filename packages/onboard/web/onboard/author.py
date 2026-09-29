@@ -19,7 +19,6 @@ from __future__ import annotations
 from typing import cast
 
 from pydantic import BaseModel
-
 from web.dsl import LazyCollection, wq
 from web.parse import Document
 from web.resolve import Resolver, flags
@@ -48,7 +47,8 @@ class Authored(BaseModel):
 
 def _file_links_query(url: str) -> Query:
     """A LISTING of downloadable files on an HTML page: every same-page link ending in a known file
-    extension, resolved absolute (used when ``brief.download`` is set on an HTML/XML page)."""
+    extension, resolved absolute (used when ``brief.download`` is set on an HTML/XML page).
+    """
     selector = ", ".join(f"a[href$='.{ext}']" for ext in _FILE_EXT)
     return cast(Query, wq.reference(url).resolve().select_all(selector).attr("href"))
 
@@ -61,8 +61,9 @@ def _skeleton(sample: Document) -> str:
     return sample.skeleton(max_lines=200, drop_chrome=True)
 
 
-async def build_query(reference: Reference, brief: DatasetBrief, *, resolver: Resolver,
-                      llm: Llm) -> "tuple[Query, str, list[str]]":
+async def build_query(
+    reference: Reference, brief: DatasetBrief, *, resolver: Resolver, llm: Llm
+) -> "tuple[Query, str, list[str]]":
     """Build the extraction query and return ``(query, engine, notes)``. A download brief on an
     HTML/XML page yields the file-links query; a binary reference yields a plain fetch; otherwise
     the model writes the ``wq`` chain over the patterns guide + the page's signals/flags, and the
@@ -71,27 +72,46 @@ async def build_query(reference: Reference, brief: DatasetBrief, *, resolver: Re
     if brief.download and reference.kind in ("html", "xml"):
         return _file_links_query(reference.url), "file_links", []
     sample = await resolver.resolve(reference.url)
-    if sample.kind not in _STRUCTURED:  # a PDF / spreadsheet / blob IS the dataset -- fetch it
+    if (
+        sample.kind not in _STRUCTURED
+    ):  # a PDF / spreadsheet / blob IS the dataset -- fetch it
         return cast(Query, wq.reference(reference.url).resolve()), "file_download", []
     prompt = author_prompt(brief, _skeleton(sample), flags(sample), kind=sample.kind)
     query = reroot(parse_query(await llm.complete(prompt)), reference.url)
-    rows, notes = apply_behaviours(cast(LazyCollection[object], query), reference, brief)
+    rows, notes = apply_behaviours(
+        cast(LazyCollection[object], query), reference, brief
+    )
     return cast(Query, rows), "llm", notes
 
 
-async def author(reference: Reference, brief: "DatasetBrief | None" = None, *, resolver: Resolver,
-                 llm: Llm) -> Query:
+async def author(
+    reference: Reference,
+    brief: "DatasetBrief | None" = None,
+    *,
+    resolver: Resolver,
+    llm: Llm,
+) -> Query:
     """The ``wq`` query that extracts ``reference``'s dataset per ``brief`` (see :func:`build_query`).
     Pass no brief to extract the salient record fields with default guidance."""
-    query, _engine, _notes = await build_query(reference, brief or DatasetBrief(), resolver=resolver, llm=llm)
+    query, _engine, _notes = await build_query(
+        reference, brief or DatasetBrief(), resolver=resolver, llm=llm
+    )
     return query
 
 
-async def authored(reference: Reference, brief: "DatasetBrief | None" = None, *, resolver: Resolver,
-                   llm: Llm) -> Authored:
+async def authored(
+    reference: Reference,
+    brief: "DatasetBrief | None" = None,
+    *,
+    resolver: Resolver,
+    llm: Llm,
+) -> Authored:
     """Like :func:`author` but returns the serialisable :class:`Authored` (blob + engine + notes)
-    -- what a pipeline stores to re-run the extraction later (via :func:`web.dsl.run_blob`)."""
-    query, engine, notes = await build_query(reference, brief or DatasetBrief(), resolver=resolver, llm=llm)
+    -- what a pipeline stores to re-run the extraction later (via :func:`web.dsl.run_blob`).
+    """
+    query, engine, notes = await build_query(
+        reference, brief or DatasetBrief(), resolver=resolver, llm=llm
+    )
     return Authored(blob=query.to_blob(), engine=engine, notes=notes)
 
 

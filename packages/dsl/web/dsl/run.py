@@ -12,18 +12,33 @@ share this one implementation. Lean by design: no browser/pool/remote/streaming 
 
 from __future__ import annotations
 
-
 from typing import cast
 
 from pydantic import JsonValue
-
 from web.fetch import Request, WebException, err
 from web.parse import Document, Element, dig
-from web.resolve import PaginatePolicy, RatePolicy, Resolver, RetryPolicy, RotationPolicy, profiles as _profiles
+from web.resolve import (
+    PaginatePolicy,
+    RatePolicy,
+    Resolver,
+    RetryPolicy,
+    RotationPolicy,
+)
+from web.resolve import profiles as _profiles
 
 #: the resolve-step keywords that carry a per-step POLICY (build a Resolver for that fetch); any
 #: other keyword (e.g. optional) is not a policy.
-_RESOLVE_POLICY = frozenset({"profile", "paginate", "max_pages", "rate_limit", "retry", "rotate", "raise_on_error"})
+_RESOLVE_POLICY = frozenset(
+    {
+        "profile",
+        "paginate",
+        "max_pages",
+        "rate_limit",
+        "retry",
+        "rotate",
+        "raise_on_error",
+    }
+)
 
 from .plan import Arg, Plan, Step
 from .values import Collection, Field, Ref, raw
@@ -38,25 +53,33 @@ _ROW_OPS = frozenset({"extract", "filter"})
 _TEXT_ATTRS = frozenset({"text", "value"})
 
 
-async def arun(plan: Plan, root: object = None, *, resolver: "Resolver | None" = None) -> object:
+async def arun(
+    plan: Plan, root: object = None, *, resolver: "Resolver | None" = None
+) -> object:
     """Async terminal: walk ``plan`` and return its materialised, smart-shaped result. Uses
-    ``resolver`` to fetch, or a transient one opened + closed for the call when omitted."""
+    ``resolver`` to fetch, or a transient one opened + closed for the call when omitted.
+    """
     if resolver is not None:
         return _smart(await _walk(plan, root, resolver, None))
     async with Resolver() as rs:  # clean entry: no hand-built fetcher/request
         return _smart(await _walk(plan, root, rs, None))
 
 
-async def run_blob(blob: str, root: object = None, *, resolver: "Resolver | None" = None) -> object:
+async def run_blob(
+    blob: str, root: object = None, *, resolver: "Resolver | None" = None
+) -> object:
     """Service/remote dispatch, server side: rebuild a plan from its blob (names validated -- the
     wire safety boundary) and run it locally."""
     return await arun(Plan.from_blob(blob).validate_names(), root, resolver=resolver)
 
 
-async def _walk(plan: Plan, root: object, rs: "Resolver", row: "dict[str, object] | None") -> object:
+async def _walk(
+    plan: Plan, root: object, rs: "Resolver", row: "dict[str, object] | None"
+) -> object:
     """Walk a plan's steps against a context, returning the RAW current value (Field/Collection/…);
     the smart unwrap happens only at the :func:`arun` terminal. ``row`` is the element's
-    extracted-so-far row, so ``field(name)`` inside a sub-expression reads an earlier column."""
+    extracted-so-far row, so ``field(name)`` inside a sub-expression reads an earlier column.
+    """
     cur = await _root_value(plan, root, rs)
     steps, i = plan.steps, 0
     while i < len(steps):
@@ -93,15 +116,28 @@ async def _root_value(plan: Plan, root: object, rs: "Resolver") -> object:
 
 # -- dispatch ----------------------------------------------------------------
 
-async def _invoke(cur: object, name: str, call: "Step | None", root: object, rs: "Resolver",
-                  row: "dict[str, object] | None") -> object:
+
+async def _invoke(
+    cur: object,
+    name: str,
+    call: "Step | None",
+    root: object,
+    rs: "Resolver",
+    row: "dict[str, object] | None",
+) -> object:
     """Dispatch one ``get`` (+ optional ``call``) step. The row-shaping ops and the fetch/lookup ops
     are handled explicitly; everything else dispatches onto the current value (fanning out over a
     Collection)."""
-    if name == "doc":  # the reference -> document join spelling (wc.resolve(url).doc()); identity
+    if (
+        name == "doc"
+    ):  # the reference -> document join spelling (wc.resolve(url).doc()); identity
         return cur
-    if name == "resolve":  # the reference -> document fetch join (with optional per-step policy)
-        return await _resolve(cur, _effective_resolver(rs, call), optional=_flag(call, "optional"))
+    if (
+        name == "resolve"
+    ):  # the reference -> document fetch join (with optional per-step policy)
+        return await _resolve(
+            cur, _effective_resolver(rs, call), optional=_flag(call, "optional")
+        )
     if name == "reference":  # a URL held in an earlier-extracted column
         col = _literal(call)
         return (row or {}).get(str(col)) if row is not None else None
@@ -119,7 +155,8 @@ async def _resolve(cur: object, rs: "Resolver", *, optional: bool = False) -> ob
     """Resolve the current value to a Document (or a Collection of them). A ``Ref`` / ``Field`` /
     URL string is fetched; a Document passes through; a Collection or list of refs FANS OUT into a
     Collection of Documents (``select_all('a').attr('href').resolve()``). Loud by default: nothing
-    to resolve (a prior select/attr missed) raises unless ``optional`` -- then it is ``None``."""
+    to resolve (a prior select/attr missed) raises unless ``optional`` -- then it is ``None``.
+    """
     if isinstance(cur, (Collection, list)):
         docs: list[object] = []
         for item in cur:
@@ -127,18 +164,29 @@ async def _resolve(cur: object, rs: "Resolver", *, optional: bool = False) -> ob
             if doc is not None:
                 docs.append(doc)
         return Collection(docs)
-    url = cur.url if isinstance(cur, Ref) else (cur.get() if isinstance(cur, Field) else cur)
+    url = (
+        cur.url
+        if isinstance(cur, Ref)
+        else (cur.get() if isinstance(cur, Field) else cur)
+    )
     if isinstance(url, str) and url:
         try:
             return await rs.resolve(Request(url=url))
-        except WebException:  # a TRANSPORT failure (resolve policy raised); optional tolerates it
+        except (
+            WebException
+        ):  # a TRANSPORT failure (resolve policy raised); optional tolerates it
             if optional:
                 return None
             raise
     if isinstance(cur, Document):
         return cur
     if not optional:
-        raise WebException(err("dsl.resolve_miss", "nothing to resolve -- a prior select / attr matched nothing"))
+        raise WebException(
+            err(
+                "dsl.resolve_miss",
+                "nothing to resolve -- a prior select / attr matched nothing",
+            )
+        )
     return None
 
 
@@ -154,12 +202,25 @@ def _effective_resolver(rs: "Resolver", call: "Step | None") -> "Resolver":
     pager = opts.get("paginate")
     return Resolver(
         profile=_profiles.get(str(name)) if isinstance(name, str) else None,
-        paginate=PaginatePolicy(param=pager, max_pages=int(_num(opts.get("max_pages"), 5)))
-                 if isinstance(pager, str) else None,
-        rate=RatePolicy(per_host=_num(opts["rate_limit"], 0.0)) if "rate_limit" in opts else None,
-        retry=RetryPolicy(max_attempts=int(_num(opts["retry"], 0))) if "retry" in opts else None,
+        paginate=(
+            PaginatePolicy(param=pager, max_pages=int(_num(opts.get("max_pages"), 5)))
+            if isinstance(pager, str)
+            else None
+        ),
+        rate=(
+            RatePolicy(per_host=_num(opts["rate_limit"], 0.0))
+            if "rate_limit" in opts
+            else None
+        ),
+        retry=(
+            RetryPolicy(max_attempts=int(_num(opts["retry"], 0)))
+            if "retry" in opts
+            else None
+        ),
         rotate=RotationPolicy() if opts.get("rotate") else None,
-        raise_on_error=bool(opts["raise_on_error"]) if "raise_on_error" in opts else None,
+        raise_on_error=(
+            bool(opts["raise_on_error"]) if "raise_on_error" in opts else None
+        ),
         pool=rs.pool,
     )
 
@@ -182,29 +243,55 @@ def _flag(call: "Step | None", key: str) -> bool:
     return bool(arg.value) if arg is not None else False
 
 
-def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object]") -> object:
+def _one(
+    obj: object, name: str, args: "list[object]", kwargs: "dict[str, object]"
+) -> object:
     """Dispatch a single read onto one value. The SAME verbs work over an HTML and a JSON document:
     ``select`` / ``select_all`` navigate (a CSS selector for markup, a dotted JSON path for JSON),
     ``attr`` / ``text`` read a leaf (an HTML attribute/text, or a JSON scalar). A miss (``None``)
-    short-circuits the chain; scalars come back wrapped in a ``Field`` so the read helpers chain."""
+    short-circuits the chain; scalars come back wrapped in a ``Field`` so the read helpers chain.
+    """
     if obj is None:
         return None
     if name == "select":
         if _markup(obj):
-            el = obj.select(str(args[0])) if isinstance(obj, (Document, Element)) else None
-            if el is None and not kwargs.get("optional"):  # loud by default: a miss names the selector
-                raise WebException(err("dsl.select_miss", f"selector {args[0]!r} matched nothing",
-                                       url=_base_of(obj)))
+            el = (
+                obj.select(str(args[0]))
+                if isinstance(obj, (Document, Element))
+                else None
+            )
+            if el is None and not kwargs.get(
+                "optional"
+            ):  # loud by default: a miss names the selector
+                raise WebException(
+                    err(
+                        "dsl.select_miss",
+                        f"selector {args[0]!r} matched nothing",
+                        url=_base_of(obj),
+                    )
+                )
             return el
-        return _json_get(obj, str(args[0]))  # a JSON sub-value (dict/list -> navigable, scalar -> leaf)
+        return _json_get(
+            obj, str(args[0])
+        )  # a JSON sub-value (dict/list -> navigable, scalar -> leaf)
     if name == "select_all":
         if _markup(obj):
-            items = obj.select_all(str(args[0])) if isinstance(obj, (Document, Element)) else []
+            items = (
+                obj.select_all(str(args[0]))
+                if isinstance(obj, (Document, Element))
+                else []
+            )
             return Collection(items, base=_base_of(obj))
-        value = _json_get(obj, str(args[0]))  # the JSON array at the path becomes the collection
-        nodes: "list[object]" = value if isinstance(value, list) else ([] if value is None else [value])
+        value = _json_get(
+            obj, str(args[0])
+        )  # the JSON array at the path becomes the collection
+        nodes: "list[object]" = (
+            value if isinstance(value, list) else ([] if value is None else [value])
+        )
         return Collection(nodes, base=_base_of(obj))
-    if name == "attr":  # HTML attribute (attr('text') -> text, attr('href') -> a resolvable Ref)
+    if (
+        name == "attr"
+    ):  # HTML attribute (attr('text') -> text, attr('href') -> a resolvable Ref)
         key = str(args[0]) if args else ""
         if isinstance(obj, Element):
             if key in _TEXT_ATTRS:
@@ -212,14 +299,22 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
             if key in _LINK_ATTRS:  # a link -> a Ref, so .resolve() can follow it
                 return Ref(obj.attr(key) or "", base=_base_of(obj))
             return Field(obj.attr(key), base=_base_of(obj))
-        if _markup(obj):  # a markup Document has no attributes of its own; text pseudo only
-            return Field(_text_of(obj) if key in _TEXT_ATTRS else None, base=_base_of(obj))
-        return Field(_json_get(obj, "" if key in _TEXT_ATTRS else key))  # JSON: value / key access
+        if _markup(
+            obj
+        ):  # a markup Document has no attributes of its own; text pseudo only
+            return Field(
+                _text_of(obj) if key in _TEXT_ATTRS else None, base=_base_of(obj)
+            )
+        return Field(
+            _json_get(obj, "" if key in _TEXT_ATTRS else key)
+        )  # JSON: value / key access
     if name == "text":
         if _markup(obj):
             return Field(_text_of(obj), base=_base_of(obj))
         return Field(_json_get(obj, ""))  # the JSON scalar value itself
-    if name == "links" and isinstance(obj, Document):  # resolvable refs, so .resolve() can follow
+    if name == "links" and isinstance(
+        obj, Document
+    ):  # resolvable refs, so .resolve() can follow
         return Collection([Ref(u, base=obj.url) for u in obj.links()])
     attr = getattr(obj, name, None)
     if attr is None:
@@ -230,8 +325,11 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
 
 def _markup(obj: object) -> bool:
     """Whether a value is a MARKUP surface (an Element, or a non-JSON Document) -- so ``select`` etc.
-    use CSS/xpath; a JSON Document or a plain JSON value (dict/list/scalar) navigates by path."""
-    return isinstance(obj, Element) or (isinstance(obj, Document) and obj.kind != "json")
+    use CSS/xpath; a JSON Document or a plain JSON value (dict/list/scalar) navigates by path.
+    """
+    return isinstance(obj, Element) or (
+        isinstance(obj, Document) and obj.kind != "json"
+    )
 
 
 def _json_get(obj: object, path: str) -> object:
@@ -244,11 +342,16 @@ def _json_get(obj: object, path: str) -> object:
     return None
 
 
-def _fan(coll: "Collection[object]", name: str, args: "list[object]",
-         kwargs: "dict[str, object]") -> object:
+def _fan(
+    coll: "Collection[object]",
+    name: str,
+    args: "list[object]",
+    kwargs: "dict[str, object]",
+) -> object:
     """Fan an element op out over a collection, ALWAYS returning a Collection so the chain stays
     uniform (``select``/``select_all`` flatten nested collections and drop misses; a scalar read
-    like ``attr``/``text`` yields a Collection of Fields/Refs -- so ``.text().number()`` chains)."""
+    like ``attr``/``text`` yields a Collection of Fields/Refs -- so ``.text().number()`` chains).
+    """
     if name in {"project", "merge", "limit", "distinct", "documents"}:
         return getattr(coll, name)(*args, **kwargs)
     flat: list[object] = []
@@ -263,11 +366,13 @@ def _fan(coll: "Collection[object]", name: str, args: "list[object]",
     return coll.derive(flat)
 
 
-async def _row_op(coll: "Collection[object]", name: str, call: "Step | None",
-                  rs: "Resolver") -> "Collection[object]":
+async def _row_op(
+    coll: "Collection[object]", name: str, call: "Step | None", rs: "Resolver"
+) -> "Collection[object]":
     """``extract`` / ``filter``: evaluate the recorded sub-expressions PER element. ``extract``
     annotates each element's row (a later column can read an earlier one via ``field``); ``filter``
-    keeps the elements every predicate is truthy for (predicates see the element's row)."""
+    keeps the elements every predicate is truthy for (predicates see the element's row).
+    """
     args = list(call.args) if call is not None else []
     kwargs = dict(call.kwargs) if call is not None else {}
     if name == "filter":
@@ -276,7 +381,11 @@ async def _row_op(coll: "Collection[object]", name: str, call: "Step | None",
         rows = coll._rows or [{} for _ in coll]
         for item, row in zip(coll, rows):
             keep = True
-            for a in args:  # explicit loop: an `await` inside all(...) would build an async generator
+            for (
+                a
+            ) in (
+                args
+            ):  # explicit loop: an `await` inside all(...) would build an async generator
                 if not _truthy(await _walk(_plan_of(a), item, rs, row)):
                     keep = False
                     break
@@ -297,6 +406,7 @@ async def _row_op(coll: "Collection[object]", name: str, call: "Step | None",
 
 # -- operators / functions / branches ---------------------------------------
 
+
 def _apply_op(cur: object, name: str, other: object) -> bool:
     """Fold a comparison / boolean op to a plain ``bool`` (operands unwrapped to their raw values)."""
     a, b = _val(cur), _val(other)
@@ -315,8 +425,14 @@ def _apply_op(cur: object, name: str, other: object) -> bool:
 
 def _order(a: object, b: object, name: str) -> bool:
     """An ordering comparison (``lt`` / ``le`` / ``gt`` / ``ge``) over two like, orderable operands
-    (numbers or strings); incomparable operands (a miss, mixed types) never match an ordering."""
-    if isinstance(a, (int, float)) and not isinstance(a, bool) and isinstance(b, (int, float)) and not isinstance(b, bool):
+    (numbers or strings); incomparable operands (a miss, mixed types) never match an ordering.
+    """
+    if (
+        isinstance(a, (int, float))
+        and not isinstance(a, bool)
+        and isinstance(b, (int, float))
+        and not isinstance(b, bool)
+    ):
         an, bn = float(a), float(b)
         return {"lt": an < bn, "le": an <= bn, "gt": an > bn, "ge": an >= bn}[name]
     if isinstance(a, str) and isinstance(b, str):
@@ -330,9 +446,12 @@ def _apply_fn(cur: object, name: str) -> "Field[bool]":
     return field.is_ok() if name == "is_ok" else field.is_empty()
 
 
-async def _when(step: "Step", root: object, rs: "Resolver", row: "dict[str, object] | None") -> object:
+async def _when(
+    step: "Step", root: object, rs: "Resolver", row: "dict[str, object] | None"
+) -> object:
     """A ``when(cond).then(a).otherwise(b)`` branch: evaluate the three sub-expressions against the
-    current element and take ``then`` when the condition is truthy, else ``otherwise``."""
+    current element and take ``then`` when the condition is truthy, else ``otherwise``.
+    """
     cond, then, other = (step.args + [Arg(), Arg(), Arg()])[:3]
     if _truthy(await _arg(cond, root, rs, row)):
         return await _arg(then, root, rs, row)
@@ -341,8 +460,10 @@ async def _when(step: "Step", root: object, rs: "Resolver", row: "dict[str, obje
 
 # -- helpers -----------------------------------------------------------------
 
-async def _eager_args(call: "Step | None", root: object, rs: "Resolver",
-                      row: "dict[str, object] | None") -> "tuple[list[object], dict[str, object]]":
+
+async def _eager_args(
+    call: "Step | None", root: object, rs: "Resolver", row: "dict[str, object] | None"
+) -> "tuple[list[object], dict[str, object]]":
     """Evaluate a call's args/kwargs eagerly (a literal as-is, a sub-plan walked once) -- for the
     ordinary ops whose arguments are not per-element sub-expressions."""
     if call is None:
@@ -352,7 +473,9 @@ async def _eager_args(call: "Step | None", root: object, rs: "Resolver",
     return args, kwargs
 
 
-async def _arg(arg: "Arg", root: object, rs: "Resolver", row: "dict[str, object] | None") -> object:
+async def _arg(
+    arg: "Arg", root: object, rs: "Resolver", row: "dict[str, object] | None"
+) -> object:
     """One argument value: its literal, or the result of walking its sub-plan against the context."""
     if arg.plan is not None:
         return await _walk(arg.plan, root, rs, row)
@@ -362,7 +485,11 @@ async def _arg(arg: "Arg", root: object, rs: "Resolver", row: "dict[str, object]
 def _plan_of(arg: "Arg") -> "Plan":
     """The sub-plan of a row-op argument (an ``extract`` column / ``filter`` predicate is always a
     recorded expression); a bare literal wraps as an empty plan that yields it."""
-    return arg.plan if arg.plan is not None else Plan(steps=[Step(kind="op", name="eq", args=[arg])])
+    return (
+        arg.plan
+        if arg.plan is not None
+        else Plan(steps=[Step(kind="op", name="eq", args=[arg])])
+    )
 
 
 def _literal(call: "Step | None") -> "JsonValue":
@@ -409,7 +536,8 @@ def _truthy(v: object) -> bool:
 def _smart(cur: object) -> object:
     """The terminal shape: a ``Field`` yields its value; a Collection with extracted rows yields the
     projected ``list[dict]`` (the implicit project -- no explicit ``.project()`` needed), else its
-    items smart-unwrapped; a list maps through; a Document/Element/scalar passes as-is."""
+    items smart-unwrapped; a list maps through; a Document/Element/scalar passes as-is.
+    """
     if isinstance(cur, Field):
         return cur.get()
     if isinstance(cur, Collection):

@@ -11,18 +11,53 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin
 
-from .nodes import Node, tag as _tag, text as _text
+from .nodes import Node
+from .nodes import tag as _tag
+from .nodes import text as _text
 
 if TYPE_CHECKING:
     from .document import Document, Element
 
 #: tags whose subtree is page chrome, not readable content -- dropped by the readable extractors.
-_CHROME = frozenset({"script", "style", "noscript", "template", "svg", "nav", "header", "footer", "aside", "form"})
+_CHROME = frozenset(
+    {
+        "script",
+        "style",
+        "noscript",
+        "template",
+        "svg",
+        "nav",
+        "header",
+        "footer",
+        "aside",
+        "form",
+    }
+)
 #: the landmark tags ``region`` reports (nearest ancestor wins).
 _LANDMARKS = frozenset({"nav", "main", "article", "header", "footer", "aside"})
 #: block tags that force a newline in the markdown render.
-_BLOCK = frozenset({"p", "div", "section", "li", "tr", "br", "blockquote", "pre", "hr",
-                    "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "table"})
+_BLOCK = frozenset(
+    {
+        "p",
+        "div",
+        "section",
+        "li",
+        "tr",
+        "br",
+        "blockquote",
+        "pre",
+        "hr",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "ul",
+        "ol",
+        "table",
+    }
+)
 _HEADINGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 
 
@@ -39,7 +74,8 @@ def main_content(doc: "Document") -> "Element | None":
 
 def region(el: "Element") -> str:
     """The page landmark ``el`` sits in -- ``nav`` / ``main`` / ``article`` / ``header`` /
-    ``footer`` / ``aside`` -- by walking ancestors for the nearest landmark tag or ARIA role."""
+    ``footer`` / ``aside`` -- by walking ancestors for the nearest landmark tag or ARIA role.
+    """
     node: "Node | None" = el._node
     while node is not None:
         role = (node.get("role") or "").lower()
@@ -136,7 +172,9 @@ def _tail(node: Node, out: list[str]) -> None:
         out.append(node.tail)
 
 
-def tables(doc: "Document", selector: "str | None" = None, *, transpose: bool = False) -> "list[dict[str, str]]":
+def tables(
+    doc: "Document", selector: "str | None" = None, *, transpose: bool = False
+) -> "list[dict[str, str]]":
     """The rows of an HTML ``<table>`` as records keyed by header, with ``rowspan`` / ``colspan``
     EXPANDED so a merged category cell is carried into the rows it spans (something ``select_all``
     on ``<tr>`` cannot do). ``selector`` picks the table (else the one with the most rows in the
@@ -147,7 +185,9 @@ def tables(doc: "Document", selector: "str | None" = None, *, transpose: bool = 
     roots = [e._node for e in doc.select_all(selector)] if selector else [doc._root()]
     candidates: list[Node] = []
     for r in roots:
-        candidates += [r] if _tag(r) == "table" else [e for e in r.iter() if _tag(e) == "table"]
+        candidates += (
+            [r] if _tag(r) == "table" else [e for e in r.iter() if _tag(e) == "table"]
+        )
     table = max(candidates, key=_row_count, default=None)
     return _table_records(table, transpose=transpose) if table is not None else []
 
@@ -159,11 +199,15 @@ def _row_count(table: Node) -> int:
 def _table_records(table: Node, *, transpose: bool) -> "list[dict[str, str]]":
     """Expand a table into a dense grid (rowspan/colspan honoured), then key rows by the header row."""
     grid: list[dict[int, str]] = []
-    pending: dict[int, tuple[str, int]] = {}  # col -> (text, remaining rowspan) for active rowspans
+    pending: dict[int, tuple[str, int]] = (
+        {}
+    )  # col -> (text, remaining rowspan) for active rowspans
     for tr in (n for n in table.iter() if _tag(n) == "tr"):
         row: dict[int, str] = {}
         col = 0
-        carry: dict[int, tuple[str, int]] = {}  # carry active rowspans down from earlier rows
+        carry: dict[int, tuple[str, int]] = (
+            {}
+        )  # carry active rowspans down from earlier rows
         for c, (txt, rem) in pending.items():
             row[c] = txt
             if rem - 1 > 0:
@@ -187,11 +231,15 @@ def _table_records(table: Node, *, transpose: bool) -> "list[dict[str, str]]":
     matrix = [[r.get(c, "") for c in range(width)] for r in grid]
     if transpose:
         matrix = [list(col) for col in zip(*matrix)] if matrix else []
-    if not matrix or not matrix[0]:  # no rows, or a header row with no cells -> no records
+    if (
+        not matrix or not matrix[0]
+    ):  # no rows, or a header row with no cells -> no records
         return []
     header, *body = matrix
     keys = [h or f"col{i}" for i, h in enumerate(header)]
-    return [{keys[i]: (r[i] if i < len(r) else "") for i in range(len(keys))} for r in body]
+    return [
+        {keys[i]: (r[i] if i < len(r) else "") for i in range(len(keys))} for r in body
+    ]
 
 
 def _int(v: "str | None", default: int) -> int:

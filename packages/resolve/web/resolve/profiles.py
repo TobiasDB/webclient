@@ -24,14 +24,23 @@ from .base import Profile
 from .policy import EscalationPolicy, RatePolicy, RetryPolicy
 
 #: HTTP with a realistic (browserforge), STABLE identity -- the cheap default.
-BASIC = Profile(escalation=EscalationPolicy(tiers=(_fp.BASIC,)),
-                retry=RetryPolicy(max_attempts=3), rate=RatePolicy(per_host=0.5))
+BASIC = Profile(
+    escalation=EscalationPolicy(tiers=(_fp.BASIC,)),
+    retry=RetryPolicy(max_attempts=3),
+    rate=RatePolicy(per_host=0.5),
+)
 #: HTTP first, escalate to a browser render when a page looks blocked / JS-gated.
-BASIC_BROWSER = Profile(escalation=EscalationPolicy(tiers=(_fp.BASIC, _fp.BROWSER)),
-                        retry=RetryPolicy(max_attempts=2), rate=RatePolicy(per_host=0.5))
+BASIC_BROWSER = Profile(
+    escalation=EscalationPolicy(tiers=(_fp.BASIC, _fp.BROWSER)),
+    retry=RetryPolicy(max_attempts=2),
+    rate=RatePolicy(per_host=0.5),
+)
 #: always render in a real browser (a stable per-session identity).
-FULL_BROWSER = Profile(escalation=EscalationPolicy(tiers=(_fp.BROWSER,)),
-                       retry=RetryPolicy(max_attempts=2), rate=RatePolicy(per_host=0.5))
+FULL_BROWSER = Profile(
+    escalation=EscalationPolicy(tiers=(_fp.BROWSER,)),
+    retry=RetryPolicy(max_attempts=2),
+    rate=RatePolicy(per_host=0.5),
+)
 
 
 def proxy(server: "str | Proxy") -> Profile:
@@ -41,18 +50,28 @@ def proxy(server: "str | Proxy") -> Profile:
 
 def proxy_browser(server: "str | Proxy") -> Profile:
     """:data:`BASIC_BROWSER` routed through ``server`` (both tiers)."""
-    return BASIC_BROWSER.with_(escalation=EscalationPolicy(tiers=(_fp.proxy(server), _fp.proxy_browser(server))))
+    return BASIC_BROWSER.with_(
+        escalation=EscalationPolicy(
+            tiers=(_fp.proxy(server), _fp.proxy_browser(server))
+        )
+    )
 
 
 def proxy_full_browser(server: "str | Proxy") -> Profile:
     """:data:`FULL_BROWSER` routed through ``server``."""
-    return FULL_BROWSER.with_(escalation=EscalationPolicy(tiers=(_fp.proxy_browser(server),)))
+    return FULL_BROWSER.with_(
+        escalation=EscalationPolicy(tiers=(_fp.proxy_browser(server),))
+    )
 
 
 #: the by-NAME registry (the constant profiles) -- so a serialisable lazy plan can name a policy,
 #: e.g. ``wq.reference(url).resolve(profile="full_browser")``. Proxy variants need an endpoint, so
 #: they are not name-addressable.
-_REGISTRY: "dict[str, Profile]" = {"basic": BASIC, "basic_browser": BASIC_BROWSER, "full_browser": FULL_BROWSER}
+_REGISTRY: "dict[str, Profile]" = {
+    "basic": BASIC,
+    "basic_browser": BASIC_BROWSER,
+    "full_browser": FULL_BROWSER,
+}
 
 
 def get(name: str) -> "Profile | None":
@@ -60,4 +79,12 @@ def get(name: str) -> "Profile | None":
     return _REGISTRY.get(name.lower().replace("-", "_"))
 
 
-__all__ = ["BASIC", "BASIC_BROWSER", "FULL_BROWSER", "proxy", "proxy_browser", "proxy_full_browser", "get"]
+__all__ = [
+    "BASIC",
+    "BASIC_BROWSER",
+    "FULL_BROWSER",
+    "proxy",
+    "proxy_browser",
+    "proxy_full_browser",
+    "get",
+]

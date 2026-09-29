@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from pydantic import BaseModel
-
 from web.parse import Document
 
 

@@ -20,9 +20,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, TypeAlias, runtime_checkable
 
-from web.fetch import ClientPool, Fetcher, Middleware, Request, Snapshot, WebException, default_pool, stack
+from web.fetch import ClientPool, Fetcher, Middleware
 from web.fetch import Profile as FetchProfile
+from web.fetch import Request, Snapshot, WebException, default_pool, stack
 from web.parse import Document
+
 from .document import document
 from .middleware import escalate as _escalate
 from .policy import EscalationPolicy, Policy
@@ -58,7 +60,8 @@ class Profile:
     (which builds its own middleware), so a Profile is self-contained and serialisable (no baked-in
     closures). ``escalation`` is the transport ladder (fetch identities to climb + when); ``retry``
     / ``rate`` / ``paginate`` / ``rotate`` are the wrapping policies. Applied via
-    ``Resolver(profile=...)`` / ``resolve(profile=...)``; combine with ``.with_(...)``."""
+    ``Resolver(profile=...)`` / ``resolve(profile=...)``; combine with ``.with_(...)``.
+    """
 
     escalation: "EscalationPolicy | None" = None
     retry: "Slot | None" = None
@@ -72,11 +75,17 @@ class Profile:
     #: failure, so it is never raised here.
     raise_on_error: bool = True
 
-    def with_(self, *, escalation: "EscalationPolicy | None | _Keep" = _KEEP,
-              retry: "Slot | None | _Keep" = _KEEP, rate: "Slot | None | _Keep" = _KEEP,
-              paginate: "Slot | None | _Keep" = _KEEP, rotate: "Slot | None | _Keep" = _KEEP,
-              middleware: "tuple[Middleware, ...] | _Keep" = _KEEP,
-              raise_on_error: "bool | _Keep" = _KEEP) -> "Profile":
+    def with_(
+        self,
+        *,
+        escalation: "EscalationPolicy | None | _Keep" = _KEEP,
+        retry: "Slot | None | _Keep" = _KEEP,
+        rate: "Slot | None | _Keep" = _KEEP,
+        paginate: "Slot | None | _Keep" = _KEEP,
+        rotate: "Slot | None | _Keep" = _KEEP,
+        middleware: "tuple[Middleware, ...] | _Keep" = _KEEP,
+        raise_on_error: "bool | _Keep" = _KEEP,
+    ) -> "Profile":
         """A copy with some slots overridden (the rest inherited) -- combine or adjust a base profile."""
         return Profile(
             escalation=self.escalation if isinstance(escalation, _Keep) else escalation,
@@ -85,13 +94,15 @@ class Profile:
             paginate=self.paginate if isinstance(paginate, _Keep) else paginate,
             rotate=self.rotate if isinstance(rotate, _Keep) else rotate,
             middleware=self.middleware if isinstance(middleware, _Keep) else middleware,
-            raise_on_error=self.raise_on_error if isinstance(raise_on_error, _Keep) else raise_on_error,
+            raise_on_error=(
+                self.raise_on_error
+                if isinstance(raise_on_error, _Keep)
+                else raise_on_error
+            ),
         )
 
 
 _EMPTY = Profile()
-
-
 
 
 @runtime_checkable
@@ -135,13 +146,24 @@ class Resolver:
         # (session/tests); else the default HTTP identity. Each tier is leased from the pool (a fetch
         # Profile -> its shared backend; a ready Fetcher/session passes through).
         if esc is not None and esc.tiers:
-            self._tiers: tuple[Fetcher, ...] = tuple(self._pool.lease(t) for t in esc.tiers)
-            self._esc: "Middleware | None" = esc.build(self._pool)  # escalate over the climb tiers, with its `on`
+            self._tiers: tuple[Fetcher, ...] = tuple(
+                self._pool.lease(t) for t in esc.tiers
+            )
+            self._esc: "Middleware | None" = esc.build(
+                self._pool
+            )  # escalate over the climb tiers, with its `on`
         elif ladder:
-            self._tiers = tuple(self._pool.lease(t) if isinstance(t, FetchProfile) else t for t in ladder)
-            self._esc = _escalate(list(self._tiers[1:])) if len(self._tiers) > 1 else None  # default `on`
+            self._tiers = tuple(
+                self._pool.lease(t) if isinstance(t, FetchProfile) else t
+                for t in ladder
+            )
+            self._esc = (
+                _escalate(list(self._tiers[1:])) if len(self._tiers) > 1 else None
+            )  # default `on`
         else:
-            self._tiers = (self._pool.lease(FetchProfile()),)  # bare default: minimal identity
+            self._tiers = (
+                self._pool.lease(FetchProfile()),
+            )  # bare default: minimal identity
             self._esc = None
         #: whether THIS resolver owns its tiers' lifetime (a session() resolver owns the sessions it
         #: opened; a base resolver's tiers are pool-owned or caller-owned -> it closes nothing).
@@ -157,16 +179,20 @@ class Resolver:
     def _stack_over(self, tiers: tuple[Fetcher, ...]) -> Fetcher:
         """Build the ordered middleware chain around the base tier. Each slot is a Policy (builds its
         middleware from the pool) or a ready middleware; escalation is already built (over the climb
-        tiers). Order (outermost -> innermost): custom, paginate, escalate, retry, rate, rotate."""
+        tiers). Order (outermost -> innermost): custom, paginate, escalate, retry, rate, rotate.
+        """
         base_tier = next(iter(tiers))  # non-empty by construction
         chain = tuple(
-            m for m in (
-                *self._mw,                    # custom, outermost
+            m
+            for m in (
+                *self._mw,  # custom, outermost
                 _slot(self._pg, self._pool),  # paginate: drives the page loop
-                self._esc,                    # escalate: climb the transport ladder on a signal
+                self._esc,  # escalate: climb the transport ladder on a signal
                 _slot(self._rt, self._pool),  # retry: same request on transient failure
                 _slot(self._rl, self._pool),  # rate: host politeness
-                _slot(self._rot, self._pool), # rotate: fresh identity, innermost (owns the fetch)
+                _slot(
+                    self._rot, self._pool
+                ),  # rotate: fresh identity, innermost (owns the fetch)
             )
             if m is not None
         )
@@ -203,7 +229,9 @@ class Resolver:
         stream (XHR/fetch responses with bodies), which Locate mines for the real data-API a page
         calls. A bare URL string is a shorthand ``Request``."""
         req = Request(url=request) if isinstance(request, str) else request
-        return await self._fetcher.fetch(req)  # runs the whole middleware chain (retry, escalate, ...)
+        return await self._fetcher.fetch(
+            req
+        )  # runs the whole middleware chain (retry, escalate, ...)
 
     async def __aenter__(self) -> "Resolver":
         """Enter a resolver scope -- ``async with Resolver(...) as rs:`` (closes on exit)."""
@@ -219,8 +247,13 @@ class Resolver:
         its state across pages. Closing it closes the sessions it opened."""
         sessions = tuple([await _open_session(t) for t in self._tiers])
         return Resolver(
-            ladder=sessions, retry=self._rt, rate=self._rl, paginate=self._pg,
-            middleware=self._mw, raise_on_error=self._raise, pool=self._pool,
+            ladder=sessions,
+            retry=self._rt,
+            rate=self._rl,
+            paginate=self._pg,
+            middleware=self._mw,
+            raise_on_error=self._raise,
+            pool=self._pool,
             _own=True,  # the session resolver OWNS its sessions (rotation off: a session is ONE identity)
         )
 
