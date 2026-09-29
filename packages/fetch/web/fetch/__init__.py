@@ -28,9 +28,10 @@ from .replay import Recorder, ReplayBackend
 from .pool import Pool
 from .proxy import Proxy
 from .entry import ClientPool, Entry, Profile, aclose_default_pool, default_pool, fetch  # functional entry + pool
+from . import profiles  # named default transport identities (web.fetch.profiles.BASIC / BROWSER / ...)
 
 __all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "BrowserSession", "HttpSession", "Session",
-           "fetch", "Entry", "Profile", "ClientPool", "default_pool", "aclose_default_pool",
+           "fetch", "Entry", "Profile", "profiles", "ClientPool", "default_pool", "aclose_default_pool",
            "Script", "ScriptRegistry", "Proxy", "Pool", "Fingerprint", "CHROME", "fleet", "generate", "Wait",
            "DOM_RECORDER", "NetworkEvent", "DOMEvent", "FetchEvent", "ConsoleEvent", "Middleware", "Handler", "stack",
            "Recorder", "ReplayBackend",

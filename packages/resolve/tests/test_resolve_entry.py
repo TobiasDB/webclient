@@ -62,3 +62,16 @@ def test_resolve_profile_uses_fetch_profiles_in_its_ladder(httpserver: HTTPServe
         return doc.metadata().title or ""
 
     assert _run(go()) == "Vendor"
+
+
+def test_default_policy_profiles_resolve(httpserver: HTTPServer) -> None:
+    from web.resolve import profiles
+
+    httpserver.expect_request("/").respond_with_data(b"<title>Profiled</title>", content_type="text/html")
+
+    async def go() -> str:
+        # the BASIC policy: rotating identity + retry + politeness, applied by name
+        doc = await resolve(httpserver.url_for("/"), profile=profiles.BASIC)
+        return doc.metadata().title or ""
+
+    assert _run(go()) == "Profiled"
