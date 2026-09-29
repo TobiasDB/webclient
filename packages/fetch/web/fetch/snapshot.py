@@ -16,8 +16,9 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from web.kernel import Event, WebError
+from web.kernel import WebError
 
+from .events import CaptureEvent
 from .request import Request
 
 
@@ -32,7 +33,7 @@ class Snapshot(BaseModel):
     elapsed: float = 0.0
     set_cookies: dict[str, str] = {}
     redirects: list[str] = []  # the intermediate URLs, in order
-    events: list[Event] = []  # captured during the fetch (browser: DOM/network/console)
+    events: list[CaptureEvent] = []  # captured during the fetch (browser: network/DOM/console)
     error: WebError | None = None
 
     @property

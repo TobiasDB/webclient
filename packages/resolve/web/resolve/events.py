@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from web.kernel import Event
+from pydantic import BaseModel
 
 
-class ResolveEvent(Event):
+class ResolveEvent(BaseModel):
     """A resolve-policy step: a retry attempt, a tier climb, or a fetched page. ``phase`` names
     which (``retry`` / ``escalate`` / ``page``); ``url`` and ``detail`` give context."""
 

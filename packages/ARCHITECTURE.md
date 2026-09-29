@@ -20,7 +20,7 @@ takes the ideas, not the code.
    below it. Each is independently installable and usable in isolation.
 3. **Every layer has a well-defined boundary + interface**, expressed as a small input→output
    contract (below).
-4. **Each layer defines its own event types.** The kernel holds only the `Event` base + the bus.
+4. **Each layer defines its own event types.** They are plain models with a `topic`; the kernel `Event` is a structural Protocol (no inheritance), and the bus routes by `topic`.
 5. **A failure is data.** A `WebError` travels on results (a not-ok `Snapshot`) and is raised as
    `WebException` only when a layer chooses to fail loudly.
 
@@ -64,7 +64,7 @@ resolve. The bridge `web.resolve.document(snap)` just hands parse the bytes.
 
 ### web.kernel — data + the event bus (depends on: pydantic)
 - `WebError` / `WebException` / `err(code, msg, **detail)` — structured errors.
-- `Event` (base; each layer subclasses) + `EventBus` (sync pub/sub over dotted topics).
+- `Event` (a structural Protocol -- `topic: str`; layers do NOT inherit it) + `EventBus` (sync pub/sub over dotted topics).
 - **The ambient bus:** `emit(event)` publishes to the bus active in the current context (a free
   no-op otherwise — works across `await` via a `ContextVar`); `Trace()` is a `with`-scope that
   installs a bus and collects everything emitted (`with Trace() as t: … ; t.events`). Layers call

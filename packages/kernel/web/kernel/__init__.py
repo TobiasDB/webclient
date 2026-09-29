@@ -2,7 +2,7 @@
 
 The one package every other layer may import and which imports none of them (only pydantic).
 It holds the shared substrate: structured :mod:`.errors` (``WebError`` / ``WebException``) and
-the :mod:`.events` bus (the ``Event`` base + ``EventBus``; each layer defines its own event
+the :mod:`.events` bus (the ``Event`` Protocol + ``EventBus``; each layer defines its own event
 types). Nothing domain-specific lives here -- no Request, Snapshot, or Document; those belong
 to the layers that own them.
 """

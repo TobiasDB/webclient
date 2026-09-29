@@ -2,7 +2,21 @@
 
 from __future__ import annotations
 
+from pydantic import BaseModel
+
 from web.kernel import Event, EventBus, WebError, WebException, err
+
+
+class _Ev(BaseModel):
+    """A layer's event is a plain model with a topic -- it does NOT inherit a kernel base; the bus
+    routes it structurally (it satisfies the :class:`~web.kernel.Event` Protocol)."""
+
+    topic: str
+
+
+def test_layer_event_satisfies_the_event_protocol_without_inheriting() -> None:
+    assert isinstance(_Ev(topic="fetch"), Event)  # runtime_checkable Protocol: just needs `topic`
+    assert Event not in _Ev.__mro__  # and it does NOT inherit the kernel -- structural only
 
 
 def test_weberror_is_data_and_exception_carries_it() -> None:
@@ -23,22 +37,22 @@ def test_bus_delivers_by_prefix_and_swallows_handler_errors() -> None:
     all_seen: list[str] = []
     sub = bus.subscribe("", lambda ev: all_seen.append(ev.topic))
 
-    bus.publish(Event(topic="fetch.retry"))
-    bus.publish(Event(topic="parse"))
+    bus.publish(_Ev(topic="fetch.retry"))
+    bus.publish(_Ev(topic="parse"))
     assert seen == ["fetch.retry"]  # prefix match only
     assert all_seen == ["fetch.retry", "parse"]  # "" sees everything
     sub()  # unsubscribe
-    bus.publish(Event(topic="fetch"))
+    bus.publish(_Ev(topic="fetch"))
     assert all_seen == ["fetch.retry", "parse"]  # no longer delivered
 
 
 def test_emit_is_noop_without_a_trace_and_captured_within_one() -> None:
     from web.kernel import Trace, emit
 
-    emit(Event(topic="x"))  # no active trace -> no-op, no error
+    emit(_Ev(topic="x"))  # no active trace -> no-op, no error
     with Trace() as t:
-        emit(Event(topic="fetch"))
-        emit(Event(topic="crawl"))
+        emit(_Ev(topic="fetch"))
+        emit(_Ev(topic="crawl"))
     assert [e.topic for e in t.events] == ["fetch", "crawl"]
-    emit(Event(topic="after"))  # outside the scope -> not captured
+    emit(_Ev(topic="after"))  # outside the scope -> not captured
     assert [e.topic for e in t.events] == ["fetch", "crawl"]

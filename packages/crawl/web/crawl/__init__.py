@@ -20,7 +20,9 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from web.fetch import Request
-from web.kernel import Event, emit
+from pydantic import BaseModel
+
+from web.kernel import emit
 from web.parse import Document
 from web.resolve import Resolver
 
@@ -29,7 +31,7 @@ from .sitemap import sitemap_urls
 from .urls import canonical
 
 
-class CrawlEvent(Event):
+class CrawlEvent(BaseModel):
     """One page the crawl fetched, with how many it has fetched so far."""
 
     topic: str = "crawl"

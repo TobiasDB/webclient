@@ -16,11 +16,11 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Literal
 
-from web.kernel import Event, emit
+from web.kernel import emit
 
 from . import mouse
 from .errors import classify
-from .events import ConsoleEvent, DOMEvent, FetchEvent, NetworkEvent
+from .events import CaptureEvent, ConsoleEvent, DOMEvent, FetchEvent, NetworkEvent
 from .fingerprint import Fingerprint, as_fingerprint
 from .proxy import Proxy, as_proxy
 from .request import Request
@@ -145,7 +145,7 @@ class BrowserSession:
         xhr/fetch bodies), console messages, and each recorder's drained DOM records."""
         content: str = await self._page.content()
         emit(FetchEvent(url=self._page.url, status=self._status, source="browser"))
-        events: list[Event] = []
+        events: list[CaptureEvent] = []
         events += await self._network_events()
         events += self._console
         for s in self._scripts:

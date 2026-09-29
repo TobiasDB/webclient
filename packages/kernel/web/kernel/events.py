@@ -1,31 +1,27 @@
 """The event bus: a minimal, synchronous pub/sub over dotted topics.
 
-The kernel defines only the :class:`Event` base and the :class:`EventBus`. Every layer
-defines its own event types (``fetch`` a ``FetchEvent``, ``parse`` a ``ParseEvent``, ...) and
-publishes them on a shared bus, so a trace or UI can observe any layer without the kernel
-knowing those types exist. Delivery is synchronous and in subscription order; a subscriber
-that raises does not stop the others (its error is swallowed -- the bus is observation, not
-control flow). Matching is by dotted-topic prefix: a subscriber on ``"fetch"`` sees
-``"fetch"`` and ``"fetch.retry"``; a subscriber on ``""`` sees everything.
+:class:`Event` is a structural :class:`~typing.Protocol` -- anything with a ``topic: str`` is an
+event -- NOT a base class to inherit. Every layer defines its own plain event models (a
+``FetchEvent``, a ``ResolveEvent``, ...) and publishes them on a shared bus; the kernel routes by
+``topic`` without knowing those types exist and without them importing a kernel base. Delivery is
+synchronous and in subscription order; a subscriber that raises does not stop the others (its error
+is swallowed -- the bus is observation, not control flow). Matching is by dotted-topic prefix: a
+subscriber on ``"fetch"`` sees ``"fetch"`` and ``"fetch.retry"``; a subscriber on ``""`` sees all.
 """
 
 from __future__ import annotations
 
 import contextvars
-import time
 from collections.abc import Callable
+from typing import Protocol, runtime_checkable
 
-from pydantic import BaseModel, Field
 
-
-class Event(BaseModel):
-    """Base for anything published on the bus. ``topic`` routes it (a dotted string);
-    subclasses add their own fields. ``ts`` is set on creation; ``source`` optionally names
-    what emitted it (a document id, a session id)."""
+@runtime_checkable
+class Event(Protocol):
+    """The structural contract for a bus event: a dotted ``topic`` that routes it. Layers implement
+    it by declaring a ``topic`` field on a plain model -- no inheritance from the kernel."""
 
     topic: str
-    ts: float = Field(default_factory=time.time)
-    source: str | None = None
 
 
 def topic_matches(prefix: str, topic: str) -> bool:
