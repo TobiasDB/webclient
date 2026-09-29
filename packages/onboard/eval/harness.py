@@ -5,8 +5,8 @@ For every case below we run the two phases against a live lab fixture:
 * **Locate** -- does :func:`web.onboard.locate` find the right source (the expected record
   selector, or a JSON/XML data document, preferring an XHR/data-API when one backs the page)?
 * **Author** -- does :func:`web.onboard.author` produce a ``wq`` query that, run, extracts the
-  intended rows? Author is driven here by :class:`~eval.heuristic_llm.HeuristicLlm` (no API key), so
-  this grades the PIPELINE MECHANICS + a mechanical author, not a model's selector quality.
+  intended rows? Author is driven by a REAL model via :class:`~eval.shim.ClaudeShim` (the local
+  ``claude -p`` CLI -- no API key), so this grades actual query-writing quality end to end.
 
 Each case is graded PASS / PARTIAL / FAIL against the fixture's published expected result, so a
 regression -- or a genuine capability gap -- is explicit. ``__main__`` serves the lab, runs this,
@@ -17,11 +17,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from web.onboard import DatasetBrief, LocateBrief, Reference, build_query, locate
-
 from web.resolve import Resolver
 
-from .heuristic_llm import HeuristicLlm
+from web.onboard import DatasetBrief, LocateBrief, Reference, build_query, locate
+
+from .shim import ClaudeShim
 
 
 @dataclass
@@ -314,7 +314,7 @@ def _grade_author(case: Case, rows: "list[dict[str, object]] | None") -> "tuple[
 async def run_case(case: Case, base: str, resolver: Resolver) -> Result:
     """Run Locate then Author for one case against the live lab and grade both phases."""
     url = f"{base}/lab/{case.name}"
-    llm = HeuristicLlm()
+    llm = ClaudeShim()
     ref = await locate(LocateBrief(goal=case.name, candidates=[url]), resolver=resolver)
     locate_grade = _grade_locate(case, ref)
     if ref is None:

@@ -8,6 +8,6 @@ the OLD repo's ``webclient.lab`` (the fixtures + their published expected result
 from __future__ import annotations
 
 from .harness import CASES, Case, Result, run_all, run_case
-from .heuristic_llm import HeuristicLlm
+from .shim import ClaudeShim
 
-__all__ = ["CASES", "Case", "Result", "run_all", "run_case", "HeuristicLlm"]
+__all__ = ["CASES", "Case", "Result", "run_all", "run_case", "ClaudeShim"]
