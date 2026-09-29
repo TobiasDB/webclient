@@ -110,10 +110,13 @@ Until = Literal["domcontentloaded", "load", "networkidle", "dom_stable", "select
 
 
 class Wait(BaseModel):
-    """When the browser backend snapshots. ``timeout`` bounds the whole wait; ``quiet`` is the
-    settle window for ``dom_stable``; ``selector`` targets ``until='selector'``."""
+    """When the browser backend snapshots. The DEFAULT is ``dom_stable`` -- wait until the page
+    stops rewriting its own DOM (an SPA settling), returning at the ``timeout`` budget even if it
+    never fully settles (a bounded settle, not a failure). ``timeout`` bounds the whole wait;
+    ``quiet`` is the no-change window that counts as stable; ``selector`` targets ``until='selector'``.
+    """
 
-    until: Until = "load"
+    until: Until = "dom_stable"
     timeout: float = 8.0
     quiet: float = 0.4
     selector: "str | None" = None

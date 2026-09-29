@@ -46,6 +46,26 @@ if TYPE_CHECKING:  # playwright is an optional extra; imported lazily at runtime
     )
 
 _STEALTH = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+
+# Force every shadow root OPEN so the snapshot can read it (a closed root is otherwise invisible).
+# Runs as an INIT script, before the page attaches any shadow root.
+_OPEN_SHADOW = (
+    "(()=>{const o=Element.prototype.attachShadow;"
+    "Element.prototype.attachShadow=function(i){return o.call(this,Object.assign({},i,{mode:'open'}))};})();"
+)
+
+# At snapshot time, INLINE the open shadow roots and same-origin iframe/frame documents into the
+# light DOM, so `content()` (and every selector) sees data that lives inside a web component or a
+# frame -- the OG client's "deep DOM". Cross-origin frames are skipped (unreadable). Idempotent.
+_INLINE_DEEP = (
+    "(()=>{function inline(r){for(const el of r.querySelectorAll('*')){"
+    "if(el.shadowRoot&&!el.__deep){el.__deep=1;const h=document.createElement('shadow-root');"
+    "h.innerHTML=el.shadowRoot.innerHTML;el.appendChild(h);inline(h);}}}"
+    "inline(document);"
+    "for(const f of document.querySelectorAll('iframe,frame')){if(f.__deep)continue;try{"
+    "const d=f.contentDocument;if(d&&d.body){f.__deep=1;const h=document.createElement('frame-body');"
+    "h.innerHTML=d.body.innerHTML;(f.parentNode||document.body).insertBefore(h,f.nextSibling);}}catch(e){}}})();"
+)
 _BODY_CAP = 512_000  # per-response body captured (text/data responses only)
 _BODIES_MAX = 60  # how many response bodies to drain per snapshot
 
@@ -175,8 +195,14 @@ class BrowserSession:
         return out
 
     async def snapshot(self) -> Snapshot:
-        """Capture the current DOM as a Snapshot: the rendered HTML, the network stream (with
-        xhr/fetch bodies), console messages, and each recorder's drained DOM records."""
+        """Capture the current DOM as a Snapshot: the rendered HTML (with shadow roots + same-origin
+        frames INLINED into the light DOM, so selectors reach web-component / iframe content), the
+        network stream (with xhr/fetch bodies), console messages, and each recorder's drained DOM
+        records."""
+        try:
+            await self._page.evaluate(_INLINE_DEEP)  # deep DOM: pull shadow + frame content inline
+        except Exception:  # never let a serialisation hiccup lose the snapshot
+            pass
         content: str = await self._page.content()
         emit(FetchEvent(url=self._page.url, status=self._status, source="browser"))
         events: list[CaptureEvent] = []
@@ -289,6 +315,7 @@ class BrowserFetcher:
         page = await context.new_page()
         scripts = self.scripts.enabled()  # only the enabled scripts install
         try:
+            await page.add_init_script(_OPEN_SHADOW)  # make shadow roots readable at snapshot
             if self._fingerprint:  # a light stealth pass (real anti-detect is a heavier backend)
                 await page.add_init_script(_STEALTH)
             for s in scripts:  # 'init' scripts run before any page script

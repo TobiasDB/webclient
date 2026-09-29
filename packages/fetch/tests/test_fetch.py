@@ -92,6 +92,38 @@ def test_browser_executes_js_a_static_fetch_cannot(httpserver: HTTPServer) -> No
     assert b"RENDERED" in rendered_c  # the browser ran the script
 
 
+def test_browser_snapshot_inlines_shadow_dom_and_iframes(httpserver: HTTPServer) -> None:
+    # a web component (shadow root) + a same-origin iframe: their content is NOT in the light DOM,
+    # but the deep-DOM snapshot inlines both so selectors reach them.
+    httpserver.expect_request("/frame").respond_with_data(
+        b"<html><body><p class='in-frame'>FRAMEDATA</p></body></html>", content_type="text/html"
+    )
+    page = (
+        b"<html><body>"
+        b"<my-widget></my-widget>"
+        b"<iframe src='/frame'></iframe>"
+        b"<script>"
+        b"customElements.define('my-widget', class extends HTMLElement {"
+        b"  connectedCallback(){ this.attachShadow({mode:'closed'}).innerHTML="
+        b"    '<span class=\"in-shadow\">SHADOWDATA</span>'; }"
+        b"});"
+        b"</script></body></html>"
+    )
+    httpserver.expect_request("/w").respond_with_data(page, content_type="text/html")
+
+    async def go() -> bytes:
+        bf = BrowserFetcher()
+        try:
+            snap = await bf.fetch(Request(url=httpserver.url_for("/w")))
+        finally:
+            await bf.aclose()
+        return snap.content
+
+    content = _run(go())
+    assert b"SHADOWDATA" in content  # a CLOSED shadow root was forced open + inlined
+    assert b"FRAMEDATA" in content  # the same-origin iframe body was inlined
+
+
 def test_live_page_actions_return_self_and_snapshot(httpserver: HTTPServer) -> None:
     httpserver.expect_request("/f").respond_with_data(
         b"<html><body><input id='q'>"
