@@ -100,7 +100,7 @@ async def _author(state: AuthorState) -> Query:
     parts.append("Reply with ONLY the wq.doc... chain -- no prose, no code fence.")
     reply = await state.llm.complete("\n\n".join(parts))
     emit(AuthorEvent(phase="reply", reply=reply))
-    return reroot(parse_query(reply), state.reference.url)
+    return reroot(parse_query(reply), state.reference.url, profile=state.reference.profile or None)
 
 
 async def _observe(state: AuthorState) -> _Obs:

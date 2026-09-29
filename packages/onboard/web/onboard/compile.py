@@ -134,15 +134,18 @@ def parse_query(reply: str) -> Expr:
     return result
 
 
-def reroot(chain: Expr, url: str) -> Query:
+def reroot(chain: Expr, url: str, *, profile: "str | None" = None) -> Query:
     """Root a page-relative ``wq.doc`` chain at ``url`` by prepending ``reference(url).resolve()``
     -- composed through the DSL's public plan API so the result is one self-contained, portable
-    blob. A chain the model already rooted at a ``reference(...)`` (it has a source) is left as is.
+    blob. ``profile`` bakes the KNOWN-good transport into the root (``resolve(profile=...)``) -- the
+    profile Locate found works, so the query uses it instead of re-running resolve's escalation
+    discovery. A chain the model already rooted at a ``reference(...)`` (it has a source) is left.
     """
     tail = Plan.from_blob(chain.to_blob())
     if tail.source is not None:  # already self-contained -- don't double-root
         return cast(Query, chain)
-    base = Plan.from_blob(cast(Expr, wq.reference(url).resolve()).to_blob())
+    root = wq.reference(url).resolve(profile=profile) if profile else wq.reference(url).resolve()
+    base = Plan.from_blob(cast(Expr, root).to_blob())
     merged = Plan(root=base.root, source=base.source, steps=[*base.steps, *tail.steps])
     return cast(Query, from_plan(merged))
 

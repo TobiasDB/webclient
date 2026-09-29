@@ -146,6 +146,42 @@ def test_locate_prefers_a_clean_source_over_a_blocked_one(httpserver: HTTPServer
     assert ref is not None and ref.url == httpserver.url_for("/people")
 
 
+def test_locate_stamps_the_working_transport_profile(httpserver: HTTPServer) -> None:
+    # a static page is fetched over HTTP -> the reference carries profile "basic" (no browser).
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+
+    async def go() -> "Reference | None":
+        async with Resolver() as r:
+            return await locate(
+                LocateBrief(goal="team", candidates=[httpserver.url_for("/people")]), resolver=r
+            )
+
+    ref = cast("Reference | None", _run(go()))
+    assert ref is not None and ref.profile == "basic"
+
+
+def test_author_bakes_the_working_profile_into_the_query(httpserver: HTTPServer) -> None:
+    # the reference's working profile is baked into the query root (resolve(profile=...)), so it uses
+    # the known transport instead of re-running resolve escalation.
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+    ref = Reference(
+        url=httpserver.url_for("/people"), kind="html", record_selector="li.row", profile="basic"
+    )
+    llm = ScriptedLlm(
+        'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
+    )
+
+    async def go() -> str:
+        async with Resolver() as r:
+            q, _engine, _notes = await build_query(
+                ref, DatasetBrief(fields=["name"]), resolver=r, llm=llm
+            )
+            return q.to_blob()
+
+    blob = cast("str", _run(go()))
+    assert '"profile"' in blob and "basic" in blob  # the profile is baked into the resolve step
+
+
 def test_locate_prefers_a_consistent_xhr_data_api(httpserver: HTTPServer) -> None:
     # the page renders the products AND declares the JSON data-API that backs it
     page = (

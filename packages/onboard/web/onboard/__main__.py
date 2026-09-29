@@ -297,6 +297,8 @@ def _explain_reference(ref: Reference) -> None:
     _err(
         f"  kind:      {ref.kind}" + ("   (needs a browser to render)" if ref.needs_browser else "")
     )
+    if ref.profile:
+        _err(f"  transport: {ref.profile}   (the profile that worked — baked into the query)")
     if ref.record_selector:
         _err(f"  records:   {ref.record_selector}   (the repeating-row selector to extract)")
     if ref.pagination:

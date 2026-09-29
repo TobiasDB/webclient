@@ -155,6 +155,10 @@ class Reference(BaseModel):
     pagination: "str | None" = None
     needs_browser: bool = False
     api_endpoint: "str | None" = None
+    #: the transport profile that WORKED during Locate (``basic`` / ``basic_browser`` /
+    #: ``full_browser``) -- so Author fetches with the KNOWN-good profile instead of re-running
+    #: resolve's escalation discovery. Baked into the query root (``resolve(profile=...)``).
+    profile: str = ""
     detail: dict[str, JsonValue] = {}
 
 

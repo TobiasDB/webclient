@@ -21,7 +21,7 @@ from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 from web.crawl import Crawler, FrontierMiddleware, Goal
-from web.fetch import NetworkEvent, Request
+from web.fetch import FetchEvent, NetworkEvent, Request, Trace
 from web.parse import Document, parse
 from web.resolve import Flag, Resolver, document, flags
 
@@ -185,7 +185,9 @@ async def _prefer_api(page: Document, ref: Reference, resolver: Resolver) -> Ref
 
 
 def _reference(doc: Document, by: "dict[str, Flag]") -> Reference:
-    """Build the Reference for a chosen candidate from its flags + record detection (pre-API)."""
+    """Build the Reference for a chosen candidate from its flags + record detection (pre-API). The
+    working ``profile`` is stamped later by :func:`_working_profile` (the tier that actually fetched
+    it), not guessed from the (over-firing) ``needs_browser`` heuristic."""
     render = {"needs_browser", "spa", "iframe"}
     return Reference(
         url=doc.url,
@@ -281,7 +283,18 @@ async def locate(
         return None
     if lb.prefer_api and best_page.kind == "html":
         best = await _prefer_api(best_page, best, resolver)
-    return best
+    return best.model_copy(update={"profile": await _working_profile(best.url, resolver)})
+
+
+async def _working_profile(url: str, resolver: Resolver) -> str:
+    """The transport that ACTUALLY fetched ``url``: ``full_browser`` if the resolve escalated to a
+    browser tier, else ``basic`` (HTTP). One probe fetch, so Author bakes the profile that worked
+    into the query root instead of re-running resolve's escalation discovery. (A static page never
+    escalates, so it stays ``basic`` -- no browser is launched.)"""
+    with Trace() as t:
+        await resolver.snapshot(Request(url=url))
+    browser = any(isinstance(e, FetchEvent) and e.source == "browser" for e in t.events)
+    return "full_browser" if browser else "basic"
 
 
 __all__ = ["locate", "Search", "data_api_endpoints"]

@@ -102,7 +102,7 @@ async def build_query(
     )
     reply = await llm.complete(author_prompt(brief, skeleton, fired, kind=sample.kind))
     emit(AuthorEvent(phase="reply", reply=reply))  # emitted BEFORE parse -- visible even on failure
-    query = reroot(parse_query(reply), reference.url)
+    query = reroot(parse_query(reply), reference.url, profile=reference.profile or None)
     emit(AuthorEvent(phase="parsed", url=reference.url))
     rows, notes = apply_behaviours(cast(LazyCollection[object], query), reference, brief)
     return cast(Query, rows), "llm", notes

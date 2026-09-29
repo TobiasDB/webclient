@@ -90,7 +90,7 @@ async def review(
             emit(ReasonEvent(stage="review", text=f"round {r}: the data satisfies the schema"))
             break
         try:
-            revised = reroot(parse_query(reply), reference.url)
+            revised = reroot(parse_query(reply), reference.url, profile=reference.profile or None)
         except QueryError:
             emit(
                 ReasonEvent(
