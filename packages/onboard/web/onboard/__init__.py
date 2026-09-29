@@ -1,11 +1,15 @@
-"""web.onboard -- the capstone: ``goal -> dataset``.
+"""web.onboard -- the capstone: ``goal -> dataset``, and the LLM tier.
 
 Composes the whole stack. Given a goal and seed URL(s): crawl for candidate pages (web.crawl over
-a web.resolve Resolver), author a row extraction on the first page that yields data (web.agent
-driven by a web.llm model), then apply that one Selection across every crawled page and aggregate
-the rows -- each tagged with its source. One page's shape, reused; the model authors once.
+a web.resolve Resolver), author a row extraction on the first page that yields data (web.agent's
+loop driven by an :class:`Llm`), then apply that one Selection across every crawled page and
+aggregate the rows -- each tagged with its source. One page's shape, reused; the model authors once.
 
-    from web.onboard import onboard
+The LLM itself lives here (not a separate layer): the :class:`Llm` protocol + :class:`AnthropicLlm`
+client (:mod:`.llm`) and :func:`llm_driver` (:mod:`.llm_driver`, which bridges an ``Llm`` to
+web.agent's pluggable ``Driver``). web.agent stays LLM-agnostic -- it takes any ``Driver`` callable.
+
+    from web.onboard import onboard, AnthropicLlm
     result = await onboard("board members and their roles", "https://acme.com/board",
                            resolver=Resolver(), llm=AnthropicLlm())
     result.rows        # [{"name": ..., "role": ..., "_source": ...}, ...]
@@ -16,10 +20,12 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from web.agent import Author, Selection, extract, llm_driver
+from web.agent import Author, Selection, extract
 from web.crawl import Crawler, Goal
-from web.llm import Llm
 from web.resolve import Resolver
+
+from .llm import AnthropicLlm, Llm
+from .llm_driver import llm_driver
 
 
 class Onboarded(BaseModel):
@@ -54,4 +60,4 @@ async def onboard(
     return Onboarded(rows=rows, selection=selection, pages=len(docs))
 
 
-__all__ = ["onboard", "Onboarded"]
+__all__ = ["onboard", "Onboarded", "Llm", "AnthropicLlm", "llm_driver"]

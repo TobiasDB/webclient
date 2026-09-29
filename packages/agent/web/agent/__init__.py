@@ -12,10 +12,11 @@ from __future__ import annotations
 
 from .extract import Author, Authored, Driver, Selection, extract
 from .interact import AgentRun, Click, Goto, Observation, Policy, Scroll, Type, WaitFor, drive
-from .llm_driver import llm_driver
 from .loop import Ask, BoundedLoop, Done, Verdict
 
+# NB: agent is LLM-AGNOSTIC -- a Driver is any callable. The Llm client + llm_driver (the concrete
+# LLM-backed driver) live in web.onboard, the LLM tier, so agent depends on no LLM.
 __all__ = ["BoundedLoop", "Verdict", "Ask", "Done", "Author", "Authored", "Selection", "Driver",
-           "extract", "llm_driver",
+           "extract",
            # the interaction agent: drive a live page toward a goal
            "drive", "Observation", "Click", "Type", "Scroll", "WaitFor", "Goto", "Policy", "AgentRun"]

@@ -29,9 +29,8 @@ takes the ideas, not the code.
 ## The stack
 
 ```
-web.onboard   goal → dataset (crawl + author + aggregate)                  ← crawl, agent, llm
-web.agent     observe→decide→apply loop; extraction authoring              ← parse, llm
-web.llm       the LLM client (Llm protocol + Anthropic)                    ← kernel
+web.onboard   goal → dataset (crawl + author + aggregate) · the LLM tier (Llm/Anthropic + driver)  ← crawl, agent, resolve
+web.agent     observe→decide→apply loop; extraction authoring (LLM-AGNOSTIC — takes any Driver)   ← parse, fetch
 web.dsl       lazy engine, 4 dispatch modes (sync / async / lazy / API)   ← all below
 web.crawl     Goal → Documents                                            ← …, resolve
 web.resolve   Request → Document  · middleware impls · tiers · signals · sessions   ← kernel, fetch, parse
@@ -176,17 +175,17 @@ simple loops below don't). `decide` may return an `Ask` instead of a decision; t
   `Selection`, `Done`, or `Ask`. A winning Selection maps straight onto a DSL plan
   (`ref(url).doc().select_all(row).project(**fields)`).
 
-### web.llm — the LLM client (depends on: kernel)
-- `Llm` (protocol): `async complete(prompt) -> str` — everything above depends on this, not a
-  vendor, so it stubs cleanly. `AnthropicLlm(*, model, auth, ...)` is the real one over httpx
-  (API/transport failures raise a structured `WebException`, never leak).
-
-### web.onboard — the capstone: `goal → dataset`
+### web.onboard — the capstone: `goal → dataset`, and the LLM tier
+- The LLM lives HERE, not in a separate layer (it is the LLM-driven tier): `Llm` (protocol,
+  `async complete(prompt) -> str` — stubs cleanly, no vendor lock) + `AnthropicLlm(*, model, auth,
+  ...)` over httpx (API/transport failures raise a structured `WebException`, never leak), and
+  `llm_driver(llm, goal)` which bridges an `Llm` to web.agent's pluggable `Driver` (it prompts with
+  the record-marked skeleton + detected record selectors). web.agent stays LLM-agnostic.
 - `onboard(goal, seeds, *, resolver, llm, max_pages=20) -> Onboarded` — crawl the seeds, author a
-  row extraction on the first page that yields data (agent + llm), then apply that one `Selection`
-  across every crawled page and aggregate the rows (each tagged with `_source`). `Onboarded { rows,
-  selection, pages }`; the winning `Selection` maps to a DSL plan for repeatable runs. ~55 lines —
-  it's pure composition.
+  row extraction on the first page that yields data (agent's loop + `llm_driver`), then apply that
+  one `Selection` across every crawled page and aggregate the rows (each tagged with `_source`).
+  `Onboarded { rows, selection, pages }`; the winning `Selection` maps to a DSL plan for repeatable
+  runs.
 
 ## How it composes
 

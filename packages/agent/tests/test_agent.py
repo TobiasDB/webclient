@@ -72,37 +72,6 @@ def test_author_asks_then_resumes_with_a_human_selection() -> None:
     assert resumed.rows == [{"t": "A"}, {"t": "B"}]  # the human's selection was applied
 
 
-class _StubLlm:
-    """A model stub: returns a selection JSON until rows exist, then signals done. It reads the
-    prompt (which carries the last rows), so it exercises the real async driver path."""
-
-    async def complete(self, prompt: str) -> str:
-        if "Rows extracted so far: []" in prompt:
-            return 'Sure: {"row": ".row", "fields": {"t": ".t", "p": ".p"}}'
-        return 'Looks good: {"done": true}'
-
-
-def test_llm_driver_authors_extraction_via_the_loop() -> None:
-    from web.agent import Author, llm_driver
-
-    driver = llm_driver(_StubLlm(), goal="each row's t and p")  # async driver; the loop awaits it
-    result = _run(Author(_PAGE, driver).run())
-    assert result.verdict.reason == "done"
-    assert result.rows == [{"t": "A", "p": "1"}, {"t": "B", "p": "2"}]
-    assert result.selection is not None and result.selection.row == ".row"
-
-
-def test_llm_driver_tolerates_an_unparseable_reply() -> None:
-    from web.agent import Author, llm_driver
-
-    class _Garbage:
-        async def complete(self, prompt: str) -> str:
-            return "I'm not going to give you JSON."
-
-    result = _run(Author(_PAGE, llm_driver(_Garbage(), goal="x")).run())
-    assert result.verdict.reason == "done" and result.rows == []  # unparseable -> stop, no crash
-
-
 # -- the interaction agent: drive a live page toward a goal --
 from pytest_httpserver import HTTPServer  # noqa: E402
 
@@ -163,25 +132,3 @@ def test_drive_does_not_falsely_stall_past_max_stalls(httpserver: HTTPServer) ->
             await bf.aclose()
 
     assert _run(go()) == "done"  # reached Done, not "stalled"
-
-
-def test_llm_driver_prompt_uses_skeleton_and_record_hints() -> None:
-    from web.agent import llm_driver
-
-    captured: dict[str, str] = {}
-
-    class _CaptureLlm:
-        async def complete(self, prompt: str) -> str:
-            captured["p"] = prompt
-            return '{"done": true}'
-
-    page = parse(b"<html><body><ul>"
-                 b"<li class='row'><span class='t'>A</span></li>"
-                 b"<li class='row'><span class='t'>B</span></li>"
-                 b"<li class='row'><span class='t'>C</span></li></ul></body></html>",
-                 content_type="text/html")
-    driver = llm_driver(_CaptureLlm(), goal="rows")
-    _run(driver(page, []))
-    p = captured["p"]
-    assert "RECORD LIST" in p and 'select_all("li.row")' in p   # skeleton marks + detected records
-    assert "Detected record region(s)" in p

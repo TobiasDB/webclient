@@ -1,6 +1,6 @@
 """An LLM-backed :class:`~web.agent.extract.Driver` -- the intelligence for extraction authoring.
 
-It turns a :class:`~web.llm.Llm` into a driver: each round it prompts the model with the goal, the
+It turns a :class:`.llm.Llm` into a driver: each round it prompts the model with the goal, the
 page, and the rows the last :class:`Selection` produced, and parses the reply into the next
 Selection (or ``Done``). The loop (which now awaits an async ``decide``) drives it. This is the one
 place LLM ↔ agent meet; the agent stays testable with a plain stub driver, and the LLM client
@@ -12,10 +12,10 @@ from __future__ import annotations
 import json
 import re
 
-from web.llm import Llm
+from web.agent import Done, Driver, Selection
 from web.parse import Document
 
-from .extract import Done, Driver, Selection
+from .llm import Llm
 
 _PROMPT = """You extract repeating structured rows from a web page.
 
