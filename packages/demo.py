@@ -35,9 +35,9 @@ _INDEX = b"""<!doctype html><html><head>
   <main>
     <h1>Catalog</h1>
     <ul class="products">
-      <li class="product"><span class="name">Widget</span><span class="price">$19.99</span></li>
-      <li class="product"><span class="name">Gadget</span><span class="price">$34.50</span></li>
-      <li class="product"><span class="name">Gizmo</span><span class="price">$8.00</span></li>
+      <li class="product"><a class="link" href="/product/1"><span class="name">Widget</span></a><span class="price">$19.99</span></li>
+      <li class="product"><a class="link" href="/product/2"><span class="name">Gadget</span></a><span class="price">$34.50</span></li>
+      <li class="product"><a class="link" href="/product/3"><span class="name">Gizmo</span></a><span class="price">$8.00</span></li>
     </ul>
     <table><tr><th>Region</th><th>Sales</th></tr><tr><td>West</td><td>120</td></tr></table>
   </main>
@@ -52,6 +52,10 @@ class _Handler(BaseHTTPRequestHandler):
             body, ctype = json.dumps({"items": [{"sku": "W1"}, {"sku": "G2"}], "next": None}).encode(), "application/json"
         elif path == "/about":
             body, ctype = _ABOUT, "text/html"
+        elif path.startswith("/product/"):
+            n = path.rsplit("/", 1)[-1]
+            body = f"<html><body><h1 class=sku>SKU-{n}</h1></body></html>".encode()
+            ctype = "text/html"
         else:
             body, ctype = _INDEX, "text/html"
         self.send_response(200)
@@ -122,6 +126,18 @@ async def main() -> None:
             print("run_blob:", server_rows)
         finally:
             await d.aclose()
+
+        _h("dsl -- follow links into detail pages (project @attr + documents flatMap)")
+        d2 = DSL(Resolver())
+        try:
+            skus = await (d2.ref(base + "/").doc()
+                          .select_all("li.product").project(url="a.link@href")  # @href -> detail URL
+                          .documents("url")                                     # resolve each detail page
+                          .select_all("h1.sku").text()                          # extract per page, concatenated
+                          .acollect())
+            print("detail SKUs (one plan, list->detail):", skus)
+        finally:
+            await d2.aclose()
     finally:
         server.shutdown()
     print("\n\033[1mdemo ok\033[0m")
