@@ -47,8 +47,8 @@ def sniff_kind(content_type: str | None, content: bytes) -> Kind:
         return "html"
     if head[:1] == b"<":
         return "xml"
-    try:
-        content[:512].decode("utf-8")
+    try:  # an INCREMENTAL decoder buffers a multibyte char split at the 512-byte cut (final=False),
+        codecs.getincrementaldecoder("utf-8")().decode(content[:512])  # so valid text isn't mis-sniffed
         return "text"
     except UnicodeDecodeError:
         return "binary"

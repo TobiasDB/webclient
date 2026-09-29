@@ -258,3 +258,11 @@ def test_jsonld_preserves_significant_whitespace_in_values() -> None:
     html = b'<html><head><script type="application/ld+json">{"name": "ACME  Corp", "sku": "A  1"}</script></head></html>'
     md = parse(html, content_type="text/html").metadata()
     assert md.ld_json == [{"name": "ACME  Corp", "sku": "A  1"}]
+
+
+def test_sniff_text_with_multibyte_char_at_512_boundary() -> None:
+    # a UTF-8 char split at the 512-byte sniff cut must NOT misclassify valid text as binary
+    body = ("x" * 511 + "é" + " tail").encode("utf-8")  # 'é' (2 bytes) straddles byte 512
+    assert parse(body).kind == "text"
+    # a genuine binary blob (invalid utf-8 mid-stream) is still binary
+    assert parse(b"\x00\x01\xff\xfe" * 200).kind == "binary"
