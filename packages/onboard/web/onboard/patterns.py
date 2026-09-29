@@ -71,28 +71,34 @@ def _flags_line(flags: "list[Flag]") -> str:
     )
 
 
-def _fields_line(brief: DatasetBrief) -> str:
-    """The requested fields as a per-line schema: each field with its type, description (what it is),
-    any explicit selector override, and an ``(optional)`` marker so the model writes
-    ``select(..., optional=True)`` for fields that may legitimately be absent. One field per line so
-    a rich schema (type + description each) reads clearly."""
-    if not brief.fields:
-        return "Fields: (none given -- extract the salient fields of each record)."
-    lines: list[str] = []
+def field_schema(brief: DatasetBrief, *, selectors: bool = False) -> "list[str]":
+    """The brief's fields as per-line schema entries -- ``  - name (type) -- description [selector]
+    (optional)``. The single source both the Author prompt (:func:`fields_line`) and the Review
+    prompt render from. ``selectors`` includes any explicit selector override (Author wants it; a
+    plain schema for Review does not). ``(optional)`` marks a field that may legitimately be absent.
+    """
+    out: list[str] = []
     for name in brief.fields:
         piece = name
         if name in brief.types:
             piece += f" ({brief.types[name]})"
         if name in brief.descriptions:
             piece += f" -- {brief.descriptions[name]}"
-        if name in brief.selectors:
+        if selectors and name in brief.selectors:
             piece += f"  [selector: {brief.selectors[name]}]"
         if name in brief.optional:
             piece += "  (optional)"
-        lines.append("  - " + piece)
-    return "Fields (each record should carry these -- name (type) -- description):\n" + "\n".join(
-        lines
-    )
+        out.append("  - " + piece)
+    return out
+
+
+def fields_line(brief: DatasetBrief) -> str:
+    """The requested fields as a labelled per-line schema for the AUTHOR prompt (selectors included)
+    -- one field per line so a rich schema (type + description each) reads clearly."""
+    if not brief.fields:
+        return "Fields: (none given -- extract the salient fields of each record)."
+    header = "Fields (each record should carry these -- name (type) -- description):\n"
+    return header + "\n".join(field_schema(brief, selectors=True))
 
 
 def author_prompt(brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, kind: str) -> str:
@@ -117,7 +123,7 @@ def author_prompt(brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, ki
         f"{guide_for(flags, kind)}\n\n"  # signal-selected examples -- lean context, not all nine
         "----\n"
         f"Using ONLY the query syntax above, write ONE wq query that extracts this dataset: {goal}.\n"
-        f"{_fields_line(brief)}{kind_note}{pager}{hints}\n\n"
+        f"{fields_line(brief)}{kind_note}{pager}{hints}\n\n"
         f"{_flags_line(flags)}\n\n"
         "Base your selectors on this page skeleton (a token-lean DOM/JSON outline; a RECORD LIST "
         f"mark shows a likely row selector):\n{skeleton}\n\n"

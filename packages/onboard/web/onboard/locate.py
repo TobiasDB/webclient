@@ -23,7 +23,6 @@ from urllib.parse import urlparse
 from web.crawl import Crawler, FrontierMiddleware, Goal
 from web.fetch import FetchEvent, NetworkEvent, Request, Trace, WebException, emit
 from web.parse import Document, parse
-
 from web.resolve import Flag, Resolver, document, flags
 
 from .llm import Llm, ReasonEvent

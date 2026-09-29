@@ -17,9 +17,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from web.onboard import ClaudeShim, DatasetBrief, LocateBrief, Reference, build_query, locate
-
 from web.resolve import Resolver
+
+from web.onboard import ClaudeShim, DatasetBrief, LocateBrief, Reference, build_query, locate
 
 
 @dataclass

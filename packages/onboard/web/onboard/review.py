@@ -12,13 +12,13 @@ from collections.abc import Sequence
 from typing import cast
 
 from web.fetch import WebException, emit
-
 from web.resolve import Resolver
 
 from .author import AuthorEvent
 from .compile import Query, QueryError, parse_query, reroot
 from .llm import Llm, ReasonEvent
 from .models import DatasetBrief, Reference
+from .patterns import field_schema
 
 #: replies that mean "the query is already good" (no wq chain, an affirmative).
 _DONE = ("done", "no change", "looks good", "correct", "complete", "ok")
@@ -27,15 +27,7 @@ _DONE = ("done", "no change", "looks good", "correct", "complete", "ok")
 def _schema_lines(brief: DatasetBrief) -> str:
     if not brief.fields:
         return "(no explicit schema -- the salient fields of each record, in full detail)"
-    out: list[str] = []
-    for f in brief.fields:
-        piece = f + (f" ({brief.types[f]})" if f in brief.types else "")
-        if f in brief.descriptions:
-            piece += f" -- {brief.descriptions[f]}"
-        if f in brief.optional:
-            piece += " (optional)"
-        out.append("  - " + piece)
-    return "\n".join(out)
+    return "\n".join(field_schema(brief))  # shared with the Author prompt; no selector overrides
 
 
 def _review_prompt(brief: DatasetBrief, query: str, rows: "Sequence[object]") -> str:

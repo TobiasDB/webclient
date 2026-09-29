@@ -144,9 +144,8 @@ class BoundedLoop(Generic[S, O, D]):
                 return v
 
     async def _apply_decision(self, decision: D) -> None:
-        result = self._apply(self._state, decision)
-        if result is not None:
-            await result
+        # apply may be sync or async -- normalise through the same helper observe/decide use.
+        await _resolve(self._apply(self._state, decision))
 
     def _advance(self) -> "Verdict | None":
         self.round += 1

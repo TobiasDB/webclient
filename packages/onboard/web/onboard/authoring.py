@@ -21,15 +21,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from web.fetch import WebException, emit
-
 from web.resolve import Resolver
 
 from .agent import BoundedLoop, Done, Verdict
-from .author import AuthorEvent, _skeleton
+from .author import AuthorEvent, sample_skeleton
 from .compile import Query, parse_query, reroot
 from .llm import Llm, ReasonEvent
 from .models import DatasetBrief, Reference
-from .patterns import _fields_line, guide_for
+from .patterns import fields_line, guide_for
 
 
 @dataclass
@@ -86,7 +85,7 @@ async def _author(state: AuthorState) -> Query:
         guide,
         "----",
         f"Write ONE wq query that extracts this dataset: {state.brief.goal or 'the records'}.",
-        _fields_line(state.brief),
+        fields_line(state.brief),
         "Requirements:\n" + "\n".join("  - " + i for i in state.instructions),
         f"LISTING page skeleton (the records are here):\n{state.listing_skeleton}",
     ]
@@ -128,7 +127,7 @@ async def _decide(obs: _Obs) -> "str | Done":
 async def _apply(state: AuthorState, turn: "str | Done") -> None:
     if turn == "base":
         sample = await state.resolver.resolve(state.reference.url)
-        state.listing_skeleton = _skeleton(sample)
+        state.listing_skeleton = sample_skeleton(sample)
         state.instructions = ["extract every listed record with the fields above"]
         emit(ReasonEvent(stage="author", text="authoring the base query for the listed records"))
         state.query = await _author(state)
@@ -137,7 +136,7 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
         if link is None:
             return
         detail = await state.resolver.resolve(link)
-        state.detail_skeleton = _skeleton(detail)
+        state.detail_skeleton = sample_skeleton(detail)
         state.nested = True
         state.instructions.append(
             "some fields are NOT on the listing -- resolve each record's link and extract them "

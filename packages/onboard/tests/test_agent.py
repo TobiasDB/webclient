@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 
-from web.onboard.agent import Ask, Author, BoundedLoop, Done, Selection
 from web.parse import parse
+
+from web.onboard.agent import Ask, Author, BoundedLoop, Done, Selection
 
 
 def _run(coro):
@@ -82,6 +83,7 @@ def test_author_asks_then_resumes_with_a_human_selection() -> None:
 # -- the interaction agent: drive a live page toward a goal --
 from pytest_httpserver import HTTPServer  # noqa: E402
 from web.fetch import BrowserFetcher, Request  # noqa: E402
+
 from web.onboard.agent import Click
 from web.onboard.agent import Done as _Done  # noqa: E402
 from web.onboard.agent import Observation, Type, drive

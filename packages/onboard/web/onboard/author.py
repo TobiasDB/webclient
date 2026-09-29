@@ -22,7 +22,6 @@ from pydantic import BaseModel
 from web.dsl import LazyCollection, wq
 from web.fetch import emit
 from web.parse import Document
-
 from web.resolve import Resolver, flags
 
 from .behaviours import apply_behaviours
@@ -83,9 +82,10 @@ def _file_links_query(url: str) -> Query:
     return cast(Query, wq.reference(url).resolve().select_all(selector).attr("href"))
 
 
-def _skeleton(sample: Document) -> str:
+def sample_skeleton(sample: Document) -> str:
     """A token-lean outline of the sample for the prompt: the JSON shape for a JSON document, else
-    the record-marked DOM skeleton with page chrome dropped."""
+    the record-marked DOM skeleton with page chrome dropped. Shared with the authoring agent loop.
+    """
     if sample.kind == "json":
         return sample.json_skeleton(max_lines=1500)
     return sample.skeleton(max_lines=1500, drop_chrome=True)
@@ -104,7 +104,7 @@ async def build_query(
     sample = await resolver.resolve(reference.url)
     if sample.kind not in _STRUCTURED:  # a PDF / spreadsheet / blob IS the dataset -- fetch it
         return cast(Query, wq.reference(reference.url).resolve()), "file_download", []
-    skeleton = _skeleton(sample)
+    skeleton = sample_skeleton(sample)
     fired = flags(sample)
     emit(
         AuthorEvent(

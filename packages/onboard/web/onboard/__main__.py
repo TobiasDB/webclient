@@ -28,15 +28,15 @@ import os
 import re
 import sys
 import time
+from collections.abc import Sequence
 from importlib.resources import files
 from pathlib import Path
-from typing import Protocol, Sequence, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from web.crawl import CrawlEvent, FrontierMiddleware
 from web.fetch import Event, EventBus, FetchEvent
 from web.fetch import Profile as FetchProfile
 from web.fetch import WebException, using
-
 from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
 
 from .author import AuthorEvent, build_query
@@ -140,7 +140,7 @@ def _packaged_briefs() -> "list[str]":
     try:
         root = files("web.onboard").joinpath("briefs")
         return sorted(p.name[:-3] for p in root.iterdir() if p.name.endswith(".md"))
-    except Exception:
+    except (ModuleNotFoundError, FileNotFoundError, OSError):  # no package data -> just no names
         return []
 
 
@@ -333,12 +333,12 @@ async def _locate(args: argparse.Namespace) -> int:
     # picks which pending edges to expand toward the dataset) AND the FINAL REVIEW (it judges each
     # candidate best-first and must confirm the page holds the requested dataset for the entity).
     frontier: "tuple[FrontierMiddleware, ...]" = ()
-    review: "ClaudeShim | None" = None
+    reviewer: "ClaudeShim | None" = None
     if args.shim:
-        review = ClaudeShim(model=args.model) if args.model else ClaudeShim()
+        reviewer = ClaudeShim(model=args.model) if args.model else ClaudeShim()
         frontier = (
             llm_frontier(
-                review,
+                reviewer,
                 brief.goal,
                 entity=args.entity or "",
                 fields=brief.fields,
@@ -366,7 +366,7 @@ async def _locate(args: argparse.Namespace) -> int:
                 search=DdgSearch(k=args.search_k),
                 frontier=frontier,
                 entity=args.entity or "",
-                review=review,
+                review=reviewer,
             )
     except WebException as exc:
         _err(f"locate failed: {exc}")
@@ -431,12 +431,13 @@ def _explain_query(
 
 
 async def _reference_for_author(
-    args: argparse.Namespace, brief: Brief, resolver: Resolver, review: "Llm | None"
+    args: argparse.Namespace, brief: Brief, resolver: Resolver, reviewer: "Llm | None"
 ) -> "Reference | None":
     """The Reference to author over, easiest-first: an explicit ``--ref`` (stdin/file, the pipe
     form); else the cached Reference from a prior ``web locate <brief> [entity]`` (the run-separately
     form); else locate it now (so ``web author`` works standalone). ``brief`` already has the entity
-    applied; ``review`` is the LLM used for Locate's final candidate review when we locate here."""
+    applied; ``reviewer`` is the LLM used for Locate's final candidate review when we locate here.
+    """
     if args.ref:
         return _reference_from_ref(args.ref)
     path = _cache_path(brief, args.brief, args.entity)
@@ -448,10 +449,10 @@ async def _reference_for_author(
     )
     # An entity-aware LLM frontier so the crawl's hostname pruning is the model's call (not a rule).
     frontier: "tuple[FrontierMiddleware, ...]" = ()
-    if review is not None:
+    if reviewer is not None:
         frontier = (
             llm_frontier(
-                review,
+                reviewer,
                 brief.goal,
                 entity=args.entity or "",
                 fields=brief.fields,
@@ -466,7 +467,7 @@ async def _reference_for_author(
             search=DdgSearch(),
             frontier=frontier,
             entity=args.entity or "",
-            review=review,
+            review=reviewer,
         )
 
 
@@ -475,7 +476,7 @@ async def _author(args: argparse.Namespace) -> int:
     resolver = _resolver(args.profile, args.proxy, args.browser_path)
     llm = _build_llm(args)
     try:
-        reference = await _reference_for_author(args, brief, resolver, review=llm)
+        reference = await _reference_for_author(args, brief, resolver, reviewer=llm)
         if reference is None:
             _err("no source located to author over (nothing scored above zero).")
             return 1

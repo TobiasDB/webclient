@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from pydantic import JsonValue
-
 from web.resolve import Resolver
 
 from .compile import Query
@@ -86,9 +85,8 @@ async def run_to_sink(
         scalars: "dict[str, JsonValue]" = {k: v for k, v in item.items() if k not in doc_fields}
         await sink.record(scalars)
         n_rows += 1
-        for (
-            f
-        ) in doc_fields:  # resolve each document field's URL to a blob, keep the row as metadata
+        # resolve each document field's URL to a blob, keeping the row's scalars as its metadata
+        for f in doc_fields:
             cell = item.get(f)
             if isinstance(cell, str) and cell.startswith(("http://", "https://")):
                 doc = await resolver.resolve(cell)

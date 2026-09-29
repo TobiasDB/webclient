@@ -28,15 +28,15 @@ from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, JsonValue
-
 from web.resolve import Flag
 
 
 class Brief(BaseModel):
     """The onboarding spec, in three sections (see the module docstring). SHARED: ``goal`` +
-    ``fields``/``descriptions`` (the schema). LOCATE: ``seeds``/``candidates``/``start_url``/
+    ``fields``/``descriptions``/``types`` (the schema). LOCATE: ``seeds``/``candidates``/``start_url``/
     ``search``/``look``/``ignore``/``max_pages``/``prefer_api``. AUTHOR: ``selectors``/``optional``/
-    ``hints``/``download``. ``name``/``title`` identify it; ``exit_when`` is an advisory exit hint.
+    ``hints``/``download`` (and ``types``, which the Author + Review prompts render). ``name``/
+    ``title`` identify it; ``exit_when`` is an advisory exit hint.
     """
 
     # ── SHARED (both Locate and Author read these) ──────────────────────────────────────────────

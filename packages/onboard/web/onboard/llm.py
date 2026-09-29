@@ -87,8 +87,8 @@ class LlmEvent(BaseModel):
 
 class ReasonEvent(BaseModel):
     """A WHY published on the bus -- the reasoning behind a choice, so a caller can log why things
-    were chosen: ``stage`` names the phase (``frontier`` / ``evaluate`` / ``author`` / ``review``)
-    and ``text`` is the reason (optionally about ``subject`` -- e.g. the URL picked)."""
+    were chosen: ``stage`` names the phase (``frontier`` / ``author`` / ``review``) and ``text`` is
+    the reason (optionally about ``subject`` -- e.g. the URL picked)."""
 
     topic: str = "reason"
     stage: str = ""
