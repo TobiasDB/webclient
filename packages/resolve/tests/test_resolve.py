@@ -430,3 +430,52 @@ def test_policies_are_serialisable_and_build_middleware() -> None:
             return callable(RetryPolicy(max_attempts=2).build(pool))
 
     assert _run(go())
+
+
+class _StaticFetcher:
+    """Returns a fixed status/body -- to stand in for a tier that is blocked (403) or serves ok."""
+
+    def __init__(self, status: int, body: bytes = b"<p>ok</p>") -> None:
+        self.status = status
+        self._body = body
+        self.calls = 0
+
+    async def fetch(self, request: Request) -> Snapshot:
+        self.calls += 1
+        return Snapshot(
+            request=request,
+            status=self.status,
+            content=self._body,
+            headers={"content-type": "text/html"},
+        )
+
+    async def aclose(self) -> None:
+        pass
+
+
+def test_escalation_falls_back_from_a_blocked_browser_to_http() -> None:
+    # the reported case: a site's WAF blocks headless Chromium (403) but serves plain HTTP a clean
+    # 200. The FULL_BROWSER ladder (browser base, HTTP fallback tier) must climb off the blocked
+    # browser to HTTP and return the good page -- browser-only would dead-end.
+    browser = _StaticFetcher(403, b"<h1>Access denied</h1>")
+    http = _StaticFetcher(200, b"<p>real events</p>")
+
+    async def go() -> "tuple[int, int, int]":
+        r = Resolver(ladder=(browser, http))
+        try:
+            snap = await r.snapshot(Request(url="https://x/"))
+        finally:
+            await r.aclose()
+        return snap.status, browser.calls, http.calls
+
+    status, browser_calls, http_calls = _run(go())
+    assert status == 200 and browser_calls == 1 and http_calls == 1
+
+
+def test_full_browser_profile_has_an_http_fallback_tier() -> None:
+    # locks the fix: FULL_BROWSER renders in a browser first, then falls back to plain HTTP.
+    from web.resolve import profiles
+
+    esc = profiles.FULL_BROWSER.escalation
+    assert esc is not None
+    assert esc.tiers[0].browser and not esc.tiers[-1].browser  # browser first, HTTP fallback last
