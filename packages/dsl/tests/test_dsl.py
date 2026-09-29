@@ -296,3 +296,24 @@ def test_documents_plan_roundtrips_through_blob(httpserver: HTTPServer) -> None:
             await r.aclose()
 
     assert _run(server()) == ["Only"]   # follow + doc_reads survived serialisation
+
+
+def test_documents_follows_a_url_string_list_from_attr(httpserver: HTTPServer) -> None:
+    # the user's attr model: select_all(a).attr(href) -> list of URLs -> documents() follows each
+    httpserver.expect_request("/l").respond_with_data(
+        b"<ul><li><a class=k href='/d/1'>a</a></li><li><a class=k href='/d/2'>b</a></li></ul>",
+        content_type="text/html")
+    httpserver.expect_request("/d/1").respond_with_data(b"<h1 class=t>One</h1>", content_type="text/html")
+    httpserver.expect_request("/d/2").respond_with_data(b"<h1 class=t>Two</h1>", content_type="text/html")
+
+    async def go() -> list:
+        d = _dsl()
+        try:
+            return await (d.ref(httpserver.url_for("/l")).doc()
+                          .select_all("a.k").attr("href")   # -> list of absolute URLs
+                          .documents()                       # no column: the items ARE the URLs
+                          .select("h1.t").text().acollect())
+        finally:
+            await d.aclose()
+
+    assert _run(go()) == ["One", "Two"]

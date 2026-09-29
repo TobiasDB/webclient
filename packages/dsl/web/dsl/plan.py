@@ -34,7 +34,8 @@ class Plan(BaseModel):
     url: str
     actions: list[Step] = []
     reads: list[Step] = []
-    follow: str = ""            # a row column holding a detail-page URL to resolve+extract per row
+    following: bool = False     # a documents() join is active (distinct from an empty follow column)
+    follow: str = ""            # the row column holding the URL; "" = the items ARE the URLs
     doc_reads: list[Step] = []  # reads applied to each resolved detail Document
 
     def to_blob(self) -> str:

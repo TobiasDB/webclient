@@ -129,16 +129,18 @@ class Document:
         """Reduce each value to a regex match (``group`` of it), optionally one ``field``."""
         return self._read("regex", {"field": field, "pattern": pattern, "group": group})
 
-    def documents(self, column: str) -> "Document":
-        """Follow a URL column into detail pages: each row's ``column`` (a URL, e.g. from
-        ``project(url='a@href')``) is resolved, and the reads chained AFTER this apply to each
-        resolved Document, their results concatenated (flatMap). So a list page + its detail pages
-        extract in one plan: ``...project(url='a@href').documents('url').select_all('h1').text()``."""
-        frozen = Plan(url=self._plan.url, actions=self._plan.actions, reads=list(self._reads), follow=column)
+    def documents(self, column: str = "") -> "Document":
+        """Follow URLs into detail pages, then apply the reads chained AFTER this to EACH resolved
+        Document, concatenating the results (flatMap). The URLs come either from a ``column`` of the
+        current rows (``project(url='a@href').documents('url')``) or, with no column, from the
+        current values being URL strings themselves (``select_all('a').attr('href').documents()``).
+        One plan spans a list page + its detail pages."""
+        frozen = Plan(url=self._plan.url, actions=self._plan.actions, reads=list(self._reads),
+                      following=True, follow=column)
         return Document(self._engine, frozen, ())  # a fresh reads list -> the per-detail-doc reads
 
     def _full(self) -> Plan:
-        if self._plan.follow:  # documents() mode: plan already holds the row reads + follow column
+        if self._plan.following:  # documents() mode: plan holds the row reads + follow; reads = doc_reads
             return self._plan.model_copy(update={"doc_reads": list(self._reads)})
         return Plan(url=self._plan.url, actions=self._plan.actions, reads=list(self._reads))
 
@@ -203,22 +205,23 @@ class DSL:
 
     async def run(self, plan: Plan) -> object:
         """Execute a plan: obtain the root Document, apply the Document reads, then -- if this is a
-        ``documents(column)`` plan -- follow each row's URL column into a detail Document and apply
-        ``doc_reads`` to each, concatenating (flatMap)."""
+        ``documents()`` plan -- follow each URL into a detail Document and apply ``doc_reads`` to
+        each, concatenating (flatMap)."""
         obj: object = await self._root(plan)
         for r in plan.reads:
             obj = _apply_read(obj, r)
-        if plan.follow:
+        if plan.following:
             obj = await self._follow(obj, plan.follow, plan.doc_reads)
         return obj
 
-    async def _follow(self, rows: object, column: str, doc_reads: "list[Step]") -> "list[object]":
-        """Resolve each row's ``column`` URL to a Document, apply ``doc_reads`` to it, and
-        concatenate the per-document results (flatMap). Non-list input / rows without a usable URL
-        contribute nothing."""
+    async def _follow(self, items: object, column: str, doc_reads: "list[Step]") -> "list[object]":
+        """Resolve each item's URL to a Document, apply ``doc_reads`` to it, and concatenate the
+        per-document results (flatMap). The URL is ``item[column]`` when ``column`` is set (rows),
+        else the item itself (a URL string from ``.attr('href')`` / ``.links()``). Non-list input or
+        items without a usable URL contribute nothing."""
         out: list[object] = []
-        for row in rows if isinstance(rows, list) else []:
-            url = row.get(column) if isinstance(row, dict) else None
+        for item in items if isinstance(items, list) else []:
+            url = item.get(column) if column and isinstance(item, dict) else item
             if not isinstance(url, str) or not url:
                 continue
             value: object = await self.resolver.resolve(Request(url=url))
