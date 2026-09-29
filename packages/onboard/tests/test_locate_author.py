@@ -316,6 +316,64 @@ def test_brief_loads_from_markdown_frontmatter() -> None:
     assert brief.optional == ["role"]
 
 
+_NAME_ONLY = 'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
+_NAME_ROLE = (
+    'wq.doc.select_all("li.row").extract('
+    'name=wq.doc.select(".name").attr("text"), role=wq.doc.select(".role").attr("text"))'
+)
+
+
+def _rerooted(chain: str, url: str) -> object:
+    from web.onboard.compile import parse_query, reroot
+
+    return reroot(parse_query(chain), url)
+
+
+def test_review_revises_the_query_to_add_a_missing_field(httpserver: HTTPServer) -> None:
+    from web.onboard import review
+    from web.onboard.compile import Query
+
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+    url = httpserver.url_for("/people")
+    initial = cast("Query", _rerooted(_NAME_ONLY, url))  # extracts name only
+    llm = ScriptedLlm(_NAME_ROLE)  # the reviewer proposes a query that also gets role
+
+    async def go() -> object:
+        async with Resolver() as r:
+            q, notes = await review(
+                initial,
+                Reference(url=url),
+                DatasetBrief(fields=["name", "role"]),
+                resolver=r,
+                llm=llm,
+                rounds=1,
+            )
+            assert notes  # the query was revised
+            return await q.acollect(resolver=r)
+
+    rows = cast("list[dict[str, object]]", _run(go()))
+    assert {"name": "Alice", "role": "CEO"} in rows  # the revised query now extracts role
+
+
+def test_review_keeps_the_query_when_the_model_says_done(httpserver: HTTPServer) -> None:
+    from web.onboard import review
+    from web.onboard.compile import Query
+
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+    url = httpserver.url_for("/people")
+    initial = cast("Query", _rerooted(_NAME_ONLY, url))
+    llm = ScriptedLlm("DONE")  # the reviewer is satisfied
+
+    async def go() -> "list[str]":
+        async with Resolver() as r:
+            q, notes = await review(
+                initial, Reference(url=url), DatasetBrief(fields=["name"]), resolver=r, llm=llm
+            )
+            return notes
+
+    assert cast("list[str]", _run(go())) == []  # unchanged
+
+
 def test_brief_schema_parses_type_and_description() -> None:
     text = (
         "---\n"

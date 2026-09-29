@@ -33,6 +33,7 @@ from .llm_driver import llm_driver
 from .locate import Search, data_api_endpoints, locate
 from .models import Brief, DatasetBrief, LocateBrief, Reference
 from .patterns import PATTERNS_GUIDE, author_prompt
+from .review import review
 from .search import DdgSearch
 from .shim import ClaudeShim
 
@@ -132,4 +133,5 @@ __all__ = [
     "behaviour",
     "register_behaviour",
     "apply_behaviours",
+    "review",
 ]

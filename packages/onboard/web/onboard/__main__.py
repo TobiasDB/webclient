@@ -44,6 +44,7 @@ from .frontier import llm_frontier
 from .llm import AnthropicLlm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage
 from .locate import locate
 from .models import Brief, Reference
+from .review import review
 from .search import DdgSearch
 from .shim import ClaudeShim
 
@@ -452,6 +453,13 @@ async def _author(args: argparse.Namespace) -> int:
         ) as exc:  # the model's reply was not a rebuildable wq chain (it was logged)
             _err(f"authoring failed: the model's query did not parse — {exc}")
             return 1
+        if args.review:  # run it, review the rows vs the schema, let the model extend/fix the query
+            _err(f"reviewing the extracted data ({args.review} round[s])…")
+            with _Progress(args.verbose):
+                query, rnotes = await review(
+                    query, reference, brief, resolver=resolver, llm=llm, rounds=args.review
+                )
+            notes += rnotes
         _explain_query(reference, brief, engine, query.describe(), notes)  # reasoning -> stderr
         print(query.to_blob())  # the serialised query -> stdout
         if isinstance(
@@ -554,6 +562,14 @@ def _parser() -> argparse.ArgumentParser:
         default=0.0,
         metavar="USD",
         help="cache-write price ($/M tokens)",
+    )
+    aut.add_argument(
+        "--review",
+        type=int,
+        default=0,
+        metavar="N",
+        help="review the extracted data against the schema and let the model revise the query "
+        "(fix selectors, add detail, follow links) for N rounds (default 0 = off)",
     )
     aut.add_argument(
         "--run", action="store_true", help="run the authored query and print a sample of rows"
