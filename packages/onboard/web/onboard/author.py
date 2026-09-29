@@ -20,8 +20,9 @@ from typing import cast
 
 from pydantic import BaseModel
 from web.dsl import LazyCollection, wq
-from web.parse import Document
 from web.resolve import Resolver, flags
+
+from web.parse import Document
 
 from .behaviours import apply_behaviours
 from .compile import Query, parse_query, reroot
@@ -57,8 +58,8 @@ def _skeleton(sample: Document) -> str:
     """A token-lean outline of the sample for the prompt: the JSON shape for a JSON document, else
     the record-marked DOM skeleton with page chrome dropped."""
     if sample.kind == "json":
-        return sample.json_skeleton(max_lines=200)
-    return sample.skeleton(max_lines=200, drop_chrome=True)
+        return sample.json_skeleton(max_lines=1500)
+    return sample.skeleton(max_lines=1500, drop_chrome=True)
 
 
 async def build_query(

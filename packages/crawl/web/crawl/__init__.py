@@ -17,9 +17,9 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from web.fetch import Request, emit
-from web.parse import Document
-
 from web.resolve import Resolver, document, flags
+
+from web.parse import Document
 
 from .frontier import FrontierMiddleware, Select, by_score, fifo
 from .frontier import stack as _frontier
@@ -68,15 +68,15 @@ class Crawler:
             for sm in _sitemap_sources(seeds, rob):
                 seeds.extend(await sitemap_urls(self._resolver, sm))
 
-        def admit(url: str, depth: int, parent: str) -> None:  # canonical-dedup + robots gate
+        def admit(url: str, item: FrontierItem) -> None:  # canonical-dedup + robots gate
             key = canonical(url)
             if key in seen or (rob is not None and not rob.allowed(url)):
                 return
             seen.add(key)
-            pending.append(FrontierItem(url=url, depth=depth, parent=parent))
+            pending.append(item)
 
         for s in seeds:  # seeds sit UNFETCHED in the frontier -- a policy can evaluate/prune them
-            admit(s, 0, "")
+            admit(s, FrontierItem(url=s))
 
         select = _frontier(fifo, goal.frontier)  # the frontier middleware chain (default: FIFO)
         yielded: set[str] = set()
@@ -107,9 +107,22 @@ class Crawler:
                         yielded.add(key)
                         yield doc
                 if doc.kind in ("html", "xml"):  # traverse links from OK pages
-                    for link in doc.links():
+                    meta = doc.metadata()
+                    title = meta.title or meta.description or ""
+                    for link, text in doc.anchors():  # carry the PARENT's assessment onto each edge
                         if goal.scope(doc, link):
-                            admit(link, item.depth + 1, item.url)
+                            admit(
+                                link,
+                                FrontierItem(
+                                    url=link,
+                                    depth=item.depth + 1,
+                                    parent=item.url,
+                                    text=text,
+                                    parent_status=snap.status,
+                                    parent_title=title,
+                                    parent_flags=fired,
+                                ),
+                            )
 
     async def aclose(self) -> None:
         await self._resolver.aclose()

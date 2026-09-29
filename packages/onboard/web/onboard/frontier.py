@@ -32,25 +32,45 @@ def _indices(reply: str, n: int) -> "list[int]":
     return out
 
 
+def _edge(i: int, it: "FrontierItem") -> str:
+    """One frontier line: the link (text) + the assessment of the page it was found on -- the
+    parent's status, title and the detection flags that fired there (record_list / data_api / ...),
+    so the model routes with real context, not URL shape alone."""
+    line = f"{i}. {it.url}"
+    if it.text:
+        line += f'   "{it.text[:80]}"'
+    ctx = []
+    if it.parent_status:
+        ctx.append(f"status {it.parent_status}")
+    if it.parent_title:
+        ctx.append(it.parent_title[:60])
+    if it.parent_flags:
+        ctx.append("flags: " + ",".join(it.parent_flags))
+    if ctx:
+        line += f"   (found on {it.parent} — {' · '.join(ctx)})"
+    return line
+
+
 def _prompt(
     goal: str,
+    fields: "Sequence[str]",
     look: "Sequence[str]",
     ignore: "Sequence[str]",
     pending: "Sequence[FrontierItem]",
     k: int,
 ) -> str:
     guides = ""
+    if fields:
+        guides += "\nEach record should have: " + ", ".join(fields)
     if look:
         guides += "\nPrefer links about: " + "; ".join(look)
     if ignore:
         guides += "\nAvoid links about: " + "; ".join(ignore)
-    listing = "\n".join(
-        f"{i}. {it.url}" + (f"   (found on {it.parent})" if it.parent else "")
-        for i, it in enumerate(pending)
-    )
+    listing = "\n".join(_edge(i, it) for i, it in enumerate(pending))
     return (
         f"You are crawling a website to find this dataset: {goal or 'the target dataset'}.{guides}\n\n"
-        f"These links are on the frontier (not yet fetched):\n{listing}\n\n"
+        f"These links are on the frontier (not yet fetched). Each shows its link text and the "
+        f"status / title / detection flags of the page it was found on:\n{listing}\n\n"
         f"Reply with ONLY a JSON array of the indices to fetch next, most-promising first, at most "
         f"{k} (e.g. [3, 0, 7]). Choose the links most likely to reach the dataset (a listing / "
         f"records / a data API); omit nav, legal, login and unrelated sections."
@@ -61,19 +81,21 @@ def llm_frontier(
     llm: Llm,
     goal: str = "",
     *,
+    fields: "Sequence[str]" = (),
     look: "Sequence[str]" = (),
     ignore: "Sequence[str]" = (),
     k: int = 5,
 ) -> FrontierMiddleware:
     """A frontier middleware that asks ``llm`` which pending edges to expand next (best-first, at
-    most ``k``), guided by ``goal`` + the brief's ``look`` / ``ignore``. Falls back to the next
-    handler (FIFO) when the model errors, replies unparseably, or picks nothing."""
+    most ``k``), guided by the ``goal`` + ``fields`` (the schema) + the brief's ``look`` / ``ignore``,
+    and each edge's link text + the status/title/flags of the page it was found on. Falls back to
+    the next handler (FIFO) when the model errors, replies unparseably, or picks nothing."""
 
     async def mw(pending: "Sequence[FrontierItem]", nxt: Select) -> "Sequence[FrontierItem]":
         if len(pending) <= 1:
             return await nxt(pending)  # nothing to choose
         try:
-            reply = await llm.complete(_prompt(goal, look, ignore, pending, k))
+            reply = await llm.complete(_prompt(goal, fields, look, ignore, pending, k))
         except WebException:
             return await nxt(pending)  # model unavailable -> plain breadth-first, don't break
         picks = [pending[i] for i in _indices(reply, len(pending))[:k]]

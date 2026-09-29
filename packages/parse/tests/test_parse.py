@@ -16,6 +16,7 @@ def test_sniff_and_select_html() -> None:
     assert len(ps) == 1 and ps[0].text == "Hello world"  # whitespace collapsed
     assert doc.links() == ["https://ex.com/p"]  # href resolved absolute
     assert doc.select_all("a")[0].attr("href") == "https://ex.com/p"
+    assert doc.anchors() == [("https://ex.com/p", "x")]  # (absolute URL, collapsed link text)
 
 
 def test_sniff_json_and_read_value() -> None:

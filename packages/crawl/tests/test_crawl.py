@@ -7,9 +7,9 @@ import asyncio
 from pytest_httpserver import HTTPServer
 from web.crawl import Crawler, Goal
 from web.fetch import HttpFetcher
-from web.parse import Document
-
 from web.resolve import Resolver
+
+from web.parse import Document
 
 
 def _run(coro):

@@ -316,7 +316,11 @@ async def _locate(args: argparse.Namespace) -> int:
     frontier: "tuple[FrontierMiddleware, ...]" = ()
     if args.shim:
         shim = ClaudeShim(model=args.model) if args.model else ClaudeShim()
-        frontier = (llm_frontier(shim, brief.goal, look=brief.look, ignore=brief.ignore),)
+        frontier = (
+            llm_frontier(
+                shim, brief.goal, fields=brief.fields, look=brief.look, ignore=brief.ignore
+            ),
+        )
     seeded = bool(brief.seeds or brief.candidates or brief.start_url)
     tag = f"{brief.name or args.brief}" + (f" · {args.entity}" if args.entity else "")
     _err(

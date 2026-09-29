@@ -52,7 +52,7 @@ async def onboard(
     *,
     resolver: Resolver,
     llm: Llm,
-    max_pages: int = 40,
+    max_pages: int = 20,
 ) -> Onboarded:
     """Crawl the seeds, author a row extraction (agent + llm) on the first page that yields data,
     then apply it across every crawled page and aggregate the rows."""

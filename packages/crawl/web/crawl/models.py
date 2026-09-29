@@ -7,11 +7,12 @@ Pure data + the small traversal-scope predicates a Goal is configured with. The 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from pydantic import BaseModel
+
 from web.parse import Document
 
 if TYPE_CHECKING:  # only for Goal's annotation -- frontier.py imports FrontierItem from here
@@ -41,11 +42,18 @@ Collect = Callable[[Document], bool]
 @dataclass
 class FrontierItem:
     """A pending URL on the crawl frontier, with the context a policy needs to prioritise it:
-    ``depth`` (link-distance from a seed; seeds are 0) and ``parent`` (the page it was found on)."""
+    ``text`` (the anchor text of the link), ``depth`` (link-distance from a seed; seeds are 0), and
+    -- from the (already-fetched) page it was found on -- ``parent`` (its URL), ``parent_status``
+    (its HTTP status), ``parent_title`` (its ``<title>`` / description), and ``parent_flags`` (the
+    detection flags that fired on it). Seeds carry only ``url``."""
 
     url: str
     depth: int = 0
     parent: str = ""
+    text: str = ""
+    parent_status: int = 0
+    parent_title: str = ""
+    parent_flags: "list[str]" = field(default_factory=list)
 
 
 def same_origin(doc: Document, link: str) -> bool:
@@ -67,7 +75,7 @@ class Goal:
     start: "str | list[str]"
     scope: Follow = same_origin
     collect: "Collect | None" = None
-    max_pages: int = 50
+    max_pages: int = 20
     frontier: "tuple[FrontierMiddleware, ...]" = ()
     assess: bool = False
     sitemap: bool = False

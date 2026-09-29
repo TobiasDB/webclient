@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
 from web.fetch import Request
-
 from web.resolve import Resolver
 
 

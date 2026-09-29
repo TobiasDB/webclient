@@ -146,6 +146,19 @@ class Document:
             if (href := a.get("href")) is not None
         ]
 
+    def anchors(self) -> "list[tuple[str, str]]":
+        """Every ``<a href>`` as ``(absolute URL, its text)`` -- like :meth:`links` but with the
+        anchor text (whitespace-collapsed), for a caller that ranks links (a crawl frontier)."""
+        if not self._markup():
+            return []
+        out: list[tuple[str, str]] = []
+        for a in query(self._root(), "a[href]"):
+            href = a.get("href")
+            if href is not None:
+                text = "".join(t for t in a.itertext() if isinstance(t, str))
+                out.append((urljoin(self.url, href), " ".join(text.split())))
+        return out
+
     def json(self) -> JSON:
         """The parsed JSON value (JSON documents); cached. Raises on non-JSON."""
         if not self._json_ready:

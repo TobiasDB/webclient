@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 
 from pytest_httpserver import HTTPServer
-from web.resolve import Resolver
-
 from web.onboard import onboard
+from web.resolve import Resolver
 
 
 def _run(coro):
@@ -53,12 +52,12 @@ def test_onboard_crawls_authors_once_and_aggregates(httpserver: HTTPServer) -> N
     assert all("_source" in row for row in result.rows)  # each row tagged with its source page
 
 
-from web.parse import parse  # noqa: E402
-
 from web.onboard import AnthropicLlm, llm_driver  # noqa: E402
 
 # -- the LLM tier now lives in onboard: llm_driver (bridges Llm -> agent.Driver) + AnthropicLlm --
 from web.onboard.agent import Author  # noqa: E402
+
+from web.parse import parse  # noqa: E402
 
 _ROWS = parse(
     b"<ul><li class='row'><span class='t'>A</span><span class='p'>1</span></li>"

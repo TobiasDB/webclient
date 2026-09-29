@@ -13,9 +13,9 @@ import gzip
 from urllib.parse import urljoin, urlsplit
 
 from web.fetch import Request
-from web.parse import Document, parse
-
 from web.resolve import Resolver
+
+from web.parse import Document, parse
 
 
 def _locs(doc: Document) -> list[str]:
