@@ -11,17 +11,6 @@ selectors that pull rows from a page, with a pluggable driver (an LLM / heuristi
 from __future__ import annotations
 
 from .extract import Author, Authored, Driver, Selection, extract
-from .interact import (
-    AgentRun,
-    Click,
-    Goto,
-    Observation,
-    Policy,
-    Scroll,
-    Type,
-    WaitFor,
-    drive,
-)
 from .loop import Ask, BoundedLoop, Done, Verdict
 
 # NB: agent is LLM-AGNOSTIC -- a Driver is any callable. The Llm client + llm_driver (the concrete
@@ -36,14 +25,4 @@ __all__ = [
     "Selection",
     "Driver",
     "extract",
-    # the interaction agent: drive a live page toward a goal
-    "drive",
-    "Observation",
-    "Click",
-    "Type",
-    "Scroll",
-    "WaitFor",
-    "Goto",
-    "Policy",
-    "AgentRun",
 ]
