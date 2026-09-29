@@ -10,25 +10,12 @@ rendered; a concrete condition (``selector``) that never arrives raises, so a re
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+from .models import Wait
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
-
-#: the readiness milestones (see the class docstring).
-Until = Literal["domcontentloaded", "load", "networkidle", "dom_stable", "selector"]
-
-
-class Wait(BaseModel):
-    """When to snapshot. ``timeout`` bounds the whole wait; ``quiet`` is the settle window for
-    ``dom_stable`` (how long the DOM node count must hold); ``selector`` targets ``until='selector'``."""
-
-    until: Until = "load"
-    timeout: float = 8.0
-    quiet: float = 0.4
-    selector: "str | None" = None
 
 
 async def apply_wait(page: "Page", wait: Wait) -> None:
@@ -65,4 +52,4 @@ async def _dom_stable(page: "Page", timeout: float, quiet: float) -> None:
         await asyncio.sleep(0.1)
 
 
-__all__ = ["Wait", "apply_wait", "Until"]
+__all__ = ["apply_wait"]

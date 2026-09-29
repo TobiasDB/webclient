@@ -14,9 +14,7 @@ richer capture.
 
 from __future__ import annotations
 
-from typing import Literal
-
-from pydantic import BaseModel
+from .models import Script
 
 _DOM_RECORD_JS = """
 (() => {
@@ -33,16 +31,6 @@ _DOM_RECORD_JS = """
 """
 
 _DOM_DRAIN_JS = "() => { const e = window.__wc_dom || []; window.__wc_dom = []; return e; }"
-
-
-class Script(BaseModel):
-    """A page script. ``on`` picks the lifecycle stage; ``drain`` (optional) is a JS expression
-    the fetcher evaluates after the page settles to pull buffered output into an event."""
-
-    name: str
-    js: str
-    on: Literal["init", "load"] = "load"
-    drain: str = ""
 
 
 #: the default DOM recorder -- a MutationObserver installed after load; its drained mutations
@@ -88,4 +76,4 @@ def default_scripts() -> ScriptRegistry:
     return ScriptRegistry((DOM_RECORDER,))
 
 
-__all__ = ["Script", "DOM_RECORDER", "ScriptRegistry", "default_scripts"]
+__all__ = ["DOM_RECORDER", "ScriptRegistry", "default_scripts"]

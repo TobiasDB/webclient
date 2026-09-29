@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .base import Fetcher
-from .request import Request
-from .snapshot import Snapshot
+from .models import Fetcher, Request, Snapshot
 
 
 class Pool:

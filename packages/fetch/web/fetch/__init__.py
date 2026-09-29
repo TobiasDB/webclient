@@ -15,22 +15,18 @@ not this layer's.
 
 from __future__ import annotations
 
-from .base import Fetcher
+from .models import (ConsoleEvent, DOMEvent, Fetcher, FetchEvent, NetworkEvent, Request, Script,
+                     Session, Snapshot, Wait)  # the plain data models + interfaces
 from .browser import BrowserFetcher, BrowserSession
 from .bus import Event, EventBus, Subscription, Trace, emit, topic_matches, using
 from .errors import WebError, WebException, err
-from .events import ConsoleEvent, DOMEvent, FetchEvent, NetworkEvent
 from .fingerprint import CHROME, Fingerprint
-from .script import DOM_RECORDER, Script, ScriptRegistry
+from .script import DOM_RECORDER, ScriptRegistry
 from .http import HttpFetcher, HttpSession
 from .middleware import Handler, Middleware, stack
 from .replay import Recorder, ReplayBackend
-from .session import Session
 from .pool import Pool
 from .proxy import Proxy
-from .request import Request
-from .snapshot import Snapshot
-from .wait import Wait
 from .entry import Entry, Profile, fetch  # the functional entry (depends on the backends above)
 
 __all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "BrowserSession", "HttpSession", "Session",

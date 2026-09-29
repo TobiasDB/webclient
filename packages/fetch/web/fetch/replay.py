@@ -16,10 +16,7 @@ from __future__ import annotations
 from .bus import emit
 from .errors import err
 
-from .base import Fetcher
-from .events import NetworkEvent
-from .request import Request
-from .snapshot import Snapshot
+from .models import Fetcher, NetworkEvent, Request, Snapshot
 
 
 class Recorder:

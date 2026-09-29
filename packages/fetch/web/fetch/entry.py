@@ -21,9 +21,7 @@ from .browser import BrowserFetcher, BrowserSession
 from .fingerprint import Fingerprint
 from .http import HttpFetcher
 from .proxy import Proxy
-from .request import Request
-from .session import Session
-from .snapshot import Snapshot
+from .models import Request, Session, Snapshot
 
 V = TypeVar("V")
 

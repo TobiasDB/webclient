@@ -20,13 +20,13 @@ from .bus import emit
 
 from . import mouse
 from .errors import classify
-from .events import CaptureEvent, ConsoleEvent, DOMEvent, FetchEvent, NetworkEvent
+from .models import CaptureEvent, ConsoleEvent, DOMEvent, FetchEvent, NetworkEvent
 from .fingerprint import Fingerprint, as_fingerprint
 from .proxy import Proxy, as_proxy
-from .request import Request
-from .script import Script, ScriptRegistry, default_scripts
-from .snapshot import Snapshot
-from .wait import Wait, apply_wait
+from .models import Request, Script
+from .script import ScriptRegistry, default_scripts
+from .models import Snapshot, Wait
+from .wait import apply_wait
 
 if TYPE_CHECKING:  # playwright is an optional extra; imported lazily at runtime in _browser_ready
     from playwright.async_api import Browser, BrowserContext, ConsoleMessage, Page, Playwright, Response

@@ -16,11 +16,10 @@ import httpx
 from .bus import emit
 
 from .errors import classify
-from .events import FetchEvent
+from .models import FetchEvent
 from .fingerprint import Fingerprint, as_fingerprint
 from .proxy import Proxy, as_proxy
-from .request import Request
-from .snapshot import Snapshot
+from .models import Request, Snapshot
 
 
 class HttpFetcher:

@@ -15,9 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from .base import Fetcher
-from .request import Request
-from .snapshot import Snapshot
+from .models import Fetcher, Request, Snapshot
 
 #: the next step in the chain: a plain request -> Snapshot.
 Handler = Callable[[Request], Awaitable[Snapshot]]
