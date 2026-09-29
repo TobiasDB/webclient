@@ -2,7 +2,7 @@
 name: ir-events
 title: Investor-relations events (upcoming + archived)
 search: investor relations events calendar
-max_pages: 25
+max_pages: 15
 prefer_api: true
 schema:
   - title: {type: string, description: the event name (e.g. Q3 2025 Earnings Call, Annual Shareholder Meeting)}

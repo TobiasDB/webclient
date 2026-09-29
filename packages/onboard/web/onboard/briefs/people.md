@@ -2,7 +2,7 @@
 name: people
 title: Team / board members
 search: leadership team
-max_pages: 20
+max_pages: 15
 schema:
   - name: the person's full name
   - role: their title / role

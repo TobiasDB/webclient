@@ -66,8 +66,16 @@ def _prompt(
     ignore: "Sequence[str]",
     pending: "Sequence[FrontierItem]",
     k: int,
+    entity: str = "",
 ) -> str:
     guides = ""
+    if entity:
+        guides += (
+            f"\nThis dataset belongs to '{entity}'. ONLY expand links on {entity}'s OWN site (its "
+            f"domain, or its name-based investor-relations host, e.g. {entity.split()[0].lower()}."
+            f"q4cdn.com). REJECT third-party sources — news, market-data aggregators, exchanges, "
+            f"brokerages — that merely mention it; those are NOT the company's own data."
+        )
     if fields:
         guides += "\nEach record should have: " + ", ".join(fields)
     if look:
@@ -90,6 +98,7 @@ def llm_frontier(
     llm: Llm,
     goal: str = "",
     *,
+    entity: str = "",
     fields: "Sequence[str]" = (),
     look: "Sequence[str]" = (),
     ignore: "Sequence[str]" = (),
@@ -97,14 +106,16 @@ def llm_frontier(
 ) -> FrontierMiddleware:
     """A frontier middleware that asks ``llm`` which pending edges to expand next (best-first, at
     most ``k``), guided by the ``goal`` + ``fields`` (the schema) + the brief's ``look`` / ``ignore``,
-    and each edge's link text + the status/title/flags of the page it was found on. Falls back to
-    the next handler (FIFO) when the model errors, replies unparseably, or picks nothing."""
+    and each edge's link text + the status/title/flags of the page it was found on. When ``entity``
+    is set (a company/site the dataset belongs to) the model is told to expand ONLY the entity's own
+    pages and reject third-party sources that merely mention it. Falls back to the next handler
+    (FIFO) when the model errors, replies unparseably, or picks nothing."""
 
     async def mw(pending: "Sequence[FrontierItem]", nxt: Select) -> "Sequence[FrontierItem]":
         if len(pending) <= 1:
             return await nxt(pending)  # nothing to choose
         try:
-            reply = await llm.complete(_prompt(goal, fields, look, ignore, pending, k))
+            reply = await llm.complete(_prompt(goal, fields, look, ignore, pending, k, entity))
         except WebException:
             return await nxt(pending)  # model unavailable -> plain breadth-first, don't break
         picks: list[FrontierItem] = []

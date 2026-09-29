@@ -42,7 +42,7 @@ from .author import AuthorEvent, build_query
 from .authoring import author_agent
 from .compile import QueryError
 from .frontier import llm_frontier
-from .llm import AnthropicLlm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage
+from .llm import AnthropicLlm, Llm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage
 from .locate import locate
 from .models import Brief, Reference
 from .review import review
@@ -328,14 +328,21 @@ def _entity_arg(entity: "str | None") -> str:
 async def _locate(args: argparse.Namespace) -> int:
     brief = _apply_entity(_load_brief(args.brief), args.entity)
     resolver = _resolver(args.profile, args.proxy, args.browser_path)
-    # --shim drives the CRAWL FRONTIER with a real model (claude -p): each round it picks which
-    # pending edges to expand toward the dataset, guided by the brief's goal + look/ignore.
+    # --shim drives the LLM stages with a real model (claude -p): the CRAWL FRONTIER (each round it
+    # picks which pending edges to expand toward the dataset) AND the FINAL REVIEW (it judges each
+    # candidate best-first and must confirm the page holds the requested dataset for the entity).
     frontier: "tuple[FrontierMiddleware, ...]" = ()
+    review: "ClaudeShim | None" = None
     if args.shim:
-        shim = ClaudeShim(model=args.model) if args.model else ClaudeShim()
+        review = ClaudeShim(model=args.model) if args.model else ClaudeShim()
         frontier = (
             llm_frontier(
-                shim, brief.goal, fields=brief.fields, look=brief.look, ignore=brief.ignore
+                review,
+                brief.goal,
+                entity=args.entity or "",
+                fields=brief.fields,
+                look=brief.look,
+                ignore=brief.ignore,
             ),
         )
     seeded = bool(brief.seeds or brief.candidates or brief.start_url)
@@ -353,7 +360,12 @@ async def _locate(args: argparse.Namespace) -> int:
     try:
         with _Progress(args.verbose) as prog:
             reference = await locate(
-                brief, resolver=resolver, search=DdgSearch(k=args.search_k), frontier=frontier
+                brief,
+                resolver=resolver,
+                search=DdgSearch(k=args.search_k),
+                frontier=frontier,
+                entity=args.entity or "",
+                review=review,
             )
     except WebException as exc:
         _err(f"locate failed: {exc}")
@@ -361,15 +373,16 @@ async def _locate(args: argparse.Namespace) -> int:
     finally:
         await resolver.aclose()
     cost = (
-        f"LLM frontier: ${prog.llm_spent:.4f} over {prog.llm_calls} call(s)"
+        f"LLM (frontier + review): ${prog.llm_spent:.4f} over {prog.llm_calls} call(s)"
         if prog.llm_calls
         else "deterministic — no LLM cost"
     )
     _err(f"  evaluated {prog.pages or '?'} page(s) in {prog.elapsed:.1f}s ({cost})")
     if reference is None:
         _err(
-            "no source holds the dataset; add seeds/candidates/start_url to the brief, "
-            "or give an entity to search for."
+            "no source passed review (none held the dataset, or every candidate was off-entity / a "
+            "third party); add seeds/candidates/start_url to the brief, refine the entity, "
+            "or widen the search."
         )
         return 1
     _explain_reference(reference)  # reasoning -> stderr
@@ -417,12 +430,12 @@ def _explain_query(
 
 
 async def _reference_for_author(
-    args: argparse.Namespace, brief: Brief, resolver: Resolver
+    args: argparse.Namespace, brief: Brief, resolver: Resolver, review: "Llm | None"
 ) -> "Reference | None":
     """The Reference to author over, easiest-first: an explicit ``--ref`` (stdin/file, the pipe
     form); else the cached Reference from a prior ``web locate <brief> [entity]`` (the run-separately
     form); else locate it now (so ``web author`` works standalone). ``brief`` already has the entity
-    applied."""
+    applied; ``review`` is the LLM used for Locate's final candidate review when we locate here."""
     if args.ref:
         return _reference_from_ref(args.ref)
     path = _cache_path(brief, args.brief, args.entity)
@@ -433,7 +446,13 @@ async def _reference_for_author(
         "  no located reference cached — locating first (run `web locate` to inspect it separately)…"
     )
     with _Progress(args.verbose):
-        return await locate(brief, resolver=resolver, search=DdgSearch())
+        return await locate(
+            brief,
+            resolver=resolver,
+            search=DdgSearch(),
+            entity=args.entity or "",
+            review=review,
+        )
 
 
 async def _author(args: argparse.Namespace) -> int:
@@ -441,7 +460,7 @@ async def _author(args: argparse.Namespace) -> int:
     resolver = _resolver(args.profile, args.proxy, args.browser_path)
     llm = _build_llm(args)
     try:
-        reference = await _reference_for_author(args, brief, resolver)
+        reference = await _reference_for_author(args, brief, resolver, review=llm)
         if reference is None:
             _err("no source located to author over (nothing scored above zero).")
             return 1

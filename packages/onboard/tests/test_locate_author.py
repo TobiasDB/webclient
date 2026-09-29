@@ -43,6 +43,8 @@ class ScriptedLlm:
 
     async def complete(self, prompt: str) -> str:
         self.prompt = prompt
+        if "Answer YES or NO" in prompt:  # Locate's final candidate review -- accept the source
+            return "YES — the page holds the requested dataset."
         return self.reply
 
 
@@ -108,6 +110,79 @@ def test_locate_rejects_a_403_candidate(httpserver: HTTPServer) -> None:
             )
 
     assert cast("Reference | None", _run(go())) is None
+
+
+def test_entity_host_helpers_keep_the_company_and_drop_aggregators() -> None:
+    # the exact line the user drew: an entity-name token in the HOST (own site / issuer subdomain)
+    # belongs to the company; a name only in the PATH is a third-party aggregator -> not the source.
+    from web.onboard.locate import _entity_tokens, _on_entity, _registrable
+
+    tok = _entity_tokens("Acme Corp Inc")
+    assert tok == frozenset({"acme"})  # corporate suffixes dropped
+    assert _on_entity("https://investors.acme.com/events", tok)  # own site
+    assert _on_entity("https://acme.q4cdn.com/2025/q1", tok)  # name-based IR host subdomain
+    assert not _on_entity("https://finrange.com/en/company/AMEX/ACU", tok)  # aggregator, path only
+    assert not _on_entity("https://marketscreener.com/acme-corp/calendar", tok)  # path only
+    assert _registrable("https://a.investors.acme.com") == "acme.com"
+    assert _registrable("https://x.acme.co.uk") == "acme.co.uk"  # multi-label suffix kept
+
+
+_ACME_EVENTS = (
+    b"<html><body><h1>Acme Corp Investor Events</h1><ul>"
+    b"<li class='row'><span class='name'>Q1 2025 Earnings Call</span></li>"
+    b"<li class='row'><span class='name'>Q2 2025 Earnings Call</span></li>"
+    b"<li class='row'><span class='name'>Annual Meeting</span></li>"
+    b"<li class='row'><span class='name'>Investor Day</span></li>"
+    b"</ul></body></html>"
+)
+
+
+def test_locate_review_rejects_an_off_entity_source(httpserver: HTTPServer) -> None:
+    # Locate is allowed to FAIL: a record-list page that does NOT belong to the entity (its host is
+    # not the company's and its text never names it) is rejected -> None, not a wrong source.
+    httpserver.expect_request("/events").respond_with_data(_ACME_EVENTS, content_type="text/html")
+
+    async def go(entity: str) -> "Reference | None":
+        async with Resolver() as r:
+            return await locate(
+                LocateBrief(goal="investor events", candidates=[httpserver.url_for("/events")]),
+                resolver=r,
+                entity=entity,
+            )
+
+    assert cast("Reference | None", _run(go("Acme Corp"))) is not None  # page names Acme -> passes
+    assert cast("Reference | None", _run(go("Globex"))) is None  # unrelated entity -> fails review
+
+
+class _VerdictLlm:
+    """A reviewer stand-in that answers Locate's YES/NO candidate review with canned verdicts in
+    sequence (best-first), so a test can drive rejection/selection."""
+
+    def __init__(self, verdicts: "list[str]") -> None:
+        self._verdicts = verdicts
+        self.i = 0
+
+    async def complete(self, prompt: str) -> str:
+        v = self._verdicts[min(self.i, len(self._verdicts) - 1)]
+        self.i += 1
+        return f"{v} — reason."
+
+
+def test_locate_llm_review_can_veto_the_only_candidate(httpserver: HTTPServer) -> None:
+    # the LLM final review runs on the winner; a NO verdict FAILS Locate even for an on-entity page.
+    httpserver.expect_request("/events").respond_with_data(_ACME_EVENTS, content_type="text/html")
+
+    async def go(verdict: str) -> "Reference | None":
+        async with Resolver() as r:
+            return await locate(
+                LocateBrief(goal="investor events", candidates=[httpserver.url_for("/events")]),
+                resolver=r,
+                entity="Acme Corp",
+                review=_VerdictLlm([verdict]),
+            )
+
+    assert cast("Reference | None", _run(go("YES"))) is not None
+    assert cast("Reference | None", _run(go("NO"))) is None  # model vetoed -> Locate fails
 
 
 def test_locate_reference_carries_flag_descriptions_and_signals(httpserver: HTTPServer) -> None:

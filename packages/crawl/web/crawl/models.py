@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from pydantic import BaseModel
-
 from web.parse import Document
 
 if TYPE_CHECKING:  # only for Goal's annotation -- frontier.py imports FrontierItem from here
@@ -75,7 +74,7 @@ class Goal:
     start: "str | list[str]"
     scope: Follow = same_origin
     collect: "Collect | None" = None
-    max_pages: int = 20
+    max_pages: int = 15
     frontier: "tuple[FrontierMiddleware, ...]" = ()
     assess: bool = False
     sitemap: bool = False

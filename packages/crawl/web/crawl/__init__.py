@@ -17,9 +17,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from web.fetch import Request, emit
-from web.resolve import Resolver, document, flags
-
 from web.parse import Document
+from web.resolve import Resolver, document, flags
 
 from .frontier import FrontierMiddleware, Select, by_score, fifo
 from .frontier import stack as _frontier

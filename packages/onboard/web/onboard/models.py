@@ -53,7 +53,7 @@ class Brief(BaseModel):
     )
     look: list[str] = []  # natural-language "prefer" page guide
     ignore: list[str] = []  # natural-language "avoid" page guide
-    max_pages: int = 20  # crawl page bound
+    max_pages: int = 15  # crawl page bound
     prefer_api: bool = True  # prefer a live XHR/data-API over the HTML page
 
     # ── AUTHOR (how to EXTRACT it) ──────────────────────────────────────────────────────────────

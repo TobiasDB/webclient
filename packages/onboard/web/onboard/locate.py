@@ -20,11 +20,12 @@ import re
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 
-from web.crawl import Crawler, FrontierMiddleware, Goal
-from web.fetch import FetchEvent, NetworkEvent, Request, Trace
+from web.crawl import Crawler, Follow, FrontierMiddleware, Goal, same_origin
+from web.fetch import FetchEvent, NetworkEvent, Request, Trace, WebException, emit
 from web.parse import Document, parse
 from web.resolve import Flag, Resolver, document, flags
 
+from .llm import Llm, ReasonEvent
 from .models import LocateBrief, Reference
 
 #: URL markers of API DOCUMENTATION / dev portals -- never a scrapable dataset, even if crawled.
@@ -255,30 +256,151 @@ def _field_bonus(doc: Document, fields: "list[str]") -> float:
     return min(2.0, hits * 0.5)
 
 
+#: corporate suffixes / stopwords dropped from an entity name before matching it to a hostname.
+_ENTITY_STOP = frozenset(
+    {
+        "inc",
+        "incorporated",
+        "corp",
+        "corporation",
+        "co",
+        "company",
+        "ltd",
+        "limited",
+        "plc",
+        "llc",
+        "lp",
+        "group",
+        "holdings",
+        "holding",
+        "the",
+        "and",
+        "of",
+        "for",
+        "sa",
+        "ag",
+        "nv",
+        "spa",
+        "gmbh",
+        "ab",
+        "as",
+        "oyj",
+        "se",
+        "kk",
+        "pte",
+        "bhd",
+    }
+)
+#: multi-label public suffixes, so ``_registrable`` keeps ``acme.co.uk`` (not ``co.uk``).
+_MULTI_TLD = frozenset(
+    {
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "com.au",
+        "net.au",
+        "org.au",
+        "co.jp",
+        "co.nz",
+        "com.br",
+        "co.in",
+        "co.za",
+        "com.sg",
+        "com.hk",
+        "com.cn",
+        "co.kr",
+    }
+)
+
+
+def _entity_tokens(entity: str) -> "frozenset[str]":
+    """The distinctive lowercase tokens of a company/entity name (corporate suffixes and short
+    words dropped). Used to recognise the entity's OWN hostnames -- its website AND its name-based
+    issuer subdomain on an IR-platform host (``acme.q4cdn.com``, ``acme.gcs-web.com``) -- so Locate
+    stays on the company and rejects unrelated third-party sources (aggregators / news / exchanges
+    that name it only in a URL path)."""
+    return frozenset(
+        t for t in re.findall(r"[a-z0-9]+", entity.lower()) if len(t) >= 3 and t not in _ENTITY_STOP
+    )
+
+
+def _registrable(url: str) -> str:
+    """The registrable domain of ``url`` (eTLD+1, a small multi-label suffix list handled), lower.
+    Approximate (no full public-suffix list) -- enough to keep the crawl within one company."""
+    host = (urlparse(url).hostname or "").lower()
+    parts = host.split(".")
+    if len(parts) >= 3 and ".".join(parts[-2:]) in _MULTI_TLD:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+def _on_entity(url: str, tokens: "frozenset[str]") -> bool:
+    """Whether ``url``'s HOST belongs to the entity -- an entity-name token appears in the hostname
+    (dots stripped). This matches the company's own domain and its name-based issuer subdomain on a
+    shared IR host, but NOT an aggregator that carries the name only in the PATH -- the exact line
+    the user drew (keep ``acme.q4cdn.com``, drop ``finrange.com/company/ACME``)."""
+    host = (urlparse(url).hostname or "").lower().replace(".", "")
+    return any(t in host for t in tokens)
+
+
+def _entity_scope(seeds: "list[str]", tokens: "frozenset[str]") -> Follow:
+    """A crawl traversal scope for an entity: follow a link iff it is on the same registrable domain
+    as an (on-entity) seed OR its host itself carries the entity name -- so the crawl can hop from
+    ``acme.com`` to ``acme.q4cdn.com`` but never wanders onto an unrelated third party."""
+    domains = frozenset(_registrable(u) for u in seeds)
+
+    def follow(doc: Document, link: str) -> bool:
+        return _registrable(link) in domains or _on_entity(link, tokens)
+
+    return follow
+
+
 async def locate(
     brief: "LocateBrief | str",
     *,
     resolver: Resolver,
     search: "Search | None" = None,
     frontier: "tuple[FrontierMiddleware, ...]" = (),
+    entity: str = "",
+    review: "Llm | None" = None,
 ) -> "Reference | None":
     """Find the best source for the goal and return a :class:`Reference` (or ``None`` if nothing
-    holds the dataset). Pass a bare goal string for the common case. Seeds come from the brief,
-    else ``search``; candidates from the brief, else a crawl; the winner is the highest dataset
-    score (record-likeness + a schema-match bonus for the brief's fields), then the XHR/data-API
-    preference is applied. An explicit source (seeds/candidates/start_url) makes ``search``
-    irrelevant -- it is only used when none is given. ``frontier`` is a turn-based crawl policy (an
-    LLM / heuristic that picks which frontier URLs to expand); default is breadth-first."""
+    holds the dataset -- Locate is ALLOWED to fail). Pass a bare goal string for the common case.
+    Seeds come from the brief, else ``search``; candidates from the brief, else a crawl; the winner
+    is the highest dataset score (record-likeness + a schema-match bonus for the brief's fields),
+    then the XHR/data-API preference is applied, then a FINAL REVIEW. An explicit source
+    (seeds/candidates/start_url) makes ``search`` irrelevant -- it is only used when none is given.
+    ``frontier`` is a turn-based crawl policy (an LLM / heuristic that picks which frontier URLs to
+    expand); default is breadth-first. When ``entity`` is set (the company/site the dataset belongs
+    to), Locate SCOPES to it: search seeds and the crawl stay on the entity's own domain(s), and the
+    final review REJECTS an off-entity winner -- a third-party source (aggregator / news) that
+    merely mentions the company is not a valid source, so Locate returns ``None`` rather than a wrong
+    page. ``review`` (optional) is an LLM that judges each candidate best-first: it must confirm the
+    page actually holds the requested dataset (for the entity) or Locate skips it -- so the model
+    genuinely SELECTS the source, and Locate FAILS (``None``) if none survive."""
     lb = LocateBrief(goal=brief) if isinstance(brief, str) else brief
+    tokens = _entity_tokens(entity)
     seeds = list(lb.seeds)
     if lb.start_url and lb.start_url not in seeds:  # a known source to seed the crawl from
         seeds.append(lb.start_url)
+    searched = False
     if (
         not lb.candidates and not seeds
     ):  # no explicit source -> search (the qualifier, else the goal)
         if search is None:
             raise ValueError("locate needs seeds, candidates, or a search callable")
         seeds = await search(lb.search or lb.goal)
+        searched = True
+
+    # Entity scoping: when the seeds came from a broad web search, keep only those on the entity's
+    # OWN host -- drop the third-party results (aggregators / news / exchanges) that the search mixes
+    # in. Fall back to all seeds if none match (a company whose site omits its name), where the final
+    # review still guards the winner.
+    if tokens and searched:
+        on_entity = [u for u in seeds if _on_entity(u, tokens)]
+        if on_entity:
+            seeds = on_entity
 
     if lb.candidates:  # status-aware: a blocked/errored candidate (403/5xx) is not a source
         docs = []
@@ -287,12 +409,13 @@ async def locate(
             if snap.ok:
                 docs.append(document(snap))
     else:
-        goal = Goal(start=seeds, max_pages=lb.max_pages, frontier=frontier, assess=True)
+        scope: Follow = _entity_scope(seeds, tokens) if tokens else same_origin
+        goal = Goal(
+            start=seeds, scope=scope, max_pages=lb.max_pages, frontier=frontier, assess=True
+        )
         docs = [d async for d in Crawler(resolver).crawl(goal)]  # the crawl yields only OK pages
 
-    best: "Reference | None" = None
-    best_page: "Document | None" = None
-    best_score = 0.0
+    scored: "list[tuple[float, Reference, Document]]" = []
     for doc in docs:
         by = {f.name: f for f in flags(doc)}
         score = _score(doc, by)
@@ -303,14 +426,74 @@ async def locate(
         if score <= 0.0:
             continue
         score += _field_bonus(doc, lb.fields)  # schema-match tiebreaker (the brief's fields)
-        if best is None or score > best_score:
-            best, best_page, best_score = _reference(doc, by), doc, score
+        scored.append((score, _reference(doc, by), doc))
 
-    if best is None or best_page is None:
-        return None
-    if lb.prefer_api and best_page.kind == "html":
-        best = await _prefer_api(best_page, best, resolver)
-    return best.model_copy(update={"profile": await _working_profile(best.url, resolver)})
+    # FINAL REVIEW, best-first: the top candidate is not accepted blindly. Each must pass the
+    # deterministic entity gate AND (when a reviewer LLM is given) the model's verdict that it truly
+    # holds the requested dataset. The first that survives wins; if none do, Locate FAILS (None) --
+    # better than handing Author a wrong page (the finrange.com/company/ACME aggregator).
+    scored.sort(key=lambda t: t[0], reverse=True)
+    for _s, ref, page in scored:
+        if not _entity_relevant(page, tokens):  # cheap gate: off-entity third party -> skip
+            continue
+        if review is not None and not await _llm_review(review, lb, page, entity):
+            continue  # the model rejected it as off-dataset / off-entity
+        if lb.prefer_api and page.kind == "html":
+            ref = await _prefer_api(page, ref, resolver)
+        return ref.model_copy(update={"profile": await _working_profile(ref.url, resolver)})
+    return None  # no candidate survived review -- Locate is allowed to fail
+
+
+def _entity_relevant(page: Document, tokens: "frozenset[str]") -> bool:
+    """The cheap final gate -- Locate is allowed to FAIL rather than hand Author a wrong page. When an
+    entity was given, a candidate must actually BELONG to it: its host carries the entity name (its
+    own site / issuer subdomain) OR the entity name appears in the page text. This rejects a
+    high-scoring third-party aggregator (a ``record_list`` on ``finrange.com/company/ACME`` IS a
+    record list, but not the COMPANY'S data). No entity -> nothing to check against, so pass."""
+    if not tokens:
+        return True
+    if _on_entity(page.url, tokens):
+        return True
+    text_tokens = set(re.findall(r"[a-z0-9]+", page.text.lower()))
+    return any(t in text_tokens for t in tokens)
+
+
+async def _llm_review(llm: Llm, lb: "LocateBrief", page: Document, entity: str) -> bool:
+    """The LLM verdict on ONE candidate: does this page actually hold the requested dataset -- and,
+    when given, does it belong to ``entity`` rather than being a third party's page about it? Locate
+    calls this best-first and takes the first the model accepts, so this is genuine candidate
+    SELECTION, not a rubber stamp on the top score. The verdict streams as a :class:`ReasonEvent`.
+    On a model error the deterministic gate already passed, so default to accept (an LLM outage must
+    not sink an otherwise on-entity source)."""
+    skel = (
+        page.json_skeleton(max_lines=60)
+        if page.kind == "json"
+        else page.skeleton(max_lines=60, drop_chrome=True)
+    )
+    want = lb.goal or "the target dataset"
+    scope = f" It must be {entity}'s OWN data, not a third party's page ABOUT it." if entity else ""
+    fields = ("\nExpected fields per record: " + ", ".join(lb.fields)) if lb.fields else ""
+    prompt = (
+        f"You are validating a data source. We need this dataset: {want}.{scope}{fields}\n\n"
+        f"Candidate page ({page.url}):\n{skel}\n\n"
+        f"Does this page actually hold the requested dataset"
+        f"{f' for {entity}' if entity else ''}? Answer YES or NO on the first line, then one short "
+        f"sentence why."
+    )
+    try:
+        reply = await llm.complete(prompt)
+    except WebException:
+        return True
+    first = next((ln for ln in reply.strip().splitlines() if ln.strip()), "").strip().lower()
+    accept = first.startswith("yes") or (not first.startswith("no") and "yes" in first)
+    emit(
+        ReasonEvent(
+            stage="review",
+            subject=page.url,
+            text=("accepted: " if accept else "rejected: ") + reply.strip()[:200],
+        )
+    )
+    return accept
 
 
 async def _working_profile(url: str, resolver: Resolver) -> str:
