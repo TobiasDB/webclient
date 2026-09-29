@@ -11,10 +11,25 @@ from __future__ import annotations
 from .entry import Profile
 from .proxy import Proxy
 
+# The BROWSER-REALNESS ladder: each rung is a more authentic (and heavier) browser identity, so a
+# resolve escalation can climb from the cheapest render to the most convincing when a page keeps
+# blocking. All carry a full browserforge fingerprint (navigator / WebGL / canvas), so even the
+# bottom rung looks like a real Chrome to a fingerprinting probe.
+#
+#   BROWSER         headless bundled Chromium   -- cheap, fast; the usual render
+#   HEADED_BROWSER  HEADED bundled Chromium     -- a real window; far fewer headless tells
+#   REAL_CHROME     HEADED real Chrome channel  -- the genuine installed Chrome; most authentic
+
 #: HTTP transport with a realistic (browserforge) identity -- the cheap default.
 BASIC = Profile(fingerprint=True)
-#: a real browser render (Playwright) with a realistic identity -- for JS-gated pages.
+#: a real browser render (headless bundled Chromium) with a realistic identity -- for JS-gated pages.
 BROWSER = Profile(fingerprint=True, browser=True)
+#: a HEADED bundled-Chromium render -- a real on-screen window, which sheds the headless tells an
+#: anti-bot WAF checks; the rung above :data:`BROWSER` (needs a display / Xvfb on Linux).
+HEADED_BROWSER = Profile(fingerprint=True, browser=True, headless=False)
+#: the genuine, installed Chrome (the ``chrome`` channel), HEADED -- the most authentic identity and
+#: the top rung; needs Chrome installed on the host.
+REAL_CHROME = Profile(fingerprint=True, browser=True, headless=False, channel="chrome")
 
 
 def with_proxy(base: Profile, proxy: "str | Proxy") -> Profile:
@@ -32,4 +47,18 @@ def proxy_browser(server: "str | Proxy") -> Profile:
     return BROWSER.with_(proxy=server)
 
 
-__all__ = ["BASIC", "BROWSER", "with_proxy", "proxy", "proxy_browser"]
+def real_chrome(server: "str | Proxy") -> Profile:
+    """The genuine installed Chrome routed through a proxy -- the most authentic tier, via a proxy."""
+    return REAL_CHROME.with_(proxy=server)
+
+
+__all__ = [
+    "BASIC",
+    "BROWSER",
+    "HEADED_BROWSER",
+    "REAL_CHROME",
+    "with_proxy",
+    "proxy",
+    "proxy_browser",
+    "real_chrome",
+]

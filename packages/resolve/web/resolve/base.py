@@ -235,8 +235,21 @@ class Resolver:
         """A stateful resolver: open a persistent SESSION on each tier (a cookie jar / browser
         context that survives across resolves) and rebuild the same chain over them. Returns a
         Resolver over the sessions, so a Crawler uses it unchanged -- an authenticated crawl keeps
-        its state across pages. Closing it closes the sessions it opened."""
-        sessions = tuple([await _open_session(t) for t in self._tiers])
+        its state across pages. Closing it closes the sessions it opened.
+
+        Opening a climb tier is BEST-EFFORT: a realness-ladder rung that cannot launch on this host
+        (a headed browser with no display, the real Chrome channel with Chrome not installed) is
+        SKIPPED, not fatal -- the session runs on the tiers that did open and escalates through those.
+        The base tier must open (there is no live page otherwise)."""
+        opened: list[Fetcher] = []
+        for i, tier in enumerate(self._tiers):
+            try:
+                opened.append(await _open_session(tier))
+            except Exception:
+                if i == 0:
+                    raise  # the base tier is required -- a session needs a live page
+                # a climb rung that can't launch here is dropped; the ladder uses what opened
+        sessions = tuple(opened)
         return Resolver(
             ladder=sessions,
             retry=self._rt,

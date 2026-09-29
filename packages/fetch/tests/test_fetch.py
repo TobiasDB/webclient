@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from pytest_httpserver import HTTPServer
+
 from web.fetch import Fetcher, HttpFetcher, Request, Snapshot
 
 

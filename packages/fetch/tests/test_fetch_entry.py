@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 from pytest_httpserver import HTTPServer
+
 from web.fetch import BrowserFetcher, ClientPool, Profile, Request, fetch
 
 
@@ -33,6 +34,20 @@ def test_browser_profile_carries_an_executable_path() -> None:
     assert base.key() != pinned.key()  # a different binary -> its own backend
     fetcher = pinned.fetcher()
     assert isinstance(fetcher, BrowserFetcher) and fetcher._executable == "/opt/chromium/chrome"
+
+
+def test_profile_realness_fields_build_the_right_browser() -> None:
+    # the browser-realness rungs: headless bundled -> headed bundled -> real Chrome channel.
+    from web.fetch import profiles as fp
+
+    assert fp.BROWSER.headless and fp.BROWSER.channel == "chromium"
+    assert not fp.HEADED_BROWSER.headless  # a real window
+    assert not fp.REAL_CHROME.headless and fp.REAL_CHROME.channel == "chrome"  # genuine Chrome
+    # headless / channel are part of the pool identity, so each rung gets its own backend
+    assert fp.BROWSER.key() != fp.HEADED_BROWSER.key() != fp.REAL_CHROME.key()
+    built = fp.REAL_CHROME.fetcher()
+    assert isinstance(built, BrowserFetcher)
+    assert built._channel == "chrome" and built._headless is False
 
 
 def test_fetch_reuses_the_pooled_backend_across_calls(httpserver: HTTPServer) -> None:

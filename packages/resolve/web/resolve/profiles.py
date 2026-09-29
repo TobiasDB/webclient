@@ -7,7 +7,8 @@ so they are factories, not constants.
 
   BASIC              HTTP with a realistic, STABLE identity (cheap; the default)
   BASIC_BROWSER      HTTP first, escalate to a browser on a block signal
-  FULL_BROWSER       always render in a browser
+  FULL_BROWSER       render in a browser, climbing the realness ladder (headless -> headed ->
+                     real Chrome) if a tier is blocked
   proxy(server)      / proxy_browser(server) / proxy_full_browser(server)  -- the same, via a proxy
 
 Fingerprint ROTATION is OFF by default: rotating identities from a SINGLE IP for the same URL is a
@@ -35,9 +36,12 @@ BASIC_BROWSER = Profile(
     retry=RetryPolicy(max_attempts=2),
     rate=RatePolicy(per_host=0.5),
 )
-#: always render in a real browser (a stable per-session identity).
+#: render in a browser, climbing the browser-REALNESS ladder if a tier is still blocked: headless
+#: bundled Chromium -> HEADED bundled Chromium -> the genuine installed Chrome. Each rung is a more
+#: authentic (and heavier) real browser -- not an HTTP fallback. (The headed rungs need a display /
+#: Xvfb; Chrome installed for the top rung. A rung that can't launch errors and the ladder climbs on.)
 FULL_BROWSER = Profile(
-    escalation=EscalationPolicy(tiers=(_fp.BROWSER,)),
+    escalation=EscalationPolicy(tiers=(_fp.BROWSER, _fp.HEADED_BROWSER, _fp.REAL_CHROME)),
     retry=RetryPolicy(max_attempts=2),
     rate=RatePolicy(per_host=0.5),
 )
@@ -56,8 +60,17 @@ def proxy_browser(server: "str | Proxy") -> Profile:
 
 
 def proxy_full_browser(server: "str | Proxy") -> Profile:
-    """:data:`FULL_BROWSER` routed through ``server``."""
-    return FULL_BROWSER.with_(escalation=EscalationPolicy(tiers=(_fp.proxy_browser(server),)))
+    """:data:`FULL_BROWSER` routed through ``server`` -- the same realness ladder, every rung via the
+    proxy (headless -> headed -> real Chrome, all through ``server``)."""
+    return FULL_BROWSER.with_(
+        escalation=EscalationPolicy(
+            tiers=(
+                _fp.proxy_browser(server),
+                _fp.HEADED_BROWSER.with_(proxy=server),
+                _fp.real_chrome(server),
+            )
+        )
+    )
 
 
 #: the by-NAME registry (the constant profiles) -- so a serialisable lazy plan can name a policy,

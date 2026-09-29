@@ -37,13 +37,19 @@ async def apply_wait(page: "Page", wait: Wait) -> None:
 
 async def _dom_stable(page: "Page", timeout: float, quiet: float) -> None:
     """Return once the DOM node count stops changing for ``quiet`` seconds, or the budget is hit
-    (a settle, not a failure) -- the safe general wait for a page that rewrites its own DOM.
+    (a settle, NEVER a failure) -- the safe general wait for a page that rewrites its own DOM. A
+    settling wait must not raise: if the page navigates / redirects / is challenged mid-wait, the JS
+    execution context is destroyed and ``page.evaluate`` throws -- that is still a settle (return what
+    has rendered), not a transport error. Hitting the budget is a settle too.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     last, stable_since = -1, None
     while loop.time() < deadline:
-        n = int(await page.evaluate("document.getElementsByTagName('*').length"))
+        try:
+            n = int(await page.evaluate("document.getElementsByTagName('*').length"))
+        except Exception:
+            return  # execution context gone (navigation / challenge / redirect) -> settle, not raise
         if n == last:
             stable_since = stable_since or loop.time()
             if loop.time() - stable_since >= quiet:

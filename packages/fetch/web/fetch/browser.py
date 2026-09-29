@@ -45,9 +45,77 @@ if TYPE_CHECKING:  # playwright is an optional extra; imported lazily at runtime
         Response,
     )
 
-_STEALTH = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+# A broad stealth patch -- only the FALLBACK when browserforge's injector is unavailable (the
+# injector does this and much more, coherently). Papers over the loudest headless tells: the
+# webdriver flag, an empty plugins/mimeTypes list, a missing window.chrome, and the headless WebGL
+# vendor/renderer (SwiftShader) that anti-bot vendors key on.
+_STEALTH = (
+    "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
+    "Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});"
+    "Object.defineProperty(navigator,'languages',{get:()=>['en-US','en']});"
+    "window.chrome={runtime:{}};"
+    "const gp=WebGLRenderingContext.prototype.getParameter;"
+    "WebGLRenderingContext.prototype.getParameter=function(p){"
+    "if(p===37445)return 'Intel Inc.';if(p===37446)return 'Intel Iris OpenGL Engine';"
+    "return gp.call(this,p);};"
+)
+# A SUPPLEMENTAL patch applied on TOP of browserforge's injection (which spoofs UA / WebGL / canvas
+# but leaves two loud automation tells): a real Chrome always exposes a populated
+# `navigator.userAgentData.brands` and a non-empty `navigator.plugins` (the built-in PDF viewers).
+# Headless/injected contexts leave both empty -- a dead giveaway a top-tier anti-bot keys on. This
+# fills them coherently, deriving the brand version from the (already-spoofed) UA. Idempotent.
+_STEALTH_SUPP = """
+(() => {
+  const m = navigator.userAgent.match(/Chrome\\/(\\d+)/);
+  const v = m ? m[1] : '146';
+  const brands = [
+    {brand: 'Chromium', version: v},
+    {brand: 'Google Chrome', version: v},
+    {brand: 'Not.A/Brand', version: '24'},
+  ];
+  const plat = /Windows/.test(navigator.userAgent) ? 'Windows'
+    : /Mac/.test(navigator.userAgent) ? 'macOS' : 'Linux';
+  try {
+    if (!navigator.userAgentData || !navigator.userAgentData.brands || !navigator.userAgentData.brands.length) {
+      Object.defineProperty(navigator, 'userAgentData', {configurable: true, get: () => ({
+        brands, mobile: false, platform: plat,
+        getHighEntropyValues: async () => ({
+          brands, mobile: false, platform: plat, platformVersion: '15.0.0',
+          architecture: 'x86', bitness: '64', uaFullVersion: v + '.0.0.0', fullVersionList: brands,
+        }),
+      })});
+    }
+  } catch (e) {}
+  try {
+    if (!window.chrome) {  // real Chrome always exposes this; headless leaves it undefined
+      window.chrome = {runtime: {}, loadTimes: function () {}, csi: function () {}, app: {}};
+    }
+  } catch (e) {}
+  try {
+    if (!navigator.plugins || navigator.plugins.length === 0) {
+      const names = ['PDF Viewer', 'Chrome PDF Viewer', 'Chromium PDF Viewer',
+                     'Microsoft Edge PDF Viewer', 'WebKit built-in PDF'];
+      const arr = names.map(n => ({name: n, description: 'Portable Document Format',
+                                   filename: 'internal-pdf-viewer', length: 1}));
+      Object.defineProperty(navigator, 'plugins', {configurable: true, get: () => arr});
+      Object.defineProperty(navigator, 'mimeTypes', {configurable: true, get: () =>
+        [{type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format'}]});
+    }
+  } catch (e) {}
+})();
+"""
 _BODY_CAP = 512_000  # per-response body captured (text/data responses only)
 _BODIES_MAX = 60  # how many response bodies to drain per snapshot
+
+
+def _bf_os(platform: str) -> str:
+    """Map a fingerprint platform (``Windows`` / ``macOS`` / ``Linux``) to browserforge's OS token."""
+    p = platform.lower()
+    if "mac" in p or "darwin" in p:
+        return "macos"
+    if "linux" in p:
+        return "linux"
+    return "windows"
 
 
 class BrowserSession:
@@ -96,7 +164,10 @@ class BrowserSession:
         await apply_wait(self._page, w)  # settle further (networkidle / dom_stable / selector)
         for s in self._scripts:
             if s.on == "load":
-                await self._page.evaluate(s.js)
+                try:  # a load recorder is best-effort -- a hiccup must not discard a real response
+                    await self._page.evaluate(s.js)
+                except Exception:
+                    pass
         return self
 
     async def click(self, selector: str, *, human: bool = False) -> "BrowserSession":
@@ -275,30 +346,29 @@ class BrowserFetcher:
                     channel=None if self._channel == "chromium" else self._channel,
                     executable_path=self._executable,  # an explicit binary overrides the channel
                     proxy=self._proxy.playwright() if self._proxy else None,
+                    # Launch as a REAL browser, not an automation harness: drop the
+                    # `AutomationControlled` blink feature (which sets navigator.webdriver + other
+                    # tells at the engine level) and Playwright's `--enable-automation` switch. This
+                    # is what an anti-bot WAF checks first.
+                    args=["--disable-blink-features=AutomationControlled"],
+                    ignore_default_args=["--enable-automation"],
                 )
             self._browser = browser
         return browser
 
     async def session(self) -> BrowserSession:
-        """Open a session that OWNS a fresh context + page (isolated cookies/state). Applies the
-        fingerprint's context options + stealth pass and any ``init`` scripts before navigation.
+        """Open a session that OWNS a fresh context + page (isolated cookies/state). Builds a REAL
+        fingerprinted context (browserforge injects a coherent navigator + screen + WebGL vendor +
+        canvas noise + plugins/fonts -- the surface anti-bot vendors probe) and installs the ``init``
+        scripts before navigation.
         """
         browser = await self._browser_ready()
-        fp = self._fingerprint
-        if fp is not None:  # apply the identity's context options (explicit, so no dict[str, Any])
-            w, h = fp.viewport
-            context = await browser.new_context(
-                user_agent=fp.user_agent,
-                viewport={"width": w, "height": h},
-                locale=fp.locale,
-            )
-        else:
-            context = await browser.new_context()
+        context = await self._new_context(browser)
         page = await context.new_page()
         scripts = self.scripts.enabled()  # only the enabled scripts install
         try:
-            if self._fingerprint:  # a light stealth pass (real anti-detect is a heavier backend)
-                await page.add_init_script(_STEALTH)
+            if self._fingerprint is not None:  # fill the tells the injector leaves (brands/plugins)
+                await page.add_init_script(_STEALTH_SUPP)
             for s in scripts:  # 'init' scripts run before any page script
                 if s.on == "init":
                     await page.add_init_script(s.js)
@@ -306,6 +376,32 @@ class BrowserFetcher:
             await context.close()
             raise
         return BrowserSession(context, page, scripts, self._wait)
+
+    async def _new_context(self, browser: "Browser") -> "BrowserContext":
+        """A fresh context carrying the fingerprint. When one is set, browserforge's Playwright
+        injector spoofs the FULL fingerprinting surface -- navigator (webdriver, plugins, languages,
+        hardwareConcurrency), screen, WebGL vendor/renderer, canvas, audio, fonts -- so the page
+        looks like a real user's Chrome to a canvas/WebGL fingerprinting probe, not a headless
+        harness. Falls back to a coherent manual context + a stealth patch if the injector is
+        unavailable, or a bare context when there is no fingerprint."""
+        fp = self._fingerprint
+        if fp is None:
+            return await browser.new_context()
+        try:
+            from browserforge.injectors.playwright import (  # type: ignore[attr-defined]
+                AsyncNewContext,
+            )
+        except ImportError:
+            AsyncNewContext = None  # type: ignore[assignment]
+        if AsyncNewContext is not None:  # the real deal: full coherent fingerprint injection
+            opts = {"browser": ("chrome",), "os": (_bf_os(fp.platform),), "device": ("desktop",)}
+            return await AsyncNewContext(browser, fingerprint_options=opts)
+        w, h = fp.viewport  # fallback: a coherent manual context + a broad stealth patch
+        context = await browser.new_context(
+            user_agent=fp.user_agent, viewport={"width": w, "height": h}, locale=fp.locale
+        )
+        await context.add_init_script(_STEALTH)
+        return context
 
     async def fetch(self, request: Request) -> Snapshot:
         """One-shot: open a session, fetch, close. Never raises (a session failure is

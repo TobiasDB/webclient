@@ -85,6 +85,13 @@ class Profile:
     fingerprint: "bool | Fingerprint" = False
     headers: "dict[str, str]" = field(default_factory=dict)
     browser: bool = False
+    #: when driving a browser, run it HEADED (a real windowed Chrome) instead of headless. A headed
+    #: browser has far fewer automation tells than headless -- the next rung of "realness" a resolve
+    #: ladder climbs to when a headless render is still blocked.
+    headless: bool = True
+    #: the browser CHANNEL: ``chromium`` (Playwright's bundled build) or ``chrome`` / ``chrome-beta``
+    #: / ``msedge`` (the REAL, installed browser -- the most authentic identity, top of the ladder).
+    channel: str = "chromium"
     #: an explicit browser binary to launch (a driver/executable path) when ``browser`` is set --
     #: for a pinned/self-managed Chromium; ``None`` uses the bundled/channel browser.
     executable_path: "str | None" = None
@@ -96,6 +103,8 @@ class Profile:
         fingerprint: "bool | Fingerprint | _Keep" = _KEEP,
         headers: "dict[str, str] | _Keep" = _KEEP,
         browser: "bool | _Keep" = _KEEP,
+        headless: "bool | _Keep" = _KEEP,
+        channel: "str | _Keep" = _KEEP,
         executable_path: "str | None | _Keep" = _KEEP,
     ) -> "Profile":
         """A copy with some slots overridden (the rest inherited) -- adjust a base profile."""
@@ -104,6 +113,8 @@ class Profile:
             fingerprint=(self.fingerprint if isinstance(fingerprint, _Keep) else fingerprint),
             headers=self.headers if isinstance(headers, _Keep) else headers,
             browser=self.browser if isinstance(browser, _Keep) else browser,
+            headless=self.headless if isinstance(headless, _Keep) else headless,
+            channel=self.channel if isinstance(channel, _Keep) else channel,
             executable_path=(
                 self.executable_path if isinstance(executable_path, _Keep) else executable_path
             ),
@@ -115,6 +126,8 @@ class Profile:
         """
         if self.browser:
             return BrowserFetcher(
+                headless=self.headless,
+                channel=self.channel,
                 proxy=self.proxy,
                 fingerprint=self.fingerprint,
                 executable_path=self.executable_path,
@@ -130,6 +143,8 @@ class Profile:
         )
         return (
             self.browser,
+            self.headless,
+            self.channel,
             str(self.proxy),
             fp,
             tuple(sorted(self.headers.items())),
