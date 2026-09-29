@@ -20,8 +20,10 @@ from threading import Thread
 from urllib.parse import parse_qs, urlparse
 
 from web.dsl import WebClient, from_blob, run_blob, wq
+from web.fetch import Profile as FetchProfile
 from web.fetch import Request, fetch
 from web.onboard import onboard
+from web.resolve import Profile as ResolveProfile
 from web.resolve import Resolver, flags, resolve
 
 _INDEX = b"""<!doctype html><html><head>
@@ -48,6 +50,8 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api":
             body, ctype = json.dumps({"items": [{"sku": "W1"}, {"sku": "G2"}], "next": None}).encode(), "application/json"
+        elif path == "/echo":  # echoes the request's user-agent, to prove a profile's headers are sent
+            body, ctype = f"ua={self.headers.get('user-agent', '')}".encode(), "text/plain"
         elif path == "/about":
             body, ctype = _ABOUT, "text/html"
         elif path.startswith("/product/"):
@@ -142,6 +146,24 @@ async def pagination(base: str) -> None:
     print("rows across pages:", [e.text for e in paged.select_all("article.row")])
 
 
+async def profiles(base: str) -> None:
+    """Profiles at BOTH layers, composed. A fetch Profile is a transport identity (proxy /
+    fingerprint / headers / browser), inheritable with ``.with_(...)``. A resolve Profile is the
+    POLICY bundle whose ladder IS fetch profiles (transport identity defined once, reused as tiers)
+    plus retry / escalation / pagination."""
+    _h("profiles (default + custom, composed across layers)")
+    default = await fetch(base + "/echo")                       # no profile -> plain HTTP transport
+    print("default profile:", default.content.decode())
+    bot = FetchProfile(headers={"user-agent": "acme-bot/1.0"})  # a custom transport identity
+    polite = bot.with_(headers={"user-agent": "acme-bot/2.0"})  # inherit + override one slot
+    tagged = await fetch(base + "/echo", profile=polite)
+    print("custom fetch profile:", tagged.content.decode())     # the profile's UA header was sent
+    # a resolve profile = policy; its ladder is fetch profiles (http base + browser escalation tier)
+    vendor = ResolveProfile(ladder=(bot, bot.with_(browser=True)), retry=2)
+    doc = await resolve(base + "/", profile=vendor)
+    print("resolve profile:", doc.metadata().title, "| ladder=http+browser(inherits UA), retry=2")
+
+
 def lazy_plans(base: str) -> str:
     """One expression language: record a chain into a serialisable Plan -- describe it, ship it as a
     blob. Nothing runs. Returns the blob for the evaluator story."""
@@ -211,6 +233,7 @@ async def main() -> None:
             await selection_and_render(base)
             await sessions(base)
             await pagination(base)
+            await profiles(base)
             blob = lazy_plans(base)
             await evaluator(wc, base, blob)
         await onboard_story(base)
