@@ -112,8 +112,20 @@ class _Progress:
                 _err(f"  · model wrote: {_short(' '.join(event.reply.split()), 100)}")
             elif event.phase == "parsed":
                 _err("  · query parsed + rerooted at the source")
-        elif isinstance(event, ResolveEvent):
-            _err(f"  · {event.phase}: {_short(event.url)}")
+        elif isinstance(
+            event, ResolveEvent
+        ):  # transport fallbacks: which tier a fetch escalated to
+            d = event.detail
+            if event.phase == "escalate":
+                remedy = f" ({d['remedy']})" if d.get("remedy") else ""
+                _err(f"  · escalate → tier {d.get('tier')}{remedy}: {_short(event.url)}")
+            elif event.phase == "sticky":
+                _err(
+                    f"  · sticky → tier {d.get('tier')} (domain already needed it): "
+                    f"{_short(event.url)}"
+                )
+            else:
+                _err(f"  · {event.phase}: {_short(event.url)}")
         elif isinstance(event, FetchEvent) and self._verbose:
             _err(f"  · fetch {event.status} ({event.elapsed:.2f}s): {_short(event.url)}")
 
