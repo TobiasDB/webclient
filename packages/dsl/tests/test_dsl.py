@@ -95,6 +95,43 @@ def test_extract_filter_number_and_smart_collect(httpserver: HTTPServer) -> None
     assert rows == [{"title": "Aeropress", "price": 39}, {"title": "Grinder", "price": 129}]
 
 
+def test_when_then_without_otherwise_defaults_to_none(httpserver: HTTPServer) -> None:
+    url = _shop(httpserver)
+    rows = _run(
+        wq.reference(url).resolve().select_all(".card")
+        .extract(name=wq.doc.select(".title").attr("text"),
+                 tier=wq.when(wq.doc.select(".price").attr("text") != "").then("priced"))  # no .otherwise()
+        .acollect())
+    assert [(r["name"], r["tier"]) for r in rows] == [
+        ("Aeropress", "priced"), ("Grinder", "priced"), ("Free Sample", None)]  # falsy -> None
+
+
+def test_wc_when_and_field(httpserver: HTTPServer) -> None:
+    url = _shop(httpserver)
+
+    async def go() -> list[Any]:
+        async with WebClient() as wc:
+            return await (wc.resolve(url).select_all(".card").extract(
+                name=wq.doc.select(".title").attr("text"),
+                tier=wc.when(wq.doc.select(".price").attr("text") != "").then("y").otherwise("n"),
+            ).filter(wc.field("name") != "Grinder").acollect())
+
+    assert [(r["name"], r["tier"]) for r in _run(go())] == [("Aeropress", "y"), ("Free Sample", "n")]
+
+
+def test_select_miss_is_loud_by_default(httpserver: HTTPServer) -> None:
+    import pytest
+
+    from web.fetch import WebException
+
+    url = _shop(httpserver)
+    with pytest.raises(WebException):  # a selector matching nothing raises, naming it
+        _run(wq.reference(url).resolve().select(".nope").attr("text").acollect())
+    # ...unless marked optional -> the miss is None and the chain short-circuits
+    got = _run(wq.reference(url).resolve().select(".nope", optional=True).attr("text").acollect())
+    assert got is None
+
+
 def test_when_then_otherwise_labels_rows(httpserver: HTTPServer) -> None:
     url = _shop(httpserver)
     rows = _run(

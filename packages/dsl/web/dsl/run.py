@@ -17,7 +17,7 @@ from typing import cast
 
 from pydantic import JsonValue
 
-from web.fetch import Request
+from web.fetch import Request, WebException, err
 from web.parse import Document, Element, dig
 from web.resolve import Resolver
 
@@ -97,7 +97,7 @@ async def _invoke(cur: object, name: str, call: "Step | None", root: object, rs:
     if name == "doc":  # the reference -> document join spelling (wc.resolve(url).doc()); identity
         return cur
     if name == "resolve":  # the reference -> document fetch join
-        return await _resolve(cur, rs)
+        return await _resolve(cur, rs, optional=_flag(call, "optional"))
     if name == "reference":  # a URL held in an earlier-extracted column
         col = _literal(call)
         return (row or {}).get(str(col)) if row is not None else None
@@ -111,21 +111,34 @@ async def _invoke(cur: object, name: str, call: "Step | None", root: object, rs:
     return _one(cur, name, args, kwargs)
 
 
-async def _resolve(cur: object, rs: "Resolver") -> object:
+async def _resolve(cur: object, rs: "Resolver", *, optional: bool = False) -> object:
     """Resolve the current value to a Document (or a Collection of them). A ``Ref`` / ``Field`` /
     URL string is fetched; a Document passes through; a Collection or list of refs FANS OUT into a
-    Collection of Documents (``select_all('a').attr('href').resolve()``); a miss stays ``None``."""
+    Collection of Documents (``select_all('a').attr('href').resolve()``). Loud by default: nothing
+    to resolve (a prior select/attr missed) raises unless ``optional`` -- then it is ``None``."""
     if isinstance(cur, (Collection, list)):
         docs: list[object] = []
         for item in cur:
-            doc = await _resolve(item, rs)
+            doc = await _resolve(item, rs, optional=optional)
             if doc is not None:
                 docs.append(doc)
         return Collection(docs)
     url = cur.url if isinstance(cur, Ref) else (cur.get() if isinstance(cur, Field) else cur)
     if isinstance(url, str) and url:
         return await rs.resolve(Request(url=url))
-    return cur if isinstance(cur, Document) else None
+    if isinstance(cur, Document):
+        return cur
+    if not optional:
+        raise WebException(err("dsl.resolve_miss", "nothing to resolve -- a prior select / attr matched nothing"))
+    return None
+
+
+def _flag(call: "Step | None", key: str) -> bool:
+    """A boolean literal keyword of a call (e.g. ``optional=True``), default ``False``."""
+    if call is None:
+        return False
+    arg = call.kwargs.get(key)
+    return bool(arg.value) if arg is not None else False
 
 
 def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object]") -> object:
@@ -137,7 +150,11 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
         return None
     if name == "select":
         if _markup(obj):
-            return obj.select(str(args[0])) if isinstance(obj, (Document, Element)) else None
+            el = obj.select(str(args[0])) if isinstance(obj, (Document, Element)) else None
+            if el is None and not kwargs.get("optional"):  # loud by default: a miss names the selector
+                raise WebException(err("dsl.select_miss", f"selector {args[0]!r} matched nothing",
+                                       url=_base_of(obj)))
+            return el
         return _json_get(obj, str(args[0]))  # a JSON sub-value (dict/list -> navigable, scalar -> leaf)
     if name == "select_all":
         if _markup(obj):

@@ -68,7 +68,7 @@ class LazyCollection(Protocol[T]):
     smart terminal ``collect`` returns ``list[T]`` (extracted rows project automatically -- no
     explicit ``.project()`` needed)."""
 
-    def select(self, selector: str) -> "LazyCollection[Element]": ...
+    def select(self, selector: str, *, optional: bool = False) -> "LazyCollection[Element]": ...
     def select_all(self, selector: str) -> "LazyCollection[Element]": ...
     @overload
     def attr(self, name: "Literal['href', 'src']") -> "LazyCollection[Ref]": ...  # type: ignore[overload-overlap]
@@ -76,7 +76,7 @@ class LazyCollection(Protocol[T]):
     def attr(self, name: str) -> "LazyCollection[str]": ...
     def text(self) -> "LazyCollection[str]": ...
     def links(self) -> "LazyCollection[Ref]": ...
-    def resolve(self) -> "LazyCollection[Document]": ...  # follow a collection of references
+    def resolve(self, *, optional: bool = False) -> "LazyCollection[Document]": ...  # follow refs
     def number(self, default: object = None) -> "LazyCollection[JsonValue]": ...
     def date(self, format: str | None = None, *, dayfirst: bool = False, default: object = None) -> "LazyCollection[JsonValue]": ...
     def extract(self, **columns: "LazyField | LazyCollection[object] | LazyDocument | LazyReference | JsonValue") -> "LazyCollection[dict[str, JsonValue]]": ...
@@ -99,7 +99,7 @@ class LazyDocument(Protocol):
     :class:`~web.parse.Document`; reads narrow to a field / reference / collection."""
 
     def doc(self) -> "LazyDocument": ...
-    def select(self, selector: str) -> "LazyDocument": ...
+    def select(self, selector: str, *, optional: bool = False) -> "LazyDocument": ...
     def select_all(self, selector: str) -> "LazyCollection[Element]": ...
     @overload
     def attr(self, name: "Literal['href', 'src']") -> "LazyReference": ...  # type: ignore[overload-overlap]
@@ -109,6 +109,17 @@ class LazyDocument(Protocol):
     def links(self) -> "LazyCollection[Ref]": ...
     def reference(self, name: str) -> "LazyReference": ...
     def field(self, name: str) -> "LazyField": ...
+    # the parse-Document read methods, exposed lazily with their real signatures (they run via the
+    # executor's method dispatch); each collects to its value.
+    def markdown(self, *, main_content_only: bool = False) -> "LazyField": ...
+    def readable(self, *, main_content_only: bool = True) -> "LazyField": ...
+    def tables(self, selector: "str | None" = None, *, transpose: bool = False) -> "LazyField": ...
+    def skeleton(self, *, max_lines: int = 400, text_chars: int = 40, max_depth: int = 30,
+                 mark_records: bool = True, mark_interactive: bool = True, drop_chrome: bool = False) -> "LazyField": ...
+    def regex(self, pattern: str, *, group: "int | str" = 0, flags: int = 0) -> "LazyField": ...
+    def at(self, path: str) -> "LazyField": ...
+    def metadata(self) -> "LazyField": ...
+    def records(self, *, min_items: int = 3, top_k: int = 3) -> "LazyField": ...
     def collect(self, root: object = None, *, resolver: "Resolver | None" = None) -> "Document": ...
     async def acollect(self, root: object = None, *, resolver: "Resolver | None" = None) -> "Document": ...
     def to_blob(self) -> str: ...
@@ -119,39 +130,51 @@ class LazyReference(Protocol):
     """A recorded reference chain (a request spec / a link from ``attr('href')``). ``resolve()``
     fetches it into a document; collected without resolving, it reads as a :class:`~web.dsl.Ref`."""
 
-    def resolve(self) -> "LazyDocument": ...
+    def resolve(self, *, optional: bool = False) -> "LazyDocument": ...
     def collect(self, root: object = None, *, resolver: "Resolver | None" = None) -> "Ref": ...
     async def acollect(self, root: object = None, *, resolver: "Resolver | None" = None) -> "Ref": ...
     def to_blob(self) -> str: ...
     def describe(self) -> str: ...
 
 
-class _When:
-    """The ``when(cond).then(a).otherwise(b)`` conditional builder -- records a single ``when`` step
-    whose three parts are sub-expressions evaluated against the surrounding element."""
+class LazyThen(LazyField, Protocol):
+    """A ``when(cond).then(a)`` conditional -- already usable as a value (``otherwise`` defaults to
+    ``None``), and ``.otherwise(b)`` refines it with the else-branch."""
 
-    __slots__ = ("_cond", "_then")
+    def otherwise(self, value: object) -> "LazyField": ...
+
+
+class _WhenExpr(Expr):
+    """The recorded ``when`` branch: an :class:`Expr` (so it works as a column / predicate straight
+    after ``.then(...)``, with a ``None`` else), plus ``.otherwise(...)`` to set the else-branch."""
+
+    def __init__(self, cond: object, then: object, otherwise: object = None) -> None:
+        from .expr import to_arg
+
+        step = Step(kind="when", args=[to_arg(cond), to_arg(then), to_arg(otherwise)])
+        super().__init__(Plan(steps=[step]))
+        object.__setattr__(self, "_cond", cond)
+        object.__setattr__(self, "_then", then)
+
+    def otherwise(self, value: object) -> LazyField:
+        """Set the else-branch (taken when the condition is falsy) and return the recorded branch."""
+        return cast(LazyField, _WhenExpr(self._cond, self._then, value))
+
+
+class _When:
+    """The ``when(cond)`` conditional builder: ``.then(a)`` is already a usable value (else ``None``),
+    ``.then(a).otherwise(b)`` sets the else-branch."""
+
+    __slots__ = ("_cond",)
 
     def __init__(self, cond: object) -> None:
         self._cond = cond
-        self._then: object = _MISSING
 
-    def then(self, value: object) -> "_When":
-        """The value taken when the condition is truthy; returns self so ``.otherwise`` chains."""
-        self._then = value
-        return self
-
-    def otherwise(self, value: object) -> LazyField:
-        """The else-value; finishes the branch and returns the recorded ``Expr`` (as a LazyField)."""
-        if self._then is _MISSING:
-            raise TypeError("when(...).then(...) before .otherwise(...)")
-        from .expr import to_arg
-
-        step = Step(kind="when", args=[to_arg(self._cond), to_arg(self._then), to_arg(value)])
-        return cast(LazyField, Expr(Plan(steps=[step])))
+    def then(self, value: object) -> LazyThen:
+        """The value taken when the condition is truthy (else ``None`` until ``.otherwise`` is set)."""
+        return cast(LazyThen, _WhenExpr(self._cond, value))
 
 
-_MISSING: object = object()
 _DOC: LazyDocument = cast(LazyDocument, Expr(Plan(root="Document")))
 
 

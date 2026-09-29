@@ -18,7 +18,7 @@ from web.resolve import Profile, Resolver
 
 from .expr import Expr
 from .plan import Plan, Step
-from .surface import LazyDocument, LazyReference
+from .surface import LazyDocument, LazyField, LazyReference, _When, wq
 
 
 class WebClient:
@@ -52,6 +52,15 @@ class WebClient:
         """Reach many documents from a seed / goal, over this client's resolver."""
         g = goal if isinstance(goal, Goal) else Goal(start=goal, max_pages=max_pages)
         return [doc async for doc in Crawler(self._resolver).crawl(g)]
+
+    def when(self, cond: object) -> _When:
+        """A conditional column: ``wc.when(cond).then(a).otherwise(b)`` (``.otherwise`` optional -->
+        ``None`` else). Same builder as ``wq.when``."""
+        return wq.when(cond)
+
+    def field(self, name: str) -> LazyField:
+        """A value already extracted in the surrounding row (``wc.field("price") != ""``)."""
+        return wq.field(name)
 
 
 __all__ = ["WebClient"]

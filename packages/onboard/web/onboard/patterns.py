@@ -99,7 +99,7 @@ def _html_col(spec: str) -> LazyField:
     """A ``wq`` column expression from a record sub-selector: ``"css"`` -> its text; ``"css@attr"``
     -> that attribute; ``"@attr"`` / an empty css -> the row element itself."""
     css, sep, attr = spec.partition("@")
-    node: LazyDocument = wq.doc.select(css) if css else wq.doc
+    node: LazyDocument = wq.doc.select(css, optional=True) if css else wq.doc  # a field may be absent on a row
     return node.attr(attr) if sep else node.attr("text")
 
 
@@ -193,7 +193,7 @@ class HtmlTable:
             if override is not None:
                 cols[name] = _html_col(override)
             elif name.lower() in headers:
-                cols[name] = wq.doc.select(f"td:nth-child({headers.index(name.lower()) + 1})").attr("text")
+                cols[name] = wq.doc.select(f"td:nth-child({headers.index(name.lower()) + 1})", optional=True).attr("text")
         return wq.reference(reference.url).resolve().select_all("table tr").extract(
             **(cols or {"text": wq.doc.attr("text")}))
 
