@@ -2,7 +2,7 @@
 
 A Document is pure content: the raw bytes, the sniffed ``kind`` and text ``encoding``, and the
 base ``url`` (only for resolving relative links). It exposes the utilities to find / extract, most
-of them thin front doors onto a sibling module (content / structure / records / index / regex /
+of them thin front doors onto a sibling module (content / structure / records / regex /
 jsonpath / metadata) so this file stays the interface, not the algorithms. It carries NO transport
 facts (status / headers / errors) -- those live on the Snapshot. Parsing is lazy (the lxml tree /
 JSON value is built on first use and cached). A selected node is an :class:`Element`, itself
@@ -12,7 +12,6 @@ readable and nestable. Ordinary methods returning ordinary values -- laziness is
 from __future__ import annotations
 
 import json as _json
-from typing import Literal
 from urllib.parse import urljoin
 
 from lxml import etree, html
@@ -20,7 +19,6 @@ from lxml import etree, html
 from . import content as _content
 from . import regex as _regex_mod
 from . import structure as _structure
-from .index import IndexedElement, index_elements
 from .jsonpath import JSON, dig, leaves
 from .jsonpath import skeleton as _json_skeleton
 from .metadata import Metadata, metadata
@@ -228,17 +226,6 @@ class Document:
         """The dominant repeating regions (the dataset) with a suggested ``select_all`` selector --
         the mechanical answer to "where is the list?" (see :mod:`.records`)."""
         return find_records(self, min_items=min_items, top_k=top_k)
-
-    def index(
-        self,
-        *,
-        kind: "Literal['interactive', 'content']" = "interactive",
-        limit: int = 200,
-    ) -> "list[IndexedElement]":
-        """The numbered element table -- controls to drive (``interactive``) or text leaves to
-        extract (``content``), each with a durable class-free selector (see :mod:`.index`).
-        """
-        return index_elements(self, kind=kind, limit=limit)
 
     # -- JSON navigation (JSON documents; see :mod:`.jsonpath`) --
     # These are SAFE on a non-JSON document (they no-op), mirroring how the markup reads are safe

@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel
 
 from .classes import semantic_classes
-from .index import interactive as _interactive
 from .nodes import Node
 from .nodes import classes as _all_classes
 from .nodes import tag as _tag
@@ -23,6 +22,43 @@ from .records import scan as _scan
 
 if TYPE_CHECKING:
     from .document import Document
+
+# -- interactivity: is this element a control? (static/semantic tier) --
+_CLICK_TAGS = frozenset({"button", "summary", "label", "option"})
+_FIELD_TAGS = frozenset({"input", "select", "textarea"})
+_CLICK_ROLES = frozenset(
+    {
+        "button",
+        "link",
+        "tab",
+        "menuitem",
+        "menuitemcheckbox",
+        "menuitemradio",
+        "checkbox",
+        "radio",
+        "switch",
+        "option",
+        "combobox",
+        "slider",
+        "spinbutton",
+    }
+)
+
+
+def _interactive(el: Node) -> bool:
+    """Whether ``el`` is a control by any static signal -- native tag, ARIA role, ``onclick`` /
+    ``tabindex`` / ``contenteditable``."""
+    tag, get = _tag(el), el.get
+    return bool(
+        (tag == "a" and get("href") is not None)
+        or tag in _CLICK_TAGS
+        or tag in _FIELD_TAGS
+        or (get("role") or "").strip().lower() in _CLICK_ROLES
+        or get("onclick") is not None
+        or get("tabindex") is not None
+        or get("contenteditable") is not None
+    )
+
 
 #: subtrees that are noise in a structural outline -- skipped whole.
 _SKIP = frozenset({"script", "style", "noscript", "template", "svg", "path", "link", "meta"})
