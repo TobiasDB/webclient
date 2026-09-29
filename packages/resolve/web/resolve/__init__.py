@@ -27,7 +27,7 @@ from .base import Profile, Resolver, Slot, Tier
 from .document import document
 from .entry import ResolveSession, resolve
 from .flags import Flag, flags
-from .middleware import escalate, rate_limit, retry, rotate
+from .middleware import escalate, rate_limit, retry, rotate, transport_remedy
 from .models import ResolveEvent
 from .paginate import (
     Until,
@@ -88,6 +88,7 @@ __all__ = [
     "rate_limit",
     "escalate",
     "rotate",
+    "transport_remedy",
     "ladder",
     "paginate_links",
     "paginate_param",

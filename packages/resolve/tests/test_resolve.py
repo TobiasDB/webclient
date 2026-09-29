@@ -284,6 +284,70 @@ def test_anti_bot_tiers_route_to_distinct_remedies() -> None:
     assert by3["captcha"].remedy == "solve:captcha"
 
 
+def _page(status: int, body: bytes) -> Snapshot:
+    return Snapshot(
+        request=Request(url="https://x/"),
+        url="https://x/",
+        status=status,
+        headers={"content-type": "text/html"},
+        content=body,
+    )
+
+
+def test_transport_remedy_maps_flags_to_the_next_move() -> None:
+    from web.resolve import transport_remedy
+
+    # a JS challenge -> climb browser realness; a bare 403 deny -> a residential IP; a 429 -> back off
+    assert (
+        transport_remedy(
+            _page(403, b"<html><body>Just a moment... Checking your browser</body></html>")
+        )
+        == "escalate:realness"
+    )
+    assert (
+        transport_remedy(_page(403, b"<html><body>Access is denied.</body></html>"))
+        == "escalate:proxy"
+    )
+    assert (
+        transport_remedy(_page(429, b"<html><body>Too many requests, slow down.</body></html>"))
+        == "retry:backoff"
+    )
+    # a clean, server-rendered page has no transport remedy
+    clean = b"<html><body><p>A normal article with plenty of real readable content and no anti-bot wall on it.</p></body></html>"
+    assert transport_remedy(_page(200, clean)) is None
+
+
+def test_escalate_climbs_on_a_challenge_but_not_a_rate_limit() -> None:
+    from web.resolve.middleware import escalate
+
+    class _Tier:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch(self, request: Request) -> Snapshot:
+            self.calls += 1
+            return _page(200, b"<html><body>the real content, plenty of it now</body></html>")
+
+        async def aclose(self) -> None:
+            pass
+
+    async def run(base: Snapshot) -> "tuple[int, int]":
+        tier = _Tier()
+
+        async def nxt(_request: Request) -> Snapshot:
+            return base
+
+        out = await escalate((tier,))(Request(url="https://x/"), nxt)
+        return tier.calls, out.status
+
+    # a JS-challenge base -> the ladder climbs to the stronger tier and clears it
+    calls, status = _run(run(_page(403, b"<html>Just a moment... Checking your browser</html>")))
+    assert calls == 1 and status == 200
+    # a 429 rate-limit base -> back off (retry's job), the ladder does NOT climb
+    calls2, _ = _run(run(_page(429, b"<html>Too many requests</html>")))
+    assert calls2 == 0
+
+
 def test_paginate_cursor_concatenates_json_pages(httpserver: HTTPServer) -> None:
     import json
 

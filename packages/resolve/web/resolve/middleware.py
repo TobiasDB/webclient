@@ -26,8 +26,8 @@ from web.fetch import (
 from web.fetch import fleet as _default_fleet
 
 from .document import document
+from .flags import flags
 from .models import ResolveEvent
-from .signals import js_challenge, spa
 
 _RETRIABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 #: TRANSIENT transport errors worth retrying the same request for. NOT here: tls (cert),
@@ -88,36 +88,67 @@ def rate_limit(min_interval: float) -> Middleware:
     return mw
 
 
-def _blocked(snap: Snapshot) -> bool:
-    """The default 'this tier was insufficient, climb the REALNESS ladder' rule (ANTI-BOT.md §5).
-    Climb only when a MORE REAL transport can plausibly clear it: a hard 401/403 deny, or a content
-    verdict a real browser answers -- a JS/PoW challenge shell or a JS-gated (SPA) page a weak tier
-    sees as an empty holder. A 429 (back off) and a 5xx / transport error (retry -- transient) are
-    NOT climbs: a realer browser does not fix a throughput limit or a flaky server, so ``retry``
-    handles them. A visible CAPTCHA is likewise not cleared by a tier climb, so it does not fire here.
-    (The content check runs even on a non-2xx, because a 403/503 often CARRIES the challenge JS.)"""
-    if snap.status in (401, 403):
-        return True
+#: remedies (from the flag layer) that a STRONGER TRANSPORT tier can satisfy -- the escalation
+#: ladder climbs on these and stops on everything else. This is the flag -> next-profile decision,
+#: and it lives in RESOLVE by design: fetch only runs the profile it is handed and has no concept of
+#: flags. Per ANTI-BOT.md §4-§5, a JS/fingerprint verdict is answered by climbing browser REALNESS
+#: (escalate:browser / escalate:realness) and an IP/ASN verdict by a residential IP (escalate:proxy);
+#: a 429 (retry:backoff), a CAPTCHA (a solver, not a tier), and a 5xx / transport error (retry --
+#: transient) are NOT climbs, so they are deliberately absent here.
+_CLIMB_REMEDIES = frozenset({"escalate:browser", "escalate:realness", "escalate:proxy"})
+
+
+def transport_remedy(snap: Snapshot) -> "str | None":
+    """The transport-level remedy the escalation ladder should apply next, read from the page's
+    FLAGS (resolve's conclusion surface): the highest-confidence flag whose remedy a different
+    transport can act on -- climb browser realness (``escalate:browser`` / ``escalate:realness``
+    from a JS-gated shell or a JS/PoW challenge), swap to a residential IP (``escalate:proxy`` from
+    an IP/ASN deny), or back off (``retry:backoff`` from a 429). ``None`` when the page is clean or
+    the remedy is not transport-shaped (a CAPTCHA solver, a login, a consent dismiss)."""
     doc = document(snap)
-    return spa(doc) is not None or js_challenge(doc) is not None
+    for flag in flags(doc, snap):  # highest-confidence first
+        if flag.remedy in _CLIMB_REMEDIES:
+            # a browser render only helps a JS-GATED page (a `spa` shell the browser will populate),
+            # not a merely thin/short one: a small but complete record list reads as `empty` yet a
+            # browser adds nothing, so climbing there just launches a browser for no gain. Require the
+            # `spa` signal for the browser rung; the realness/proxy rungs have no such caveat.
+            if flag.remedy == "escalate:browser" and not any(s.name == "spa" for s in flag.signals):
+                continue
+            return flag.remedy
+        if flag.remedy == "retry:backoff":
+            return flag.remedy
+    return None
 
 
 def escalate(
     tiers: "Sequence[Fetcher]", *, blocked: "Callable[[Snapshot], bool] | None" = None
 ) -> Middleware:
-    """Walk the escalation LADDER: after the base fetch (via ``next``), if the result looks
-    blocked/insufficient, re-issue the SAME request on the next tier, and so on until one succeeds
-    or the ladder is exhausted. ``tiers`` are the tiers ABOVE the base; each tier just fetches --
-    choosing/ordering them is this policy. (A tier's fetch is a different transport, so it does not
-    re-enter retry/rate_limit; wrap a tier with those if it needs them.)"""
-    check = blocked or _blocked
+    """Walk the escalation LADDER: after the base fetch (via ``next``), decide from the RESULT which
+    stronger tier to try next, re-issue the SAME request there, and so on until one succeeds or the
+    ladder is exhausted. ``tiers`` are the tiers ABOVE the base; each tier just fetches -- resolve
+    chooses/orders them (fetch is flag-unaware). The climb decision is REASON-AWARE by default
+    (:func:`transport_remedy`): it climbs only for a remedy a stronger transport satisfies and stops
+    on a rate-limit / CAPTCHA / transient error. Passing an explicit ``blocked`` predicate (e.g. from
+    an ``EscalationPolicy(on=...)`` status list) restores the plain climb-while-true behaviour. (A
+    tier's fetch is a different transport, so it does not re-enter retry/rate_limit; wrap a tier with
+    those if it needs them.)"""
 
     async def mw(request: Request, nxt: Handler) -> Snapshot:
         snap = await nxt(request)
         for i, tier in enumerate(tiers):
-            if not check(snap):
-                break
-            emit(ResolveEvent(phase="escalate", url=request.url, detail={"tier": i + 1}))
+            if blocked is not None:  # explicit predicate (status/error tokens) -- plain climb
+                if not blocked(snap):
+                    break
+                remedy: "str | None" = None
+            else:  # default: the flag -> next-profile decision
+                remedy = transport_remedy(snap)
+                if remedy not in _CLIMB_REMEDIES:
+                    break
+            emit(
+                ResolveEvent(
+                    phase="escalate", url=request.url, detail={"tier": i + 1, "remedy": remedy}
+                )
+            )
             snap = await tier.fetch(request)
         return snap
 
@@ -140,4 +171,4 @@ def rotate(pool: ClientPool, fleet: "tuple[Fingerprint, ...] | None" = None) -> 
     return mw
 
 
-__all__ = ["retry", "rate_limit", "escalate", "rotate"]
+__all__ = ["retry", "rate_limit", "escalate", "rotate", "transport_remedy"]
