@@ -57,13 +57,10 @@ def llm_driver(llm: Llm, goal: str, *, skeleton_lines: int = 200) -> Driver:
     marked skeleton (not raw HTML) plus the detected record selectors -- cheaper and far more
     selector-authorable than truncated source."""
 
-    async def driver(
-        doc: Document, rows: "list[dict[str, str | None]]"
-    ) -> "Selection | Done":
+    async def driver(doc: Document, rows: "list[dict[str, str | None]]") -> "Selection | Done":
         records = (
             "; ".join(
-                f'select_all("{r.item_selector}") ({r.count} items)'
-                for r in doc.records(top_k=3)
+                f'select_all("{r.item_selector}") ({r.count} items)' for r in doc.records(top_k=3)
             )
             or "(none detected)"
         )

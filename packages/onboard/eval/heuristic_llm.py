@@ -20,9 +20,7 @@ import re
 
 _NOISE = frozenset({"th", "option", "meta", "link", "script"})
 _LINKISH = frozenset({"url", "link", "href", "detail", "source", "page", "profile"})
-_DATEISH = frozenset(
-    {"date", "published", "updated", "when", "time", "timestamp", "age"}
-)
+_DATEISH = frozenset({"date", "published", "updated", "when", "time", "timestamp", "age"})
 
 _MARK = re.compile(r'RECORD LIST · (\d+) · select_all\("([^"]+)"\)')
 _SUBMARK = re.compile(r'select_all\("([^"]+)"\)')
@@ -101,11 +99,7 @@ def _record_selector(skeleton: str) -> str:
 
 
 def _lines(skeleton: str) -> list[_Line]:
-    return [
-        pl
-        for pl in (_parse_line(raw) for raw in skeleton.splitlines())
-        if pl is not None
-    ]
+    return [pl for pl in (_parse_line(raw) for raw in skeleton.splitlines()) if pl is not None]
 
 
 def _record_lines(all_lines: list[_Line], selector: str) -> list[_Line]:
@@ -163,9 +157,7 @@ def _column(field: str, line: "_Line") -> str:
 
 def _html_query(record: str, fields: list[str], all_lines: list[_Line]) -> str:
     kids = _record_lines(all_lines, record)
-    is_table = (
-        record.split()[-1] == "tr"
-    )  # a plain header-column table (not tr.someclass)
+    is_table = record.split()[-1] == "tr"  # a plain header-column table (not tr.someclass)
     headers = [ln.text for ln in all_lines if ln.tag == "th"]
     cols: list[str] = []
     for i, f in enumerate(fields):
@@ -174,16 +166,10 @@ def _html_query(record: str, fields: list[str], all_lines: list[_Line]) -> str:
             cols.append(_column(f, line))
         elif is_table:  # a header-column table: map the field to its column
             col = next(
-                (
-                    h + 1
-                    for h, label in enumerate(headers)
-                    if f.lower() in label.lower()
-                ),
+                (h + 1 for h, label in enumerate(headers) if f.lower() in label.lower()),
                 i + 1,
             )
-            cols.append(
-                f'{f}=wq.doc.select("td:nth-of-type({col})", optional=True).attr("text")'
-            )
+            cols.append(f'{f}=wq.doc.select("td:nth-of-type({col})", optional=True).attr("text")')
     if not cols:
         cols.append('text=wq.doc.attr("text")')
     root = "tbody tr" if is_table else record
@@ -265,9 +251,7 @@ class HeuristicLlm:
             self.reply = _json_query(fields, path, keys) if path else "wq.doc"
             return self.reply
         record = _record_selector(skeleton)
-        self.reply = (
-            _html_query(record, fields, _lines(skeleton)) if record else "wq.doc"
-        )
+        self.reply = _html_query(record, fields, _lines(skeleton)) if record else "wq.doc"
         return self.reply
 
 

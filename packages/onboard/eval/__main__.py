@@ -35,19 +35,14 @@ def _table(results: list[Result]) -> str:
 
 def _tally(results: list[Result], attr: str) -> str:
     counts = {
-        g: sum(1 for r in results if getattr(r, attr) == g)
-        for g in ("PASS", "PARTIAL", "FAIL")
+        g: sum(1 for r in results if getattr(r, attr) == g) for g in ("PASS", "PARTIAL", "FAIL")
     }
-    return (
-        f"PASS {counts['PASS']} · PARTIAL {counts['PARTIAL']} · FAIL {counts['FAIL']}"
-    )
+    return f"PASS {counts['PASS']} · PARTIAL {counts['PARTIAL']} · FAIL {counts['FAIL']}"
 
 
 def _report(results: list[Result], *, key: bool) -> str:
     engine = (
-        "AnthropicLlm (real model)"
-        if key
-        else "HeuristicLlm (deterministic stand-in, no API key)"
+        "AnthropicLlm (real model)" if key else "HeuristicLlm (deterministic stand-in, no API key)"
     )
     lines = [
         "# Onboard eval -- Locate + Author against the webclient lab",

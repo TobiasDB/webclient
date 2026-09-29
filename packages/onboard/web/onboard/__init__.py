@@ -32,6 +32,7 @@ from .llm_driver import llm_driver
 from .locate import Search, data_api_endpoints, locate
 from .models import Brief, DatasetBrief, LocateBrief, Reference
 from .patterns import PATTERNS_GUIDE, author_prompt
+from .search import DdgSearch
 
 
 class Onboarded(BaseModel):
@@ -53,10 +54,7 @@ async def onboard(
 ) -> Onboarded:
     """Crawl the seeds, author a row extraction (agent + llm) on the first page that yields data,
     then apply it across every crawled page and aggregate the rows."""
-    docs = [
-        doc
-        async for doc in Crawler(resolver).crawl(Goal(start=seeds, max_pages=max_pages))
-    ]
+    docs = [doc async for doc in Crawler(resolver).crawl(Goal(start=seeds, max_pages=max_pages))]
 
     selection: "Selection | None" = None
     for doc in docs:  # author once, on the first page that produces rows
@@ -68,11 +66,7 @@ async def onboard(
         return Onboarded(pages=len(docs))
 
     rows: list[dict[str, "str | None"]] = []
-    for (
-        doc
-    ) in (
-        docs
-    ):  # apply the one Selection everywhere; non-matching pages contribute nothing
+    for doc in docs:  # apply the one Selection everywhere; non-matching pages contribute nothing
         for row in extract(doc, selection):
             rows.append({**row, "_source": doc.url})
     return Onboarded(rows=rows, selection=selection, pages=len(docs))
@@ -117,6 +111,7 @@ __all__ = [
     "DatasetBrief",
     "AuthoredQuery",
     "Search",
+    "DdgSearch",
     "data_api_endpoints",
     # the natural-language patterns knowledge + the safe query compiler
     "PATTERNS_GUIDE",

@@ -21,9 +21,7 @@ from web.dsl import LazyCollection, wq
 from .models import DatasetBrief, Reference
 
 #: a query modifier sees the recorded collection plus the reference/brief context.
-_Modify = Callable[
-    [LazyCollection[object], Reference, DatasetBrief], LazyCollection[object]
-]
+_Modify = Callable[[LazyCollection[object], Reference, DatasetBrief], LazyCollection[object]]
 
 
 @dataclass(frozen=True)

@@ -114,9 +114,7 @@ def data_api_endpoints(doc: Document) -> list[str]:
         if href:
             declared.append(href)
     linky = [
-        u
-        for u in doc.links()
-        if "/api/" in u.lower() or u.lower().split("?")[0].endswith(".json")
+        u for u in doc.links() if "/api/" in u.lower() or u.lower().split("?")[0].endswith(".json")
     ]
     for u in [*declared, *linky]:
         if urlparse(u).hostname == host and u not in out:
@@ -172,17 +170,11 @@ async def _prefer_api(page: Document, ref: Reference, resolver: Resolver) -> Ref
     for url in data_api_endpoints(page):
         api = await resolver.resolve(Request(url=url))
         if _consistent(page, api):
-            return ref.model_copy(
-                update={"url": url, "kind": api.kind, "api_endpoint": url}
-            )
-    if (
-        ref.needs_browser
-    ):  # a JS-gated page: mine the XHR/fetch stream for the API that feeds it
+            return ref.model_copy(update={"url": url, "kind": api.kind, "api_endpoint": url})
+    if ref.needs_browser:  # a JS-gated page: mine the XHR/fetch stream for the API that feeds it
         for url, api in await _observed(page, resolver):
             if _consistent(page, api):
-                return ref.model_copy(
-                    update={"url": url, "kind": api.kind, "api_endpoint": url}
-                )
+                return ref.model_copy(update={"url": url, "kind": api.kind, "api_endpoint": url})
     return ref
 
 
@@ -211,27 +203,18 @@ async def locate(
     score, then the XHR/data-API preference is applied."""
     lb = LocateBrief(goal=brief) if isinstance(brief, str) else brief
     seeds = list(lb.seeds)
-    if (
-        lb.start_url and lb.start_url not in seeds
-    ):  # a known source to seed the crawl from
+    if lb.start_url and lb.start_url not in seeds:  # a known source to seed the crawl from
         seeds.append(lb.start_url)
     if not lb.candidates and not seeds:
         if search is None:
             raise ValueError("locate needs seeds, candidates, or a search callable")
-        query = (
-            f"{lb.goal} {lb.search}".strip() if lb.search else lb.goal
-        )  # brief search qualifier
+        query = f"{lb.goal} {lb.search}".strip() if lb.search else lb.goal  # brief search qualifier
         seeds = await search(query)
 
     if lb.candidates:
         docs = [await resolver.resolve(Request(url=u)) for u in lb.candidates]
     else:
-        docs = [
-            d
-            async for d in Crawler(resolver).crawl(
-                Goal(start=seeds, max_pages=lb.max_pages)
-            )
-        ]
+        docs = [d async for d in Crawler(resolver).crawl(Goal(start=seeds, max_pages=lb.max_pages))]
 
     best: "Reference | None" = None
     best_page: "Document | None" = None

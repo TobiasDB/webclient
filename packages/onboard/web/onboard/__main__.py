@@ -23,15 +23,19 @@ import argparse
 import asyncio
 import json
 import sys
+from importlib.resources import files
+from pathlib import Path
 from typing import Sequence
 
 from web.fetch import Profile as FetchProfile
+from web.fetch import WebException
 from web.resolve import EscalationPolicy, Resolver, profiles
 
 from .author import build_query
 from .llm import AnthropicLlm, Pricing, RateLimit
 from .locate import locate
 from .models import Brief, Reference
+from .search import DdgSearch
 
 
 def _err(*lines: str) -> None:
@@ -67,10 +71,33 @@ def _resolver(
             )
             for t in profile.escalation.tiers
         )
-        profile = profile.with_(
-            escalation=EscalationPolicy(tiers=tiers, on=profile.escalation.on)
-        )
+        profile = profile.with_(escalation=EscalationPolicy(tiers=tiers, on=profile.escalation.on))
     return Resolver(profile=profile)
+
+
+def _packaged_briefs() -> "list[str]":
+    """The names of the briefs bundled with the package (``web/onboard/briefs/*.md``)."""
+    try:
+        root = files("web.onboard").joinpath("briefs")
+        return sorted(p.name[:-3] for p in root.iterdir() if p.name.endswith(".md"))
+    except Exception:
+        return []
+
+
+def _load_brief(arg: str) -> Brief:
+    """Resolve ``--brief``: a path to a markdown file, else a packaged brief by name
+    (``web/onboard/briefs/<name>.md``; ``-``/``_`` interchangeable). See :func:`_packaged_briefs`.
+    """
+    if Path(arg).is_file():
+        return Brief.load(arg)
+    for name in {arg, arg.replace("-", "_"), arg.replace("_", "-")}:
+        res = files("web.onboard").joinpath(f"briefs/{name}.md")
+        if res.is_file():
+            return Brief.from_markdown(res.read_text(encoding="utf-8"))
+    raise SystemExit(
+        f"no brief {arg!r}: not a file, and no packaged briefs/{arg}.md. "
+        f"Available packaged briefs: {', '.join(_packaged_briefs()) or '(none)'}"
+    )
 
 
 def _pairs(items: "Sequence[str] | None") -> "dict[str, str]":
@@ -124,13 +151,10 @@ def _explain_reference(ref: Reference) -> None:
     elif ref.page_url and ref.page_url != ref.url:
         _err(f"  page:      {ref.page_url}")
     _err(
-        f"  kind:      {ref.kind}"
-        + ("   (needs a browser to render)" if ref.needs_browser else "")
+        f"  kind:      {ref.kind}" + ("   (needs a browser to render)" if ref.needs_browser else "")
     )
     if ref.record_selector:
-        _err(
-            f"  records:   {ref.record_selector}   (the repeating-row selector to extract)"
-        )
+        _err(f"  records:   {ref.record_selector}   (the repeating-row selector to extract)")
     if ref.pagination:
         _err(f"  pager:     {ref.pagination}   (the pipeline follows it)")
     if ref.flags:
@@ -148,7 +172,7 @@ def _locate_brief(args: argparse.Namespace) -> Brief:
     """The FIND-slice Brief: a ``--brief`` markdown file (frontmatter) as the base, with any
     explicitly-given CLI option overriding it (so a file supplies defaults, flags tune them).
     """
-    base = Brief.load(args.brief) if args.brief else Brief()
+    base = _load_brief(args.brief) if args.brief else Brief()
     updates: dict[str, object] = {}
     if args.goal:
         updates["goal"] = args.goal
@@ -174,12 +198,20 @@ def _locate_brief(args: argparse.Namespace) -> Brief:
 async def _locate(args: argparse.Namespace) -> int:
     brief = _locate_brief(args)
     resolver = _resolver(args.profile, args.proxy, args.browser_path)
+    # a default web-search backend (ddgs): only used when the brief gives no seeds/candidates, so
+    # `--search "BBC latest news"` (or a company in --goal) turns into seed URLs.
     try:
-        reference = await locate(brief, resolver=resolver)
+        reference = await locate(brief, resolver=resolver, search=DdgSearch(k=args.search_k))
+    except WebException as exc:
+        _err(f"locate failed: {exc}")
+        return 1
     finally:
         await resolver.aclose()
     if reference is None:
-        _err("no source holds the dataset (nothing scored above zero).")
+        _err(
+            "no source holds the dataset (nothing scored above zero); "
+            "try --seed/--candidate, or a --search term."
+        )
         return 1
     _explain_reference(reference)  # reasoning -> stderr
     print(
@@ -227,11 +259,7 @@ def _explain_query(
             + "   (* = optional)"
         )
     if reference.flags:
-        _err(
-            "  dataset:   "
-            + ", ".join(reference.flags)
-            + "   (flags carried from Locate)"
-        )
+        _err("  dataset:   " + ", ".join(reference.flags) + "   (flags carried from Locate)")
     _err(f"  query:     {describe}   ← the wq chain")
     for note in notes:
         _err(f"  note:      {note}   (advisory: the static query cannot express this)")
@@ -241,7 +269,7 @@ def _author_brief(args: argparse.Namespace) -> Brief:
     """The SHAPE-slice Brief: a ``--brief`` markdown file (frontmatter, incl. its ``schema:`` ->
     fields + descriptions) as the base, with any explicitly-given CLI option overriding it.
     """
-    base = Brief.load(args.brief) if args.brief else Brief()
+    base = _load_brief(args.brief) if args.brief else Brief()
     updates: dict[str, object] = {}
     if args.goal:
         updates["goal"] = args.goal
@@ -266,12 +294,8 @@ async def _author(args: argparse.Namespace) -> int:
     resolver = _resolver(args.profile, args.proxy, args.browser_path)
     llm = _build_llm(args)
     try:
-        query, engine, notes = await build_query(
-            reference, brief, resolver=resolver, llm=llm
-        )
-        _explain_query(
-            reference, brief, engine, query.describe(), notes
-        )  # reasoning -> stderr
+        query, engine, notes = await build_query(reference, brief, resolver=resolver, llm=llm)
+        _explain_query(reference, brief, engine, query.describe(), notes)  # reasoning -> stderr
         print(query.to_blob())  # the serialised query -> stdout
         if getattr(llm, "calls", 0):  # metered spend (a real, priced client) -> stderr
             u = llm.usage
@@ -320,8 +344,9 @@ def _parser() -> argparse.ArgumentParser:
     loc.add_argument(
         "--brief",
         default=None,
-        metavar="FILE",
-        help="a brief markdown file (YAML frontmatter) as the base; options override it",
+        metavar="FILE|NAME",
+        help="a brief markdown file (YAML frontmatter), or a packaged name "
+        "(news/products/people), as the base; options override it",
     )
     loc.add_argument("--goal", default=None, help="the dataset to find (free text)")
     loc.add_argument(
@@ -338,11 +363,15 @@ def _parser() -> argparse.ArgumentParser:
         metavar="URL",
         help="evaluate exactly this URL, skip crawling (repeatable)",
     )
+    loc.add_argument("--start-url", default=None, help="one known source to seed the crawl from")
     loc.add_argument(
-        "--start-url", default=None, help="one known source to seed the crawl from"
+        "--search",
+        default=None,
+        help="a web-search query/qualifier (e.g. a company) -- searched (with the goal) via ddgs "
+        "to seed the crawl when no --seed/--candidate is given",
     )
     loc.add_argument(
-        "--search", default=None, help="a web-search qualifier (needs a search backend)"
+        "--search-k", type=int, default=6, metavar="N", help="how many search results to seed from"
     )
     loc.add_argument(
         "--look",
@@ -376,8 +405,9 @@ def _parser() -> argparse.ArgumentParser:
     aut.add_argument(
         "--brief",
         default=None,
-        metavar="FILE",
-        help="a brief markdown file (YAML frontmatter, incl. schema:) as the base; options override it",
+        metavar="FILE|NAME",
+        help="a brief markdown file (YAML frontmatter, incl. schema:), or a packaged name "
+        "(news/products/people), as the base; options override it",
     )
     aut.add_argument("url", nargs="?", help="the source URL (or use --ref)")
     aut.add_argument(
@@ -415,9 +445,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="a field that may be absent (repeatable)",
     )
-    aut.add_argument(
-        "--hints", default=None, help="structural guidance for the query author"
-    )
+    aut.add_argument("--hints", default=None, help="structural guidance for the query author")
     aut.add_argument(
         "--download",
         action="store_true",

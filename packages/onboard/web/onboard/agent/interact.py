@@ -37,9 +37,7 @@ class Type(BaseModel):
 
 
 class Scroll(BaseModel):
-    selector: "str | None" = (
-        None  # None -> scroll to the page bottom (trigger lazy load)
-    )
+    selector: "str | None" = None  # None -> scroll to the page bottom (trigger lazy load)
 
 
 class WaitFor(BaseModel):
@@ -65,9 +63,7 @@ class AgentRun(BaseModel):
 
 async def _observe(session: BrowserSession) -> Observation:
     snap = await session.snapshot()
-    doc = parse(
-        snap.content, content_type=snap.headers.get("content-type"), url=snap.url
-    )
+    doc = parse(snap.content, content_type=snap.headers.get("content-type"), url=snap.url)
     return Observation(url=snap.url, skeleton=doc.skeleton())
 
 
@@ -85,9 +81,7 @@ async def _apply(session: BrowserSession, action: "Action") -> None:
     # Done never reaches apply -- done() catches it first
 
 
-async def drive(
-    session: BrowserSession, policy: Policy, *, max_rounds: int = 20
-) -> AgentRun:
+async def drive(session: BrowserSession, policy: Policy, *, max_rounds: int = 20) -> AgentRun:
     """Drive ``session`` with ``policy`` until it returns ``Done`` (or a bound / an :class:`Ask`).
     The session owns its page; this only acts on it."""
     loop: "BoundedLoop[BrowserSession, Observation, Action]" = BoundedLoop(

@@ -17,8 +17,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from web.onboard import DatasetBrief, LocateBrief, Reference, build_query, locate
 from web.resolve import Resolver
+
+from web.onboard import DatasetBrief, LocateBrief, Reference, build_query, locate
 
 from .heuristic_llm import HeuristicLlm
 
@@ -83,9 +84,7 @@ CASES: list[Case] = [
         5,
         ("title", "Senior Engineer"),
     ),
-    Case(
-        "frozen", "static list", ["name"], "article.item", "html", 3, ("name", "Row A")
-    ),
+    Case("frozen", "static list", ["name"], "article.item", "html", 3, ("name", "Row A")),
     Case("large", "static list", ["k", "v"], "li.item", "html", 6000, ("v", "value 0")),
     Case(
         "catalog",
@@ -294,16 +293,12 @@ def _grade_locate(case: Case, ref: "Reference | None") -> str:
     return "PARTIAL" if got else "FAIL"
 
 
-def _grade_author(
-    case: Case, rows: "list[dict[str, object]] | None"
-) -> "tuple[str, str]":
+def _grade_author(case: Case, rows: "list[dict[str, object]] | None") -> "tuple[str, str]":
     if not isinstance(rows, list):
         return "FAIL", "no rows (query did not produce a list)"
     key, want = case.probe
     hit = any(want.lower() in str(r.get(key, "")).lower() for r in rows)
-    enough = (
-        len(rows) >= case.rows or case.paginated
-    )  # a paginated list authors ONE page
+    enough = len(rows) >= case.rows or case.paginated  # a paginated list authors ONE page
     if hit and enough:
         return "PASS", f"{len(rows)} rows, probe {key}~{want!r} found"
     if hit:
@@ -336,9 +331,7 @@ async def run_case(case: Case, base: str, resolver: Resolver) -> Result:
         )
     brief = DatasetBrief(goal=case.name, fields=case.fields)
     try:
-        query, engine, _notes = await build_query(
-            ref, brief, resolver=resolver, llm=llm
-        )
+        query, engine, _notes = await build_query(ref, brief, resolver=resolver, llm=llm)
         rows = await query.acollect(resolver=resolver)
     except Exception as exc:  # a genuine author/run failure is a FAIL, not a crash
         return Result(

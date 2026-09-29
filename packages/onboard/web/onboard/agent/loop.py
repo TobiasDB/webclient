@@ -129,12 +129,8 @@ class BoundedLoop(Generic[S, O, D]):
         while True:
             if self.round >= self.max_rounds:
                 return self._verdict("budget")
-            observation: O = await _resolve(
-                self._observe(self._state)
-            )  # sync or async observe
-            decision: "D | Ask" = await _resolve(
-                self._decide(observation)
-            )  # sync or async driver
+            observation: O = await _resolve(self._observe(self._state))  # sync or async observe
+            decision: "D | Ask" = await _resolve(self._decide(observation))  # sync or async driver
             if isinstance(decision, Ask):
                 self._waiting = True
                 return self._verdict("waiting", ask=decision)
@@ -162,9 +158,7 @@ class BoundedLoop(Generic[S, O, D]):
                 return self._verdict("stalled")
         return None
 
-    def _verdict(
-        self, reason: Reason, *, error: str = "", ask: "Ask | None" = None
-    ) -> Verdict:
+    def _verdict(self, reason: Reason, *, error: str = "", ask: "Ask | None" = None) -> Verdict:
         return Verdict(reason=reason, rounds=self.round, error=error, ask=ask)
 
 

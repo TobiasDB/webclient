@@ -72,15 +72,11 @@ async def build_query(
     if brief.download and reference.kind in ("html", "xml"):
         return _file_links_query(reference.url), "file_links", []
     sample = await resolver.resolve(reference.url)
-    if (
-        sample.kind not in _STRUCTURED
-    ):  # a PDF / spreadsheet / blob IS the dataset -- fetch it
+    if sample.kind not in _STRUCTURED:  # a PDF / spreadsheet / blob IS the dataset -- fetch it
         return cast(Query, wq.reference(reference.url).resolve()), "file_download", []
     prompt = author_prompt(brief, _skeleton(sample), flags(sample), kind=sample.kind)
     query = reroot(parse_query(await llm.complete(prompt)), reference.url)
-    rows, notes = apply_behaviours(
-        cast(LazyCollection[object], query), reference, brief
-    )
+    rows, notes = apply_behaviours(cast(LazyCollection[object], query), reference, brief)
     return cast(Query, rows), "llm", notes
 
 

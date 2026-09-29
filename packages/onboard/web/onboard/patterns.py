@@ -22,9 +22,7 @@ from web.resolve import Flag
 from .models import DatasetBrief
 
 #: the query-writing guide (markdown + worked examples), rendered into every author prompt.
-PATTERNS_GUIDE: str = (
-    files("web.onboard").joinpath("patterns.md").read_text(encoding="utf-8")
-)
+PATTERNS_GUIDE: str = files("web.onboard").joinpath("patterns.md").read_text(encoding="utf-8")
 
 
 def _flags_line(flags: "list[Flag]") -> str:
@@ -39,9 +37,8 @@ def _flags_line(flags: "list[Flag]") -> str:
         f"{', '.join(s.name for s in f.signals) or 'n/a'})"
         for f in present
     ]
-    return (
-        "PAGE SIGNALS (hardcoded detections about this page -- account for them):\n"
-        + "\n".join(lines)
+    return "PAGE SIGNALS (hardcoded detections about this page -- account for them):\n" + "\n".join(
+        lines
     )
 
 
@@ -62,9 +59,7 @@ def _fields_line(brief: DatasetBrief) -> str:
     return "Fields (the columns each record should carry): " + "; ".join(parts)
 
 
-def author_prompt(
-    brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, kind: str
-) -> str:
+def author_prompt(brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, kind: str) -> str:
     """The prompt that asks the model to write the extraction query: the patterns guide, the ask
     (goal + fields), the page's hardcoded signals/flags, and the page skeleton. ``kind`` is the
     document kind (``json`` steers the model to the dotted-path form)."""

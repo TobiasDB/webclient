@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 
-from web.onboard.agent import Ask, Author, BoundedLoop, Done, Selection
 from web.parse import parse
+
+from web.onboard.agent import Ask, Author, BoundedLoop, Done, Selection
 
 
 def _run(coro):
@@ -69,9 +70,7 @@ def test_author_refines_then_done() -> None:
 
 def test_author_asks_then_resumes_with_a_human_selection() -> None:
     def driver(doc, rows):  # type: ignore[no-untyped-def]
-        return Ask(
-            reason="which selector?", options=[".row"]
-        )  # always defers to a human
+        return Ask(reason="which selector?", options=[".row"])  # always defers to a human
 
     author = Author(_PAGE, driver)
     first = _run(author.run())
@@ -84,6 +83,7 @@ def test_author_asks_then_resumes_with_a_human_selection() -> None:
 # -- the interaction agent: drive a live page toward a goal --
 from pytest_httpserver import HTTPServer  # noqa: E402
 from web.fetch import BrowserFetcher, Request  # noqa: E402
+
 from web.onboard.agent import Click
 from web.onboard.agent import Done as _Done  # noqa: E402
 from web.onboard.agent import Observation, Type, drive

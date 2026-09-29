@@ -59,12 +59,8 @@ class Brief(BaseModel):
         strings) fills ``fields`` + ``descriptions``; the markdown body is the ``goal`` when no
         ``goal`` / ``description`` key is given."""
         front, body = _parse_frontmatter(text)
-        data: dict[str, object] = {
-            k: v for k, v in front.items() if k in cls.model_fields
-        }
-        if (
-            "description" in front and "goal" not in data
-        ):  # webclient calls the ask `description`
+        data: dict[str, object] = {k: v for k, v in front.items() if k in cls.model_fields}
+        if "description" in front and "goal" not in data:  # webclient calls the ask `description`
             data["goal"] = front["description"]
         data.setdefault("goal", body.strip())
         if "schema" in front:  # a list of `path: desc` items (or bare field names)

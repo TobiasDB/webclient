@@ -15,6 +15,8 @@ from typing import cast
 import pytest
 from pytest_httpserver import HTTPServer
 from web.dsl import Plan
+from web.resolve import Resolver
+
 from web.onboard import (
     Brief,
     DatasetBrief,
@@ -28,7 +30,6 @@ from web.onboard import (
     locate_and_author,
 )
 from web.onboard.__main__ import main
-from web.resolve import Resolver
 
 
 class ScriptedLlm:
@@ -59,16 +60,12 @@ _PEOPLE = (
 
 
 def test_locate_selects_the_record_list_candidate(httpserver: HTTPServer) -> None:
-    httpserver.expect_request("/people").respond_with_data(
-        _PEOPLE, content_type="text/html"
-    )
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
 
     async def go() -> "Reference | None":
         async with Resolver() as r:
             return await locate(
-                LocateBrief(
-                    goal="team members", candidates=[httpserver.url_for("/people")]
-                ),
+                LocateBrief(goal="team members", candidates=[httpserver.url_for("/people")]),
                 resolver=r,
             )
 
@@ -103,18 +100,14 @@ def test_locate_prefers_a_consistent_xhr_data_api(httpserver: HTTPServer) -> Non
     assert ref is not None
     # the XHR rule fired: the located source is the JSON endpoint, not the HTML page
     assert ref.url == httpserver.url_for("/api/products.json")
-    assert ref.kind == "json" and ref.api_endpoint == httpserver.url_for(
-        "/api/products.json"
-    )
+    assert ref.kind == "json" and ref.api_endpoint == httpserver.url_for("/api/products.json")
     assert ref.page_url == httpserver.url_for("/shop")  # provenance kept
 
 
 def test_author_writes_a_working_query_for_a_record_list(
     httpserver: HTTPServer,
 ) -> None:
-    httpserver.expect_request("/people").respond_with_data(
-        _PEOPLE, content_type="text/html"
-    )
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
     ref = Reference(
         url=httpserver.url_for("/people"),
         kind="html",
@@ -142,9 +135,7 @@ def test_author_writes_a_working_query_for_a_record_list(
         {"name": "Cara", "role": "COO"},
     ]
     # the prompt carried the hardcoded flags AND the patterns guide
-    assert (
-        "PAGE SIGNALS" in llm.prompt and "Writing a `wq` extraction query" in llm.prompt
-    )
+    assert "PAGE SIGNALS" in llm.prompt and "Writing a `wq` extraction query" in llm.prompt
 
 
 def test_author_writes_a_working_query_for_a_json_data_api(
@@ -188,9 +179,7 @@ def test_author_writes_a_working_query_for_an_html_table(
         b"<tr><td>Grace</td><td>New York</td></tr></tbody></table></body></html>"
     )
     httpserver.expect_request("/tbl").respond_with_data(table, content_type="text/html")
-    ref = Reference(
-        url=httpserver.url_for("/tbl"), kind="html", record_selector="tbody tr"
-    )
+    ref = Reference(url=httpserver.url_for("/tbl"), kind="html", record_selector="tbody tr")
     llm = ScriptedLlm(
         'wq.doc.select_all("tbody tr").extract('
         'name=wq.doc.select("td:nth-of-type(1)").attr("text"), '
@@ -199,9 +188,7 @@ def test_author_writes_a_working_query_for_an_html_table(
 
     async def go() -> object:
         async with Resolver() as r:
-            q = await author(
-                ref, DatasetBrief(fields=["name", "city"]), resolver=r, llm=llm
-            )
+            q = await author(ref, DatasetBrief(fields=["name", "city"]), resolver=r, llm=llm)
             return await q.acollect(resolver=r)
 
     rows = cast("list[dict[str, object]]", _run(go()))
@@ -210,9 +197,7 @@ def test_author_writes_a_working_query_for_an_html_table(
 
 
 def test_locate_and_author_compose_end_to_end(httpserver: HTTPServer) -> None:
-    httpserver.expect_request("/people").respond_with_data(
-        _PEOPLE, content_type="text/html"
-    )
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
     llm = ScriptedLlm(
         'wq.doc.select_all("li.row").extract('
         'name=wq.doc.select(".name").attr("text"), '
@@ -252,15 +237,11 @@ def test_brief_loads_from_markdown_frontmatter() -> None:
     )
     brief = Brief.from_markdown(text)
     assert (
-        brief.name == "team"
-        and brief.seeds == ["https://acme.com/team"]
-        and brief.max_pages == 12
+        brief.name == "team" and brief.seeds == ["https://acme.com/team"] and brief.max_pages == 12
     )
     assert brief.goal == "Board members and their roles."  # the body is the goal
     assert brief.fields == ["name", "role"]  # schema: -> fields
-    assert brief.descriptions == {
-        "name": "the person's full name"
-    }  # {path: desc} -> descriptions
+    assert brief.descriptions == {"name": "the person's full name"}  # {path: desc} -> descriptions
     assert brief.optional == ["role"]
 
 
@@ -274,17 +255,11 @@ class _ClosableLlm(ScriptedLlm):
 def test_cli_locate_emits_serialised_reference(
     httpserver: HTTPServer, capsys: "pytest.CaptureFixture[str]"
 ) -> None:
-    httpserver.expect_request("/people").respond_with_data(
-        _PEOPLE, content_type="text/html"
-    )
-    rc = main(
-        ["locate", "--goal", "team", "--candidate", httpserver.url_for("/people")]
-    )
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+    rc = main(["locate", "--goal", "team", "--candidate", httpserver.url_for("/people")])
     out = capsys.readouterr()
     assert rc == 0
-    ref = Reference.model_validate_json(
-        out.out.strip()
-    )  # stdout is the serialised Reference
+    ref = Reference.model_validate_json(out.out.strip())  # stdout is the serialised Reference
     assert ref.record_selector == "li.row" and "record_list" in ref.flags
     assert "flags:" in out.err and "records:" in out.err  # reasoning went to stderr
 
@@ -294,16 +269,12 @@ def test_cli_author_emits_blob_and_runs(
     capsys: "pytest.CaptureFixture[str]",
     monkeypatch: "pytest.MonkeyPatch",
 ) -> None:
-    httpserver.expect_request("/people").respond_with_data(
-        _PEOPLE, content_type="text/html"
-    )
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
     reply = (
         'wq.doc.select_all("li.row").extract('
         'name=wq.doc.select(".name").attr("text"), role=wq.doc.select(".role").attr("text"))'
     )
-    monkeypatch.setattr(
-        "web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(reply)
-    )
+    monkeypatch.setattr("web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(reply))
     rc = main(
         [
             "author",
@@ -318,9 +289,7 @@ def test_cli_author_emits_blob_and_runs(
     out = capsys.readouterr()
     assert rc == 0
     Plan.from_blob(out.out.strip())  # stdout is a rebuildable wq blob
-    assert (
-        "query:" in out.err and "rows:" in out.err
-    )  # reasoning + sample went to stderr
+    assert "query:" in out.err and "rows:" in out.err  # reasoning + sample went to stderr
 
 
 def test_cli_locate_pipes_into_author(
@@ -329,23 +298,13 @@ def test_cli_locate_pipes_into_author(
     monkeypatch: "pytest.MonkeyPatch",
 ) -> None:
     # the composition: locate's stdout (a Reference JSON) is exactly what author --ref - consumes.
-    httpserver.expect_request("/people").respond_with_data(
-        _PEOPLE, content_type="text/html"
-    )
-    rc = main(
-        ["locate", "--goal", "team", "--candidate", httpserver.url_for("/people")]
-    )
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+    rc = main(["locate", "--goal", "team", "--candidate", httpserver.url_for("/people")])
     located = capsys.readouterr().out.strip()
     assert rc == 0
-    monkeypatch.setattr(
-        "sys.stdin", type("S", (), {"read": staticmethod(lambda: located)})()
-    )
-    reply = (
-        'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
-    )
-    monkeypatch.setattr(
-        "web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(reply)
-    )
+    monkeypatch.setattr("sys.stdin", type("S", (), {"read": staticmethod(lambda: located)})())
+    reply = 'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
+    monkeypatch.setattr("web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(reply))
     rc = main(["author", "--ref", "-", "--field", "name"])
     assert rc == 0 and Plan.from_blob(capsys.readouterr().out.strip())
 
@@ -357,3 +316,36 @@ def test_llm_pricing_meters_spend_from_usage() -> None:
     assert total.input == 1200 and total.cache_read == 4000
     cost = pricing.cost(total)
     assert abs(cost - (1200 * 3.0 + 500 * 15.0 + 4000 * 0.30) / 1_000_000) < 1e-12
+
+
+def test_packaged_briefs_are_available_and_loadable() -> None:
+    from web.onboard.__main__ import _load_brief, _packaged_briefs
+
+    assert {"news", "products", "people"} <= set(_packaged_briefs())
+    brief = _load_brief("news")  # by packaged name -> loads its frontmatter
+    assert brief.name == "news" and "headline" in brief.fields and brief.search
+
+
+def test_ddg_search_parses_result_urls(monkeypatch: "pytest.MonkeyPatch") -> None:
+    import ddgs
+
+    from web.onboard import DdgSearch
+
+    class _FakeDDGS:
+        def __enter__(self) -> "_FakeDDGS":
+            return self
+
+        def __exit__(self, *_a: object) -> bool:
+            return False
+
+        def text(self, query: str, max_results: int, backend: str) -> list[dict[str, str]]:
+            return [
+                {"href": "https://a.com", "title": "A"},
+                {"url": "https://b.com"},
+                {"title": "no url here"},
+                {"href": "https://a.com"},  # dupe dropped
+            ]
+
+    monkeypatch.setattr(ddgs, "DDGS", _FakeDDGS)
+    urls = cast("list[str]", _run(DdgSearch()("latest news")))
+    assert urls == ["https://a.com", "https://b.com"]

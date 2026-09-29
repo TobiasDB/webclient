@@ -101,9 +101,7 @@ class AnthropicLlm:
         pricing: "Pricing | None" = None,
     ) -> None:
         self._model = model
-        self._auth = (
-            auth if auth is not None else os.environ.get("ANTHROPIC_API_KEY", "")
-        )
+        self._auth = auth if auth is not None else os.environ.get("ANTHROPIC_API_KEY", "")
         self._max_tokens = max_tokens
         self._system = system
         self._rate = rate or RateLimit()
@@ -157,9 +155,7 @@ class AnthropicLlm:
         except httpx.HTTPError as exc:
             raise WebException(err("llm.request", str(exc))) from exc
         if resp.status_code != 200:
-            raise WebException(
-                err("llm.api", f"HTTP {resp.status_code}", body=resp.text[:500])
-            )
+            raise WebException(err("llm.api", f"HTTP {resp.status_code}", body=resp.text[:500]))
         data: object = resp.json()
         self._meter(data)
         content = data.get("content", []) if isinstance(data, dict) else []

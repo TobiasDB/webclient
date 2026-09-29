@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 
 from pytest_httpserver import HTTPServer
-from web.onboard import onboard
 from web.resolve import Resolver
+
+from web.onboard import onboard
 
 
 def _run(coro):
@@ -46,23 +47,18 @@ def test_onboard_crawls_authors_once_and_aggregates(httpserver: HTTPServer) -> N
             await r.aclose()
 
     result = _run(go())
-    assert (
-        result.pages == 2
-        and result.selection is not None
-        and result.selection.row == ".row"
-    )
+    assert result.pages == 2 and result.selection is not None and result.selection.row == ".row"
     # the ONE authored Selection was applied across BOTH crawled pages and aggregated
     assert sorted(str(row["n"]) for row in result.rows) == ["Alice", "Bob"]
-    assert all(
-        "_source" in row for row in result.rows
-    )  # each row tagged with its source page
+    assert all("_source" in row for row in result.rows)  # each row tagged with its source page
 
+
+from web.parse import parse  # noqa: E402
 
 from web.onboard import AnthropicLlm, llm_driver  # noqa: E402
 
 # -- the LLM tier now lives in onboard: llm_driver (bridges Llm -> agent.Driver) + AnthropicLlm --
 from web.onboard.agent import Author  # noqa: E402
-from web.parse import parse  # noqa: E402
 
 _ROWS = parse(
     b"<ul><li class='row'><span class='t'>A</span><span class='p'>1</span></li>"
@@ -91,9 +87,7 @@ def test_llm_driver_tolerates_an_unparseable_reply() -> None:
             return "not JSON"
 
     result = _run(Author(_ROWS, llm_driver(_Garbage(), goal="x")).run())
-    assert (
-        result.verdict.reason == "done" and result.rows == []
-    )  # unparseable -> stop, no crash
+    assert result.verdict.reason == "done" and result.rows == []  # unparseable -> stop, no crash
 
 
 def test_llm_driver_prompt_uses_skeleton_and_record_hints() -> None:
@@ -130,6 +124,4 @@ def test_anthropic_llm_raises_structured_error_on_non_200(
         finally:
             await llm.aclose()
 
-    assert (
-        _run(go()) == "llm.api"
-    )  # non-200 -> structured llm.api error, never a raw httpx leak
+    assert _run(go()) == "llm.api"  # non-200 -> structured llm.api error, never a raw httpx leak
