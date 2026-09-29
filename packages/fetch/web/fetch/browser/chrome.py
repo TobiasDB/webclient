@@ -25,6 +25,7 @@ under ``TYPE_CHECKING`` and never imports it at module load.
 
 from __future__ import annotations
 
+import glob
 import os
 import shutil
 import subprocess
@@ -42,6 +43,31 @@ if TYPE_CHECKING:
 #: tells) and Playwright's --enable-automation switch. This is the first thing a WAF checks (§2.3).
 _STEALTH_ARGS = ("--disable-blink-features=AutomationControlled",)
 _DROP_DEFAULT_ARGS = ("--enable-automation",)
+#: the leak-patched driver -- a drop-in Playwright fork that suppresses the CDP ``Runtime.enable``
+#: leak (ANTI-BOT.md §5's flagship automation tell) and other protocol-level giveaways. Selected per
+#: supply via ``driver="patchright"``; the manager starts the matching runtime, and this module
+#: reuses the installed Chromium for it (its patches are in the driver, not the binary).
+_LEAK_PATCHED_DRIVER = "patchright"
+
+
+def _installed_chromium() -> "str | None":
+    """The Playwright-managed Chromium binary, so a patched driver (patchright, which pins a
+    different build) can drive the SAME binary via ``executable_path`` instead of downloading its
+    own -- the leak patch lives in the driver, not the browser. Best-effort glob of the
+    ms-playwright cache; ``None`` if not found (the driver then falls back to its own resolution).
+    """
+    base = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or os.path.expanduser(
+        "~/.cache/ms-playwright"
+    )
+    for pattern in (
+        "chromium-*/chrome-linux*/chrome",
+        "chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium",
+        "chromium-*/chrome-win*/chrome.exe",
+    ):
+        hits = sorted(glob.glob(os.path.join(base, pattern)))
+        if hits:
+            return hits[-1]  # the newest installed build
+    return None
 
 
 @runtime_checkable
@@ -51,6 +77,9 @@ class BrowserSupply(Protocol):
     running one (so cleanup only disconnects, never kills the user's / remote process)."""
 
     owns_process: bool
+    #: which browser DRIVER runs this supply -- ``"playwright"`` (default) or ``"patchright"`` (the
+    #: leak-patched fork). The manager starts the matching runtime; the supply just names it.
+    driver: str
 
     async def connect(self, pw: "Playwright") -> "Browser": ...
 
@@ -68,14 +97,24 @@ class LaunchSupply:
     channel: str = "chromium"
     executable_path: "str | None" = None
     proxy: "Proxy | None" = None
+    driver: str = "playwright"
     owns_process: bool = field(default=True, init=False)
 
     async def connect(self, pw: "Playwright") -> "Browser":
+        executable = self.executable_path
+        # the leak-patched driver pins its own Chromium build; point it at the installed one so it
+        # drives the same binary (the patch is in the driver, not the browser) with no extra download.
+        if (
+            executable is None
+            and self.driver == _LEAK_PATCHED_DRIVER
+            and self.channel == "chromium"
+        ):
+            executable = _installed_chromium()
         return await pw.chromium.launch(
             headless=self.headless,
             # "chromium" = the bundled build; a real channel launches the genuine installed browser.
             channel=None if self.channel == "chromium" else self.channel,
-            executable_path=self.executable_path,  # an explicit binary overrides the channel
+            executable_path=executable,  # an explicit binary overrides the channel
             proxy=self.proxy.playwright() if self.proxy else None,
             args=list(_STEALTH_ARGS),
             ignore_default_args=list(_DROP_DEFAULT_ARGS),
@@ -84,7 +123,14 @@ class LaunchSupply:
     def key(self) -> object:
         # the launch identity -- NOT the fingerprint, which is a per-CONTEXT option, so two tiers
         # that differ only by fingerprint can still share one launched process.
-        return ("launch", self.headless, self.channel, self.executable_path, str(self.proxy))
+        return (
+            "launch",
+            self.driver,
+            self.headless,
+            self.channel,
+            self.executable_path,
+            str(self.proxy),
+        )
 
 
 @dataclass
@@ -93,13 +139,14 @@ class CdpSupply:
     attach rather than launch, so we never own or kill the process -- cleanup only disconnects."""
 
     endpoint: str
+    driver: str = "playwright"
     owns_process: bool = field(default=False, init=False)
 
     async def connect(self, pw: "Playwright") -> "Browser":
         return await pw.chromium.connect_over_cdp(self.endpoint)
 
     def key(self) -> object:
-        return ("cdp", self.endpoint)
+        return ("cdp", self.driver, self.endpoint)
 
 
 #: genuine-Chrome install locations per platform (NOT the Playwright bundle / Chrome for Testing).
@@ -165,15 +212,21 @@ def supply_for(
     channel: str = "chromium",
     executable_path: "str | None" = None,
     proxy: "Proxy | None" = None,
+    driver: str = "playwright",
 ) -> BrowserSupply:
     """The default supply for a set of options: a :class:`CdpSupply` when a ``cdp`` endpoint is
     given (attach to a running / remote Chrome), else a :class:`LaunchSupply` (launch a local one).
-    Lets :class:`~web.fetch.browser.BrowserFetcher` keep its flat kwargs while delegating the
+    ``driver`` selects the browser driver (``"patchright"`` for the leak-patched fork). Lets
+    :class:`~web.fetch.browser.BrowserFetcher` keep its flat kwargs while delegating the
     obtain-a-browser concern here."""
     if cdp is not None:
-        return CdpSupply(endpoint=cdp)
+        return CdpSupply(endpoint=cdp, driver=driver)
     return LaunchSupply(
-        headless=headless, channel=channel, executable_path=executable_path, proxy=proxy
+        headless=headless,
+        channel=channel,
+        executable_path=executable_path,
+        proxy=proxy,
+        driver=driver,
     )
 
 

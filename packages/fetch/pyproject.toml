@@ -9,6 +9,8 @@ dependencies = ["httpx>=0.24", "pydantic>=2", "browserforge>=1.2"]
 browser = ["playwright>=1.30"]
 # rung 2 of the evasion ladder: a real Chrome TLS/HTTP2 fingerprint at the HTTP layer (ANTI-BOT.md §2.1).
 impersonate = ["curl_cffi>=0.7"]
+# the leak-patched browser driver (drop-in Playwright fork) that suppresses the CDP Runtime.enable leak (§5).
+stealth = ["patchright>=1.5"]
 
 [build-system]
 requires = ["hatchling"]

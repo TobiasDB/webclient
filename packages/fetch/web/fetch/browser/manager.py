@@ -17,12 +17,30 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from .chrome import BrowserSupply
 
 if TYPE_CHECKING:
     from playwright.async_api import Browser, Playwright
+
+
+async def _start_runtime(driver: str) -> "Playwright":
+    """Start the Playwright runtime for ``driver``: the leak-patched ``patchright`` fork when asked
+    for (and installed) -- it suppresses the CDP ``Runtime.enable`` leak (ANTI-BOT.md §5) -- else
+    stock Playwright. patchright is a DROP-IN fork with an identical async API (only its nominal
+    types differ), so the supply/session code is driver-agnostic; we bridge the type at this one
+    seam. An uninstalled patched driver falls back to Playwright (unpatched, but working)."""
+    if driver == "patchright":
+        try:
+            import patchright.async_api as _patchright  # the leak-patched fork (optional extra)
+
+            return cast("Playwright", await _patchright.async_playwright().start())
+        except ImportError:
+            pass
+    from playwright.async_api import async_playwright
+
+    return await async_playwright().start()
 
 
 @dataclass
@@ -41,22 +59,23 @@ class BrowserManager:
     internal lock, so concurrent acquires of the same identity share one process."""
 
     def __init__(self) -> None:
-        self._pw: "Playwright | None" = None
+        #: one Playwright runtime PER DRIVER (stock vs leak-patched), started lazily and shared.
+        self._runtimes: "dict[str, Playwright]" = {}
         self._leases: "dict[object, _Lease]" = {}
         self._lock = asyncio.Lock()
 
     async def acquire(self, supply: BrowserSupply) -> "Browser":
         """The browser for ``supply`` -- launched/attached on first use, reused (ref-count bumped)
-        thereafter. Starts the shared Playwright runtime lazily on the first acquire."""
+        thereafter. Starts the runtime for the supply's driver lazily on first use."""
         async with self._lock:
-            if self._pw is None:
-                from playwright.async_api import async_playwright  # optional extra, lazy
-
-                self._pw = await async_playwright().start()
+            runtime = self._runtimes.get(supply.driver)
+            if runtime is None:
+                runtime = await _start_runtime(supply.driver)
+                self._runtimes[supply.driver] = runtime
             key = supply.key()
             lease = self._leases.get(key)
             if lease is None:
-                browser = await supply.connect(self._pw)
+                browser = await supply.connect(runtime)
                 self._leases[key] = _Lease(browser=browser, refs=1, supply=supply)
                 return browser
             lease.refs += 1
@@ -82,7 +101,7 @@ class BrowserManager:
 
     async def aclose(self) -> None:
         """Shut the whole layer: close every launched process this manager still holds (leaving any
-        attached one running) and stop the Playwright runtime. Idempotent."""
+        attached one running) and stop every driver runtime. Idempotent."""
         async with self._lock:
             for lease in self._leases.values():
                 if lease.supply.owns_process:
@@ -91,9 +110,9 @@ class BrowserManager:
                     except Exception:
                         pass
             self._leases.clear()
-            if self._pw is not None:
-                await self._pw.stop()
-                self._pw = None
+            for runtime in self._runtimes.values():
+                await runtime.stop()
+            self._runtimes.clear()
 
 
 __all__ = ["BrowserManager"]

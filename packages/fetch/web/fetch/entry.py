@@ -100,6 +100,10 @@ class Profile:
     #: preset like ``"chrome"`` (empty = plain httpx). Rung 2 of the evasion ladder: it closes the
     #: JA3/JA4 + HTTP2 tell a stock client leaks (ANTI-BOT.md §2.1) without the cost of a browser.
     impersonate: str = ""
+    #: drive a browser tier through the LEAK-PATCHED driver (patchright) instead of stock Playwright,
+    #: suppressing the CDP ``Runtime.enable`` leak (ANTI-BOT.md §5's flagship automation tell). Only
+    #: affects browser profiles; falls back to Playwright when patchright isn't installed.
+    stealth: bool = False
 
     def with_(
         self,
@@ -112,6 +116,7 @@ class Profile:
         channel: "str | _Keep" = _KEEP,
         executable_path: "str | None | _Keep" = _KEEP,
         impersonate: "str | _Keep" = _KEEP,
+        stealth: "bool | _Keep" = _KEEP,
     ) -> "Profile":
         """A copy with some slots overridden (the rest inherited) -- adjust a base profile."""
         return Profile(
@@ -125,6 +130,7 @@ class Profile:
                 self.executable_path if isinstance(executable_path, _Keep) else executable_path
             ),
             impersonate=self.impersonate if isinstance(impersonate, _Keep) else impersonate,
+            stealth=self.stealth if isinstance(stealth, _Keep) else stealth,
         )
 
     def fetcher(
@@ -143,6 +149,7 @@ class Profile:
                 proxy=self.proxy,
                 fingerprint=self.fingerprint,
                 executable_path=self.executable_path,
+                driver="patchright" if self.stealth else "playwright",
                 manager=manager,
             )
         if self.impersonate:  # rung 2: a real TLS/HTTP2 fingerprint at the HTTP layer (curl_cffi)
@@ -161,6 +168,7 @@ class Profile:
             self.headless,
             self.channel,
             self.impersonate,
+            self.stealth,
             str(self.proxy),
             fp,
             tuple(sorted(self.headers.items())),

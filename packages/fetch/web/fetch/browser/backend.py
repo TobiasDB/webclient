@@ -312,6 +312,7 @@ class BrowserFetcher:
         cdp: "str | None" = None,
         wait: "Wait | None" = None,
         executable_path: "str | None" = None,
+        driver: str = "playwright",
         supply: "BrowserSupply | None" = None,
         manager: "BrowserManager | None" = None,
         scripts: "tuple[Script, ...] | ScriptRegistry | None" = None,
@@ -336,6 +337,7 @@ class BrowserFetcher:
             channel=channel,
             executable_path=executable_path,
             proxy=self._proxy,
+            driver=driver,
         )
         #: a registry so a caller can enable/disable capture scripts; a bare tuple is wrapped.
         self.scripts: ScriptRegistry = (

@@ -26,14 +26,19 @@ BASIC = Profile(fingerprint=True)
 #: the evasion ladder: it closes the JA3/JA4 + HTTP2 tell plain httpx leaks (ANTI-BOT.md §2.1) at
 #: no more cost than an HTTP fetch, but still runs no JS. Needs the ``curl_cffi`` extra installed.
 IMPERSONATE = Profile(impersonate="chrome")
+# Every browser rung runs through the leak-patched driver (``stealth=True`` -> patchright), which
+# suppresses the CDP ``Runtime.enable`` leak (ANTI-BOT.md §5). It reuses the installed Chromium and
+# falls back to stock Playwright when patchright isn't installed, so this is a safe default.
 #: a real browser render (headless bundled Chromium) with a realistic identity -- for JS-gated pages.
-BROWSER = Profile(fingerprint=True, browser=True)
+BROWSER = Profile(fingerprint=True, browser=True, stealth=True)
 #: a HEADED bundled-Chromium render -- a real on-screen window, which sheds the headless tells an
 #: anti-bot WAF checks; the rung above :data:`BROWSER` (needs a display / Xvfb on Linux).
-HEADED_BROWSER = Profile(fingerprint=True, browser=True, headless=False)
+HEADED_BROWSER = Profile(fingerprint=True, browser=True, headless=False, stealth=True)
 #: the genuine, installed Chrome (the ``chrome`` channel), HEADED -- the most authentic identity and
 #: the top rung; needs Chrome installed on the host.
-REAL_CHROME = Profile(fingerprint=True, browser=True, headless=False, channel="chrome")
+REAL_CHROME = Profile(
+    fingerprint=True, browser=True, headless=False, channel="chrome", stealth=True
+)
 
 
 def with_proxy(base: Profile, proxy: "str | Proxy") -> Profile:

@@ -55,6 +55,7 @@ class _FakeSupply:
 
     def __init__(self, owns: bool, key: str = "k") -> None:
         self.owns_process = owns
+        self.driver = "playwright"
         self._key = key
         self.browser = _FakeBrowser()
 
@@ -63,6 +64,13 @@ class _FakeSupply:
 
     def key(self) -> object:
         return self._key
+
+
+def _seeded_manager() -> "BrowserManager":
+    """A manager with its runtime pre-seeded (fake), so acquire skips starting a real Playwright."""
+    m = BrowserManager()
+    m._runtimes = {"playwright": _FakePlaywright()}  # type: ignore[attr-defined]
+    return m
 
 
 def test_launch_supply_launches_a_real_browser_not_a_harness() -> None:
@@ -101,12 +109,20 @@ def test_browser_fetcher_derives_its_supply_from_kwargs() -> None:
     assert isinstance(BrowserFetcher(channel="chrome")._supply, LaunchSupply)
 
 
+def test_stealth_profile_selects_the_leak_patched_driver() -> None:
+    from web.fetch import Profile
+
+    stealthy = Profile(browser=True, stealth=True).fetcher()
+    plain = Profile(browser=True).fetcher()
+    assert stealthy._supply.driver == "patchright"  # type: ignore[union-attr]
+    assert plain._supply.driver == "playwright"  # type: ignore[union-attr]
+    # the driver is part of the launch identity, so stealthy and plain don't share a process
+    assert LaunchSupply(driver="patchright").key() != LaunchSupply().key()
+
+
 def test_manager_pools_a_process_by_identity_and_ref_counts_it() -> None:
     # two acquires of the same launch identity SHARE one process, closed only when the last releases.
-    m = BrowserManager()
-    m._pw = (
-        _FakePlaywright()
-    )  # pre-set so acquire skips starting a real Playwright  # type: ignore[assignment]
+    m = _seeded_manager()
     sup = _FakeSupply(owns=True)
     b1 = _run(m.acquire(sup))
     b2 = _run(m.acquire(sup))
@@ -118,22 +134,20 @@ def test_manager_pools_a_process_by_identity_and_ref_counts_it() -> None:
 
 
 def test_manager_never_closes_an_attached_process() -> None:
-    m = BrowserManager()
-    m._pw = _FakePlaywright()  # type: ignore[assignment]
+    m = _seeded_manager()
     sup = _FakeSupply(owns=False)  # attached over CDP
     b = _run(m.acquire(sup))
     _run(m.release(sup))
     assert b.closed is False  # attached -> the remote/user process is left running
 
 
-def test_manager_aclose_stops_playwright_and_closes_held_processes() -> None:
-    m = BrowserManager()
-    pw = _FakePlaywright()
-    m._pw = pw  # type: ignore[assignment]
+def test_manager_aclose_stops_the_runtime_and_closes_held_processes() -> None:
+    m = _seeded_manager()
+    pw = m._runtimes["playwright"]  # type: ignore[attr-defined]
     sup = _FakeSupply(owns=True)
     b = _run(m.acquire(sup))
     _run(m.aclose())
-    assert b.closed is True and pw.stopped is True and m._pw is None
+    assert b.closed is True and pw.stopped is True and not m._runtimes  # type: ignore[attr-defined]
 
 
 def test_pool_shares_one_manager_across_browser_tiers() -> None:
