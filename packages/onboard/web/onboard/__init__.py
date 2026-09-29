@@ -1,28 +1,24 @@
 """web.onboard -- the capstone: ``goal -> dataset``, and the LLM tier.
 
-Composes the whole stack. Given a goal and seed URL(s): crawl for candidate pages (web.crawl over
-a web.resolve Resolver), author a row extraction on the first page that yields data (web.onboard.agent's
-loop driven by an :class:`Llm`), then apply that one Selection across every crawled page and
-aggregate the rows -- each tagged with its source. One page's shape, reused; the model authors once.
+Composes the whole stack as two phases. LOCATE (:func:`locate`) finds the best SOURCE for a goal --
+crawl/search for candidate pages over a web.resolve Resolver, score them, and (optionally) let an
+LLM review the winner. AUTHOR (:func:`author`) then writes a ``wq`` extraction query for that source
+over the patterns guide + the page's signals/flags. :func:`locate_and_author` is the thin
+composition of the two.
 
 The LLM itself lives here (not a separate layer): the :class:`Llm` protocol + :class:`AnthropicLlm`
-client (:mod:`.llm`) and :func:`llm_driver` (:mod:`.llm_driver`, which bridges an ``Llm`` to
-web.onboard.agent's pluggable ``Driver``). web.onboard.agent stays LLM-agnostic -- it takes any ``Driver`` callable.
+client (:mod:`.llm`), with :class:`ClaudeShim` a keyless local ``claude -p`` stand-in.
 
-    from web.onboard import onboard, AnthropicLlm
-    result = await onboard("board members and their roles", "https://acme.com/board",
-                           resolver=Resolver(), llm=AnthropicLlm())
-    result.rows        # [{"name": ..., "role": ..., "_source": ...}, ...]
-    result.selection   # the winning Selection (maps to a DSL plan for repeatable runs)
+    from web.onboard import locate_and_author, AnthropicLlm, DdgSearch
+    query = await locate_and_author("board members and their roles",
+                                    resolver=Resolver(), llm=AnthropicLlm(), search=DdgSearch())
+    rows = await query.acollect(resolver=Resolver())  # the wq query runs (or ships as a blob)
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel
-from web.crawl import Crawler, Goal
 from web.resolve import Resolver
 
-from .agent import Author, Selection, extract
 from .author import Authored as AuthoredQuery
 from .author import AuthorEvent, author, authored, build_query
 from .authoring import author_agent
@@ -30,7 +26,6 @@ from .behaviours import Behaviour, apply_behaviours, behaviour, register_behavio
 from .compile import Query, QueryError, parse_query, reroot
 from .frontier import llm_frontier
 from .llm import AnthropicLlm, Llm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage
-from .llm_driver import llm_driver
 from .locate import Search, data_api_endpoints, locate
 from .models import Brief, DatasetBrief, LocateBrief, Reference
 from .patterns import PATTERNS_GUIDE, author_prompt
@@ -38,43 +33,6 @@ from .review import review
 from .search import DdgSearch
 from .shim import ClaudeShim
 from .sink import MemorySink, Sink, document_fields, run_to_sink
-
-
-class Onboarded(BaseModel):
-    """The dataset: the aggregated rows (each with a ``_source`` url), the Selection that produced
-    them, and how many pages were crawled."""
-
-    rows: list[dict[str, "str | None"]] = []
-    selection: "Selection | None" = None
-    pages: int = 0
-
-
-async def onboard(
-    goal: str,
-    seeds: "str | list[str]",
-    *,
-    resolver: Resolver,
-    llm: Llm,
-    max_pages: int = 15,
-) -> Onboarded:
-    """Crawl the seeds, author a row extraction (agent + llm) on the first page that yields data,
-    then apply it across every crawled page and aggregate the rows."""
-    docs = [doc async for doc in Crawler(resolver).crawl(Goal(start=seeds, max_pages=max_pages))]
-
-    selection: "Selection | None" = None
-    for doc in docs:  # author once, on the first page that produces rows
-        authored = await Author(doc, llm_driver(llm, goal)).run()
-        if authored.rows and authored.selection is not None:
-            selection = authored.selection
-            break
-    if selection is None:
-        return Onboarded(pages=len(docs))
-
-    rows: list[dict[str, "str | None"]] = []
-    for doc in docs:  # apply the one Selection everywhere; non-matching pages contribute nothing
-        for row in extract(doc, selection):
-            rows.append({**row, "_source": doc.url})
-    return Onboarded(rows=rows, selection=selection, pages=len(docs))
 
 
 async def locate_and_author(
@@ -96,8 +54,6 @@ async def locate_and_author(
 
 
 __all__ = [
-    "onboard",
-    "Onboarded",
     "Llm",
     "AnthropicLlm",
     "ClaudeShim",
@@ -106,7 +62,6 @@ __all__ = [
     "RateLimit",
     "LlmEvent",
     "ReasonEvent",
-    "llm_driver",
     "llm_frontier",
     # the reusable Locate + Author phases and their value models
     "locate",

@@ -1,28 +1,20 @@
-"""web.agent -- the agent tier: an observe->decide->apply loop that drives the lower layers.
+"""web.agent -- the loop tier: the ONE bounded, interrupt/resumable control loop.
 
-This is where BoundedLoop belongs (its interrupt/resume is what an agent needs, unlike the simple
-bounded loops below). The first agent is extraction AUTHORING: drive the loop to find the
-selectors that pull rows from a page, with a pluggable driver (an LLM / heuristic / test stub).
+:class:`BoundedLoop` is the shared observe->decide->apply primitive every agentic loop derives
+from -- its interrupt/resume (a ``decide`` may return an :class:`Ask` to hand off to a human, and
+the loop is :meth:`~BoundedLoop.resume`d with the answer) is what sets it apart from the simple
+bounded loops elsewhere. The authoring loop (``web.onboard.author_agent``) is its consumer.
 
-    from web.agent import Author, Selection, Done
-    result = await Author(doc, driver).run()   # result.rows, result.selection, result.verdict
+    from web.onboard.agent import BoundedLoop, Ask, Done
 """
 
 from __future__ import annotations
 
-from .extract import Author, Authored, Driver, Selection, extract
 from .loop import Ask, BoundedLoop, Done, Verdict
 
-# NB: agent is LLM-AGNOSTIC -- a Driver is any callable. The Llm client + llm_driver (the concrete
-# LLM-backed driver) live in web.onboard, the LLM tier, so agent depends on no LLM.
 __all__ = [
     "BoundedLoop",
     "Verdict",
     "Ask",
     "Done",
-    "Author",
-    "Authored",
-    "Selection",
-    "Driver",
-    "extract",
 ]

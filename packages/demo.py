@@ -17,12 +17,13 @@ import asyncio
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
+from typing import cast
 from urllib.parse import parse_qs, urlparse
 
 from web.dsl import WebClient, from_blob, run_blob, wq
 from web.fetch import Profile as FetchProfile
 from web.fetch import Request, fetch
-from web.onboard import onboard
+from web.onboard import Brief, locate_and_author
 from web.resolve import EscalationPolicy, PaginatePolicy
 from web.resolve import Profile as ResolveProfile
 from web.resolve import Resolver, RetryPolicy, flags, resolve
@@ -284,23 +285,30 @@ async def evaluator(wc: WebClient, base: str, blob: str) -> None:
 
 
 class _StubLlm:
-    """An offline stand-in for AnthropicLlm: authors the product-row selector once, then done."""
+    """An offline stand-in for AnthropicLlm: writes the product-extraction wq query the Author asks
+    for (locate is deterministic here -- the stub is only hit by author)."""
 
     async def complete(self, prompt: str) -> str:
-        if "Rows extracted so far: []" in prompt:
-            return 'Use: {"row": "li.product", "fields": {"name": ".name"}}'
-        return '{"done": true}'
+        return (
+            'wq.doc.select_all("li.product").extract('
+            'name=wq.doc.select(".name").attr("text"), '
+            'price=wq.doc.select(".price").attr("text"))'
+        )
 
 
 async def onboard_story(base: str) -> None:
-    """The capstone: crawl + author (agent + an Llm) + aggregate into a dataset (the LLM tier)."""
-    _h("onboard -- goal -> dataset (crawl + author + aggregate)")
+    """The capstone: LOCATE the best source for a goal, AUTHOR its wq query, then run it -> dataset."""
+    _h("locate + author -- goal -> source -> wq query -> dataset")
+    brief = Brief(goal="each product's name and price", candidates=[base + "/"], fields=["name"])
     async with Resolver() as rs:
-        result = await onboard(
-            "each product's name", base + "/", resolver=rs, llm=_StubLlm(), max_pages=6
-        )
-        print(f"pages={result.pages} selection.row={result.selection and result.selection.row!r}")
-        print("dataset:", sorted(str(row["name"]) for row in result.rows))
+        query = await locate_and_author(brief, brief, resolver=rs, llm=_StubLlm())
+        if query is None:
+            print("no source located")
+            return
+        result = await query.acollect(resolver=rs)  # Query is a collection|document union
+        rows = cast("list[dict[str, object]]", result if isinstance(result, list) else [result])
+        print("authored:", query.describe()[:72], "...")
+        print("dataset:", [(r.get("name"), r.get("price")) for r in rows])
 
 
 async def main() -> None:
