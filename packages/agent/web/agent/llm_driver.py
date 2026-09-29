@@ -26,10 +26,11 @@ Reply with ONLY a JSON object, either:
 or, if the rows already extracted below satisfy the goal:
   {{"done": true}}
 
+Detected record region(s) -- a good starting point for "row": {records}
 Rows extracted so far: {rows}
 
-Page HTML (truncated):
-{html}
+Page skeleton (a token-lean DOM outline; a "RECORD LIST" mark shows a likely row selector):
+{skeleton}
 """
 
 
@@ -48,11 +49,16 @@ def _parse(reply: str) -> "Selection | Done":
     return Selection(row=str(obj["row"]), fields={str(k): str(v) for k, v in obj.get("fields", {}).items()})
 
 
-def llm_driver(llm: Llm, goal: str, *, page_chars: int = 6000) -> Driver:
-    """A Driver that asks ``llm`` for the next :class:`Selection` given the page + last rows."""
+def llm_driver(llm: Llm, goal: str, *, skeleton_lines: int = 200) -> Driver:
+    """A Driver that asks ``llm`` for the next :class:`Selection`. It sends the token-lean, record-
+    marked skeleton (not raw HTML) plus the detected record selectors -- cheaper and far more
+    selector-authorable than truncated source."""
 
     async def driver(doc: Document, rows: "list[dict[str, str | None]]") -> "Selection | Done":
-        prompt = _PROMPT.format(goal=goal, rows=rows, html=doc.text[:page_chars])
+        records = "; ".join(f'select_all("{r.item_selector}") ({r.count} items)'
+                            for r in doc.records(top_k=3)) or "(none detected)"
+        prompt = _PROMPT.format(goal=goal, records=records, rows=rows,
+                                skeleton=doc.skeleton(max_lines=skeleton_lines))
         return _parse(await llm.complete(prompt))
 
     return driver
