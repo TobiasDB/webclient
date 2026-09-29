@@ -445,11 +445,25 @@ async def _reference_for_author(
     _err(
         "  no located reference cached — locating first (run `web locate` to inspect it separately)…"
     )
+    # An entity-aware LLM frontier so the crawl's hostname pruning is the model's call (not a rule).
+    frontier: "tuple[FrontierMiddleware, ...]" = ()
+    if review is not None:
+        frontier = (
+            llm_frontier(
+                review,
+                brief.goal,
+                entity=args.entity or "",
+                fields=brief.fields,
+                look=brief.look,
+                ignore=brief.ignore,
+            ),
+        )
     with _Progress(args.verbose):
         return await locate(
             brief,
             resolver=resolver,
             search=DdgSearch(),
+            frontier=frontier,
             entity=args.entity or "",
             review=review,
         )
