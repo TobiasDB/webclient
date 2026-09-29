@@ -7,11 +7,36 @@ from typing import Any
 
 from pytest_httpserver import HTTPServer
 
-from web.fetch import Profile, Request, fetch
+from web.fetch import ClientPool, Profile, Request, fetch
 
 
 def _run(coro: Any) -> Any:
     return asyncio.run(coro)
+
+
+def test_pool_leases_one_shared_backend_per_profile() -> None:
+    async def go() -> tuple[bool, bool]:
+        async with ClientPool() as pool:
+            a = pool.lease(Profile())
+            b = pool.lease(Profile())                       # same profile -> SAME backend (reused)
+            c = pool.lease(Profile(headers={"x": "y"}))     # different profile -> its own backend
+            return a is b, a is c
+
+    same, different = _run(go())
+    assert same is True and different is False
+
+
+def test_fetch_reuses_the_pooled_backend_across_calls(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/").respond_with_data(b"hi")
+
+    async def go() -> tuple[bytes, bytes, int]:
+        async with ClientPool() as pool:
+            first = await fetch(httpserver.url_for("/"), pool=pool)   # leases + keeps the backend
+            second = await fetch(httpserver.url_for("/"), pool=pool)  # reuses it (not relaunched)
+            return first.content, second.content, len(pool._backends)
+
+    a, b, n = _run(go())
+    assert a == b == b"hi" and n == 1  # one shared backend served both
 
 
 def test_fetch_one_shot_returns_a_snapshot(httpserver: HTTPServer) -> None:

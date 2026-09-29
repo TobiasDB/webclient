@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, TypeAlias, runtime_checkable
 
-from web.fetch import Fetcher, HttpFetcher, Middleware, Request, stack
+from web.fetch import ClientPool, Fetcher, Middleware, Request, default_pool, stack
 from web.fetch import Profile as FetchProfile
 from web.parse import Document
 from .document import document
@@ -76,10 +76,6 @@ class Profile:
 _EMPTY = Profile()
 
 
-def _as_fetcher(tier: "Tier") -> Fetcher:
-    """Materialise a ladder tier to a Fetcher: a fetch :class:`Profile` becomes its fetcher, a ready
-    Fetcher passes through."""
-    return tier.fetcher() if isinstance(tier, FetchProfile) else tier
 
 
 @runtime_checkable
@@ -109,11 +105,21 @@ class Resolver:
         retry: "int | Middleware | None" = None,
         paginate: "Middleware | None" = None,
         middleware: tuple[Middleware, ...] = (),
+        pool: "ClientPool | None" = None,
+        _own: bool = False,
     ) -> None:
         p = profile or _EMPTY
+        self._pool = pool or default_pool()
         chosen = ladder if ladder is not None else p.ladder
-        # materialise fetch profiles -> fetchers; empty/None -> the default HTTP tier
-        self._tiers: tuple[Fetcher, ...] = tuple(_as_fetcher(t) for t in chosen) if chosen else (HttpFetcher(),)
+        # LEASE each tier from the pool -- a fetch Profile leases its SHARED backend (browser
+        # launched once, reused); a ready Fetcher (a caller's, or an opened session) passes through.
+        # Empty/None -> the default HTTP tier, leased from the pool.
+        self._tiers: tuple[Fetcher, ...] = (
+            tuple(self._pool.lease(t) if isinstance(t, FetchProfile) else t for t in chosen)
+            if chosen else (self._pool.lease(FetchProfile()),))
+        #: whether THIS resolver owns its tiers' lifetime (a session() resolver owns the sessions it
+        #: opened; a base resolver's tiers are pool-owned or caller-owned -> it closes nothing).
+        self._owned = _own
         # keep the resolved slots so session() can rebuild the same chain over persistent tiers
         self._rl = rate_limit if rate_limit is not None else p.rate_limit
         self._rt = retry if retry is not None else p.retry
@@ -161,12 +167,17 @@ class Resolver:
         its state across pages. Closing it closes the sessions it opened."""
         sessions = tuple([await _open_session(t) for t in self._tiers])
         return Resolver(
-            ladder=sessions, rate_limit=self._rl, retry=self._rt, paginate=self._pg, middleware=self._mw,
+            ladder=sessions, rate_limit=self._rl, retry=self._rt, paginate=self._pg,
+            middleware=self._mw, pool=self._pool, _own=True,  # the session resolver OWNS its sessions
         )
 
     async def aclose(self) -> None:
-        for tier in self._tiers:  # close every tier (unused browser tiers are a no-op)
-            await tier.aclose()
+        """Close only the tiers this resolver OWNS -- the sessions a ``session()`` resolver opened.
+        A base resolver's tiers are leased from the pool (or handed in by a caller), so it closes
+        nothing here; the pool's ``aclose`` shuts those (and any launched browser)."""
+        if self._owned:
+            for tier in self._tiers:
+                await tier.aclose()
 
 
 __all__ = ["Resolver", "Profile"]

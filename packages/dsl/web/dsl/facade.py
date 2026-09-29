@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import cast
 
 from web.crawl import Crawler, Goal
+from web.fetch import ClientPool
 from web.parse import Document
 from web.resolve import Profile, Resolver
 
@@ -25,14 +26,17 @@ class WebClient:
     Its lazy chains are bound to that resolver, so a whole session of queries shares one transport
     (cookies, pooled connections, the profile's ladder/politeness)."""
 
-    def __init__(self, *, resolver: "Resolver | None" = None, profile: "Profile | None" = None) -> None:
-        self._resolver = resolver or Resolver(profile=profile)
+    def __init__(self, *, resolver: "Resolver | None" = None, profile: "Profile | None" = None,
+                 pool: "ClientPool | None" = None) -> None:
+        self._pool = pool or ClientPool()
+        self._resolver = resolver or Resolver(profile=profile, pool=self._pool)
 
     async def __aenter__(self) -> "WebClient":
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
-        await self._resolver.aclose()
+        await self._resolver.aclose()  # closes any sessions it opened
+        await self._pool.aclose()      # shuts the shared backends (the browser)
 
     def ref(self, url: str) -> LazyReference:
         """A lazy reference root bound to this client (``wc.ref(url).resolve()...``)."""

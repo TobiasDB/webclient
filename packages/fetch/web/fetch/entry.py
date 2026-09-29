@@ -100,8 +100,66 @@ class Profile:
             return BrowserFetcher(proxy=self.proxy, fingerprint=self.fingerprint)
         return HttpFetcher(proxy=self.proxy, fingerprint=self.fingerprint)
 
+    def key(self) -> "tuple[object, ...]":
+        """A hashable identity for pooling: two profiles with the same key share one backend."""
+        fp = self.fingerprint if isinstance(self.fingerprint, bool) else self.fingerprint.model_dump_json()
+        return (self.browser, str(self.proxy), fp, tuple(sorted(self.headers.items())))
+
 
 _EMPTY = Profile()
+
+
+class ClientPool:
+    """Keeps long-lived backends alive and hands out a SHARED one per transport :class:`Profile`,
+    so a browser is launched ONCE and reused across fetches (not relaunched per request), and httpx
+    connections are pooled. Backends multiplex (httpx pools connections; a browser opens a context
+    per session), so a lease is the shared instance, not an exclusive checkout. The pool OWNS the
+    backends' lifetimes -- ``aclose`` closes them all (that is what shuts the browser)."""
+
+    def __init__(self) -> None:
+        self._backends: "dict[tuple[object, ...], BrowserFetcher | HttpFetcher]" = {}
+
+    def lease(self, profile: "Profile") -> "BrowserFetcher | HttpFetcher":
+        """The shared backend for ``profile`` -- created on first use, reused thereafter."""
+        key = profile.key()
+        backend = self._backends.get(key)
+        if backend is None:
+            backend = profile.fetcher()
+            self._backends[key] = backend
+        return backend
+
+    async def aclose(self) -> None:
+        """Close every pooled backend (shuts any launched browser)."""
+        for backend in self._backends.values():
+            await backend.aclose()
+        self._backends.clear()
+
+    async def __aenter__(self) -> "ClientPool":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        await self.aclose()
+
+
+_DEFAULT_POOL: "ClientPool | None" = None
+
+
+def default_pool() -> ClientPool:
+    """The process-wide default pool the functional entries lease from when none is given -- so
+    repeated ``fetch(url)`` / ``resolve(url)`` calls reuse one browser / httpx client. Long-lived;
+    close it with :func:`aclose_default_pool` (or own an explicit :class:`ClientPool`)."""
+    global _DEFAULT_POOL
+    if _DEFAULT_POOL is None:
+        _DEFAULT_POOL = ClientPool()
+    return _DEFAULT_POOL
+
+
+async def aclose_default_pool() -> None:
+    """Close + drop the process-wide default pool (shuts any browser it launched)."""
+    global _DEFAULT_POOL
+    if _DEFAULT_POOL is not None:
+        await _DEFAULT_POOL.aclose()
+        _DEFAULT_POOL = None
 
 
 def as_request(request: "Request | str", headers: "dict[str, str]") -> Request:
@@ -112,11 +170,15 @@ def as_request(request: "Request | str", headers: "dict[str, str]") -> Request:
 
 
 def fetch(request: "Request | str", *, browser: bool = False, profile: "Profile | None" = None,
-          proxy: "str | Proxy | None" = None, fingerprint: "bool | Fingerprint" = False) -> "Entry[Snapshot, Session]":
+          proxy: "str | Proxy | None" = None, fingerprint: "bool | Fingerprint" = False,
+          pool: "ClientPool | None" = None) -> "Entry[Snapshot, Session]":
     """Fetch ``request`` (a URL or a :class:`Request`). ``await`` it for a one-shot Snapshot, or
     ``async with fetch(...) as session:`` for a live session (a browser session is navigated to the
     request and owns its page; an HTTP session holds a cookie jar). ``profile`` supplies the
-    transport identity; ``browser`` / ``proxy`` / ``fingerprint`` override it per call."""
+    transport identity; ``browser`` / ``proxy`` / ``fingerprint`` override it per call. The backend
+    is LEASED from ``pool`` (or the process :func:`default_pool`) -- shared and reused, so the
+    browser is not relaunched per fetch. The pool owns the backend; only the session (its page /
+    cookie jar) is closed on exit."""
     prof = profile or _EMPTY
     eff = Profile(
         proxy=proxy if proxy is not None else prof.proxy,
@@ -124,22 +186,19 @@ def fetch(request: "Request | str", *, browser: bool = False, profile: "Profile 
         headers=prof.headers,
         browser=browser or prof.browser,
     )
-    backend = eff.fetcher()
+    backend = (pool or default_pool()).lease(eff)
     req = as_request(request, eff.headers)
 
     async def one_shot() -> Snapshot:
-        try:
-            return await backend.fetch(req)
-        finally:
-            await backend.aclose()
+        return await backend.fetch(req)  # the pool owns the backend -- do not close it here
 
     async def open_session() -> Session:
-        session = await backend.session()
+        session = await backend.session()  # a fresh context/page (browser) or cookie jar (http)
         if isinstance(session, BrowserSession):  # position the page at the request; then click/snapshot
             await session.goto(req)
         return session
 
-    return Entry(one_shot, open_session, backend.aclose)
+    return Entry(one_shot, open_session)  # on exit: close the session only; the pooled backend lives
 
 
-__all__ = ["fetch", "Entry", "Profile", "as_request"]
+__all__ = ["fetch", "Entry", "Profile", "ClientPool", "default_pool", "aclose_default_pool", "as_request"]

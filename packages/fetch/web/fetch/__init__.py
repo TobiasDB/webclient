@@ -27,10 +27,11 @@ from .middleware import Handler, Middleware, stack
 from .replay import Recorder, ReplayBackend
 from .pool import Pool
 from .proxy import Proxy
-from .entry import Entry, Profile, fetch  # the functional entry (depends on the backends above)
+from .entry import ClientPool, Entry, Profile, aclose_default_pool, default_pool, fetch  # functional entry + pool
 
 __all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "BrowserSession", "HttpSession", "Session",
-           "fetch", "Entry", "Profile", "Script", "ScriptRegistry", "Proxy", "Pool", "Fingerprint", "CHROME", "Wait",
+           "fetch", "Entry", "Profile", "ClientPool", "default_pool", "aclose_default_pool",
+           "Script", "ScriptRegistry", "Proxy", "Pool", "Fingerprint", "CHROME", "Wait",
            "DOM_RECORDER", "NetworkEvent", "DOMEvent", "FetchEvent", "ConsoleEvent", "Middleware", "Handler", "stack",
            "Recorder", "ReplayBackend",
            # the shared substrate (relocated from the removed web.kernel bottom layer)

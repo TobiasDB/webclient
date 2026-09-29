@@ -15,7 +15,7 @@ the one-shot/session pattern is identical at both layers.
 
 from __future__ import annotations
 
-from web.fetch import Entry, Middleware, Request
+from web.fetch import ClientPool, Entry, Middleware, Request
 from web.parse import Document
 
 from .base import Profile, Resolver, Tier
@@ -49,16 +49,17 @@ class ResolveSession:
 def resolve(request: "Request | str", *, profile: "Profile | None" = None,
             paginate: "str | Middleware | None" = None, max_pages: int = 20,
             rate_limit: "float | Middleware | None" = None, retry: "int | Middleware | None" = None,
-            ladder: "tuple[Tier, ...] | None" = None,
-            middleware: "tuple[Middleware, ...]" = ()) -> "Entry[Document, ResolveSession]":
+            ladder: "tuple[Tier, ...] | None" = None, middleware: "tuple[Middleware, ...]" = (),
+            pool: "ClientPool | None" = None) -> "Entry[Document, ResolveSession]":
     """Resolve ``request`` (a URL or a :class:`~web.fetch.Request`) to a Document. ``await`` it for a
     one-shot Document, or ``async with resolve(...) as session:`` for a persistent session. Pagination
     is a plain kwarg: ``paginate="page"`` walks the ``?page=N`` param up to ``max_pages`` (pass a
     ready pagination middleware for other shapes). ``profile`` supplies the vendor policy bundle; the
-    politeness/retry/ladder slots override it per call."""
+    politeness/retry/ladder slots override it per call. The backend is LEASED from ``pool`` (or the
+    process default) -- reused across calls, so a browser tier is not relaunched per resolve."""
     pager = paginate_param(paginate, max_pages=max_pages) if isinstance(paginate, str) else paginate
     resolver = Resolver(profile=profile, paginate=pager, rate_limit=rate_limit, retry=retry,
-                        ladder=ladder, middleware=middleware)
+                        ladder=ladder, middleware=middleware, pool=pool)
     req = Request(url=request) if isinstance(request, str) else request
 
     async def one_shot() -> Document:
