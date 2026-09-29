@@ -185,9 +185,7 @@ def tables(
     roots = [e._node for e in doc.select_all(selector)] if selector else [doc._root()]
     candidates: list[Node] = []
     for r in roots:
-        candidates += (
-            [r] if _tag(r) == "table" else [e for e in r.iter() if _tag(e) == "table"]
-        )
+        candidates += [r] if _tag(r) == "table" else [e for e in r.iter() if _tag(e) == "table"]
     table = max(candidates, key=_row_count, default=None)
     return _table_records(table, transpose=transpose) if table is not None else []
 
@@ -199,15 +197,11 @@ def _row_count(table: Node) -> int:
 def _table_records(table: Node, *, transpose: bool) -> "list[dict[str, str]]":
     """Expand a table into a dense grid (rowspan/colspan honoured), then key rows by the header row."""
     grid: list[dict[int, str]] = []
-    pending: dict[int, tuple[str, int]] = (
-        {}
-    )  # col -> (text, remaining rowspan) for active rowspans
+    pending: dict[int, tuple[str, int]] = {}  # col -> (text, remaining rowspan) for active rowspans
     for tr in (n for n in table.iter() if _tag(n) == "tr"):
         row: dict[int, str] = {}
         col = 0
-        carry: dict[int, tuple[str, int]] = (
-            {}
-        )  # carry active rowspans down from earlier rows
+        carry: dict[int, tuple[str, int]] = {}  # carry active rowspans down from earlier rows
         for c, (txt, rem) in pending.items():
             row[c] = txt
             if rem - 1 > 0:
@@ -231,15 +225,11 @@ def _table_records(table: Node, *, transpose: bool) -> "list[dict[str, str]]":
     matrix = [[r.get(c, "") for c in range(width)] for r in grid]
     if transpose:
         matrix = [list(col) for col in zip(*matrix)] if matrix else []
-    if (
-        not matrix or not matrix[0]
-    ):  # no rows, or a header row with no cells -> no records
+    if not matrix or not matrix[0]:  # no rows, or a header row with no cells -> no records
         return []
     header, *body = matrix
     keys = [h or f"col{i}" for i, h in enumerate(header)]
-    return [
-        {keys[i]: (r[i] if i < len(r) else "") for i in range(len(keys))} for r in body
-    ]
+    return [{keys[i]: (r[i] if i < len(r) else "") for i in range(len(keys))} for r in body]
 
 
 def _int(v: "str | None", default: int) -> int:

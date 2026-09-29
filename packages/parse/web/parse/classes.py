@@ -77,9 +77,7 @@ def is_noise_class(tok: str) -> bool:
         and any(c.isdigit() for c in tok)
     ):
         return True  # mixed-case + digit -> generated hash
-    return any(
-        len(seg) >= 8 and _HEX_SEG.fullmatch(seg) for seg in re.split(r"[-_]", tok)
-    )
+    return any(len(seg) >= 8 and _HEX_SEG.fullmatch(seg) for seg in re.split(r"[-_]", tok))
 
 
 def semantic_classes(classes: "list[str]") -> "list[str]":

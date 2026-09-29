@@ -29,9 +29,7 @@ def _run(coro: Any) -> Any:
 def _shop(server: HTTPServer) -> str:
     server.expect_request("/").respond_with_data(_SHOP, content_type="text/html")
     for n in (1, 2, 3):
-        server.expect_request(f"/i/{n}").respond_with_data(
-            _ITEM % n, content_type="text/html"
-        )
+        server.expect_request(f"/i/{n}").respond_with_data(_ITEM % n, content_type="text/html")
     return server.url_for("/")
 
 
@@ -179,13 +177,7 @@ def test_select_miss_is_loud_by_default(httpserver: HTTPServer) -> None:
     with pytest.raises(WebException):  # a selector matching nothing raises, naming it
         _run(wq.reference(url).resolve().select(".nope").attr("text").acollect())
     # ...unless marked optional -> the miss is None and the chain short-circuits
-    got = _run(
-        wq.reference(url)
-        .resolve()
-        .select(".nope", optional=True)
-        .attr("text")
-        .acollect()
-    )
+    got = _run(wq.reference(url).resolve().select(".nope", optional=True).attr("text").acollect())
     assert got is None
 
 
@@ -228,14 +220,10 @@ def test_field_references_an_earlier_column(httpserver: HTTPServer) -> None:
 
 def test_attr_fanout_returns_references(httpserver: HTTPServer) -> None:
     url = _shop(httpserver)
-    refs = _run(
-        wq.reference(url).resolve().select_all(".card a.link").attr("href").acollect()
-    )
+    refs = _run(wq.reference(url).resolve().select_all(".card a.link").attr("href").acollect())
     assert [r.url.rsplit("/", 1)[-1] for r in refs] == ["1", "2", "3"]  # a list of Ref
     # a fanned text read stays a chainable collection: .text().number() works
-    prices = _run(
-        wq.reference(url).resolve().select_all(".card .price").text().acollect()
-    )
+    prices = _run(wq.reference(url).resolve().select_all(".card .price").text().acollect())
     assert prices == ["$39", "$129", ""]
 
 
@@ -278,9 +266,7 @@ def test_lazy_resolve_takes_a_named_profile_and_policy(httpserver: HTTPServer) -
         .attr("text")
     )
     assert chain.collect() == "Aeropress"
-    assert (
-        '"resolve"' in chain.to_blob()
-    )  # policy args recorded, plan stays serialisable
+    assert '"resolve"' in chain.to_blob()  # policy args recorded, plan stays serialisable
 
 
 def test_extract_follows_a_reference_into_detail_pages(httpserver: HTTPServer) -> None:
@@ -302,9 +288,7 @@ def test_extract_follows_a_reference_into_detail_pages(httpserver: HTTPServer) -
 
 def test_same_verbs_query_a_json_data_api(httpserver: HTTPServer) -> None:
     body = b'{"data": {"items": [{"sku": "W1", "p": {"n": "Widget"}}, {"sku": "G2", "p": {"n": "Gadget"}}]}}'
-    httpserver.expect_request("/api").respond_with_data(
-        body, content_type="application/json"
-    )
+    httpserver.expect_request("/api").respond_with_data(body, content_type="application/json")
     # IDENTICAL to the HTML form -- select_all navigates the array, extract reads each item's leaves;
     # only the selector dialect differs (a JSON path instead of CSS)
     rows = _run(
@@ -361,9 +345,7 @@ def test_field_and_collection_helpers() -> None:
     assert Field("£51.77").number().get() == 51.77
     assert Field("Three").number().get() == 3
     assert Field("18 Sep 2026").date().get() == "2026-09-18"
-    assert (
-        not Field("", ok=True).is_empty().get() is False
-    )  # empty string -> is_empty true
+    assert not Field("", ok=True).is_empty().get() is False  # empty string -> is_empty true
     coll: Collection[Field[str]] = Field("a, b, c").split(",")
     assert [f.get() for f in coll] == ["a", "b", "c"]
     assert len(coll) == 3

@@ -36,11 +36,7 @@ def test_document_is_pure_content_no_transport_facts() -> None:
     doc = parse(b"<title>T</title>", content_type="text/html", url="https://ex.com/x")
     assert doc.kind == "html" and doc.url == "https://ex.com/x"
     assert doc.select("title") is not None and doc.select("title").text == "T"  # type: ignore[union-attr]
-    assert (
-        not hasattr(doc, "status")
-        and not hasattr(doc, "ok")
-        and not hasattr(doc, "error")
-    )
+    assert not hasattr(doc, "status") and not hasattr(doc, "ok") and not hasattr(doc, "error")
 
 
 def test_nested_select_composes() -> None:
@@ -57,10 +53,7 @@ def test_markup_reads_are_safe_on_non_markup_and_bad_bytes() -> None:
     # a JSON document: markup reads return empty, not raise
     j = parse(b'{"a": 1}', content_type="application/json")
     assert (
-        j.kind == "json"
-        and j.select("a") is None
-        and j.select_all("a") == []
-        and j.links() == []
+        j.kind == "json" and j.select("a") is None and j.select_all("a") == [] and j.links() == []
     )
     assert j.json() == {"a": 1}
 
@@ -70,11 +63,7 @@ def test_markup_reads_are_safe_on_non_markup_and_bad_bytes() -> None:
 
     # empty content -> empty tree, empty reads
     empty = parse(b"", content_type="text/html")
-    assert (
-        empty.select("div") is None
-        and empty.select_all("div") == []
-        and empty.links() == []
-    )
+    assert empty.select("div") is None and empty.select_all("div") == [] and empty.links() == []
 
 
 # -- content extraction: metadata, readable/markdown, tables, regex, structure --
@@ -187,9 +176,7 @@ def test_find_records_locates_the_dataset_not_the_nav() -> None:
     regs = doc.records()
     assert regs, "expected at least one record region"
     top = regs[0]
-    assert (
-        top.item_selector == "li.item" and top.count == 4
-    )  # the dataset, not the 4-link nav
+    assert top.item_selector == "li.item" and top.count == 4  # the dataset, not the 4-link nav
     # the richer content list outranks the bare-link nav menu
     assert top.score >= max(r.score for r in regs)
 
@@ -233,9 +220,7 @@ def test_skeleton_marks_records_and_interactive() -> None:
     )
     doc = parse(html, content_type="text/html")
     sk = doc.skeleton()
-    assert (
-        "← RECORD LIST" in sk and 'select_all("li.item")' in sk
-    )  # dataset flagged in place
+    assert "← RECORD LIST" in sk and 'select_all("li.item")' in sk  # dataset flagged in place
     assert "← clickable" in sk  # the onclick div flagged
     # a native <a>/<button> is obvious and must NOT be marked clickable
     assert "a  ← clickable" not in doc.skeleton()
@@ -254,9 +239,7 @@ def test_tables_degenerate_no_cells_does_not_crash() -> None:
     assert doc.tables() == []
     assert doc.tables(transpose=True) == []
     # a header-only table yields no data rows, not junk
-    doc2 = parse(
-        b"<table><tr><th>A</th><th>B</th></tr></table>", content_type="text/html"
-    )
+    doc2 = parse(b"<table><tr><th>A</th><th>B</th></tr></table>", content_type="text/html")
     assert doc2.tables() == []
 
 
@@ -273,21 +256,14 @@ def test_json_reads_are_safe_on_non_json_documents() -> None:
 
 def test_mislabelled_charset_does_not_crash_text() -> None:
     # a bogus/unsupported charset must fall back to utf-8, not raise LookupError on .text
-    doc = parse(
-        "<html>café</html>".encode("utf-8"), content_type="text/html; charset=bogus"
-    )
+    doc = parse("<html>café</html>".encode("utf-8"), content_type="text/html; charset=bogus")
     assert doc.encoding == "utf-8"
     assert "café" in doc.text
     # a real declared charset is still honoured
-    win = parse(
-        "naïve".encode("windows-1252"), content_type="text/plain; charset=windows-1252"
-    )
+    win = parse("naïve".encode("windows-1252"), content_type="text/plain; charset=windows-1252")
     assert win.encoding == "windows-1252" and win.text == "naïve"
     # a meta charset with a typo also falls back
-    assert (
-        parse(b"<meta charset=notacodec><p>x</p>", content_type="text/html").encoding
-        == "utf-8"
-    )
+    assert parse(b"<meta charset=notacodec><p>x</p>", content_type="text/html").encoding == "utf-8"
 
 
 def test_jsonld_preserves_significant_whitespace_in_values() -> None:
@@ -299,9 +275,7 @@ def test_jsonld_preserves_significant_whitespace_in_values() -> None:
 
 def test_sniff_text_with_multibyte_char_at_512_boundary() -> None:
     # a UTF-8 char split at the 512-byte sniff cut must NOT misclassify valid text as binary
-    body = ("x" * 511 + "é" + " tail").encode(
-        "utf-8"
-    )  # 'é' (2 bytes) straddles byte 512
+    body = ("x" * 511 + "é" + " tail").encode("utf-8")  # 'é' (2 bytes) straddles byte 512
     assert parse(body).kind == "text"
     # a genuine binary blob (invalid utf-8 mid-stream) is still binary
     assert parse(b"\x00\x01\xff\xfe" * 200).kind == "binary"

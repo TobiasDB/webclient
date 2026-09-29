@@ -96,9 +96,7 @@ async def _perform(
             follow_redirects=request.follow_redirects,
             timeout=request.timeout,
         )
-    except (
-        Exception
-    ) as exc:  # classify; CancelledError is a BaseException, so it still propagates
+    except Exception as exc:  # classify; CancelledError is a BaseException, so it still propagates
         return Snapshot(
             request=request,
             url=request.url,
@@ -121,11 +119,7 @@ async def _perform(
         set_cookies=set_cookies,
         redirects=[str(h.url) for h in resp.history],
     )
-    emit(
-        FetchEvent(
-            url=snap.url, status=snap.status, elapsed=snap.elapsed, source="http"
-        )
-    )
+    emit(FetchEvent(url=snap.url, status=snap.status, elapsed=snap.elapsed, source="http"))
     return snap
 
 

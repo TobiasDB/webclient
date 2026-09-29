@@ -38,14 +38,8 @@ def _merge(snaps: list[Snapshot]) -> Snapshot:
     parts: list[str] = []
     for s in snaps:
         body = document(s).select("body")
-        parts.append(
-            body.inner_html
-            if body is not None
-            else s.content.decode("utf-8", "replace")
-        )
-    combined = (
-        "<!doctype html><html><body>" + "".join(parts) + "</body></html>"
-    ).encode("utf-8")
+        parts.append(body.inner_html if body is not None else s.content.decode("utf-8", "replace"))
+    combined = ("<!doctype html><html><body>" + "".join(parts) + "</body></html>").encode("utf-8")
     return snaps[0].model_copy(
         update={
             "content": combined,
@@ -79,12 +73,7 @@ def paginate_links(*, until: "Until | None" = None, max_pages: int = 20) -> Midd
         for _ in range(max_pages - 1):
             doc = document(snap)
             nxt_url = _next_link(doc)
-            if (
-                not snap.ok
-                or nxt_url is None
-                or nxt_url in seen
-                or (until and until(doc))
-            ):
+            if not snap.ok or nxt_url is None or nxt_url in seen or (until and until(doc)):
                 break
             seen.add(nxt_url)
             snap = await nxt(request.model_copy(update={"url": nxt_url}))
@@ -183,9 +172,7 @@ def paginate_cursor(
                 doc.json()  # validate JSON before navigating; non-JSON ends the unfold
             except (ValueError, _json.JSONDecodeError):
                 break
-            page_items = doc.at(
-                items_path
-            )  # dotted-path dig (shared with parse -- no fork)
+            page_items = doc.at(items_path)  # dotted-path dig (shared with parse -- no fork)
             if isinstance(page_items, list):
                 items.extend(page_items)
             elif page_items is not None:

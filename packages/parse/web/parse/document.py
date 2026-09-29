@@ -173,15 +173,11 @@ class Document:
         """HTML ``<table>`` rows as header-keyed records, with rowspan/colspan expanded."""
         return _content.tables(self, selector, transpose=transpose)
 
-    def regex(
-        self, pattern: str, *, group: "int | str" = 0, flags: int = 0
-    ) -> "str | None":
+    def regex(self, pattern: str, *, group: "int | str" = 0, flags: int = 0) -> "str | None":
         """The first ``pattern`` match in the document text (``group`` of it), or ``None``."""
         return _regex_mod.regex(self, pattern, group=group, flags=flags)
 
-    def regex_all(
-        self, pattern: str, *, group: "int | str" = 0, flags: int = 0
-    ) -> "list[str]":
+    def regex_all(self, pattern: str, *, group: "int | str" = 0, flags: int = 0) -> "list[str]":
         """Every ``pattern`` match in the document text, each reduced to ``group``."""
         return _regex_mod.regex_all(self, pattern, group=group, flags=flags)
 

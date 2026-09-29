@@ -15,15 +15,15 @@ not this layer's.
 
 from __future__ import annotations
 
-from . import (
+from . import (  # named default transport identities (web.fetch.profiles.BASIC / BROWSER / ...)
     profiles,
-)  # named default transport identities (web.fetch.profiles.BASIC / BROWSER / ...)
+)
 from .browser import BrowserFetcher, BrowserSession
 from .bus import Event, EventBus, Subscription, Trace, emit, topic_matches, using
+from .entry import Profile  # functional entry + pool
 from .entry import (
     ClientPool,
     Entry,
-    Profile,  # functional entry + pool
     aclose_default_pool,
     default_pool,
     fetch,
@@ -32,8 +32,8 @@ from .errors import WebError, WebException, err
 from .fingerprint import CHROME, Fingerprint, fleet, generate
 from .http import HttpFetcher, HttpSession
 from .middleware import Handler, Middleware, stack
+from .models import ConsoleEvent  # the plain data models + interfaces
 from .models import (
-    ConsoleEvent,  # the plain data models + interfaces
     DOMEvent,
     Fetcher,
     FetchEvent,

@@ -23,13 +23,16 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 from importlib.resources import files
 from pathlib import Path
 from typing import Sequence
 
+from web.crawl import CrawlEvent
+from web.fetch import Event, EventBus, FetchEvent
 from web.fetch import Profile as FetchProfile
-from web.fetch import WebException
-from web.resolve import EscalationPolicy, Resolver, profiles
+from web.fetch import WebException, using
+from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
 
 from .author import build_query
 from .llm import AnthropicLlm, Pricing, RateLimit
@@ -39,9 +42,50 @@ from .search import DdgSearch
 
 
 def _err(*lines: str) -> None:
-    """Human-readable reasoning goes to stderr, so stdout stays a clean, pipeable artifact."""
+    """Human-readable reasoning + live progress go to stderr (flushed, so they stream immediately
+    even when stdout is piped), keeping stdout a clean, pipeable artifact."""
     for line in lines:
-        print(line, file=sys.stderr)
+        print(line, file=sys.stderr, flush=True)
+
+
+def _short(url: str, n: int = 78) -> str:
+    return url if len(url) <= n else url[: n - 1] + "…"
+
+
+class _Progress:
+    """A live bus subscriber that streams what the run is doing to stderr, so a long search/crawl/
+    author is visibly working (not hung). Installs itself as the ambient event bus for the scope;
+    prints each crawled page + each resolve-policy step (retries/escalations), and -- with
+    ``verbose`` -- every fetch. Tracks pages + elapsed for a closing summary."""
+
+    def __init__(self, verbose: bool) -> None:
+        self._verbose = verbose
+        self._bus = EventBus()
+        self.pages = 0
+        self._start = 0.0
+
+    def _on(self, event: Event) -> None:
+        if isinstance(event, CrawlEvent):
+            self.pages = event.fetched
+            _err(f"  · crawled {event.fetched}: {_short(event.url)}")
+        elif isinstance(event, ResolveEvent):
+            _err(f"  · {event.phase}: {_short(event.url)}")
+        elif isinstance(event, FetchEvent) and self._verbose:
+            _err(f"  · fetch {event.status} ({event.elapsed:.2f}s): {_short(event.url)}")
+
+    def __enter__(self) -> "_Progress":
+        self._start = time.monotonic()
+        self._bus.subscribe("", self._on)
+        self._using = using(self._bus)
+        self._using.__enter__()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._using.__exit__(*exc)
+
+    @property
+    def elapsed(self) -> float:
+        return time.monotonic() - self._start
 
 
 def _resolver(
@@ -135,6 +179,12 @@ def _transport_args(sub: argparse.ArgumentParser) -> None:
         metavar="EXE",
         help="an explicit browser binary (driver/executable) for any browser tier to launch",
     )
+    sub.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="stream every fetch too (default streams crawled pages + retries/escalations)",
+    )
 
 
 # -- web locate -----------------------------------------------------------------------------------
@@ -198,15 +248,24 @@ def _locate_brief(args: argparse.Namespace) -> Brief:
 async def _locate(args: argparse.Namespace) -> int:
     brief = _locate_brief(args)
     resolver = _resolver(args.profile, args.proxy, args.browser_path)
+    seeded = bool(brief.seeds or brief.candidates or brief.start_url)
+    _err(
+        f"locating: {'crawling seeds' if seeded else f'searching {brief.search or brief.goal!r}'} "
+        f"then evaluating candidates (max {brief.max_pages} pages)…"
+    )
     # a default web-search backend (ddgs): only used when the brief gives no seeds/candidates, so
     # `--search "BBC latest news"` (or a company in --goal) turns into seed URLs.
     try:
-        reference = await locate(brief, resolver=resolver, search=DdgSearch(k=args.search_k))
+        with _Progress(args.verbose) as prog:
+            reference = await locate(brief, resolver=resolver, search=DdgSearch(k=args.search_k))
     except WebException as exc:
         _err(f"locate failed: {exc}")
         return 1
     finally:
         await resolver.aclose()
+    _err(
+        f"  evaluated {prog.pages or '?'} page(s) in {prog.elapsed:.1f}s (deterministic — no LLM cost)"
+    )
     if reference is None:
         _err(
             "no source holds the dataset (nothing scored above zero); "
@@ -293,8 +352,10 @@ async def _author(args: argparse.Namespace) -> int:
     brief = _author_brief(args)
     resolver = _resolver(args.profile, args.proxy, args.browser_path)
     llm = _build_llm(args)
+    _err(f"authoring: resolving {_short(reference.url)} then asking the model for the query…")
     try:
-        query, engine, notes = await build_query(reference, brief, resolver=resolver, llm=llm)
+        with _Progress(args.verbose):
+            query, engine, notes = await build_query(reference, brief, resolver=resolver, llm=llm)
         _explain_query(reference, brief, engine, query.describe(), notes)  # reasoning -> stderr
         print(query.to_blob())  # the serialised query -> stdout
         if getattr(llm, "calls", 0):  # metered spend (a real, priced client) -> stderr
@@ -303,9 +364,13 @@ async def _author(args: argparse.Namespace) -> int:
                 f"  spend:     ${llm.spent_usd:.4f} over {llm.calls} call(s)"
                 f"  (tokens in {u.input}, out {u.output}, cache r/w {u.cache_read}/{u.cache_write})"
             )
+        else:
+            _err("  spend:     $0.0000 (set --price-* to meter, or no LLM call was billed)")
         if not args.run:
             return 0
-        rows = await query.acollect(resolver=resolver)
+        _err("running the query…")
+        with _Progress(args.verbose):
+            rows = await query.acollect(resolver=resolver)
         listed = rows if isinstance(rows, list) else [rows]
         _err(f"\n  rows:      {len(listed)}")
         for row in listed[: args.sample]:

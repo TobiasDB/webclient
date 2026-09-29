@@ -101,15 +101,11 @@ class Profile:
         """A copy with some slots overridden (the rest inherited) -- adjust a base profile."""
         return Profile(
             proxy=self.proxy if isinstance(proxy, _Keep) else proxy,
-            fingerprint=(
-                self.fingerprint if isinstance(fingerprint, _Keep) else fingerprint
-            ),
+            fingerprint=(self.fingerprint if isinstance(fingerprint, _Keep) else fingerprint),
             headers=self.headers if isinstance(headers, _Keep) else headers,
             browser=self.browser if isinstance(browser, _Keep) else browser,
             executable_path=(
-                self.executable_path
-                if isinstance(executable_path, _Keep)
-                else executable_path
+                self.executable_path if isinstance(executable_path, _Keep) else executable_path
             ),
         )
 
@@ -203,11 +199,7 @@ def as_request(request: "Request | str", headers: "dict[str, str]") -> Request:
     """A ``Request`` from a URL string or a ready request, with profile headers merged in (an
     explicit request's own headers win)."""
     req = Request(url=request) if isinstance(request, str) else request
-    return (
-        req.model_copy(update={"headers": {**headers, **req.headers}})
-        if headers
-        else req
-    )
+    return req.model_copy(update={"headers": {**headers, **req.headers}}) if headers else req
 
 
 def fetch(
@@ -237,14 +229,10 @@ def fetch(
     req = as_request(request, eff.headers)
 
     async def one_shot() -> Snapshot:
-        return await backend.fetch(
-            req
-        )  # the pool owns the backend -- do not close it here
+        return await backend.fetch(req)  # the pool owns the backend -- do not close it here
 
     async def open_session() -> Session:
-        session = (
-            await backend.session()
-        )  # a fresh context/page (browser) or cookie jar (http)
+        session = await backend.session()  # a fresh context/page (browser) or cookie jar (http)
         if isinstance(
             session, BrowserSession
         ):  # position the page at the request; then click/snapshot

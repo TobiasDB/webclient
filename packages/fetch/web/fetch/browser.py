@@ -35,9 +35,7 @@ from .proxy import Proxy, as_proxy
 from .script import ScriptRegistry, default_scripts
 from .wait import apply_wait
 
-if (
-    TYPE_CHECKING
-):  # playwright is an optional extra; imported lazily at runtime in _browser_ready
+if TYPE_CHECKING:  # playwright is an optional extra; imported lazily at runtime in _browser_ready
     from playwright.async_api import (
         Browser,
         BrowserContext,
@@ -71,9 +69,7 @@ class BrowserSession:
         self._request = Request(url=page.url or "about:blank")
         self._status = 0
         self._headers: dict[str, str] = {}
-        self._responses: "list[Response]" = (
-            []
-        )  # raw Response objects; bodies drained in snapshot()
+        self._responses: "list[Response]" = []  # raw Response objects; bodies drained in snapshot()
         self._console: list[ConsoleEvent] = []
         page.on("response", self._record_response)
         page.on("console", self._record_console)
@@ -84,9 +80,7 @@ class BrowserSession:
     def _record_console(self, message: "ConsoleMessage") -> None:
         self._console.append(ConsoleEvent(level=message.type, text=message.text))
 
-    async def goto(
-        self, request: Request, *, wait: "Wait | None" = None
-    ) -> "BrowserSession":
+    async def goto(self, request: Request, *, wait: "Wait | None" = None) -> "BrowserSession":
         """Navigate the owned page to ``request`` and settle per ``wait`` (else the session default);
         returns Self so navigation and actions chain. Installs the ``load`` recorders after render.
         """
@@ -96,14 +90,10 @@ class BrowserSession:
         nav: Literal["domcontentloaded", "load"] = (
             "domcontentloaded" if w.until == "domcontentloaded" else "load"
         )
-        resp = await self._page.goto(
-            request.url, wait_until=nav, timeout=request.timeout * 1000
-        )
+        resp = await self._page.goto(request.url, wait_until=nav, timeout=request.timeout * 1000)
         self._status = resp.status if resp is not None else 0
         self._headers = dict(resp.headers) if resp is not None else {}
-        await apply_wait(
-            self._page, w
-        )  # settle further (networkidle / dom_stable / selector)
+        await apply_wait(self._page, w)  # settle further (networkidle / dom_stable / selector)
         for s in self._scripts:
             if s.on == "load":
                 await self._page.evaluate(s.js)
@@ -171,9 +161,7 @@ class BrowserSession:
                     if raw and len(raw) <= _BODY_CAP:
                         body = raw
                     drained += 1
-                except (
-                    Exception
-                ):  # body gone / stream consumed -> skip, don't fail the snapshot
+                except Exception:  # body gone / stream consumed -> skip, don't fail the snapshot
                     pass
             out.append(
                 NetworkEvent(
@@ -246,9 +234,7 @@ class BrowserFetcher:
         scripts: "tuple[Script, ...] | ScriptRegistry | None" = None,
     ) -> None:
         self._headless = headless
-        self._channel = (
-            channel  # "chromium" = bundled; "chrome" = the real Chrome install
-        )
+        self._channel = channel  # "chromium" = bundled; "chrome" = the real Chrome install
         #: an explicit browser BINARY to launch (a driver/executable path), instead of the one the
         #: channel resolves to -- for a pinned/self-managed Chromium or a custom build.
         self._executable = executable_path
@@ -262,11 +248,7 @@ class BrowserFetcher:
         self.scripts: ScriptRegistry = (
             default_scripts()
             if scripts is None
-            else (
-                scripts
-                if isinstance(scripts, ScriptRegistry)
-                else ScriptRegistry(scripts)
-            )
+            else (scripts if isinstance(scripts, ScriptRegistry) else ScriptRegistry(scripts))
         )
         self._pw: "Playwright | None" = None
         self._browser: "Browser | None" = None
@@ -277,9 +259,7 @@ class BrowserFetcher:
             from playwright.async_api import async_playwright
 
             self._pw = await async_playwright().start()
-            if (
-                self._cdp is not None
-            ):  # attach to an existing browser over the DevTools protocol
+            if self._cdp is not None:  # attach to an existing browser over the DevTools protocol
                 browser = await self._pw.chromium.connect_over_cdp(self._cdp)
             else:
                 browser = await self._pw.chromium.launch(
@@ -297,9 +277,7 @@ class BrowserFetcher:
         """
         browser = await self._browser_ready()
         fp = self._fingerprint
-        if (
-            fp is not None
-        ):  # apply the identity's context options (explicit, so no dict[str, Any])
+        if fp is not None:  # apply the identity's context options (explicit, so no dict[str, Any])
             w, h = fp.viewport
             context = await browser.new_context(
                 user_agent=fp.user_agent,
@@ -311,9 +289,7 @@ class BrowserFetcher:
         page = await context.new_page()
         scripts = self.scripts.enabled()  # only the enabled scripts install
         try:
-            if (
-                self._fingerprint
-            ):  # a light stealth pass (real anti-detect is a heavier backend)
+            if self._fingerprint:  # a light stealth pass (real anti-detect is a heavier backend)
                 await page.add_init_script(_STEALTH)
             for s in scripts:  # 'init' scripts run before any page script
                 if s.on == "init":

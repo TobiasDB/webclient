@@ -59,11 +59,7 @@ def retry(max_attempts: int = 3, backoff: float = 0.2) -> Middleware:
         snap = await nxt(request)
         attempt = 1
         while attempt < max_attempts and _retriable(snap):
-            emit(
-                ResolveEvent(
-                    phase="retry", url=request.url, detail={"attempt": attempt}
-                )
-            )
+            emit(ResolveEvent(phase="retry", url=request.url, detail={"attempt": attempt}))
             await asyncio.sleep(backoff * (2 ** (attempt - 1)))
             snap = await nxt(request)
             attempt += 1
@@ -117,18 +113,14 @@ def escalate(
         for i, tier in enumerate(tiers):
             if not check(snap):
                 break
-            emit(
-                ResolveEvent(phase="escalate", url=request.url, detail={"tier": i + 1})
-            )
+            emit(ResolveEvent(phase="escalate", url=request.url, detail={"tier": i + 1}))
             snap = await tier.fetch(request)
         return snap
 
     return mw
 
 
-def rotate(
-    pool: ClientPool, fleet: "tuple[Fingerprint, ...] | None" = None
-) -> Middleware:
+def rotate(pool: ClientPool, fleet: "tuple[Fingerprint, ...] | None" = None) -> Middleware:
     """Present a fresh identity per request: lease a differently-fingerprinted backend from ``pool``
     (a browserforge ``fleet``) and fetch through IT, so repeated requests do not all look identical.
     The fingerprint-rotation POLICY -- unlike retry (which re-issues on the same backend), it

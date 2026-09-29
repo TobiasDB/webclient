@@ -45,9 +45,7 @@ class WebClient:
 
     def ref(self, url: str) -> LazyReference:
         """A lazy reference root bound to this client (``wc.ref(url).resolve()...``)."""
-        return cast(
-            LazyReference, Expr(Plan(root="Reference", source=url), self._resolver)
-        )
+        return cast(LazyReference, Expr(Plan(root="Reference", source=url), self._resolver))
 
     def resolve(self, url: str) -> LazyDocument:
         """The resolved page as a lazy document chain (``wc.resolve(url).doc()`` /
@@ -60,9 +58,7 @@ class WebClient:
         )
         return cast(LazyDocument, Expr(plan, self._resolver))
 
-    async def crawl(
-        self, goal: "Goal | str", *, max_pages: int = 50
-    ) -> "list[Document]":
+    async def crawl(self, goal: "Goal | str", *, max_pages: int = 50) -> "list[Document]":
         """Reach many documents from a seed / goal, over this client's resolver."""
         g = goal if isinstance(goal, Goal) else Goal(start=goal, max_pages=max_pages)
         return [doc async for doc in Crawler(self._resolver).crawl(g)]

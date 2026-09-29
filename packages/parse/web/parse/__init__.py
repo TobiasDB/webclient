@@ -22,9 +22,7 @@ from .sniff import Kind, sniff_charset, sniff_kind
 from .structure import Heading, outline, skeleton
 
 
-def parse(
-    content: bytes, *, content_type: str | None = None, url: str = ""
-) -> Document:
+def parse(content: bytes, *, content_type: str | None = None, url: str = "") -> Document:
     """Interpret bytes into a :class:`Document`: sniff the kind and charset from ``content_type``
     + the bytes, keeping ``url`` as the base for relative-link resolution."""
     return Document(

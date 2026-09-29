@@ -20,12 +20,8 @@ from .nodes import tag as _tag
 if TYPE_CHECKING:
     from .document import Document
 
-_SKIP = frozenset(
-    {"script", "style", "noscript", "template", "svg", "path", "br", "hr"}
-)
-_DRAWING = frozenset(
-    {"svg", "math", "canvas"}
-)  # repetition here is geometry, not records
+_SKIP = frozenset({"script", "style", "noscript", "template", "svg", "path", "br", "hr"})
+_DRAWING = frozenset({"svg", "math", "canvas"})  # repetition here is geometry, not records
 _CHROME_TAGS = frozenset({"nav", "header", "footer", "aside"})
 _CHROME_ROLES = frozenset({"navigation", "banner", "contentinfo", "complementary"})
 _WRAPPER_TAGS = frozenset({"div", "span", "li", "section", "article"})
@@ -76,10 +72,7 @@ def _chromey(el: Node) -> bool:
     node: "Node | None" = el
     hops = 0
     while node is not None and hops < 25:
-        if (
-            _tag(node) in _CHROME_TAGS
-            or (node.get("role") or "").lower() in _CHROME_ROLES
-        ):
+        if _tag(node) in _CHROME_TAGS or (node.get("role") or "").lower() in _CHROME_ROLES:
             return True
         node = node.getparent()
         hops += 1
@@ -152,9 +145,7 @@ def scan(doc: "Document", *, min_items: int = 3) -> "list[tuple[Node, RecordRegi
     return found
 
 
-def find_records(
-    doc: "Document", *, min_items: int = 3, top_k: int = 3
-) -> "list[RecordRegion]":
+def find_records(doc: "Document", *, min_items: int = 3, top_k: int = 3) -> "list[RecordRegion]":
     """The most dataset-like repeating regions in a markup document, best first (up to ``top_k``).
     A region is a container plus a group of >= ``min_items`` structurally-identical children; scored
     so a long, content-rich, non-chrome list outranks a short nav menu."""

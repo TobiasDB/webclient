@@ -12,9 +12,7 @@ if TYPE_CHECKING:
     from .document import Document
 
 
-def regex(
-    doc: "Document", pattern: str, *, group: "int | str" = 0, flags: int = 0
-) -> "str | None":
+def regex(doc: "Document", pattern: str, *, group: "int | str" = 0, flags: int = 0) -> "str | None":
     """The FIRST match of ``pattern`` in the document's text, returning ``group`` (0 = whole match,
     an int/name = a capture group), or ``None`` if it does not match."""
     m = re.search(pattern, doc.text, flags)

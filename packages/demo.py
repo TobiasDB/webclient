@@ -51,9 +51,7 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api":
             body, ctype = (
-                json.dumps(
-                    {"items": [{"sku": "W1"}, {"sku": "G2"}], "next": None}
-                ).encode(),
+                json.dumps({"items": [{"sku": "W1"}, {"sku": "G2"}], "next": None}).encode(),
                 "application/json",
             )
         elif (
@@ -104,9 +102,7 @@ def references(base: str) -> None:
     _h("references (pure request specs)")
     spec = Request(url=base + "/?page=1")
     print("url:", spec.url)
-    print(
-        "with header:", spec.model_copy(update={"headers": {"x-app": "demo"}}).headers
-    )
+    print("with header:", spec.model_copy(update={"headers": {"x-app": "demo"}}).headers)
     print("with cookie:", spec.model_copy(update={"cookies": {"token": "tok"}}).cookies)
 
 
@@ -135,14 +131,10 @@ async def selection_and_render(base: str) -> None:
     for card in home.select_all("li.product"):
         title = card.select(".name")
         price = card.select(".price")
-        print(
-            "  card:", title.text if title else "?", "|", price.text if price else "?"
-        )
+        print("  card:", title.text if title else "?", "|", price.text if price else "?")
     print("table:", home.tables("table"))
     print("markdown:", home.markdown(main_content_only=True).splitlines()[0])
-    print(
-        "skeleton:", home.skeleton(max_lines=3, drop_chrome=True).replace("\n", " | ")
-    )
+    print("skeleton:", home.skeleton(max_lines=3, drop_chrome=True).replace("\n", " | "))
     api = await resolve(base + "/api")
     print("json at('items[0].sku'):", api.at("items[0].sku"))
     # the SAME DSL verbs query JSON -- select_all navigates the array, extract reads each item
@@ -180,9 +172,7 @@ async def sessions(base: str) -> None:
 async def pagination(base: str) -> None:
     """Param pagination as a Policy on ``resolve`` -- the merged multi-page document."""
     _h("pagination (a policy)")
-    paged = await resolve(
-        base + "/feed", paginate=PaginatePolicy(param="page", max_pages=2)
-    )
+    paged = await resolve(base + "/feed", paginate=PaginatePolicy(param="page", max_pages=2))
     print("rows across pages:", [e.text for e in paged.select_all("article.row")])
 
 
@@ -194,16 +184,10 @@ async def profiles(base: str) -> None:
     _h("profiles (default + custom, composed across layers)")
     default = await fetch(base + "/echo")  # no profile -> plain HTTP transport
     print("default profile:", default.content.decode())
-    bot = FetchProfile(
-        headers={"user-agent": "acme-bot/1.0"}
-    )  # a custom transport identity
-    polite = bot.with_(
-        headers={"user-agent": "acme-bot/2.0"}
-    )  # inherit + override one slot
+    bot = FetchProfile(headers={"user-agent": "acme-bot/1.0"})  # a custom transport identity
+    polite = bot.with_(headers={"user-agent": "acme-bot/2.0"})  # inherit + override one slot
     tagged = await fetch(base + "/echo", profile=polite)
-    print(
-        "custom fetch profile:", tagged.content.decode()
-    )  # the profile's UA header was sent
+    print("custom fetch profile:", tagged.content.decode())  # the profile's UA header was sent
     # a resolve profile = a POLICY bundle; escalation is the ladder of fetch identities, retry a policy
     vendor = ResolveProfile(
         escalation=EscalationPolicy(tiers=(bot, bot.with_(browser=True))),
@@ -315,9 +299,7 @@ async def onboard_story(base: str) -> None:
         result = await onboard(
             "each product's name", base + "/", resolver=rs, llm=_StubLlm(), max_pages=6
         )
-        print(
-            f"pages={result.pages} selection.row={result.selection and result.selection.row!r}"
-        )
+        print(f"pages={result.pages} selection.row={result.selection and result.selection.row!r}")
         print("dataset:", sorted(str(row["name"]) for row in result.rows))
 
 
@@ -325,9 +307,7 @@ async def main() -> None:
     server, base = _serve()
     try:
         references(base)
-        async with (
-            WebClient() as wc
-        ):  # the DSL entry owns the resolver for the whole session
+        async with WebClient() as wc:  # the DSL entry owns the resolver for the whole session
             await fetch_and_crawl(wc, base)
             await selection_and_render(base)
             await sessions(base)

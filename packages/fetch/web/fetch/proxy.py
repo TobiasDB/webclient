@@ -13,9 +13,7 @@ from urllib.parse import quote
 
 from pydantic import BaseModel
 
-if (
-    TYPE_CHECKING
-):  # playwright is an optional extra; this is the renderer for its proxy config
+if TYPE_CHECKING:  # playwright is an optional extra; this is the renderer for its proxy config
     from playwright.async_api import ProxySettings
 
 
@@ -34,9 +32,7 @@ class Proxy(BaseModel):
         if self.username is None:
             return self.server
         scheme, sep, rest = self.server.partition("://")
-        auth = quote(self.username) + (
-            ":" + quote(self.password) if self.password else ""
-        )
+        auth = quote(self.username) + (":" + quote(self.password) if self.password else "")
         return f"{scheme}{sep}{auth}@{rest}" if sep else f"{auth}@{self.server}"
 
     def playwright(self) -> "ProxySettings":

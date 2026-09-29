@@ -151,9 +151,7 @@ class Expr:
         return self._coerce("iterator")
 
     # -- evaluation: the four dispatch modes ---------------------------------
-    async def acollect(
-        self, root: object = None, *, resolver: "Resolver | None" = None
-    ) -> object:
+    async def acollect(self, root: object = None, *, resolver: "Resolver | None" = None) -> object:
         """ASYNC dispatch: walk the plan on the caller's loop and return the materialised result --
         smart about its shape (extracted rows -> ``list[dict]``, a field chain -> a list of values,
         a single field -> its value). ``root`` roots a context plan (a URL / Document); a
@@ -163,9 +161,7 @@ class Expr:
 
         return await arun(self._plan, root, resolver=resolver or self._bound)
 
-    def collect(
-        self, root: object = None, *, resolver: "Resolver | None" = None
-    ) -> object:
+    def collect(self, root: object = None, *, resolver: "Resolver | None" = None) -> object:
         """SYNC dispatch: :meth:`acollect` run to completion (blocks). Works from any context --
         plain code or inside a running loop (see :func:`_run_sync`)."""
         return _run_sync(self.acollect(root, resolver=resolver))
@@ -189,9 +185,7 @@ def to_arg(value: object) -> Arg:
     (evaluated per element at run time), any other value a literal arg."""
     if isinstance(value, Expr):
         return Arg(plan=value._plan)
-    return Arg(
-        value=cast(JsonValue, value)
-    )  # a literal arg must be JSON (it rides the wire blob)
+    return Arg(value=cast(JsonValue, value))  # a literal arg must be JSON (it rides the wire blob)
 
 
 def lazy(cls: type[T], *, plan: Plan | None = None) -> T:

@@ -34,9 +34,7 @@ def topic_matches(prefix: str, topic: str) -> bool:
 class Subscription:
     """A live subscription; call it (or use it as a context manager) to unsubscribe."""
 
-    def __init__(
-        self, bus: "EventBus", prefix: str, handler: "Callable[[Event], None]"
-    ) -> None:
+    def __init__(self, bus: "EventBus", prefix: str, handler: "Callable[[Event], None]") -> None:
         self._bus, self.prefix, self.handler = bus, prefix, handler
 
     def __call__(self) -> None:
@@ -56,23 +54,17 @@ class EventBus:
     def __init__(self) -> None:
         self._subs: list[Subscription] = []
 
-    def subscribe(
-        self, prefix: str, handler: "Callable[[Event], None]"
-    ) -> Subscription:
+    def subscribe(self, prefix: str, handler: "Callable[[Event], None]") -> Subscription:
         sub = Subscription(self, prefix, handler)
         self._subs.append(sub)
         return sub
 
     def publish(self, event: Event) -> None:
-        for sub in tuple(
-            self._subs
-        ):  # a copy: a handler may (un)subscribe mid-dispatch
+        for sub in tuple(self._subs):  # a copy: a handler may (un)subscribe mid-dispatch
             if topic_matches(sub.prefix, event.topic):
                 try:
                     sub.handler(event)
-                except (
-                    Exception
-                ):  # a bus subscriber is an observer; it never breaks the emitter
+                except Exception:  # a bus subscriber is an observer; it never breaks the emitter
                     pass
 
     def _remove(self, sub: Subscription) -> None:
@@ -127,9 +119,7 @@ class Trace:
         self.bus.subscribe("", self.events.append)
         self._token: "contextvars.Token[EventBus | None] | None" = None
 
-    def subscribe(
-        self, prefix: str, handler: "Callable[[Event], None]"
-    ) -> Subscription:
+    def subscribe(self, prefix: str, handler: "Callable[[Event], None]") -> Subscription:
         return self.bus.subscribe(prefix, handler)
 
     def __enter__(self) -> "Trace":

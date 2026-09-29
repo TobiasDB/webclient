@@ -107,3 +107,15 @@ venv = "env"
 # (validated at their use-site by tests/fixtures/typing_surface.py).
 reportOverlappingOverload = false
 reportNoOverloadImplementation = false
+
+# Formatting for the packages/ clean-room stack (and this project). A SINGLE authoritative
+# config here so `isort packages/` + `black packages/` run from the repo root are consistent
+# (black uses ONE config per invocation, resolved at the common root -- here). line-length 100
+# matches the codebase's hand-formatted ~99-col style. Each packages/*/pyproject.toml carries the
+# same values so per-package invocation agrees.
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+line_length = 100

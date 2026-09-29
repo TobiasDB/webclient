@@ -53,9 +53,7 @@ _ROLE_BY_TAG = {
     "label": "label",
     "option": "option",
 }
-_TEXTISH = frozenset(
-    {"text", "search", "email", "url", "tel", "password", "number", ""}
-)
+_TEXTISH = frozenset({"text", "search", "email", "url", "tel", "password", "number", ""})
 _VALUE_TYPES = frozenset({"submit", "button", "reset"})
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _SEP = re.compile(r"[-_./]+")
@@ -120,9 +118,7 @@ def element_name(el: Node, *, max_len: int = 60) -> str:
         if v and _wordlike(v):
             return v[:max_len]
     tag = _tag(el)
-    if tag == "button" or (
-        tag == "input" and (get("type") or "").lower() in _VALUE_TYPES
-    ):
+    if tag == "button" or (tag == "input" and (get("type") or "").lower() in _VALUE_TYPES):
         v = (get("value") or "").strip()
         if v and _wordlike(v):
             return v[:max_len]

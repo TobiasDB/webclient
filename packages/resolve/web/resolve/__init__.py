@@ -20,9 +20,9 @@ from __future__ import annotations
 # the framework, re-exported for ergonomics (it lives in web.fetch)
 from web.fetch import Handler, Middleware, stack
 
-from . import (
+from . import (  # named default resolve policies (web.resolve.profiles.BASIC / FULL_BROWSER / ...)
     profiles,
-)  # named default resolve policies (web.resolve.profiles.BASIC / FULL_BROWSER / ...)
+)
 from .base import Profile, Resolver, Slot, Tier
 from .document import document
 from .entry import ResolveSession, resolve

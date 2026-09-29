@@ -105,9 +105,7 @@ def test_live_page_actions_return_self_and_snapshot(httpserver: HTTPServer) -> N
         try:
             session = await bf.session()  # the session owns the page
             await session.goto(Request(url=httpserver.url_for("/f")))
-            driven = await (await session.type("#q", "hello")).click(
-                "#go"
-            )  # actions return Self
+            driven = await (await session.type("#q", "hello")).click("#go")  # actions return Self
             assert isinstance(driven, BrowserSession)
             snap = await driven.snapshot()
             await session.aclose()  # closing the session closes the page it owns
@@ -245,27 +243,19 @@ def test_record_then_replay_offline(httpserver: HTTPServer) -> None:
 
     async def replay() -> tuple[bytes, int]:
         rb = ReplayBackend(events)
-        hit = await rb.fetch(
-            Request(url=httpserver.url_for("/p"))
-        )  # served from the recording
-        miss = await rb.fetch(
-            Request(url="https://drifted.example/x")
-        )  # not recorded -> drift
+        hit = await rb.fetch(Request(url=httpserver.url_for("/p")))  # served from the recording
+        miss = await rb.fetch(Request(url="https://drifted.example/x"))  # not recorded -> drift
         return hit.content, miss.status
 
     content, miss_status = _run(replay())
-    assert (
-        content == b"<h1>recorded</h1>"
-    )  # offline, deterministic (no second server hit)
+    assert content == b"<h1>recorded</h1>"  # offline, deterministic (no second server hit)
     assert miss_status == 599  # drift is visible, not a silent real fetch
 
 
 def test_replay_backend_is_a_fetcher() -> None:
     from web.fetch import Fetcher
 
-    assert isinstance(ReplayBackend([]), Fetcher) and isinstance(
-        Recorder(HttpFetcher()), Fetcher
-    )
+    assert isinstance(ReplayBackend([]), Fetcher) and isinstance(Recorder(HttpFetcher()), Fetcher)
 
 
 def test_http_backend_classifies_failure_modes() -> None:
@@ -300,9 +290,7 @@ def test_browser_backend_never_raises_on_nav_failure() -> None:
 
     snap = _run(go())
     assert (
-        not snap.ok
-        and snap.error is not None
-        and snap.error.code in ("fetch.connect", "fetch.dns")
+        not snap.ok and snap.error is not None and snap.error.code in ("fetch.connect", "fetch.dns")
     )
 
 
@@ -331,9 +319,7 @@ def test_http_session_persists_cookies_but_one_shot_fetch_does_not(
         assert isinstance(s, (HttpSession, Session))
         try:
             await s.fetch(Request(url=httpserver.url_for("/login")))  # sets sid
-            me = await s.fetch(
-                Request(url=httpserver.url_for("/me"))
-            )  # jar sends it back
+            me = await s.fetch(Request(url=httpserver.url_for("/me")))  # jar sends it back
             return me.content
         finally:
             await s.aclose()
@@ -384,9 +370,7 @@ def test_script_registry_disables_capture(httpserver: HTTPServer) -> None:
 def test_proxy_renders_for_each_backend() -> None:
     from web.fetch import BrowserFetcher, HttpFetcher, Proxy
 
-    p = Proxy(
-        server="http://gw:8080", username="u", password="p@ss", bypass="localhost"
-    )
+    p = Proxy(server="http://gw:8080", username="u", password="p@ss", bypass="localhost")
     assert p.httpx() == "http://u:p%40ss@gw:8080"  # auth embedded, percent-encoded
     assert p.playwright() == {
         "server": "http://gw:8080",
@@ -395,10 +379,7 @@ def test_proxy_renders_for_each_backend() -> None:
         "bypass": "localhost",
     }
     # backends accept a Proxy (or a bare string) without error
-    assert (
-        HttpFetcher(proxy=p) is not None
-        and HttpFetcher(proxy="http://gw:8080") is not None
-    )
+    assert HttpFetcher(proxy=p) is not None and HttpFetcher(proxy="http://gw:8080") is not None
     assert BrowserFetcher(proxy=p) is not None
 
 
@@ -423,9 +404,7 @@ def test_pool_bounds_concurrency() -> None:
     async def go() -> tuple[int, int]:
         slow = _Slow()
         pool = Pool(slow, limit=2)
-        await asyncio.gather(
-            *[pool.fetch(Request(url=f"https://x/{i}")) for i in range(8)]
-        )
+        await asyncio.gather(*[pool.fetch(Request(url=f"https://x/{i}")) for i in range(8)])
         await pool.aclose()
         return slow.max_overlap, pool.peak
 

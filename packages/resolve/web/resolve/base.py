@@ -95,9 +95,7 @@ class Profile:
             rotate=self.rotate if isinstance(rotate, _Keep) else rotate,
             middleware=self.middleware if isinstance(middleware, _Keep) else middleware,
             raise_on_error=(
-                self.raise_on_error
-                if isinstance(raise_on_error, _Keep)
-                else raise_on_error
+                self.raise_on_error if isinstance(raise_on_error, _Keep) else raise_on_error
             ),
         )
 
@@ -146,24 +144,19 @@ class Resolver:
         # (session/tests); else the default HTTP identity. Each tier is leased from the pool (a fetch
         # Profile -> its shared backend; a ready Fetcher/session passes through).
         if esc is not None and esc.tiers:
-            self._tiers: tuple[Fetcher, ...] = tuple(
-                self._pool.lease(t) for t in esc.tiers
-            )
+            self._tiers: tuple[Fetcher, ...] = tuple(self._pool.lease(t) for t in esc.tiers)
             self._esc: "Middleware | None" = esc.build(
                 self._pool
             )  # escalate over the climb tiers, with its `on`
         elif ladder:
             self._tiers = tuple(
-                self._pool.lease(t) if isinstance(t, FetchProfile) else t
-                for t in ladder
+                self._pool.lease(t) if isinstance(t, FetchProfile) else t for t in ladder
             )
             self._esc = (
                 _escalate(list(self._tiers[1:])) if len(self._tiers) > 1 else None
             )  # default `on`
         else:
-            self._tiers = (
-                self._pool.lease(FetchProfile()),
-            )  # bare default: minimal identity
+            self._tiers = (self._pool.lease(FetchProfile()),)  # bare default: minimal identity
             self._esc = None
         #: whether THIS resolver owns its tiers' lifetime (a session() resolver owns the sessions it
         #: opened; a base resolver's tiers are pool-owned or caller-owned -> it closes nothing).
@@ -190,9 +183,7 @@ class Resolver:
                 self._esc,  # escalate: climb the transport ladder on a signal
                 _slot(self._rt, self._pool),  # retry: same request on transient failure
                 _slot(self._rl, self._pool),  # rate: host politeness
-                _slot(
-                    self._rot, self._pool
-                ),  # rotate: fresh identity, innermost (owns the fetch)
+                _slot(self._rot, self._pool),  # rotate: fresh identity, innermost (owns the fetch)
             )
             if m is not None
         )

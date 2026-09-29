@@ -31,9 +31,7 @@ def dig(value: JSON, path: str) -> JSON:
             value = value.get(key) if isinstance(value, dict) else None
         if idx is not None:
             value = (
-                value[idx]
-                if isinstance(value, list) and -len(value) <= idx < len(value)
-                else None
+                value[idx] if isinstance(value, list) and -len(value) <= idx < len(value) else None
             )
         if value is None:
             return None

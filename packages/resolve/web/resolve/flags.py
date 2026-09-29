@@ -64,13 +64,9 @@ _CONCLUSIONS: tuple[_Conclusion, ...] = (
     _Conclusion("auth_required", "session:login", doc_detectors=(_s.login_wall,)),
     _Conclusion("consent_wall", "dismiss:consent", doc_detectors=(_s.consent_wall,)),
     _Conclusion("paginated", "paginate", doc_detectors=(_s.pagination,)),
-    _Conclusion(
-        "infinite_scroll", "paginate:scroll", doc_detectors=(_s.infinite_scroll,)
-    ),
+    _Conclusion("infinite_scroll", "paginate:scroll", doc_detectors=(_s.infinite_scroll,)),
     _Conclusion("server_error", "retry", snap_detectors=(_s.server_error,)),
-    _Conclusion(
-        "structured_data", "extract:jsonld", doc_detectors=(_s.structured_data,)
-    ),
+    _Conclusion("structured_data", "extract:jsonld", doc_detectors=(_s.structured_data,)),
     _Conclusion("data_api", "extract:json_island", doc_detectors=(_s.data_api,)),
     _Conclusion("record_list", "extract:records", doc_detectors=(_s.record_list,)),
     _Conclusion("tabbed", "interact:tabs", doc_detectors=(_s.tabbed,)),
@@ -86,9 +82,7 @@ def _noisy_or(confidences: "list[float]") -> float:
     return 1.0 - p
 
 
-def _collect(
-    concl: _Conclusion, doc: Document, snap: "Snapshot | None"
-) -> "list[Signal]":
+def _collect(concl: _Conclusion, doc: Document, snap: "Snapshot | None") -> "list[Signal]":
     hits: list[Signal] = []
     for d in concl.doc_detectors:
         if (sig := d(doc)) is not None:

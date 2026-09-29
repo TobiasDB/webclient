@@ -59,9 +59,7 @@ class WebException(Exception):
     structured ``.error``."""
 
     def __init__(self, error: "WebError | str", message: str = "") -> None:
-        self.error = (
-            WebError(code=error, message=message) if isinstance(error, str) else error
-        )
+        self.error = WebError(code=error, message=message) if isinstance(error, str) else error
         super().__init__(str(self.error))
 
 
@@ -127,9 +125,7 @@ def classify(exc: BaseException, *, url: str = "") -> WebError:
             code = "fetch.dns"
         else:
             code = "fetch.connect"
-    elif isinstance(
-        exc, httpx.NetworkError
-    ):  # Read/Write/Close errors (base after ConnectError)
+    elif isinstance(exc, httpx.NetworkError):  # Read/Write/Close errors (base after ConnectError)
         code = "fetch.connect"
     elif any(isinstance(c, ssl.SSLError) for c in causes):
         code = "fetch.tls"

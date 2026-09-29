@@ -70,9 +70,7 @@ class Crawler:
             fetched += 1
             emit(CrawlEvent(url=url, fetched=fetched))
             if goal.collect is None or goal.collect(doc):
-                key = canonical(
-                    _canonical_url(doc)
-                )  # the page's OWN identity (rel=canonical wins)
+                key = canonical(_canonical_url(doc))  # the page's OWN identity (rel=canonical wins)
                 if key not in yielded:
                     yielded.add(key)
                     yield doc

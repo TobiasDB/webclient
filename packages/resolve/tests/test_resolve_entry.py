@@ -27,17 +27,11 @@ def test_resolve_one_shot_returns_a_document(httpserver: HTTPServer) -> None:
 
 
 def test_resolve_as_session_reuses_state(httpserver: HTTPServer) -> None:
-    httpserver.expect_request("/a").respond_with_data(
-        b"<title>A</title>", content_type="text/html"
-    )
-    httpserver.expect_request("/b").respond_with_data(
-        b"<title>B</title>", content_type="text/html"
-    )
+    httpserver.expect_request("/a").respond_with_data(b"<title>A</title>", content_type="text/html")
+    httpserver.expect_request("/b").respond_with_data(b"<title>B</title>", content_type="text/html")
 
     async def go() -> tuple[str, str]:
-        async with resolve(
-            httpserver.url_for("/a")
-        ) as session:  # same call, as a session
+        async with resolve(httpserver.url_for("/a")) as session:  # same call, as a session
             a = await session.doc()
             b = await session.resolve(httpserver.url_for("/b"))
             return a.metadata().title or "", b.metadata().title or ""
@@ -57,14 +51,10 @@ def test_resolve_session_interacts_with_the_live_page(httpserver: HTTPServer) ->
     httpserver.expect_request("/app").respond_with_data(page, content_type="text/html")
 
     async def go() -> tuple[str, str]:
-        async with resolve(
-            httpserver.url_for("/app"), profile=profiles.FULL_BROWSER
-        ) as s:
+        async with resolve(httpserver.url_for("/app"), profile=profiles.FULL_BROWSER) as s:
             before = (await s.doc()).select_all("#box")[0].text  # the live page, parsed
             await s.click("#go")  # interaction on the live page
-            after = (
-                (await s.doc()).select_all("#box")[0].text
-            )  # re-parsed -> reflects the click
+            after = (await s.doc()).select_all("#box")[0].text  # re-parsed -> reflects the click
             return before, after
 
     assert _run(go()) == ("before", "after")

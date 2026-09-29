@@ -63,13 +63,9 @@ class ResolveSession:
 
     def __init__(self, resolver: Resolver, live: Fetcher, request: Request) -> None:
         self._resolver = resolver
-        self._live = (
-            live  # the base tier's live fetch session (a browser session == a _Page)
-        )
+        self._live = live  # the base tier's live fetch session (a browser session == a _Page)
         self._request = request
-        self._doc: "Document | None" = (
-            None  # memo for the HTTP (no-live-page) case only
-        )
+        self._doc: "Document | None" = None  # memo for the HTTP (no-live-page) case only
 
     def _page(self) -> _Page:
         """The live page, or a clear error when this session's base transport is not a browser."""
@@ -98,9 +94,7 @@ class ResolveSession:
 
     async def goto(self, request: "Request | str") -> "ResolveSession":
         """Navigate the live page to ``request`` (chainable). Then ``doc()`` / interact."""
-        await self._page().goto(
-            Request(url=request) if isinstance(request, str) else request
-        )
+        await self._page().goto(Request(url=request) if isinstance(request, str) else request)
         return self
 
     async def click(self, selector: str, *, human: bool = False) -> "ResolveSession":
@@ -168,12 +162,8 @@ def resolve(
 
     async def open_session() -> ResolveSession:
         session_resolver = await resolver.session()
-        live = (
-            session_resolver.base
-        )  # the base tier's live fetch session (a browser == a _Page)
-        if isinstance(
-            live, _Page
-        ):  # position the live page at the entry URL (mirrors `fetch()`)
+        live = session_resolver.base  # the base tier's live fetch session (a browser == a _Page)
+        if isinstance(live, _Page):  # position the live page at the entry URL (mirrors `fetch()`)
             await live.goto(req)
         return ResolveSession(session_resolver, live, req)
 

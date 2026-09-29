@@ -51,17 +51,13 @@ def proxy(server: "str | Proxy") -> Profile:
 def proxy_browser(server: "str | Proxy") -> Profile:
     """:data:`BASIC_BROWSER` routed through ``server`` (both tiers)."""
     return BASIC_BROWSER.with_(
-        escalation=EscalationPolicy(
-            tiers=(_fp.proxy(server), _fp.proxy_browser(server))
-        )
+        escalation=EscalationPolicy(tiers=(_fp.proxy(server), _fp.proxy_browser(server)))
     )
 
 
 def proxy_full_browser(server: "str | Proxy") -> Profile:
     """:data:`FULL_BROWSER` routed through ``server``."""
-    return FULL_BROWSER.with_(
-        escalation=EscalationPolicy(tiers=(_fp.proxy_browser(server),))
-    )
+    return FULL_BROWSER.with_(escalation=EscalationPolicy(tiers=(_fp.proxy_browser(server),)))
 
 
 #: the by-NAME registry (the constant profiles) -- so a serialisable lazy plan can name a policy,

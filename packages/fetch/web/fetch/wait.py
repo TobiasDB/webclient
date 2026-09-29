@@ -30,9 +30,7 @@ async def apply_wait(page: "Page", wait: Wait) -> None:
         except Exception:
             pass
     if wait.until == "selector" and wait.selector:
-        await page.wait_for_selector(
-            wait.selector, timeout=ms
-        )  # a real miss raises (loud)
+        await page.wait_for_selector(wait.selector, timeout=ms)  # a real miss raises (loud)
     elif wait.until == "dom_stable":
         await _dom_stable(page, wait.timeout, wait.quiet)
 

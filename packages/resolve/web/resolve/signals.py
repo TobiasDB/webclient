@@ -30,9 +30,7 @@ def spa(doc: Document) -> "Signal | None":
         return None
     body = doc.select("body")
     visible = len(body.text) if body is not None else 0
-    mounts = doc.select(
-        "#root, #app, [data-reactroot], [data-server-rendered], [ng-version]"
-    )
+    mounts = doc.select("#root, #app, [data-reactroot], [data-server-rendered], [ng-version]")
     if visible < 200 and mounts is not None and doc.select("script") is not None:
         return Signal(name="spa", confidence=0.8, detail={"visible_chars": visible})
     return None
@@ -126,9 +124,7 @@ def blocked_status(snap: Snapshot) -> "Signal | None":
     """A transport-level block by STATUS -- 401/403 (denied), 429 (rate-limited). A Snapshot fact,
     not content: the remedy differs (backoff for 429; a stronger tier/proxy for 403)."""
     if snap.status in (401, 403):
-        return Signal(
-            name="blocked_status", confidence=0.9, detail={"status": snap.status}
-        )
+        return Signal(name="blocked_status", confidence=0.9, detail={"status": snap.status})
     if snap.status == 429:
         return Signal(
             name="blocked_status",
@@ -169,9 +165,7 @@ def data_api(doc: Document) -> "Signal | None":
     if doc.kind != "html":
         return None
     if (
-        doc.select(
-            "script#__NEXT_DATA__, script[type='application/json'], script[id*=state]"
-        )
+        doc.select("script#__NEXT_DATA__, script[type='application/json'], script[id*=state]")
         is not None
     ):
         return Signal(name="data_api", confidence=0.7)
@@ -199,10 +193,7 @@ def tabbed(doc: Document) -> "Signal | None":
     remedy is an interaction, not a URL walk)."""
     if doc.kind != "html":
         return None
-    if (
-        doc.select("[role=tablist], [role=tab], [data-tabs], [data-tab], .tab-content")
-        is not None
-    ):
+    if doc.select("[role=tablist], [role=tab], [data-tabs], [data-tab], .tab-content") is not None:
         return Signal(name="tabbed", confidence=0.6)
     return None
 

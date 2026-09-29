@@ -25,15 +25,11 @@ if TYPE_CHECKING:
     from .document import Document
 
 #: subtrees that are noise in a structural outline -- skipped whole.
-_SKIP = frozenset(
-    {"script", "style", "noscript", "template", "svg", "path", "link", "meta"}
-)
+_SKIP = frozenset({"script", "style", "noscript", "template", "svg", "path", "link", "meta"})
 #: page-chrome landmarks dropped when ``drop_chrome`` (so records aren't buried under menus).
 _CHROME = frozenset({"nav", "header", "footer", "aside"})
 #: native controls whose interactivity is obvious from the tag -- not worth a ``← clickable`` mark.
-_OBVIOUS = frozenset(
-    {"a", "button", "input", "select", "textarea", "summary", "label", "option"}
-)
+_OBVIOUS = frozenset({"a", "button", "input", "select", "textarea", "summary", "label", "option"})
 
 
 class Heading(BaseModel):
@@ -124,9 +120,7 @@ def _emit(
     line = "  " * depth + _signature(node)
     own = " ".join((node.text or "").split())
     kids = [c for c in node if _tag(c) not in _SKIP]
-    if own and (
-        not kids or len(own) > 1
-    ):  # hint a leaf's (or a short container's) own text
+    if own and (not kids or len(own) > 1):  # hint a leaf's (or a short container's) own text
         line += f"  {own[:text_chars]!r}"
     if mark_interactive and tag not in _OBVIOUS and _interactive(node):
         line += "  ← clickable"

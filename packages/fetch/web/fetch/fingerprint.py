@@ -31,9 +31,7 @@ class Fingerprint(BaseModel):
     platform: str = "Windows"
     ua_brands: str = '"Chromium";v="124", "Not-A.Brand";v="99"'
     headers: dict[str, str] = {}
-    raw_headers: dict[str, str] = (
-        {}
-    )  # a complete header set (from browserforge); used verbatim
+    raw_headers: dict[str, str] = {}  # a complete header set (from browserforge); used verbatim
 
     def http_headers(self) -> dict[str, str]:
         """The request headers this identity sends. A generated ``raw_headers`` set is used as-is

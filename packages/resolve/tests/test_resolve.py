@@ -15,9 +15,7 @@ def _run(coro):
 
 
 def test_resolver_fetches_and_parses(httpserver: HTTPServer) -> None:
-    httpserver.expect_request("/p").respond_with_data(
-        b"<h1>hi</h1>", content_type="text/html"
-    )
+    httpserver.expect_request("/p").respond_with_data(b"<h1>hi</h1>", content_type="text/html")
 
     async def go() -> Document:
         r = Resolver()
@@ -93,9 +91,7 @@ def test_retry_middleware_recovers_from_transient_failure() -> None:
         return await r.resolve(Request(url="https://x/"))
 
     doc = _run(go())
-    assert (
-        fetcher.calls == 3 and doc.select_all("p")[0].text == "ok"
-    )  # 2 failures + 1 success
+    assert fetcher.calls == 3 and doc.select_all("p")[0].text == "ok"  # 2 failures + 1 success
     assert doc.select_all("p")[0].text == "ok"
 
 
@@ -105,9 +101,7 @@ def test_retry_gives_up_then_the_policy_decides() -> None:
 
     # DEFAULT: a transport failure raises AFTER the retry middleware has run (obeying it first)
     async def raises() -> Document:
-        r = Resolver(
-            ladder=(_FlakyFetcher(fail=99),), retry=retry(max_attempts=2, backoff=0.0)
-        )
+        r = Resolver(ladder=(_FlakyFetcher(fail=99),), retry=retry(max_attempts=2, backoff=0.0))
         return await r.resolve(Request(url="https://x/"))
 
     with pytest.raises(WebException):
@@ -125,9 +119,7 @@ def test_retry_gives_up_then_the_policy_decides() -> None:
         return await r.resolve(Request(url="https://x/"))
 
     doc = _run(returns())
-    assert (
-        fetcher.calls == 2 and doc.select("p") is None
-    )  # gave up -> empty content, no raise
+    assert fetcher.calls == 2 and doc.select("p") is None  # gave up -> empty content, no raise
 
 
 def test_rate_limit_spaces_same_host_requests() -> None:
@@ -156,22 +148,11 @@ def _d(html: bytes):  # a parsed Document from bytes
 
 
 def test_spa_signal_on_a_client_rendered_shell() -> None:
-    s = spa(
-        _d(
-            b"<html><body><div id='root'></div><script src='/app.js'></script></body></html>"
-        )
-    )
+    s = spa(_d(b"<html><body><div id='root'></div><script src='/app.js'></script></body></html>"))
     assert isinstance(s, Signal) and s.name == "spa"
     # a server-rendered page with real text does NOT fire spa
     assert (
-        spa(
-            _d(
-                b"<html><body><div id='root'>"
-                + b"content " * 60
-                + b"</div></body></html>"
-            )
-        )
-        is None
+        spa(_d(b"<html><body><div id='root'>" + b"content " * 60 + b"</div></body></html>")) is None
     )
 
 
@@ -182,8 +163,7 @@ def test_login_and_pagination_detectors() -> None:
 
 def test_anti_bot_reads_content_markers() -> None:
     assert (
-        anti_bot(_d(b"<html><body>Please verify you are human (captcha)</body></html>"))
-        is not None
+        anti_bot(_d(b"<html><body>Please verify you are human (captcha)</body></html>")) is not None
     )
     assert anti_bot(_d(b"<html><body>normal page</body></html>")) is None
 
@@ -191,9 +171,7 @@ def test_anti_bot_reads_content_markers() -> None:
 def test_trace_captures_events_across_layers(httpserver: HTTPServer) -> None:
     from web.fetch import Trace
 
-    httpserver.expect_request("/p").respond_with_data(
-        b"<h1>hi</h1>", content_type="text/html"
-    )
+    httpserver.expect_request("/p").respond_with_data(b"<h1>hi</h1>", content_type="text/html")
     fetcher = _FlakyFetcher(fail=1)  # one transient failure -> a retry event too
 
     async def go_flaky() -> list[str]:
@@ -208,9 +186,7 @@ def test_trace_captures_events_across_layers(httpserver: HTTPServer) -> None:
         _run(go_flaky())
     topics = [e.topic for e in t.events]
     # the flaky fetcher isn't an http backend so no FetchEvent, but the retry policy emitted one
-    assert "resolve" in topics and any(
-        getattr(e, "phase", "") == "retry" for e in t.events
-    )
+    assert "resolve" in topics and any(getattr(e, "phase", "") == "retry" for e in t.events)
 
     # a real http fetch emits a FetchEvent
     async def go_http() -> None:
@@ -238,10 +214,7 @@ def test_flags_roll_signals_into_conclusions_with_remedies() -> None:
     fs = flags(doc)
     by_name = {f.name: f for f in fs}
     assert "auth_required" in by_name
-    assert (
-        by_name["auth_required"].present
-        and by_name["auth_required"].remedy == "session:login"
-    )
+    assert by_name["auth_required"].present and by_name["auth_required"].remedy == "session:login"
     assert all(isinstance(f, Flag) for f in fs)
 
 
@@ -296,9 +269,7 @@ def test_paginate_cursor_concatenates_json_pages(httpserver: HTTPServer) -> None
 
     async def go() -> Document:
         r = Resolver(
-            paginate=paginate_cursor(
-                cursor_path="next", param="cursor", items_path="items"
-            )
+            paginate=paginate_cursor(cursor_path="next", param="cursor", items_path="items")
         )
         try:
             return await r.resolve(Request(url=httpserver.url_for("/api")))
@@ -367,19 +338,11 @@ def test_retry_retries_real_transient_errors_not_persistent_ones() -> None:
         "fetch.proxy",
         "fetch.transport",
     ):
-        assert (
-            _retriable(
-                Snapshot(request=Request(url="https://x/"), error=err(code, "x"))
-            )
-            is True
-        )
+        assert _retriable(Snapshot(request=Request(url="https://x/"), error=err(code, "x"))) is True
     # persistent errors must NOT be retried (a retry can't help)
     for code in ("fetch.tls", "fetch.url", "fetch.redirects"):
         assert (
-            _retriable(
-                Snapshot(request=Request(url="https://x/"), error=err(code, "x"))
-            )
-            is False
+            _retriable(Snapshot(request=Request(url="https://x/"), error=err(code, "x"))) is False
         )
 
 
@@ -393,9 +356,7 @@ def test_paginate_param_aggregates_rows_across_full_html_pages(
 
         page = int(req.args.get("page", "1"))
         if page > 3:
-            return Response(
-                b"<html><body><ul></ul></body></html>", content_type="text/html"
-            )
+            return Response(b"<html><body><ul></ul></body></html>", content_type="text/html")
         items = "".join(f"<li class=row>p{page}-{i}</li>" for i in range(2))
         return Response(
             f"<html><body><ul>{items}</ul></body></html>".encode(),
@@ -407,9 +368,7 @@ def test_paginate_param_aggregates_rows_across_full_html_pages(
     async def go() -> list[str]:
         from web.resolve import paginate_param, until_empty
 
-        r = Resolver(
-            paginate=paginate_param("page", until=until_empty("li.row"), max_pages=5)
-        )
+        r = Resolver(paginate=paginate_param("page", until=until_empty("li.row"), max_pages=5))
         try:
             doc = await r.resolve(Request(url=httpserver.url_for("/list")))
             return [e.text for e in doc.select_all("li.row")]
@@ -430,16 +389,12 @@ def test_paginate_param_aggregates_rows_across_full_html_pages(
 def test_rotate_middleware_presents_fleet_identities(httpserver: HTTPServer) -> None:
     from web.fetch import ClientPool, Fingerprint
 
-    httpserver.expect_request("/").respond_with_data(
-        b"<html></html>", content_type="text/html"
-    )
+    httpserver.expect_request("/").respond_with_data(b"<html></html>", content_type="text/html")
     fp1 = Fingerprint(user_agent="Agent/1")
     fp2 = Fingerprint(user_agent="Agent/2")
 
     async def go() -> None:
-        async with (
-            ClientPool() as pool
-        ):  # rotation re-leases a fresh-identity backend per request
+        async with ClientPool() as pool:  # rotation re-leases a fresh-identity backend per request
             rs = Resolver(rotate=RotationPolicy(fleet=(fp1, fp2)), pool=pool)
             for _ in range(6):
                 await rs.resolve(Request(url=httpserver.url_for("/")))
@@ -467,9 +422,7 @@ def test_policies_are_serialisable_and_build_middleware() -> None:
     assert prof.escalation is not None and prof.escalation.on == ("403",)
 
     async def go() -> bool:
-        async with (
-            ClientPool() as pool
-        ):  # .build(pool) turns a policy into its middleware
+        async with ClientPool() as pool:  # .build(pool) turns a policy into its middleware
             return callable(RetryPolicy(max_attempts=2).build(pool))
 
     assert _run(go())

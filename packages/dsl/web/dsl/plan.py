@@ -116,11 +116,7 @@ class Plan(BaseModel):
         """A canonical, readable rendering of the chain as a Python-like expression -- for logs and
         the demo. Roots render as ``reference("url")`` (sourced) or the type name; operators as
         their symbols, so the whole thing reads as the ``wq`` chain that recorded it."""
-        out = (
-            f"reference({self.source!r})"
-            if self.source is not None
-            else (self.root or _CTX)
-        )
+        out = f"reference({self.source!r})" if self.source is not None else (self.root or _CTX)
         for s in self.steps:
             args = ", ".join(
                 [*map(_show, s.args), *(f"{k}={_show(v)}" for k, v in s.kwargs.items())]
@@ -130,11 +126,7 @@ class Plan(BaseModel):
             elif s.kind == "call":
                 out = f"{out}({args})"
             elif s.kind == "op":
-                out = (
-                    f"~{out}"
-                    if s.name == "not"
-                    else f"({out} {_OP_SYM[s.name]} {args})"
-                )
+                out = f"~{out}" if s.name == "not" else f"({out} {_OP_SYM[s.name]} {args})"
             elif s.kind == "fn":
                 out = f"{s.name}({out}{', ' + args if args else ''})"
             else:  # when

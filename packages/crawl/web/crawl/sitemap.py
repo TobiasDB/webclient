@@ -26,16 +26,12 @@ def _ungzip(doc: Document, url: str) -> Document:
     if doc.content[:2] != b"\x1f\x8b":
         return doc
     try:
-        return parse(
-            gzip.decompress(doc.content), content_type="application/xml", url=url
-        )
+        return parse(gzip.decompress(doc.content), content_type="application/xml", url=url)
     except (OSError, EOFError):  # truncated/invalid gzip -> leave as-is
         return doc
 
 
-async def sitemap_urls(
-    resolver: Resolver, source: str, *, max_maps: int = 20
-) -> list[str]:
+async def sitemap_urls(resolver: Resolver, source: str, *, max_maps: int = 20) -> list[str]:
     """Every page URL advertised by the sitemap at ``source`` -- following a sitemap index into its
     child sitemaps (up to ``max_maps`` fetched in all). ``source`` may be a full sitemap URL or a
     site base (then ``/sitemap.xml`` is assumed)."""
@@ -56,9 +52,7 @@ async def sitemap_urls(
         seen.add(url)
         doc = _ungzip(await resolver.resolve(Request(url=url)), url)
         fetched += 1
-        if (
-            doc.select("sitemapindex") is not None
-        ):  # an index: its <loc>s are child sitemaps
+        if doc.select("sitemapindex") is not None:  # an index: its <loc>s are child sitemaps
             queue.extend(loc for loc in _locs(doc) if loc not in seen)
         else:  # a urlset: its <loc>s are pages
             out.extend(_locs(doc))

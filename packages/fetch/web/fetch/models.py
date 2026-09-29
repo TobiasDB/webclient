@@ -96,9 +96,7 @@ class Snapshot(BaseModel):
     elapsed: float = 0.0
     set_cookies: dict[str, str] = {}
     redirects: list[str] = []  # the intermediate URLs, in order
-    events: list[CaptureEvent] = (
-        []
-    )  # captured during the fetch (browser: network/DOM/console)
+    events: list[CaptureEvent] = []  # captured during the fetch (browser: network/DOM/console)
     error: WebError | None = None
 
     @property

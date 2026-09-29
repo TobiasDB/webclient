@@ -23,8 +23,7 @@ from pydantic import JsonValue
 T = TypeVar("T", covariant=True)
 
 _MONTHS = {
-    m: i + 1
-    for i, m in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split())
+    m: i + 1 for i, m in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split())
 }
 _UNITS = {
     "second": 1,
@@ -131,9 +130,7 @@ def parse_when(
     )
     if m:
         n = 1 if m.group(1) in ("a", "an", "one") else int(m.group(1))
-        return (base - _dt.timedelta(seconds=n * _UNITS[m.group(2)])).replace(
-            microsecond=0
-        )
+        return (base - _dt.timedelta(seconds=n * _UNITS[m.group(2)])).replace(microsecond=0)
     return None
 
 
@@ -142,14 +139,10 @@ class Field(Generic[T]):
 
     __slots__ = ("_value", "_ok", "_base")
 
-    def __init__(
-        self, value: object = None, *, ok: bool = True, base: str = ""
-    ) -> None:
+    def __init__(self, value: object = None, *, ok: bool = True, base: str = "") -> None:
         self._value = value
         self._ok = ok and value is not None
-        self._base = (
-            base  # the page URL the value was read on, so link() resolves relative text
-        )
+        self._base = base  # the page URL the value was read on, so link() resolves relative text
 
     def get(self, default: object = None) -> T:
         """The field's value, or ``default`` when it is empty/missing."""
@@ -225,9 +218,7 @@ class Field(Generic[T]):
         text = str(self.get() or "").strip()
         return Field(urljoin(base or self._base or "", text) if text else "")
 
-    def map(
-        self, mapping: "dict[str, JsonValue]", default: object = None
-    ) -> "Field[JsonValue]":
+    def map(self, mapping: "dict[str, JsonValue]", default: object = None) -> "Field[JsonValue]":
         """The value looked up in ``mapping`` (strings compare case-insensitively); ``default`` when
         it is not there."""
         v = self.get()
@@ -312,15 +303,9 @@ def raw(value: object) -> JsonValue:
         return value.url
     if isinstance(value, (list, Collection)):
         return [raw(v) for v in value]
-    if (
-        isinstance(value, (str, int, float, bool))
-        or value is None
-        or isinstance(value, dict)
-    ):
+    if isinstance(value, (str, int, float, bool)) or value is None or isinstance(value, dict):
         return cast(JsonValue, value)
-    return str(
-        value
-    )  # a stray core value (e.g. an element) becomes its repr; rows stay pure data
+    return str(value)  # a stray core value (e.g. an element) becomes its repr; rows stay pure data
 
 
 def clean_row(row: "dict[str, object]") -> "dict[str, JsonValue]":
