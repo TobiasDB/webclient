@@ -18,13 +18,13 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import JsonValue
 
-from web.dsl import LazyCollection, LazyDocument, LazyField, LazyValues, wq
+from web.dsl import LazyCollection, LazyDocument, LazyField, wq
 from web.parse import Document as Page, Element, dig
 
 from .models import DatasetBrief, Reference
 
 #: any recorded query Author can emit (rows / a scalar fan-out / a single document download).
-Query = LazyCollection | LazyValues | LazyDocument
+Query = LazyCollection[object] | LazyDocument
 
 #: envelope keys a data-API commonly wraps its record array in, tried before a blind scan.
 _ENVELOPES = ("results", "data", "items", "rows", "records", "entries", "docs", "hits")
@@ -48,7 +48,7 @@ class Pattern(Protocol):
     name: str
 
     def match(self, reference: Reference) -> float: ...
-    def build(self, reference: Reference, brief: DatasetBrief, sample: Page) -> "LazyCollection | LazyDocument": ...
+    def build(self, reference: Reference, brief: DatasetBrief, sample: Page) -> "LazyCollection[object] | LazyDocument": ...
 
 
 _PATTERNS: list[Pattern] = []
@@ -144,7 +144,7 @@ class JsonArray:
     def match(self, reference: Reference) -> float:
         return 1.0 if reference.kind == "json" else 0.0
 
-    def build(self, reference: Reference, brief: DatasetBrief, sample: Page) -> LazyCollection:
+    def build(self, reference: Reference, brief: DatasetBrief, sample: Page) -> LazyCollection[object]:
         value = sample.json()
         path = _json_array_path(value) or ""
         node = dig(value, path)
@@ -166,7 +166,7 @@ class RepeatingRecords:
             return 0.0
         return 0.3 if _is_table_row(reference.record_selector) else 0.8
 
-    def build(self, reference: Reference, brief: DatasetBrief, sample: Page) -> LazyCollection:
+    def build(self, reference: Reference, brief: DatasetBrief, sample: Page) -> LazyCollection[object]:
         row = reference.record_selector or ""
         records = sample.select_all(row)
         cols = _html_columns(records[0], brief) if records else {"text": wq.doc.attr("text")}
@@ -185,7 +185,7 @@ class HtmlTable:
             return 0.0
         return 0.9 if _is_table_row(reference.record_selector) else 0.4
 
-    def build(self, reference: Reference, brief: DatasetBrief, sample: Page) -> LazyCollection:
+    def build(self, reference: Reference, brief: DatasetBrief, sample: Page) -> LazyCollection[object]:
         headers = [h.text.strip().lower() for h in sample.select_all("table th")]
         cols: dict[str, LazyField] = {}
         for name in brief.fields:
@@ -212,7 +212,7 @@ class FileDownload:
         return wq.reference(reference.url).resolve()
 
 
-def file_links_query(reference: Reference) -> LazyValues:
+def file_links_query(reference: Reference) -> LazyCollection[object]:
     """The query for a LISTING of downloadable files (used when ``brief.download`` is set on an
     HTML page): every same-page link ending in a known file extension, resolved absolute."""
     sel = ", ".join(f"a[href$='.{ext}']" for ext in _FILE_EXT)

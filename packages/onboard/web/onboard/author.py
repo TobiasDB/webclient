@@ -48,7 +48,7 @@ async def build_query(reference: Reference, brief: DatasetBrief, *, resolver: Re
     query = pat.build(reference, brief, sample)
     if pat.name == "file_download":  # a single-document download -- no row behaviours apply
         return query, pat.name, []
-    rows, notes = apply_behaviours(cast(LazyCollection, query), reference, brief)
+    rows, notes = apply_behaviours(cast(LazyCollection[object], query), reference, brief)
     return rows, pat.name, notes
 
 

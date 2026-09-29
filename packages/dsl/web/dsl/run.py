@@ -79,11 +79,11 @@ async def _walk(plan: Plan, root: object, rs: "Resolver", row: "dict[str, object
 
 
 async def _root_value(plan: Plan, root: object, rs: "Resolver") -> object:
-    """The starting value: a ``reference(url)`` root is its URL string (a ``resolve`` step fetches
-    it); any other root is the passed context (the collect() argument, or the element a sub-expr
-    runs against)."""
+    """The starting value: a ``reference(url)`` root is a :class:`Ref` (a ``resolve`` step fetches
+    it; collected bare, it reads as the reference); any other root is the passed context (the
+    collect() argument, or the element a sub-expr runs against)."""
     if plan.source is not None:
-        return plan.source
+        return Ref(plan.source, base=plan.source)
     return root
 
 
@@ -188,24 +188,21 @@ def _json_get(obj: object, path: str) -> object:
 
 def _fan(coll: "Collection[object]", name: str, args: "list[object]",
          kwargs: "dict[str, object]") -> object:
-    """Fan an element op out over a collection: nested collections/elements flatten into one
-    Collection (``select``/``select_all``); scalar reads fan out to a plain list of Fields."""
+    """Fan an element op out over a collection, ALWAYS returning a Collection so the chain stays
+    uniform (``select``/``select_all`` flatten nested collections and drop misses; a scalar read
+    like ``attr``/``text`` yields a Collection of Fields/Refs -- so ``.text().number()`` chains)."""
     if name in {"project", "merge", "limit", "distinct", "documents"}:
         return getattr(coll, name)(*args, **kwargs)
-    results = [_one(item, name, args, kwargs) for item in coll]
     flat: list[object] = []
-    surfaces = True
-    for r in results:
-        if isinstance(r, Collection):
-            flat.extend(r)
-        elif isinstance(r, Element):
-            flat.append(r)
-        elif r is None:
-            surfaces = surfaces and name in {"select", "select_all"}  # a select miss is dropped
+    for item in coll:
+        result = _one(item, name, args, kwargs)
+        if isinstance(result, Collection):  # select_all fanned -> flatten one level
+            flat.extend(result)
+        elif result is None and name in {"select", "select_all"}:
+            continue  # a select miss drops out of the collection
         else:
-            surfaces = False
-            flat.append(r)
-    return coll.derive(flat) if surfaces else results
+            flat.append(result)
+    return coll.derive(flat)
 
 
 async def _row_op(coll: "Collection[object]", name: str, call: "Step | None",
@@ -357,13 +354,11 @@ def _smart(cur: object) -> object:
     items smart-unwrapped; a list maps through; a Document/Element/scalar passes as-is."""
     if isinstance(cur, Field):
         return cur.get()
-    if isinstance(cur, Ref):  # an unresolved reference reads as its URL
-        return cur.url
     if isinstance(cur, Collection):
         return cur.project() if cur._rows is not None else [_smart(i) for i in cur]
     if isinstance(cur, list):
         return [_smart(i) for i in cur]
-    return cur
+    return cur  # a Ref reads as itself (a live reference); a Document/Element/scalar passes through
 
 
 __all__ = ["arun", "run_blob"]

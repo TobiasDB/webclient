@@ -25,10 +25,9 @@ from .expr import Expr, from_blob, from_plan
 from .facade import WebClient
 from .plan import Arg, Plan, Step
 from .run import run_blob
-from .surface import (LazyCollection, LazyDocument, LazyField, LazyReference, LazyReferences,
-                      LazyValues, wq)
+from .surface import LazyCollection, LazyDocument, LazyField, LazyReference, wq
 from .values import Collection, Field, Ref
 
 __all__ = ["wq", "WebClient", "Expr", "from_blob", "from_plan", "run_blob", "Plan", "Step", "Arg",
-           "Collection", "Field", "Ref", "LazyReference", "LazyReferences", "LazyDocument",
-           "LazyCollection", "LazyValues", "LazyField"]
+           "Collection", "Field", "Ref", "LazyReference", "LazyDocument", "LazyCollection",
+           "LazyField"]

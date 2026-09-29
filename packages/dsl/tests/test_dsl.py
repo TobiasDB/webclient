@@ -118,10 +118,13 @@ def test_field_references_an_earlier_column(httpserver: HTTPServer) -> None:
 
 # -- attr fan-out + documents follow -----------------------------------------
 
-def test_attr_fanout_returns_a_list_of_values(httpserver: HTTPServer) -> None:
+def test_attr_fanout_returns_references(httpserver: HTTPServer) -> None:
     url = _shop(httpserver)
-    hrefs = _run(wq.reference(url).resolve().select_all(".card a.link").attr("href").acollect())
-    assert [str(h).rsplit("/", 1)[-1] for h in hrefs] == ["1", "2", "3"]
+    refs = _run(wq.reference(url).resolve().select_all(".card a.link").attr("href").acollect())
+    assert [r.url.rsplit("/", 1)[-1] for r in refs] == ["1", "2", "3"]  # a list of Ref
+    # a fanned text read stays a chainable collection: .text().number() works
+    prices = _run(wq.reference(url).resolve().select_all(".card .price").text().acollect())
+    assert prices == ["$39", "$129", ""]
 
 
 def test_attr_href_is_a_resolvable_reference(httpserver: HTTPServer) -> None:

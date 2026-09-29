@@ -21,7 +21,7 @@ from web.dsl import LazyCollection, wq
 from .models import DatasetBrief, Reference
 
 #: a query modifier sees the recorded collection plus the reference/brief context.
-_Modify = Callable[[LazyCollection, Reference, DatasetBrief], LazyCollection]
+_Modify = Callable[[LazyCollection[object], Reference, DatasetBrief], LazyCollection[object]]
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,7 @@ def behaviour(flag: str, note: str = "") -> "Callable[[_Modify], _Modify]":
 
 
 @behaviour("record_list")
-def _drop_empty_rows(q: LazyCollection, reference: Reference, brief: DatasetBrief) -> LazyCollection:
+def _drop_empty_rows(q: LazyCollection[object], reference: Reference, brief: DatasetBrief) -> LazyCollection[object]:
     """A detected record region often includes blank scaffolding siblings -- drop rows whose first
     requested field came back empty, so the dataset is the records, not the frame."""
     if brief.fields:
@@ -73,7 +73,7 @@ register_behaviour(Behaviour("iframe", note="the content sits in an iframe -- de
                              "framed source (a browser render inlines it)"))
 
 
-def apply_behaviours(q: LazyCollection, reference: Reference, brief: DatasetBrief) -> "tuple[LazyCollection, list[str]]":
+def apply_behaviours(q: LazyCollection[object], reference: Reference, brief: DatasetBrief) -> "tuple[LazyCollection[object], list[str]]":
     """Apply every registered behaviour whose flag/signal fired on ``reference``: run its query
     modifier (if any) and collect its note. Returns the modified query and the advisory notes."""
     fired = set(reference.flags) | set(reference.signals)
