@@ -219,6 +219,29 @@ def _reason(doc: Document, by: "dict[str, Flag]") -> str:
     return "; ".join(bits) or "the highest dataset-likeness score among the candidates"
 
 
+#: file extensions a download brief harvests (mirrors :mod:`web.onboard.author`).
+_FILE_EXT = (
+    ".pdf",
+    ".pptx",
+    ".ppt",
+    ".xlsx",
+    ".xls",
+    ".csv",
+    ".doc",
+    ".docx",
+    ".odt",
+    ".ods",
+    ".rtf",
+    ".txt",
+    ".zip",
+)
+
+
+def _download_targets(doc: Document) -> "list[str]":
+    """The downloadable-file links on the page (by extension) -- the 'records' of a download brief."""
+    return [u for u in doc.links() if u.lower().split("?")[0].endswith(_FILE_EXT)]
+
+
 def _field_bonus(doc: Document, fields: "list[str]") -> float:
     """A small score boost when the page actually SHOWS the fields the brief's schema asks for --
     so Locate recognises the RIGHT dataset among several record lists (the schema is SHARED: Author
@@ -273,6 +296,10 @@ async def locate(
     for doc in docs:
         by = {f.name: f for f in flags(doc)}
         score = _score(doc, by)
+        if lb.download:  # a DOWNLOAD brief: a page that LISTS the target files IS the source
+            targets = _download_targets(doc)
+            if targets:
+                score = max(score, 5.0 + min(len(targets), 20) * 0.1)
         if score <= 0.0:
             continue
         score += _field_bonus(doc, lb.fields)  # schema-match tiebreaker (the brief's fields)

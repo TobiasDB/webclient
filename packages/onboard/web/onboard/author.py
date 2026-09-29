@@ -31,7 +31,21 @@ from .models import DatasetBrief, Reference
 from .patterns import author_prompt
 
 #: file extensions a download-listing query harvests from an HTML page.
-_FILE_EXT = ("pdf", "xlsx", "xls", "csv", "doc", "docx", "zip")
+_FILE_EXT = (
+    "pdf",
+    "pptx",
+    "ppt",
+    "xlsx",
+    "xls",
+    "csv",
+    "doc",
+    "docx",
+    "odt",
+    "ods",
+    "rtf",
+    "txt",
+    "zip",
+)
 #: document kinds that carry an extractable structure (anything else IS the file to download).
 _STRUCTURED = frozenset({"html", "xml", "json"})
 

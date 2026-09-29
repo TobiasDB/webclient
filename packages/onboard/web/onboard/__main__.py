@@ -495,7 +495,7 @@ async def _author(args: argparse.Namespace) -> int:
         listed = rows if isinstance(rows, list) else [rows]
         _err(f"\n  rows:      {len(listed)}")
         for row in listed[: args.sample]:
-            _err(f"    {json.dumps(row, ensure_ascii=False)}")
+            _err(f"    {json.dumps(row, ensure_ascii=False, default=str)}")
         return 0 if listed else 1
     finally:
         await resolver.aclose()
