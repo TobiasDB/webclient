@@ -6,9 +6,8 @@ import asyncio
 from typing import Any
 
 from pytest_httpserver import HTTPServer
-from web.resolve import Resolver
-
 from web.dsl import Collection, Field, Plan, WebClient, from_blob, run_blob, wq
+from web.resolve import Resolver
 
 _SHOP = (
     b"<html><body><main>"

@@ -7,7 +7,6 @@ from typing import Any
 
 from pytest_httpserver import HTTPServer
 from web.fetch import Profile as FetchProfile
-
 from web.resolve import EscalationPolicy, PaginatePolicy, Profile, RetryPolicy, resolve
 
 

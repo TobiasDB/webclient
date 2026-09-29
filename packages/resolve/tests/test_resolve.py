@@ -7,7 +7,6 @@ import asyncio
 from pytest_httpserver import HTTPServer
 from web.fetch import HttpFetcher, Request, Snapshot
 from web.parse import Document
-
 from web.resolve import RatePolicy, Resolver, RotationPolicy, rate_limit, retry
 
 
@@ -141,7 +140,6 @@ def test_rate_limit_spaces_same_host_requests() -> None:
 # -- signals: clean, standalone detector functions over a Document (a sub-part of resolve) --
 
 from web.parse import parse  # noqa: E402
-
 from web.resolve import (  # noqa: E402
     Signal,
     consent_wall,
@@ -446,7 +444,6 @@ def test_tabbed_widget() -> None:
 
 def test_retry_retries_real_transient_errors_not_persistent_ones() -> None:
     from web.fetch import err
-
     from web.resolve.middleware import _retriable
 
     # the common transient transport errors must be retried (previously only "fetch.transport" was)
@@ -529,7 +526,6 @@ def test_rotate_middleware_presents_fleet_identities(httpserver: HTTPServer) -> 
 def test_policies_are_serialisable_and_build_middleware() -> None:
     from web.fetch import ClientPool
     from web.fetch import profiles as fp
-
     from web.resolve import EscalationPolicy, Profile, RatePolicy, RetryPolicy
 
     # a policy is a plain (pydantic) model -> a Profile bundling them is fully serialisable

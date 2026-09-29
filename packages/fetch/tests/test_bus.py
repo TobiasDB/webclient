@@ -4,7 +4,6 @@ in isolation."""
 from __future__ import annotations
 
 from pydantic import BaseModel
-
 from web.fetch import Event, EventBus, WebError, WebException, err
 
 

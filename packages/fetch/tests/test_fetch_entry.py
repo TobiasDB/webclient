@@ -6,7 +6,6 @@ import asyncio
 from typing import Any
 
 from pytest_httpserver import HTTPServer
-
 from web.fetch import BrowserFetcher, ClientPool, Profile, Request, fetch
 
 
