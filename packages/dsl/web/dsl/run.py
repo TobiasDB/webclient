@@ -125,7 +125,12 @@ async def _resolve(cur: object, rs: "Resolver", *, optional: bool = False) -> ob
         return Collection(docs)
     url = cur.url if isinstance(cur, Ref) else (cur.get() if isinstance(cur, Field) else cur)
     if isinstance(url, str) and url:
-        return await rs.resolve(Request(url=url))
+        try:
+            return await rs.resolve(Request(url=url))
+        except WebException:  # a TRANSPORT failure (resolve policy raised); optional tolerates it
+            if optional:
+                return None
+            raise
     if isinstance(cur, Document):
         return cur
     if not optional:

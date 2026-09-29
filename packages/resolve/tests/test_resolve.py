@@ -61,15 +61,28 @@ def test_retry_middleware_recovers_from_transient_failure() -> None:
     assert doc.select_all("p")[0].text == "ok"
 
 
-def test_retry_gives_up_and_returns_the_last_document() -> None:
-    fetcher = _FlakyFetcher(fail=99)
+def test_retry_gives_up_then_the_policy_decides() -> None:
+    import pytest
 
-    async def go() -> Document:
-        r = Resolver(ladder=(fetcher,), retry=retry(max_attempts=2, backoff=0.0))
+    from web.fetch import WebException
+
+    # DEFAULT: a transport failure raises AFTER the retry middleware has run (obeying it first)
+    async def raises() -> Document:
+        r = Resolver(ladder=(_FlakyFetcher(fail=99),), retry=retry(max_attempts=2, backoff=0.0))
         return await r.resolve(Request(url="https://x/"))
 
-    doc = _run(go())
-    assert fetcher.calls == 2 and doc.select("p") is None  # gave up -> empty content
+    with pytest.raises(WebException):
+        _run(raises())
+
+    # POLICY opt-out: raise_on_error=False returns the not-ok (empty) Document instead
+    fetcher = _FlakyFetcher(fail=99)
+
+    async def returns() -> Document:
+        r = Resolver(ladder=(fetcher,), retry=retry(max_attempts=2, backoff=0.0), raise_on_error=False)
+        return await r.resolve(Request(url="https://x/"))
+
+    doc = _run(returns())
+    assert fetcher.calls == 2 and doc.select("p") is None  # gave up -> empty content, no raise
 
 
 def test_rate_limit_spaces_same_host_requests() -> None:

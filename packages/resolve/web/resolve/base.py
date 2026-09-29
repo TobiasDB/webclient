@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, TypeAlias, runtime_checkable
 
-from web.fetch import ClientPool, Fetcher, Middleware, Request, default_pool, stack
+from web.fetch import ClientPool, Fetcher, Middleware, Request, WebException, default_pool, stack
 from web.fetch import Profile as FetchProfile
 from web.parse import Document
 from .document import document
@@ -57,12 +57,18 @@ class Profile:
     retry: "int | Middleware | None" = None
     paginate: "Middleware | None" = None
     middleware: "tuple[Middleware, ...]" = ()
+    #: on a TRANSPORT failure (no response, after the middleware chain -- retry/escalate -- has run),
+    #: raise a structured WebException by default; set False for a policy that returns the not-ok
+    #: (empty) Document instead. An HTTP status (404/500) is a valid response, never a transport
+    #: failure, so it is never raised here.
+    raise_on_error: bool = True
 
     def with_(self, *, ladder: "tuple[Tier, ...] | None | _Keep" = _KEEP,
               rate_limit: "float | Middleware | None | _Keep" = _KEEP,
               retry: "int | Middleware | None | _Keep" = _KEEP,
               paginate: "Middleware | None | _Keep" = _KEEP,
-              middleware: "tuple[Middleware, ...] | _Keep" = _KEEP) -> "Profile":
+              middleware: "tuple[Middleware, ...] | _Keep" = _KEEP,
+              raise_on_error: "bool | _Keep" = _KEEP) -> "Profile":
         """A copy with some slots overridden (the rest inherited) -- combine or adjust a base profile."""
         return Profile(
             ladder=self.ladder if isinstance(ladder, _Keep) else ladder,
@@ -70,6 +76,7 @@ class Profile:
             retry=self.retry if isinstance(retry, _Keep) else retry,
             paginate=self.paginate if isinstance(paginate, _Keep) else paginate,
             middleware=self.middleware if isinstance(middleware, _Keep) else middleware,
+            raise_on_error=self.raise_on_error if isinstance(raise_on_error, _Keep) else raise_on_error,
         )
 
 
@@ -105,11 +112,13 @@ class Resolver:
         retry: "int | Middleware | None" = None,
         paginate: "Middleware | None" = None,
         middleware: tuple[Middleware, ...] = (),
+        raise_on_error: "bool | None" = None,
         pool: "ClientPool | None" = None,
         _own: bool = False,
     ) -> None:
         p = profile or _EMPTY
         self._pool = pool or default_pool()
+        self._raise = raise_on_error if raise_on_error is not None else p.raise_on_error
         chosen = ladder if ladder is not None else p.ladder
         # LEASE each tier from the pool -- a fetch Profile leases its SHARED backend (browser
         # launched once, reused); a ready Fetcher (a caller's, or an opened session) passes through.
@@ -148,10 +157,16 @@ class Resolver:
         return stack(base_tier, chain)
 
     async def resolve(self, request: "Request | str") -> Document:
-        """``Request -> Document`` (a bare URL string is accepted as a shorthand ``Request`` -- the
-        clean entry, no hand-built request)."""
+        """``Request -> Document`` (a bare URL string is a shorthand ``Request``). The middleware
+        chain (retry / escalate / rate-limit / paginate) runs first; then, on a TRANSPORT failure
+        (no response), this raises a structured :class:`~web.fetch.WebException` by default -- the
+        resolve POLICY's choice (``raise_on_error=False`` returns the not-ok empty Document instead).
+        An HTTP status (404/500) is a valid response and is never raised."""
         req = Request(url=request) if isinstance(request, str) else request
-        return document(await self._fetcher.fetch(req))
+        snap = await self._fetcher.fetch(req)  # runs the whole middleware chain (retry, escalate, ...)
+        if snap.error is not None and self._raise:
+            raise WebException(snap.error)
+        return document(snap)
 
     async def __aenter__(self) -> "Resolver":
         """Enter a resolver scope -- ``async with Resolver(...) as rs:`` (closes on exit)."""
@@ -168,7 +183,8 @@ class Resolver:
         sessions = tuple([await _open_session(t) for t in self._tiers])
         return Resolver(
             ladder=sessions, rate_limit=self._rl, retry=self._rt, paginate=self._pg,
-            middleware=self._mw, pool=self._pool, _own=True,  # the session resolver OWNS its sessions
+            middleware=self._mw, raise_on_error=self._raise, pool=self._pool,
+            _own=True,  # the session resolver OWNS its sessions
         )
 
     async def aclose(self) -> None:
