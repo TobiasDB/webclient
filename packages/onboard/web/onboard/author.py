@@ -20,9 +20,9 @@ from typing import cast
 
 from pydantic import BaseModel
 from web.dsl import LazyCollection, wq
-from web.resolve import Resolver, flags
-
+from web.fetch import emit
 from web.parse import Document
+from web.resolve import Resolver, flags
 
 from .behaviours import apply_behaviours
 from .compile import Query, parse_query, reroot
@@ -34,6 +34,20 @@ from .patterns import author_prompt
 _FILE_EXT = ("pdf", "xlsx", "xls", "csv", "doc", "docx", "zip")
 #: document kinds that carry an extractable structure (anything else IS the file to download).
 _STRUCTURED = frozenset({"html", "xml", "json"})
+
+
+class AuthorEvent(BaseModel):
+    """One Author stage, published on the event bus so a caller can log authoring AS IT GOES:
+    ``sample`` (the resolved sample -- kind, skeleton size, flags), ``reply`` (the model's raw ``wq``
+    chain, visible even when it fails to parse), ``parsed`` (parsed + rerooted at the source)."""
+
+    topic: str = "author"
+    phase: str = ""
+    url: str = ""
+    kind: str = ""
+    lines: int = 0
+    flags: list[str] = []
+    reply: str = ""
 
 
 class Authored(BaseModel):
@@ -75,8 +89,21 @@ async def build_query(
     sample = await resolver.resolve(reference.url)
     if sample.kind not in _STRUCTURED:  # a PDF / spreadsheet / blob IS the dataset -- fetch it
         return cast(Query, wq.reference(reference.url).resolve()), "file_download", []
-    prompt = author_prompt(brief, _skeleton(sample), flags(sample), kind=sample.kind)
-    query = reroot(parse_query(await llm.complete(prompt)), reference.url)
+    skeleton = _skeleton(sample)
+    fired = flags(sample)
+    emit(
+        AuthorEvent(
+            phase="sample",
+            url=reference.url,
+            kind=sample.kind,
+            lines=skeleton.count("\n") + 1,
+            flags=[f.name for f in fired],
+        )
+    )
+    reply = await llm.complete(author_prompt(brief, skeleton, fired, kind=sample.kind))
+    emit(AuthorEvent(phase="reply", reply=reply))  # emitted BEFORE parse -- visible even on failure
+    query = reroot(parse_query(reply), reference.url)
+    emit(AuthorEvent(phase="parsed", url=reference.url))
     rows, notes = apply_behaviours(cast(LazyCollection[object], query), reference, brief)
     return cast(Query, rows), "llm", notes
 
@@ -112,4 +139,4 @@ async def authored(
     return Authored(blob=query.to_blob(), engine=engine, notes=notes)
 
 
-__all__ = ["author", "authored", "build_query", "Authored"]
+__all__ = ["author", "authored", "build_query", "Authored", "AuthorEvent"]

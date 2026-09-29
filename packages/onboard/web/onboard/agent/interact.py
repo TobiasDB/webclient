@@ -14,7 +14,6 @@ from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel
 from web.fetch import BrowserSession, Request
-
 from web.parse import parse
 
 from .loop import Ask, BoundedLoop, Done, Verdict

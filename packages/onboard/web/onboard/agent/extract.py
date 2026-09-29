@@ -17,7 +17,6 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel
-
 from web.parse import Document
 
 from .loop import Ask, BoundedLoop, Done, Verdict

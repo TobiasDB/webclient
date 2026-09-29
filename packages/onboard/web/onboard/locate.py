@@ -22,9 +22,8 @@ from urllib.parse import urlparse
 
 from web.crawl import Crawler, FrontierMiddleware, Goal
 from web.fetch import NetworkEvent, Request
-from web.resolve import Flag, Resolver, document, flags
-
 from web.parse import Document, parse
+from web.resolve import Flag, Resolver, document, flags
 
 from .models import LocateBrief, Reference
 

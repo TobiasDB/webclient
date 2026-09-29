@@ -38,7 +38,8 @@ from web.fetch import Profile as FetchProfile
 from web.fetch import WebException, using
 from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
 
-from .author import build_query
+from .author import AuthorEvent, build_query
+from .compile import QueryError
 from .frontier import llm_frontier
 from .llm import AnthropicLlm, LlmEvent, Pricing, RateLimit, Usage
 from .locate import locate
@@ -97,6 +98,14 @@ class _Progress:
                 f"  · llm [{event.model}] call {event.calls}: ${event.cost_usd:.4f}"
                 f"  (running ${event.spent_usd:.4f})"
             )
+        elif isinstance(event, AuthorEvent):  # the authoring stages
+            if event.phase == "sample":
+                fl = ", ".join(event.flags) or "—"
+                _err(f"  · sample: {event.kind}, {event.lines} skeleton line(s), flags: {fl}")
+            elif event.phase == "reply":
+                _err(f"  · model wrote: {_short(' '.join(event.reply.split()), 100)}")
+            elif event.phase == "parsed":
+                _err("  · query parsed + rerooted at the source")
         elif isinstance(event, ResolveEvent):
             _err(f"  · {event.phase}: {_short(event.url)}")
         elif isinstance(event, FetchEvent) and self._verbose:
@@ -428,8 +437,16 @@ async def _author(args: argparse.Namespace) -> int:
             _err("no source located to author over (nothing scored above zero).")
             return 1
         _err(f"authoring: resolving {_short(reference.url)} then asking the model for the query…")
-        with _Progress(args.verbose):
-            query, engine, notes = await build_query(reference, brief, resolver=resolver, llm=llm)
+        try:
+            with _Progress(args.verbose):
+                query, engine, notes = await build_query(
+                    reference, brief, resolver=resolver, llm=llm
+                )
+        except (
+            QueryError
+        ) as exc:  # the model's reply was not a rebuildable wq chain (it was logged)
+            _err(f"authoring failed: the model's query did not parse — {exc}")
+            return 1
         _explain_query(reference, brief, engine, query.describe(), notes)  # reasoning -> stderr
         print(query.to_blob())  # the serialised query -> stdout
         if isinstance(
@@ -443,8 +460,12 @@ async def _author(args: argparse.Namespace) -> int:
         if not args.run:
             return 0
         _err("running the query…")
-        with _Progress(args.verbose):
-            rows = await query.acollect(resolver=resolver)
+        try:
+            with _Progress(args.verbose):
+                rows = await query.acollect(resolver=resolver)
+        except WebException as exc:  # a runtime extraction failure (e.g. a loud select miss)
+            _err(f"running failed: {exc}")
+            return 1
         listed = rows if isinstance(rows, list) else [rows]
         _err(f"\n  rows:      {len(listed)}")
         for row in listed[: args.sample]:

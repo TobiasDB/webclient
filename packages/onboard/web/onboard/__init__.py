@@ -24,7 +24,7 @@ from web.resolve import Resolver
 
 from .agent import Author, Selection, extract
 from .author import Authored as AuthoredQuery
-from .author import author, authored, build_query
+from .author import AuthorEvent, author, authored, build_query
 from .behaviours import Behaviour, apply_behaviours, behaviour, register_behaviour
 from .compile import Query, QueryError, parse_query, reroot
 from .frontier import llm_frontier
@@ -115,6 +115,7 @@ __all__ = [
     "LocateBrief",
     "DatasetBrief",
     "AuthoredQuery",
+    "AuthorEvent",
     "Search",
     "DdgSearch",
     "data_api_endpoints",
