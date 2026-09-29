@@ -19,9 +19,9 @@ web.onboard.agent's pluggable ``Driver``). web.onboard.agent stays LLM-agnostic 
 from __future__ import annotations
 
 from pydantic import BaseModel
-from web.resolve import Resolver
-
 from web.crawl import Crawler, Goal
+
+from web.resolve import Resolver
 
 from .agent import Author, Selection, extract
 from .author import Authored as AuthoredQuery

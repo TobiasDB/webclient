@@ -5,7 +5,7 @@ _Generated 2026-09-29 · Author LLM: **HeuristicLlm (deterministic stand-in, no 
 Two phases per example: **Locate** (find the right source -- the expected record selector, or a JSON/XML data document) and **Author** (write a `wq` query and RUN it, grading the rows against the fixture's published expected result).
 
 - **Locate:** PASS 21 · PARTIAL 0 · FAIL 3
-- **Author:** PASS 8 · PARTIAL 7 · FAIL 9
+- **Author:** PASS 7 · PARTIAL 7 · FAIL 10
 
 > With no `ANTHROPIC_API_KEY`, Author is driven by a deterministic `HeuristicLlm` that reads the prompt's skeleton + fields and writes the query by a fixed heuristic. This measures the PIPELINE MECHANICS (prompt -> parse -> reroot -> run) and how far a mechanical author gets, **not a model's selector quality** -- a real `AnthropicLlm` is a drop-in replacement.
 
@@ -26,7 +26,7 @@ Two phases per example: **Locate** (find the right source -- the expected record
 | `cursor` | json | PASS | PASS | 4 | 4 rows, probe name~'Item 1' found |
 | `rss` | xml feed | PASS | PARTIAL | 3 | 3 rows but probe title~'Q3 earnings released' MISSING |
 | `paginated` | pagination | PASS | PASS | 4 | 4 rows, probe name~'Row 1' found |
-| `looppager` | pagination | PASS | PASS | 4 | 4 rows, probe name~'Item 1' found |
+| `looppager` | pagination | PASS | FAIL | 0 | no rows (query did not produce a list) |
 | `overlap` | pagination | PASS | PASS | 5 | 5 rows, probe name~'Item 1' found |
 | `deep` | pagination + detail | PASS | PASS | 4 | 4 rows, probe name~'Item 1' found |
 | `news` | sibling rows | PASS | PARTIAL | 6 | 6 rows but probe title~'CPU' MISSING |

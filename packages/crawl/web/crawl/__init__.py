@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 
 from web.fetch import Request, emit
 from web.parse import Document
+
 from web.resolve import Resolver, document, flags
 
 from .frontier import FrontierMiddleware, Select, by_score, fifo
@@ -96,8 +97,8 @@ class Crawler:
                         url=item.url, fetched=fetched, status=snap.status, ok=snap.ok, flags=fired
                     )
                 )
-                if snap.error is not None:  # transport failure: nothing to yield or traverse
-                    continue
+                if not snap.ok:  # a transport failure or a bad status (403/404/5xx): not a source
+                    continue  # reported on the event above; never yielded or traversed
                 if goal.collect is None or goal.collect(doc):
                     key = canonical(
                         _canonical_url(doc)
@@ -105,7 +106,7 @@ class Crawler:
                     if key not in yielded:
                         yielded.add(key)
                         yield doc
-                if doc.kind in ("html", "xml"):  # traverse links even from non-results
+                if doc.kind in ("html", "xml"):  # traverse links from OK pages
                     for link in doc.links():
                         if goal.scope(doc, link):
                             admit(link, item.depth + 1, item.url)

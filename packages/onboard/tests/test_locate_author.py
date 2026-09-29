@@ -15,6 +15,8 @@ from typing import cast
 import pytest
 from pytest_httpserver import HTTPServer
 from web.dsl import Plan
+from web.resolve import Resolver
+
 from web.onboard import (
     Brief,
     DatasetBrief,
@@ -28,7 +30,6 @@ from web.onboard import (
     locate_and_author,
 )
 from web.onboard.__main__ import main
-from web.resolve import Resolver
 
 
 class ScriptedLlm:
@@ -92,6 +93,39 @@ def test_locate_rejects_a_blocked_bot_wall(httpserver: HTTPServer) -> None:
             )
 
     assert cast("Reference | None", _run(go())) is None
+
+
+def test_locate_rejects_a_403_candidate(httpserver: HTTPServer) -> None:
+    # status-aware: a 403 (even with a table) is not ok -> not a source, so locate finds nothing.
+    httpserver.expect_request("/denied").respond_with_data(
+        _BLOCKED, status=403, content_type="text/html"
+    )
+
+    async def go() -> "Reference | None":
+        async with Resolver() as r:
+            return await locate(
+                LocateBrief(goal="data", candidates=[httpserver.url_for("/denied")]), resolver=r
+            )
+
+    assert cast("Reference | None", _run(go())) is None
+
+
+def test_locate_reference_carries_flag_descriptions_and_signals(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+
+    async def go() -> "Reference | None":
+        async with Resolver() as r:
+            return await locate(
+                LocateBrief(goal="team", candidates=[httpserver.url_for("/people")]), resolver=r
+            )
+
+    ref = cast("Reference | None", _run(go()))
+    assert ref is not None
+    rl = next((f for f in ref.assessment if f.name == "record_list"), None)
+    assert rl is not None and rl.description and rl.confidence > 0.0  # the flag carries its meaning
+    assert rl.signals and all(
+        s.confidence > 0.0 for s in rl.signals
+    )  # + the evidence + confidences
 
 
 def test_locate_prefers_a_clean_source_over_a_blocked_one(httpserver: HTTPServer) -> None:
@@ -402,6 +436,7 @@ def test_packaged_briefs_are_available_and_loadable() -> None:
 
 def test_ddg_search_parses_result_urls(monkeypatch: "pytest.MonkeyPatch") -> None:
     import ddgs
+
     from web.onboard import DdgSearch
 
     class _FakeDDGS:

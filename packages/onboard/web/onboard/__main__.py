@@ -32,12 +32,12 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Sequence
 
+from web.crawl import CrawlEvent
 from web.fetch import Event, EventBus, FetchEvent
 from web.fetch import Profile as FetchProfile
 from web.fetch import WebException, using
-from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
 
-from web.crawl import CrawlEvent
+from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
 
 from .author import build_query
 from .llm import AnthropicLlm, Pricing, RateLimit
@@ -209,9 +209,10 @@ def _transport_args(sub: argparse.ArgumentParser) -> None:
     )
     sub.add_argument(
         "--profile",
-        default="basic",
+        default="basic_browser",
         choices=("basic", "basic_browser", "full_browser"),
-        help="resolve profile: HTTP, escalate-to-browser, or always-render",
+        help="resolve profile (default basic_browser: HTTP first, escalate to a browser on a block "
+        "/403 -- robust; `basic` is HTTP-only, `full_browser` always renders)",
     )
     sub.add_argument(
         "--full-browser",
@@ -260,10 +261,15 @@ def _explain_reference(ref: Reference) -> None:
         _err(f"  records:   {ref.record_selector}   (the repeating-row selector to extract)")
     if ref.pagination:
         _err(f"  pager:     {ref.pagination}   (the pipeline follows it)")
-    if ref.flags:
-        _err("  flags:     " + ", ".join(ref.flags) + "   (the conclusions that fired)")
-    if ref.signals:
-        _err("  evidence:  " + ", ".join(ref.signals))
+    if ref.assessment:  # each conclusion, its confidence + meaning, and the evidence that fired it
+        _err("  flags:")
+        for f in ref.assessment:
+            _err(f"    {f.name} ({f.confidence:.2f}) — {f.description}")
+            for s in f.signals:
+                extra = f" {s.detail}" if s.detail else ""
+                _err(f"        · {s.name} ({s.confidence:.2f}){extra}")
+    elif ref.flags:
+        _err("  flags:     " + ", ".join(ref.flags))
     score = ref.detail.get("score")
     if score is not None:
         _err(

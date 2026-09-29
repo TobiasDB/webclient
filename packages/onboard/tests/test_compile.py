@@ -12,8 +12,9 @@ from typing import cast
 
 import pytest
 from pytest_httpserver import HTTPServer
-from web.onboard.compile import QueryError, parse_query, query_code, reroot
 from web.resolve import Resolver
+
+from web.onboard.compile import QueryError, parse_query, query_code, reroot
 
 
 def _run(coro: object) -> object:

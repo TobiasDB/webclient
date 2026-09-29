@@ -20,11 +20,11 @@ import re
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 
+from web.crawl import Crawler, FrontierMiddleware, Goal
 from web.fetch import NetworkEvent, Request
 from web.parse import Document, parse
-from web.resolve import Flag, Resolver, flags
 
-from web.crawl import Crawler, FrontierMiddleware, Goal
+from web.resolve import Flag, Resolver, document, flags
 
 from .models import LocateBrief, Reference
 
@@ -194,6 +194,7 @@ def _reference(doc: Document, by: "dict[str, Flag]") -> Reference:
         page_url=doc.url,
         flags=sorted(by),
         signals=sorted({s.name for f in by.values() for s in f.signals}),
+        assessment=sorted(by.values(), key=lambda f: -f.confidence),  # full report: why each fired
         record_selector=_record_selector(doc),
         pagination=_pagination(by),
         needs_browser=any(n in by for n in render),
@@ -239,11 +240,15 @@ async def locate(
             raise ValueError("locate needs seeds, candidates, or a search callable")
         seeds = await search(lb.search or lb.goal)
 
-    if lb.candidates:
-        docs = [await resolver.resolve(Request(url=u)) for u in lb.candidates]
+    if lb.candidates:  # status-aware: a blocked/errored candidate (403/5xx) is not a source
+        docs = []
+        for u in lb.candidates:
+            snap = await resolver.snapshot(Request(url=u))
+            if snap.ok:
+                docs.append(document(snap))
     else:
         goal = Goal(start=seeds, max_pages=lb.max_pages, frontier=frontier, assess=True)
-        docs = [d async for d in Crawler(resolver).crawl(goal)]
+        docs = [d async for d in Crawler(resolver).crawl(goal)]  # the crawl yields only OK pages
 
     best: "Reference | None" = None
     best_page: "Document | None" = None

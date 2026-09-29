@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 
 from pytest_httpserver import HTTPServer
+from web.crawl import Crawler, Goal
 from web.fetch import HttpFetcher
 from web.parse import Document
-from web.resolve import Resolver
 
-from web.crawl import Crawler, Goal
+from web.resolve import Resolver
 
 
 def _run(coro):
@@ -78,9 +78,8 @@ def test_frontier_middleware_picks_which_edges_to_expand(httpserver: HTTPServer)
 
 def test_crawl_event_carries_status_ok_and_flags(httpserver: HTTPServer) -> None:
     # a page that 404s is reported (ok=False) and does not abort the crawl; assess adds flags.
-    from web.fetch import Trace
-
     from web.crawl import CrawlEvent
+    from web.fetch import Trace
 
     body = b"<html><body><ul><li class='row'>a</li><li class='row'>b</li><li class='row'>c</li></ul></body></html>"
     httpserver.expect_request("/list").respond_with_data(body, content_type="text/html")

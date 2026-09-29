@@ -29,6 +29,8 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, JsonValue
 
+from web.resolve import Flag
+
 
 class Brief(BaseModel):
     """The onboarding spec, in three sections (see the module docstring). SHARED: ``goal`` +
@@ -124,17 +126,21 @@ class Reference(BaseModel):
     """WHERE the located dataset is, plus the hints Author needs. ``url`` is the source to query
     -- the **XHR/data-API endpoint when one backs the page** (JSON beats HTML), else the page
     itself; ``page_url`` is always the page it was found on. ``kind`` is the sniffed kind of
-    ``url``. ``flags``/``signals`` are the conclusions/evidence that fired (from web.resolve).
-    ``record_selector`` is the suggested repeating-row ``select_all`` target; ``pagination`` is
-    the pager remedy (``paginate`` / ``paginate:scroll`` / ``paginate:cursor``); ``needs_browser``
-    means a static fetch won't build the DOM; ``api_endpoint`` is the discovered data-API (equals
-    ``url`` when preferred). ``detail`` carries any extra evidence."""
+    ``url``. ``flags``/``signals`` are the conclusion/evidence NAMES that fired (a quick membership
+    check); ``assessment`` is the FULL detection report -- each :class:`~web.resolve.Flag` with its
+    description, confidence, and the signals (with confidences) that triggered it, so a caller can
+    see WHY a conclusion fired. ``record_selector`` is the suggested repeating-row ``select_all``
+    target; ``pagination`` is the pager remedy (``paginate`` / ``paginate:scroll`` /
+    ``paginate:cursor``); ``needs_browser`` means a static fetch won't build the DOM; ``api_endpoint``
+    is the discovered data-API (equals ``url`` when preferred). ``detail`` carries any extra
+    evidence (e.g. the dataset-likeness ``score``)."""
 
     url: str
     kind: str = "html"
     page_url: str = ""
     flags: list[str] = []
     signals: list[str] = []
+    assessment: list[Flag] = []
     record_selector: "str | None" = None
     pagination: "str | None" = None
     needs_browser: bool = False
