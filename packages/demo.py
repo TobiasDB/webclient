@@ -7,9 +7,11 @@ against it, bottom-up, printing what each produces:
     parse    -- bytes -> Document: records(), skeleton() marks, tables(), metadata(), JSON at()
     resolve  -- Request -> Document with policy: flags() conclusions + param pagination
     crawl    -- Goal -> Documents (canonical-deduped frontier)
-    dsl      -- a lazy plan: ref(url).doc().select_all(...).project(...).number() in 3 dispatch modes
+    dsl      -- a lazy plan: select_all(...).project(...); select().attr(); documents() follow-links
+    onboard  -- goal -> dataset: crawl + author (agent + an Llm) + aggregate (the LLM tier)
 
 No browser needed (deterministic); the browser backend + interaction agent are covered by tests.
+The onboard section uses a tiny offline stub Llm (no API key) in place of AnthropicLlm.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from threading import Thread
 from web.crawl import Crawler, Goal
 from web.dsl import DSL, run_blob
 from web.fetch import HttpFetcher, Request
+from web.onboard import onboard  # the capstone + LLM tier (AnthropicLlm lives here too)
 from web.parse import parse
 from web.resolve import Resolver, flags, paginate_param
 
@@ -77,6 +80,16 @@ def _h(title: str) -> None:
     print(f"\n\033[1m== {title} ==\033[0m")
 
 
+class _StubLlm:
+    """An offline stand-in for AnthropicLlm: authors the product-row selector once (while there are
+    no rows), then signals done. A real run passes AnthropicLlm() instead."""
+
+    async def complete(self, prompt: str) -> str:
+        if "Rows extracted so far: []" in prompt:
+            return 'Use: {"row": "li.product", "fields": {"name": ".name"}}'
+        return '{"done": true}'
+
+
 async def main() -> None:
     server, base = _serve()
     try:
@@ -124,20 +137,37 @@ async def main() -> None:
             print("to_blob:", blob[:70], "...")
             server_rows = await run_blob(blob, Resolver())  # remote dispatch (server side)
             print("run_blob:", server_rows)
+            # attr = select(...).attr(...) / a collection's .attr(...)
+            hrefs = await d.ref(base + "/").doc().select_all("li.product a.link").attr("href").acollect()
+            rel = [str(h).replace(base, "") for h in hrefs] if isinstance(hrefs, list) else hrefs
+            print("select_all(...).attr('href'):", rel)
         finally:
             await d.aclose()
 
-        _h("dsl -- follow links into detail pages (project @attr + documents flatMap)")
+        _h("dsl -- follow links into detail pages (documents flatMap, two ways)")
         d2 = DSL(Resolver())
         try:
-            skus = await (d2.ref(base + "/").doc()
-                          .select_all("li.product").project(url="a.link@href")  # @href -> detail URL
-                          .documents("url")                                     # resolve each detail page
-                          .select_all("h1.sku").text()                          # extract per page, concatenated
-                          .acollect())
-            print("detail SKUs (one plan, list->detail):", skus)
+            # (a) a URL column from project(@href), followed by name
+            by_col = await (d2.ref(base + "/").doc()
+                            .select_all("li.product").project(url="a.link@href")
+                            .documents("url").select_all("h1.sku").text().acollect())
+            print("via project(url=a@href).documents('url'):", by_col)
+            # (b) the attr URL list itself, followed (no column)
+            by_attr = await (d2.ref(base + "/").doc()
+                             .select_all("li.product a.link").attr("href")
+                             .documents().select_all("h1.sku").text().acollect())
+            print("via select_all(a).attr('href').documents():", by_attr)
         finally:
             await d2.aclose()
+
+        _h("onboard -- goal -> dataset (crawl + author + aggregate; LLM tier)")
+        r = Resolver()
+        try:
+            result = await onboard("each product's name", base + "/", resolver=r, llm=_StubLlm(), max_pages=6)
+            print(f"pages={result.pages} selection.row={result.selection and result.selection.row!r}")
+            print("dataset:", sorted(str(row["name"]) for row in result.rows))
+        finally:
+            await r.aclose()
     finally:
         server.shutdown()
     print("\n\033[1mdemo ok\033[0m")
