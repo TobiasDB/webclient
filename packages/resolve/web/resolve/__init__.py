@@ -23,7 +23,7 @@ from web.fetch import Handler, Middleware, stack
 from .base import Profile, Resolver, Tier
 from .document import document
 from .entry import ResolveSession, resolve
-from .events import ResolveEvent
+from .models import ResolveEvent
 from .flags import Flag, flags
 from .middleware import escalate, rate_limit, retry
 from .paginate import Until, paginate_clicks, paginate_cursor, paginate_links, paginate_param

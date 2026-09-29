@@ -1,4 +1,4 @@
-"""web.resolve's own event types -- what the resolve policies report on the bus."""
+"""web.resolve's data models -- the event type its policies report on the bus."""
 
 from __future__ import annotations
 

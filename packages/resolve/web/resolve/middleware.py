@@ -15,7 +15,7 @@ from web.fetch import Fetcher, Handler, Middleware, Request, Snapshot
 from web.fetch import emit
 
 from .document import document
-from .events import ResolveEvent
+from .models import ResolveEvent
 from .signals import anti_bot, spa
 
 _RETRIABLE_STATUS = frozenset({429, 500, 502, 503, 504})
