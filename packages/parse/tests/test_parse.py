@@ -251,3 +251,10 @@ def test_mislabelled_charset_does_not_crash_text() -> None:
     assert win.encoding == "windows-1252" and win.text == "naïve"
     # a meta charset with a typo also falls back
     assert parse(b"<meta charset=notacodec><p>x</p>", content_type="text/html").encoding == "utf-8"
+
+
+def test_jsonld_preserves_significant_whitespace_in_values() -> None:
+    # JSON-LD string values with multiple spaces must survive (whitespace collapse would corrupt them)
+    html = b'<html><head><script type="application/ld+json">{"name": "ACME  Corp", "sku": "A  1"}</script></head></html>'
+    md = parse(html, content_type="text/html").metadata()
+    assert md.ld_json == [{"name": "ACME  Corp", "sku": "A  1"}]

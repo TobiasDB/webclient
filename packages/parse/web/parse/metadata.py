@@ -14,6 +14,7 @@ from urllib.parse import urljoin
 from pydantic import BaseModel
 
 from .jsonpath import JSON
+from .nodes import raw_text as _raw_text
 
 if TYPE_CHECKING:
     from .document import Document
@@ -50,8 +51,8 @@ def metadata(doc: "Document") -> Metadata:
 
     ld: list[JSON] = []
     for el in doc.select_all("script[type='application/ld+json']"):
-        try:
-            ld.append(_json.loads(el.text or "null"))
+        try:  # raw_text, not el.text -- whitespace collapse would corrupt string values
+            ld.append(_json.loads(_raw_text(el._node) or "null"))
         except _json.JSONDecodeError:
             continue  # a malformed block is skipped, not fatal
 

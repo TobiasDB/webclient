@@ -16,10 +16,15 @@ def tag(node: Node) -> str:
     return t.lower() if isinstance(t, str) else ""
 
 
+def raw_text(node: Node) -> str:
+    """All descendant text of ``node``, VERBATIM (no whitespace collapse) -- for content whose
+    internal whitespace is significant, e.g. the JSON inside a ``<script type=ld+json>``."""
+    return "".join(t.decode() if isinstance(t, bytes) else t for t in node.itertext())
+
+
 def text(node: Node) -> str:
     """All descendant text of ``node``, whitespace-collapsed (works for HTML and XML nodes)."""
-    parts = [t.decode() if isinstance(t, bytes) else t for t in node.itertext()]
-    return " ".join("".join(parts).split())
+    return " ".join(raw_text(node).split())
 
 
 def classes(node: Node) -> "list[str]":
@@ -33,4 +38,4 @@ def query(node: Node, css: str) -> "list[Node]":
     return node.cssselect(css)
 
 
-__all__ = ["Node", "tag", "text", "classes", "query"]
+__all__ = ["Node", "tag", "text", "raw_text", "classes", "query"]
