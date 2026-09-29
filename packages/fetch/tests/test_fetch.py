@@ -249,47 +249,6 @@ def test_custom_fingerprint_drives_ua_and_client_hints(httpserver: HTTPServer) -
     assert seen["plat"] == '"Linux"'  # client hints stay coherent with the identity
 
 
-# -- replay: record a live run's network stream, re-serve it offline (no HAR) --
-
-from web.fetch import NetworkEvent  # noqa: E402
-from web.fetch import Trace  # noqa: E402
-from web.fetch import Recorder, ReplayBackend  # noqa: E402
-
-
-def test_record_then_replay_offline(httpserver: HTTPServer) -> None:
-    httpserver.expect_request("/p").respond_with_data(
-        b"<h1>recorded</h1>", content_type="text/html"
-    )
-
-    async def record() -> list[NetworkEvent]:
-        rec = Recorder(HttpFetcher())
-        try:
-            with Trace() as t:
-                await rec.fetch(Request(url=httpserver.url_for("/p")))
-            return [e for e in t.events if isinstance(e, NetworkEvent)]
-        finally:
-            await rec.aclose()
-
-    events = _run(record())
-    assert events and events[0].body == b"<h1>recorded</h1>"
-
-    async def replay() -> tuple[bytes, int]:
-        rb = ReplayBackend(events)
-        hit = await rb.fetch(Request(url=httpserver.url_for("/p")))  # served from the recording
-        miss = await rb.fetch(Request(url="https://drifted.example/x"))  # not recorded -> drift
-        return hit.content, miss.status
-
-    content, miss_status = _run(replay())
-    assert content == b"<h1>recorded</h1>"  # offline, deterministic (no second server hit)
-    assert miss_status == 599  # drift is visible, not a silent real fetch
-
-
-def test_replay_backend_is_a_fetcher() -> None:
-    from web.fetch import Fetcher
-
-    assert isinstance(ReplayBackend([]), Fetcher) and isinstance(Recorder(HttpFetcher()), Fetcher)
-
-
 def test_http_backend_classifies_failure_modes() -> None:
     async def go() -> dict[str, str]:
         f = HttpFetcher()

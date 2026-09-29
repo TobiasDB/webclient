@@ -60,7 +60,6 @@ from .models import (
     Wait,
 )
 from .proxy import Proxy
-from .replay import Recorder, ReplayBackend
 
 __all__ = [
     "Request",
@@ -105,8 +104,6 @@ __all__ = [
     "Middleware",
     "Handler",
     "stack",
-    "Recorder",
-    "ReplayBackend",
     # the shared substrate (relocated from the removed web.kernel bottom layer)
     "WebError",
     "WebException",
