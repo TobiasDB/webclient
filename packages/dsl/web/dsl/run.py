@@ -13,10 +13,12 @@ share this one implementation. Lean by design: no browser/pool/remote/streaming 
 from __future__ import annotations
 
 
+from typing import cast
+
 from pydantic import JsonValue
 
 from web.fetch import Request
-from web.parse import Document, Element
+from web.parse import Document, Element, dig
 from web.resolve import Resolver
 
 from .plan import Arg, Plan, Step
@@ -115,22 +117,34 @@ async def _resolve(cur: object, rs: "Resolver") -> "Document | None":
 
 
 def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object]") -> object:
-    """Dispatch a single op onto one value (Document / Element / Field / scalar). A miss (``None``)
-    short-circuits the chain. Scalars come back wrapped in a ``Field`` so the read helpers chain."""
+    """Dispatch a single read onto one value. The SAME verbs work over an HTML and a JSON document:
+    ``select`` / ``select_all`` navigate (a CSS selector for markup, a dotted JSON path for JSON),
+    ``attr`` / ``text`` read a leaf (an HTML attribute/text, or a JSON scalar). A miss (``None``)
+    short-circuits the chain; scalars come back wrapped in a ``Field`` so the read helpers chain."""
     if obj is None:
         return None
-    if name == "attr":  # the unified reader: attr('text') -> text, attr('href') -> the attribute
-        key = str(args[0]) if args else ""
-        if key in _TEXT_ATTRS:
-            return Field(_text_of(obj), base=_base_of(obj))
-        return Field(obj.attr(key) if isinstance(obj, Element) else None, base=_base_of(obj))
-    if name == "text":
-        return Field(_text_of(obj), base=_base_of(obj))
     if name == "select":
-        return obj.select(str(args[0])) if isinstance(obj, (Document, Element)) else None
+        if _markup(obj):
+            return obj.select(str(args[0])) if isinstance(obj, (Document, Element)) else None
+        return _json_get(obj, str(args[0]))  # a JSON sub-value (dict/list -> navigable, scalar -> leaf)
     if name == "select_all":
-        items = obj.select_all(str(args[0])) if isinstance(obj, (Document, Element)) else []
-        return Collection(items, base=_base_of(obj))
+        if _markup(obj):
+            items = obj.select_all(str(args[0])) if isinstance(obj, (Document, Element)) else []
+            return Collection(items, base=_base_of(obj))
+        value = _json_get(obj, str(args[0]))  # the JSON array at the path becomes the collection
+        nodes: "list[object]" = value if isinstance(value, list) else ([] if value is None else [value])
+        return Collection(nodes, base=_base_of(obj))
+    if name == "attr":  # HTML attribute (attr('text') -> text); or a JSON leaf/key by path
+        key = str(args[0]) if args else ""
+        if isinstance(obj, Element):
+            return Field(_text_of(obj) if key in _TEXT_ATTRS else obj.attr(key), base=_base_of(obj))
+        if _markup(obj):  # a markup Document has no attributes of its own; text pseudo only
+            return Field(_text_of(obj) if key in _TEXT_ATTRS else None, base=_base_of(obj))
+        return Field(_json_get(obj, "" if key in _TEXT_ATTRS else key))  # JSON: value / key access
+    if name == "text":
+        if _markup(obj):
+            return Field(_text_of(obj), base=_base_of(obj))
+        return Field(_json_get(obj, ""))  # the JSON scalar value itself
     if name == "links" and isinstance(obj, Document):
         return Collection([Field(u, base=obj.url) for u in obj.links()])
     attr = getattr(obj, name, None)
@@ -138,6 +152,22 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
         return None
     value = attr(*args, **kwargs) if callable(attr) else attr
     return _wrap(value, _base_of(obj))
+
+
+def _markup(obj: object) -> bool:
+    """Whether a value is a MARKUP surface (an Element, or a non-JSON Document) -- so ``select`` etc.
+    use CSS/xpath; a JSON Document or a plain JSON value (dict/list/scalar) navigates by path."""
+    return isinstance(obj, Element) or (isinstance(obj, Document) and obj.kind != "json")
+
+
+def _json_get(obj: object, path: str) -> object:
+    """Follow a dotted JSON ``path`` into a value (a JSON Document's parsed value, or a JSON node
+    reached earlier), reusing :func:`web.parse.dig`. Returns the raw sub-value (dict/list -> further
+    navigable, scalar -> a leaf); ``None`` for a non-JSON input or a miss."""
+    node = obj.json() if isinstance(obj, Document) and obj.kind == "json" else obj
+    if isinstance(node, (dict, list, str, int, float, bool)) or node is None:
+        return dig(cast(JsonValue, node), path)
+    return None
 
 
 def _fan(coll: "Collection[object]", name: str, args: "list[object]",

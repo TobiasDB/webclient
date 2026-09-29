@@ -114,6 +114,11 @@ async def selection_and_render(base: str) -> None:
     print("skeleton:", home.skeleton(max_lines=3, drop_chrome=True).replace("\n", " | "))
     api = await resolve(base + "/api")
     print("json at('items[0].sku'):", api.at("items[0].sku"))
+    # the SAME DSL verbs query JSON -- select_all navigates the array, extract reads each item
+    # (only the selector is a JSON path, not CSS)
+    skus = await (wq.reference(base + "/api").resolve()
+                  .select_all("items").extract(sku=wq.doc.select("sku").attr("text")).acollect())
+    print("wq over JSON (same verbs):", skus)
 
 
 async def sessions(base: str) -> None:

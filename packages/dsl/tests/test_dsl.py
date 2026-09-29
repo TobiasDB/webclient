@@ -137,6 +137,19 @@ def test_extract_follows_a_reference_into_detail_pages(httpserver: HTTPServer) -
 
 # -- WebClient (context-managed DSL entry) -----------------------------------
 
+def test_same_verbs_query_a_json_data_api(httpserver: HTTPServer) -> None:
+    body = b'{"data": {"items": [{"sku": "W1", "p": {"n": "Widget"}}, {"sku": "G2", "p": {"n": "Gadget"}}]}}'
+    httpserver.expect_request("/api").respond_with_data(body, content_type="application/json")
+    # IDENTICAL to the HTML form -- select_all navigates the array, extract reads each item's leaves;
+    # only the selector dialect differs (a JSON path instead of CSS)
+    rows = _run(
+        wq.reference(httpserver.url_for("/api")).resolve()
+        .select_all("data.items")
+        .extract(sku=wq.doc.select("sku").attr("text"), name=wq.doc.select("p.n").attr("text"))
+        .acollect())
+    assert rows == [{"sku": "W1", "name": "Widget"}, {"sku": "G2", "name": "Gadget"}]
+
+
 def test_webclient_is_context_managed(httpserver: HTTPServer) -> None:
     url = _shop(httpserver)
 
