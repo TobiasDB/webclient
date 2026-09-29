@@ -39,6 +39,7 @@ from .entry import (
 from .errors import WebError, WebException, err
 from .fingerprint import CHROME, Fingerprint, fleet, generate
 from .http import HttpFetcher, HttpSession
+from .impersonate import ImpersonateFetcher, ImpersonateSession
 from .middleware import Handler, Middleware, stack
 from .models import ConsoleEvent  # the plain data models + interfaces
 from .models import (
@@ -64,6 +65,8 @@ __all__ = [
     "HttpFetcher",
     "BrowserFetcher",
     "BrowserSession",
+    "ImpersonateFetcher",
+    "ImpersonateSession",
     "BrowserSupply",
     "LaunchSupply",
     "CdpSupply",

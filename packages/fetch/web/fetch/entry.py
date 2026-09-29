@@ -20,6 +20,7 @@ from typing import Generic, Protocol, TypeVar, runtime_checkable
 from .browser import BrowserFetcher, BrowserSession
 from .fingerprint import Fingerprint
 from .http import HttpFetcher
+from .impersonate import ImpersonateFetcher
 from .models import Request, Session, Snapshot
 from .proxy import Proxy
 
@@ -95,6 +96,10 @@ class Profile:
     #: an explicit browser binary to launch (a driver/executable path) when ``browser`` is set --
     #: for a pinned/self-managed Chromium; ``None`` uses the bundled/channel browser.
     executable_path: "str | None" = None
+    #: IMPERSONATE a real browser's TLS/HTTP2 fingerprint at the HTTP layer (curl_cffi) -- a browser
+    #: preset like ``"chrome"`` (empty = plain httpx). Rung 2 of the evasion ladder: it closes the
+    #: JA3/JA4 + HTTP2 tell a stock client leaks (ANTI-BOT.md §2.1) without the cost of a browser.
+    impersonate: str = ""
 
     def with_(
         self,
@@ -106,6 +111,7 @@ class Profile:
         headless: "bool | _Keep" = _KEEP,
         channel: "str | _Keep" = _KEEP,
         executable_path: "str | None | _Keep" = _KEEP,
+        impersonate: "str | _Keep" = _KEEP,
     ) -> "Profile":
         """A copy with some slots overridden (the rest inherited) -- adjust a base profile."""
         return Profile(
@@ -118,11 +124,13 @@ class Profile:
             executable_path=(
                 self.executable_path if isinstance(executable_path, _Keep) else executable_path
             ),
+            impersonate=self.impersonate if isinstance(impersonate, _Keep) else impersonate,
         )
 
-    def fetcher(self) -> "BrowserFetcher | HttpFetcher":
+    def fetcher(self) -> "BrowserFetcher | ImpersonateFetcher | HttpFetcher":
         """The backend this transport identity describes -- so a fetch profile can be used directly
-        as a tier in a resolve profile's escalation ladder (an HTTP tier, a browser tier, ...).
+        as a tier in a resolve profile's escalation ladder (an HTTP tier, an impersonating HTTP tier,
+        a browser tier, ...). A browser wins over impersonation wins over plain HTTP.
         """
         if self.browser:
             return BrowserFetcher(
@@ -132,6 +140,8 @@ class Profile:
                 fingerprint=self.fingerprint,
                 executable_path=self.executable_path,
             )
+        if self.impersonate:  # rung 2: a real TLS/HTTP2 fingerprint at the HTTP layer (curl_cffi)
+            return ImpersonateFetcher(impersonate=self.impersonate, proxy=self.proxy)
         return HttpFetcher(proxy=self.proxy, fingerprint=self.fingerprint)
 
     def key(self) -> "tuple[object, ...]":
@@ -145,6 +155,7 @@ class Profile:
             self.browser,
             self.headless,
             self.channel,
+            self.impersonate,
             str(self.proxy),
             fp,
             tuple(sorted(self.headers.items())),
@@ -164,9 +175,11 @@ class ClientPool:
     """
 
     def __init__(self) -> None:
-        self._backends: "dict[tuple[object, ...], BrowserFetcher | HttpFetcher]" = {}
+        self._backends: (
+            "dict[tuple[object, ...], BrowserFetcher | ImpersonateFetcher | HttpFetcher]"
+        ) = {}
 
-    def lease(self, profile: "Profile") -> "BrowserFetcher | HttpFetcher":
+    def lease(self, profile: "Profile") -> "BrowserFetcher | ImpersonateFetcher | HttpFetcher":
         """The shared backend for ``profile`` -- created on first use, reused thereafter."""
         key = profile.key()
         backend = self._backends.get(key)

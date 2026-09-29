@@ -22,6 +22,10 @@ from .proxy import Proxy
 
 #: HTTP transport with a realistic (browserforge) identity -- the cheap default.
 BASIC = Profile(fingerprint=True)
+#: HTTP transport that IMPERSONATES a real Chrome's TLS/HTTP2 fingerprint (curl_cffi) -- rung 2 of
+#: the evasion ladder: it closes the JA3/JA4 + HTTP2 tell plain httpx leaks (ANTI-BOT.md §2.1) at
+#: no more cost than an HTTP fetch, but still runs no JS. Needs the ``curl_cffi`` extra installed.
+IMPERSONATE = Profile(impersonate="chrome")
 #: a real browser render (headless bundled Chromium) with a realistic identity -- for JS-gated pages.
 BROWSER = Profile(fingerprint=True, browser=True)
 #: a HEADED bundled-Chromium render -- a real on-screen window, which sheds the headless tells an
@@ -54,6 +58,7 @@ def real_chrome(server: "str | Proxy") -> Profile:
 
 __all__ = [
     "BASIC",
+    "IMPERSONATE",
     "BROWSER",
     "HEADED_BROWSER",
     "REAL_CHROME",

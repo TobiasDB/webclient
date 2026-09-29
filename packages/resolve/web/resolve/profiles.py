@@ -30,9 +30,13 @@ BASIC = Profile(
     retry=RetryPolicy(max_attempts=3),
     rate=RatePolicy(per_host=0.5),
 )
-#: HTTP first, escalate to a browser render when a page looks blocked / JS-gated.
+#: the full lower ladder (ANTI-BOT.md §5 rungs 1-3): plain httpx first (cheapest), then IMPERSONATE
+#: the browser's TLS/HTTP2 fingerprint on a block (rung 2 -- closes the JA3/JA4 network tell at HTTP
+#: cost), then a real browser render for a JS/PoW challenge (rung 3). The reason-aware ladder climbs
+#: only when a stronger transport can help. (The impersonate rung needs the ``curl_cffi`` extra; if
+#: it can't be leased the ladder still climbs past it to the browser.)
 BASIC_BROWSER = Profile(
-    escalation=EscalationPolicy(tiers=(_fp.BASIC, _fp.BROWSER)),
+    escalation=EscalationPolicy(tiers=(_fp.BASIC, _fp.IMPERSONATE, _fp.BROWSER)),
     retry=RetryPolicy(max_attempts=2),
     rate=RatePolicy(per_host=0.5),
 )
@@ -53,9 +57,15 @@ def proxy(server: "str | Proxy") -> Profile:
 
 
 def proxy_browser(server: "str | Proxy") -> Profile:
-    """:data:`BASIC_BROWSER` routed through ``server`` (both tiers)."""
+    """:data:`BASIC_BROWSER` routed through ``server`` (httpx -> impersonate -> browser, all proxied)."""
     return BASIC_BROWSER.with_(
-        escalation=EscalationPolicy(tiers=(_fp.proxy(server), _fp.proxy_browser(server)))
+        escalation=EscalationPolicy(
+            tiers=(
+                _fp.proxy(server),
+                _fp.IMPERSONATE.with_(proxy=server),
+                _fp.proxy_browser(server),
+            )
+        )
     )
 
 
