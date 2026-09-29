@@ -3,7 +3,7 @@ name = "web-fetch"
 version = "0.1.0"
 description = "web-* fetch: the transport layer — Request -> Snapshot. Depends only on httpx."
 requires-python = ">=3.12"
-dependencies = ["httpx>=0.24", "pydantic>=2"]
+dependencies = ["httpx>=0.24", "pydantic>=2", "browserforge>=1.2"]
 
 [project.optional-dependencies]
 browser = ["playwright>=1.30"]

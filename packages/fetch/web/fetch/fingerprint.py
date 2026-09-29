@@ -1,11 +1,17 @@
 """``Fingerprint`` -- a shared backend concept: the identity a backend presents.
 
 A fingerprint is a coherent bundle -- a user-agent, the client-hint headers that must match it, a
-viewport, and a locale -- rendered per backend (HTTP headers for httpx; context options + a
-stealth patch for the browser). Keeping them together avoids the classic mismatch (a Chrome UA
-with no ``Sec-Ch-Ua``, or a desktop UA in a mobile viewport). It is NOT TLS/JA3 impersonation --
-that is a heavier transport swap (curl_cffi) that plugs into the HTTP backend; this is the
-header/context layer both backends share. ``fingerprint=True`` on a backend uses :data:`CHROME`.
+viewport and a locale -- rendered per backend (HTTP headers for httpx; context options + a stealth
+patch for the browser). Keeping them together avoids the classic mismatch (a Chrome UA with no
+``Sec-Ch-Ua``, a desktop UA in a mobile viewport). It is NOT TLS/JA3 impersonation -- that is a
+heavier transport swap (curl_cffi) that plugs into the HTTP backend; this is the header/context
+layer both backends share.
+
+Real identities come from **browserforge** (:func:`generate` / :func:`fleet`), which draws coherent
+header + navigator/screen bundles from real-world browser data -- so we never ship stale, hand-typed
+UA strings. :data:`CHROME` is a static offline fallback used when browserforge is unavailable and as
+the ``fingerprint=True`` default. Rotation across requests is NOT here -- it is a resolve middleware
+(:func:`web.resolve.rotate`) that leases a differently-fingerprinted backend per request.
 """
 
 from __future__ import annotations
@@ -14,7 +20,9 @@ from pydantic import BaseModel
 
 
 class Fingerprint(BaseModel):
-    """A presented identity. Extra ``headers`` are merged after the derived client hints."""
+    """A presented identity. ``raw_headers`` (a complete generated set, e.g. from browserforge) is
+    sent verbatim when present; otherwise the client hints are derived from the fields. Extra
+    ``headers`` merge after the derived hints."""
 
     user_agent: str
     accept_language: str = "en-US,en;q=0.9"
@@ -23,9 +31,13 @@ class Fingerprint(BaseModel):
     platform: str = "Windows"
     ua_brands: str = '"Chromium";v="124", "Not-A.Brand";v="99"'
     headers: dict[str, str] = {}
+    raw_headers: dict[str, str] = {}  # a complete header set (from browserforge); used verbatim
 
     def http_headers(self) -> dict[str, str]:
-        """The request headers this identity sends (UA + matching client hints + extras)."""
+        """The request headers this identity sends. A generated ``raw_headers`` set is used as-is
+        (already coherent); otherwise UA + matching client hints are derived from the fields."""
+        if self.raw_headers:
+            return {**self.raw_headers, **self.headers}
         return {
             "User-Agent": self.user_agent,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -37,20 +49,54 @@ class Fingerprint(BaseModel):
         }
 
 
-#: a Chrome-on-Windows desktop fingerprint (the ``fingerprint=True`` default).
+#: a Chrome-on-Windows desktop fingerprint -- the static offline fallback + the ``fingerprint=True``
+#: default (used only when browserforge is unavailable; prefer :func:`generate`).
 CHROME = Fingerprint(
     user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
 )
 
 
-def as_fingerprint(fp: "bool | Fingerprint | None") -> "Fingerprint | None":
-    """Coerce ``True`` -> :data:`CHROME`, ``False``/``None`` -> None, a Fingerprint -> itself."""
-    if fp is True:
+def generate(browser: str = "chrome", *, os: "str | None" = None, device: str = "desktop") -> Fingerprint:
+    """A realistic :class:`Fingerprint` from **browserforge** (real-world header + navigator/screen
+    data), so identities are correct and current. Falls back to :data:`CHROME` if browserforge is
+    not installed. ``browser`` is ``chrome`` / ``firefox`` / ``safari`` / ``edge``; ``os`` narrows
+    the platform (``windows`` / ``macos`` / ``linux``); ``device`` defaults to ``desktop``."""
+    try:
+        from browserforge.fingerprints import FingerprintGenerator
+        from browserforge.headers import HeaderGenerator
+    except ImportError:
         return CHROME
+    header_kw: dict[str, object] = {"browser": browser, "device": device}
+    if os is not None:
+        header_kw["os"] = os
+    raw = {str(k): str(v) for k, v in HeaderGenerator().generate(**header_kw).items()}  # type: ignore[arg-type]
+    fp = FingerprintGenerator().generate(browser=browser, os=os, device=device)
+    ua = raw.get("User-Agent") or raw.get("user-agent") or fp.navigator.userAgent
+    return Fingerprint(
+        user_agent=ua,
+        accept_language=raw.get("Accept-Language", "en-US,en;q=0.9"),
+        viewport=(fp.screen.width, fp.screen.height),
+        locale=(fp.navigator.language or "en-US"),
+        raw_headers=raw,
+    )
+
+
+def fleet(browsers: "tuple[str, ...]" = ("chrome", "firefox", "safari", "edge")) -> "tuple[Fingerprint, ...]":
+    """A set of coherent, realistic identities (one per browser) to ROTATE across -- generated by
+    browserforge (or a single :data:`CHROME` fallback if it is unavailable)."""
+    built = tuple(generate(b) for b in browsers)
+    return built if any(f is not CHROME for f in built) else (CHROME,)
+
+
+def as_fingerprint(fp: "bool | Fingerprint | None") -> "Fingerprint | None":
+    """Coerce ``True`` -> a browserforge Chrome identity (``CHROME`` if unavailable), ``False`` /
+    ``None`` -> None, a Fingerprint -> itself."""
+    if fp is True:
+        return generate("chrome")
     if not fp:
         return None
     return fp
 
 
-__all__ = ["Fingerprint", "CHROME", "as_fingerprint"]
+__all__ = ["Fingerprint", "CHROME", "generate", "fleet", "as_fingerprint"]
