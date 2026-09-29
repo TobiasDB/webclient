@@ -26,7 +26,7 @@ from web.parse import Document, parse
 from web.resolve import Flag, Resolver, document, flags
 
 from .llm import Llm, ReasonEvent
-from .models import LocateBrief, Reference
+from .models import DOWNLOAD_EXTENSIONS, LocateBrief, Reference
 
 #: URL markers of API DOCUMENTATION / dev portals -- never a scrapable dataset, even if crawled.
 _DOCS = (
@@ -222,27 +222,9 @@ def _reason(doc: Document, by: "dict[str, Flag]") -> str:
     return "; ".join(bits) or "the highest dataset-likeness score among the candidates"
 
 
-#: file extensions a download brief harvests (mirrors :mod:`web.onboard.author`).
-_FILE_EXT = (
-    ".pdf",
-    ".pptx",
-    ".ppt",
-    ".xlsx",
-    ".xls",
-    ".csv",
-    ".doc",
-    ".docx",
-    ".odt",
-    ".ods",
-    ".rtf",
-    ".txt",
-    ".zip",
-)
-
-
 def _download_targets(doc: Document) -> "list[str]":
     """The downloadable-file links on the page (by extension) -- the 'records' of a download brief."""
-    return [u for u in doc.links() if u.lower().split("?")[0].endswith(_FILE_EXT)]
+    return [u for u in doc.links() if u.lower().split("?")[0].endswith(DOWNLOAD_EXTENSIONS)]
 
 
 def _field_bonus(doc: Document, fields: "list[str]") -> float:

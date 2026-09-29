@@ -27,25 +27,9 @@ from web.resolve import Resolver, flags
 from .behaviours import apply_behaviours
 from .compile import Query, parse_query, reroot
 from .llm import Llm
-from .models import DatasetBrief, Reference
+from .models import DOWNLOAD_EXTENSIONS, DatasetBrief, Reference
 from .patterns import author_prompt
 
-#: file extensions a download-listing query harvests from an HTML page.
-_FILE_EXT = (
-    "pdf",
-    "pptx",
-    "ppt",
-    "xlsx",
-    "xls",
-    "csv",
-    "doc",
-    "docx",
-    "odt",
-    "ods",
-    "rtf",
-    "txt",
-    "zip",
-)
 #: document kinds that carry an extractable structure (anything else IS the file to download).
 _STRUCTURED = frozenset({"html", "xml", "json"})
 
@@ -78,7 +62,7 @@ def _file_links_query(url: str) -> Query:
     """A LISTING of downloadable files on an HTML page: every same-page link ending in a known file
     extension, resolved absolute (used when ``brief.download`` is set on an HTML/XML page).
     """
-    selector = ", ".join(f"a[href$='.{ext}']" for ext in _FILE_EXT)
+    selector = ", ".join(f"a[href$='{ext}']" for ext in DOWNLOAD_EXTENSIONS)
     return cast(Query, wq.reference(url).resolve().select_all(selector).attr("href"))
 
 

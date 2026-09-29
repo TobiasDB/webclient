@@ -96,6 +96,25 @@ class Brief(BaseModel):
 LocateBrief = Brief
 DatasetBrief = Brief
 
+#: file extensions a ``download`` brief harvests -- the downloadable-file kinds a page lists (as
+#: opposed to :data:`Brief.download` HTML/XML/JSON that carry extractable rows). One source of truth
+#: for both phases: Locate scores a page's download links, Author builds the harvest selector.
+DOWNLOAD_EXTENSIONS = (
+    ".pdf",
+    ".pptx",
+    ".ppt",
+    ".xlsx",
+    ".xls",
+    ".csv",
+    ".doc",
+    ".docx",
+    ".odt",
+    ".ods",
+    ".rtf",
+    ".txt",
+    ".zip",
+)
+
 
 def _parse_frontmatter(text: str) -> "tuple[dict[str, JsonValue], str]":
     """Split ``---``-fenced YAML frontmatter from the markdown body; ``({}, text)`` if none."""
@@ -163,4 +182,4 @@ class Reference(BaseModel):
     detail: dict[str, JsonValue] = {}
 
 
-__all__ = ["Brief", "LocateBrief", "DatasetBrief", "Reference"]
+__all__ = ["Brief", "LocateBrief", "DatasetBrief", "Reference", "DOWNLOAD_EXTENSIONS"]
