@@ -82,8 +82,8 @@ class EscalationPolicy(BaseModel):
     on: "tuple[str, ...]" = ()
 
     def base(self, pool: ClientPool) -> Fetcher:
-        """The base tier (``tiers[0]``, leased), or the default HTTP identity when unset."""
-        return pool.lease(self.tiers[0]) if self.tiers else pool.lease(FetchProfile(fingerprint=True))
+        """The base tier (``tiers[0]``, leased), or the minimal default identity when unset."""
+        return pool.lease(self.tiers[0]) if self.tiers else pool.lease(FetchProfile())
 
     def build(self, pool: ClientPool) -> "Middleware | None":
         """The escalate middleware over the tiers ABOVE the base, or ``None`` when there are none."""

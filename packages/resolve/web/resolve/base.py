@@ -141,7 +141,7 @@ class Resolver:
             self._tiers = tuple(self._pool.lease(t) if isinstance(t, FetchProfile) else t for t in ladder)
             self._esc = _escalate(list(self._tiers[1:])) if len(self._tiers) > 1 else None  # default `on`
         else:
-            self._tiers = (self._pool.lease(FetchProfile(fingerprint=True)),)
+            self._tiers = (self._pool.lease(FetchProfile()),)  # bare default: minimal identity
             self._esc = None
         #: whether THIS resolver owns its tiers' lifetime (a session() resolver owns the sessions it
         #: opened; a base resolver's tiers are pool-owned or caller-owned -> it closes nothing).

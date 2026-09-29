@@ -24,7 +24,8 @@ from .base import Profile
 from .policy import EscalationPolicy, RatePolicy, RetryPolicy
 
 #: HTTP with a realistic (browserforge), STABLE identity -- the cheap default.
-BASIC = Profile(retry=RetryPolicy(max_attempts=3), rate=RatePolicy(per_host=0.5))
+BASIC = Profile(escalation=EscalationPolicy(tiers=(_fp.BASIC,)),
+                retry=RetryPolicy(max_attempts=3), rate=RatePolicy(per_host=0.5))
 #: HTTP first, escalate to a browser render when a page looks blocked / JS-gated.
 BASIC_BROWSER = Profile(escalation=EscalationPolicy(tiers=(_fp.BASIC, _fp.BROWSER)),
                         retry=RetryPolicy(max_attempts=2), rate=RatePolicy(per_host=0.5))

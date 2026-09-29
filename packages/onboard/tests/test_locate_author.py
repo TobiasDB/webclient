@@ -1,8 +1,10 @@
-"""Locate + Author -- the reusable, registry-driven phases (no LLM), on the wq DSL.
+"""Locate + Author -- the reusable phases on the wq DSL.
 
 Covers: Locate selecting a dataset candidate; Locate PREFERRING a consistent XHR/data-API JSON
-endpoint over the page; Author emitting a WORKING wq query for an HTML repeating-record list, a
-JSON data-API, and an HTML header table; and the composition end to end.
+endpoint over the page; Author driving a (scripted) LLM over the patterns guide to write a WORKING
+wq query for an HTML repeating-record list, a JSON data-API, and an HTML header table; and the
+composition end to end. The LLM is a scripted stub -- so these test the pipeline MECHANICS (prompt
+-> parse -> reroot -> run), not a model's selector quality.
 """
 
 from __future__ import annotations
@@ -15,7 +17,19 @@ from pytest_httpserver import HTTPServer
 from web.resolve import Resolver
 from web.onboard import (DatasetBrief, LocateBrief, Reference, author, build_query, locate,
                          locate_and_author)
-from web.onboard.patterns import best_pattern
+
+
+class ScriptedLlm:
+    """An :class:`~web.onboard.Llm` that returns one canned ``wq`` reply, and records the prompt it
+    was given -- a deterministic stand-in for a real model so Author is testable offline."""
+
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
+        self.prompt = ""
+
+    async def complete(self, prompt: str) -> str:
+        self.prompt = prompt
+        return self.reply
 
 
 def _run(coro: object) -> object:
@@ -71,17 +85,23 @@ def test_author_writes_a_working_query_for_a_record_list(httpserver: HTTPServer)
     httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
     ref = Reference(url=httpserver.url_for("/people"), kind="html", record_selector="li.row",
                     flags=["record_list"])
+    llm = ScriptedLlm('wq.doc.select_all("li.row").extract('
+                      'name=wq.doc.select(".name").attr("text"), '
+                      'role=wq.doc.select(".role").attr("text"))')
 
     async def go() -> object:
         async with Resolver() as r:
-            q, pattern, _notes = await build_query(ref, DatasetBrief(fields=["name", "role"]), resolver=r)
-            assert pattern == "repeating_records"
+            q, engine, _notes = await build_query(ref, DatasetBrief(fields=["name", "role"]),
+                                                  resolver=r, llm=llm)
+            assert engine == "llm"
             return await q.acollect(resolver=r)
 
     rows = cast("list[dict[str, object]]", _run(go()))
     assert rows == [{"name": "Alice", "role": "CEO"},
                     {"name": "Bob", "role": "CTO"},
                     {"name": "Cara", "role": "COO"}]
+    # the prompt carried the hardcoded flags AND the patterns guide
+    assert "PAGE SIGNALS" in llm.prompt and "Writing a `wq` extraction query" in llm.prompt
 
 
 def test_author_writes_a_working_query_for_a_json_data_api(httpserver: HTTPServer) -> None:
@@ -90,47 +110,54 @@ def test_author_writes_a_working_query_for_a_json_data_api(httpserver: HTTPServe
         content_type="application/json")
     ref = Reference(url=httpserver.url_for("/api/items"), kind="json",
                     api_endpoint=httpserver.url_for("/api/items"))
+    llm = ScriptedLlm('wq.doc.select_all("results").extract('
+                      'name=wq.doc.attr("name"), '
+                      'amount=wq.doc.select("price.amount").attr("text").number())')
 
     async def go() -> object:
         async with Resolver() as r:
-            q, pattern, _notes = await build_query(
-                ref, DatasetBrief(fields=["name", "amount"], selectors={"amount": "price.amount"}), resolver=r)
-            assert pattern == "json_array"
+            q, engine, _notes = await build_query(ref, DatasetBrief(fields=["name", "amount"]),
+                                                  resolver=r, llm=llm)
+            assert engine == "llm"
             return await q.acollect(resolver=r)
 
     rows = cast("list[dict[str, object]]", _run(go()))
     assert rows == [{"name": "Widget", "amount": 9}, {"name": "Gadget", "amount": 12}]
+    assert "JSON document" in llm.prompt  # the kind steer reached the prompt
 
 
 def test_author_writes_a_working_query_for_an_html_table(httpserver: HTTPServer) -> None:
-    table = (b"<html><body><table><tr><th>name</th><th>city</th></tr>"
+    table = (b"<html><body><table><thead><tr><th>name</th><th>city</th></tr></thead><tbody>"
              b"<tr><td>Ada</td><td>London</td></tr>"
              b"<tr><td>Linus</td><td>Helsinki</td></tr>"
-             b"<tr><td>Grace</td><td>New York</td></tr></table></body></html>")
+             b"<tr><td>Grace</td><td>New York</td></tr></tbody></table></body></html>")
     httpserver.expect_request("/tbl").respond_with_data(table, content_type="text/html")
-    ref = Reference(url=httpserver.url_for("/tbl"), kind="html", record_selector="tr")
-    picked = best_pattern(ref)
-    assert picked is not None and picked.name == "html_table"  # routed to the table pattern
+    ref = Reference(url=httpserver.url_for("/tbl"), kind="html", record_selector="tbody tr")
+    llm = ScriptedLlm('wq.doc.select_all("tbody tr").extract('
+                      'name=wq.doc.select("td:nth-of-type(1)").attr("text"), '
+                      'city=wq.doc.select("td:nth-of-type(2)").attr("text"))')
 
     async def go() -> object:
         async with Resolver() as r:
-            q = await author(ref, DatasetBrief(fields=["name", "city"]), resolver=r)
+            q = await author(ref, DatasetBrief(fields=["name", "city"]), resolver=r, llm=llm)
             return await q.acollect(resolver=r)
 
     rows = cast("list[dict[str, object]]", _run(go()))
-    # the header row has no <td>, so it projects empty; the data rows carry the record
     assert {"name": "Ada", "city": "London"} in rows
     assert {"name": "Linus", "city": "Helsinki"} in rows
 
 
 def test_locate_and_author_compose_end_to_end(httpserver: HTTPServer) -> None:
     httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+    llm = ScriptedLlm('wq.doc.select_all("li.row").extract('
+                      'name=wq.doc.select(".name").attr("text"), '
+                      'role=wq.doc.select(".role").attr("text"))')
 
     async def go() -> object:
         async with Resolver() as r:
             q = await locate_and_author(
                 LocateBrief(goal="team", candidates=[httpserver.url_for("/people")]),
-                DatasetBrief(fields=["name", "role"]), resolver=r)
+                DatasetBrief(fields=["name", "role"]), resolver=r, llm=llm)
             assert q is not None
             return await q.acollect(resolver=r)
 

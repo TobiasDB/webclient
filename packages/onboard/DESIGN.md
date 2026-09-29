@@ -3,13 +3,14 @@
 `onboard` splits into two composable, independently-usable phases with typed value models:
 
 ```
-locate(goal, *, resolver, ...) -> Reference        # WHERE the dataset is
-author(reference, brief, *, dsl) -> wq query        # HOW to extract it (a web.dsl chain)
-onboard = author ∘ locate                            # the thin composition on top
+locate(goal, *, resolver, ...)         -> Reference   # WHERE the dataset is (deterministic)
+author(reference, brief, *, resolver, llm) -> wq query   # HOW to extract it (a web.dsl chain)
+onboard = author ∘ locate                             # the thin composition on top
 ```
 
-Each phase is a small set of pure functions + pydantic value models + a registry; neither
-depends on an LLM (an LLM is an *optional* injected search / field-mapper, not the engine).
+**Locate** is deterministic (an LLM plugs in only as the optional `search` seed callable).
+**Author** is LLM-driven: the model writes the `wq` query from the patterns guide + the page's
+hardcoded signals/flags. Both are small units of pure functions + pydantic value models.
 
 ## Value models (`models.py`)
 
@@ -40,39 +41,57 @@ depends on an LLM (an LLM is an *optional* injected search / field-mapper, not t
   than scraping HTML). Consistency is checked by actually resolving the endpoint -- never a
   blind or hallucinated pick.
 
-## Author (`author.py`) -- registry-driven
+## Author (`author.py`) -- LLM-driven over natural-language patterns
 
-Author resolves the reference once to get a **sample**, picks the best-matching **Pattern**, and
-builds a `web.dsl` (`wq`) chain; **Behaviours** keyed on the reference's flags then modify it.
+Author resolves the reference once to get a **sample**, gathers the page's hardcoded
+**Signals/Flags** (`web.resolve.flags`), and hands the model two things: (a) those signals/flags,
+and (b) the **patterns guide** -- natural-language KNOWLEDGE, not Python classes. The model writes
+the `wq` chain; a safe compiler rebuilds it and roots it at the source. Flag-keyed **Behaviours**
+then add advisory notes.
 
-- **Patterns registry** (`patterns.py`) -- well-known structures -> their query shape. Each is a
-  `Pattern` (a structural `Protocol`: `match(reference) -> score`, `build(reference, brief, sample)
-  -> a wq collection/document`). Shipped: `json_array` (a data-API envelope -> `.at(path).pluck(...)`),
-  `repeating_records` (a list -> `.select_all(row).project(...)`), `html_table` (a header
-  `<table>`, column-by-header), `file_download` (a binary reference, or a listing of file links).
-  Register another (a key/value spec table, JSON-LD, ...) with `@pattern`.
-- **Behaviours registry** (`behaviours.py`) -- a flag/signal -> a query modifier. Shipped:
-  `record_list` -> `.nonempty().distinct()`, `paginated`/`infinite_scroll` -> note a paginating
-  resolver is needed, `consent_wall`/`tabbed` -> note an interaction is needed. Register another
-  with `@behaviour`.
-- **Field mapping** is deterministic: a brief field name maps to a record sub-selector by
-  class / `itemprop` / `data-*` (HTML) or a matching key (JSON); an explicit `brief.selectors`
-  entry always wins.
+- **Patterns are markdown, not code** (`patterns.md` + `patterns.py`). `patterns.md` is the
+  query-writing guide: the three-move recipe, how to read leaves/attributes, the transforms, durable
+  selectors, and **worked, verified examples** for the well-known structures -- a flat HTML list, an
+  HTML table, a JSON/API document (dotted paths + `.attr(key)`), an RSS/XML feed, a list-valued
+  field, a class-token value, filtering, a detail-page resolve, and a grouped two-section selector.
+  `patterns.py` loads that markdown as `PATTERNS_GUIDE` and `author_prompt(...)` renders it into the
+  prompt with the fired signals/flags and a token-lean page skeleton. Adding or refining a "pattern"
+  is now an edit to prose + an example, not a new `Pattern` subclass.
+- **Only Signals/Flags stay hardcoded** -- they are ground truth about the page (a login wall, a
+  pager, a JSON data-API, a record region), computed by `web.resolve`. They steer the prompt (e.g. a
+  `paginated` page tells the model to write one page; a `json` kind steers it to dotted paths).
+- **The safe compiler** (`compile.py`). `parse_query` rebuilds the model's `wq.doc…` chain by
+  walking its AST and driving the REAL `wq` recorder -- attribute access + method calls, the query
+  operators (`& | ~`, comparisons) and literal constants only. It is NOT `eval`: only `wq` is a
+  name, `_`-prefixed attributes / starred args / any other construct are refused, so a
+  prompt-injected line reaching `__globals__` on an untrusted crawled page cannot execute. `reroot`
+  prepends `reference(url).resolve()` (the guide has the model write a page-relative chain; the
+  pipeline supplies the source), composing the two recordings through the DSL's public plan API into
+  one self-contained, portable blob.
+- **Behaviours registry** (`behaviours.py`) -- a flag/signal -> a query modifier and/or an advisory
+  note the model can't express in a static plan (`paginated`/`infinite_scroll` -> use a paginating
+  resolver; `consent_wall`/`tabbed`/`iframe` -> a browser interaction is needed).
+- **Deterministic shortcuts** stay code, not model calls: a `download` brief on an HTML page yields
+  a file-links query; a binary reference (a PDF/spreadsheet) yields a plain fetch.
 
 ## Why this shape
 
 The old monolith (`webclient/pipelines/onboarding/`) folded locate + author + an LLM query-writer
-into one 4k-line flow. The learnings distilled here: candidate tiering + scrapability scoring
-(`select.py`/`evaluate.py`), the XHR-only-when-it-backs-the-page rule (`reference.py`), the
-flags-as-ground-truth-for-structure rule (`evaluate.py`), and pattern-shaped queries
-(`query_build.py`). What is dropped: the LLM writing raw query *code* (and its AST sandbox) --
-here the query shape is chosen by an extensible registry, and only field naming may (optionally)
-consult a model.
+into one 4k-line flow, driven by exactly this idea -- a `lazy_query_guide()` skill (markdown +
+examples) rendered into a `write_query` prompt, and a safe AST allowlist (`query_build.py`) that
+rebuilt the model's chain without `eval`. This package distils that: Locate stays deterministic
+(candidate tiering + scrapability scoring + the XHR-only-when-it-backs-the-page rule); Author keeps
+the guide-as-knowledge + safe-compile approach but adapts every example to the NEW `wq` surface and
+drops the hardcoded `Pattern`-class registry that had briefly replaced it -- structure-to-query
+mapping reads and evolves far better as prose than as an if-chain of classes.
 
 ## DSL note
 
 Author emits `wq` chains and needs nothing added to the DSL: HTML and JSON extract with the SAME
-verbs -- `wq.reference(url).resolve().select_all(row).extract(field=wq.doc.select(sel).attr("text"))`
--- where `select`/`select_all` take a CSS selector for markup and a dotted JSON path for a JSON
-document. `author` returns the lazy query (`await q.acollect(resolver=rs)` / `.collect()`);
-`authored` returns its `to_blob()` (rerun with `web.dsl.run_blob`).
+verbs -- `wq.doc.select_all(row).extract(field=wq.doc.select(sel).attr("text"))` -- where
+`select`/`select_all` take a CSS selector for markup and a dotted JSON path for a JSON document.
+The DSL has no `.regex()`, `optional=`, `.as_json()` or `.table()`; the guide uses the leaf reads
+(`attr`) and transforms (`number`/`date`/`split`/`map`) instead, and a `select` miss yields null
+(never dropping a record), so filtering is explicit. `author` returns the lazy query
+(`await q.acollect(resolver=rs)`); `authored` returns its `to_blob()` (rerun with
+`web.dsl.run_blob`).
