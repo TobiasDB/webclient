@@ -20,6 +20,14 @@ from . import (  # named default transport identities (web.fetch.profiles.BASIC 
 )
 from .browser import BrowserFetcher, BrowserSession
 from .bus import Event, EventBus, Subscription, Trace, emit, topic_matches, using
+from .chrome import (
+    BrowserSupply,
+    CdpSupply,
+    LaunchSupply,
+    ensure_chromium,
+    real_chrome_path,
+    supply_for,
+)
 from .entry import Profile  # functional entry + pool
 from .entry import (
     ClientPool,
@@ -56,6 +64,12 @@ __all__ = [
     "HttpFetcher",
     "BrowserFetcher",
     "BrowserSession",
+    "BrowserSupply",
+    "LaunchSupply",
+    "CdpSupply",
+    "supply_for",
+    "real_chrome_path",
+    "ensure_chromium",
     "HttpSession",
     "Session",
     "fetch",

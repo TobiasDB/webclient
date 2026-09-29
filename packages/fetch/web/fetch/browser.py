@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Literal
 
 from . import mouse
 from .bus import emit
+from .chrome import BrowserSupply, supply_for
 from .errors import classify
 from .fingerprint import Fingerprint, as_fingerprint
 from .models import (
@@ -310,6 +311,7 @@ class BrowserFetcher:
         cdp: "str | None" = None,
         wait: "Wait | None" = None,
         executable_path: "str | None" = None,
+        supply: "BrowserSupply | None" = None,
         scripts: "tuple[Script, ...] | ScriptRegistry | None" = None,
     ) -> None:
         self._headless = headless
@@ -323,6 +325,16 @@ class BrowserFetcher:
         #: a CDP endpoint (e.g. ``http://localhost:9222``) to ATTACH to an already-running browser
         #: instead of launching one -- a real user profile, a remote grid, an inspected Chrome.
         self._cdp = cdp
+        #: HOW the browser is obtained (launch a local process vs attach over CDP) + its lifecycle,
+        #: factored into :mod:`.chrome`. A caller can pass an explicit ``supply`` (e.g. a remote-CDP
+        #: box on a residential exit); otherwise it is derived from the flat kwargs above.
+        self._supply: BrowserSupply = supply or supply_for(
+            cdp=cdp,
+            headless=headless,
+            channel=channel,
+            executable_path=executable_path,
+            proxy=self._proxy,
+        )
         #: a registry so a caller can enable/disable capture scripts; a bare tuple is wrapped.
         self.scripts: ScriptRegistry = (
             default_scripts()
@@ -338,21 +350,9 @@ class BrowserFetcher:
             from playwright.async_api import async_playwright
 
             self._pw = await async_playwright().start()
-            if self._cdp is not None:  # attach to an existing browser over the DevTools protocol
-                browser = await self._pw.chromium.connect_over_cdp(self._cdp)
-            else:
-                browser = await self._pw.chromium.launch(
-                    headless=self._headless,
-                    channel=None if self._channel == "chromium" else self._channel,
-                    executable_path=self._executable,  # an explicit binary overrides the channel
-                    proxy=self._proxy.playwright() if self._proxy else None,
-                    # Launch as a REAL browser, not an automation harness: drop the
-                    # `AutomationControlled` blink feature (which sets navigator.webdriver + other
-                    # tells at the engine level) and Playwright's `--enable-automation` switch. This
-                    # is what an anti-bot WAF checks first.
-                    args=["--disable-blink-features=AutomationControlled"],
-                    ignore_default_args=["--enable-automation"],
-                )
+            # the supply obtains the browser -- launch a local process (with the real-browser launch
+            # args) or attach to a running one over CDP; see :mod:`.chrome`.
+            browser = await self._supply.connect(self._pw)
             self._browser = browser
         return browser
 
@@ -423,7 +423,10 @@ class BrowserFetcher:
 
     async def aclose(self) -> None:
         if self._browser is not None:
-            await self._browser.close()
+            # only CLOSE a browser we launched; an attached (CDP) supply must leave the user's /
+            # remote process running -- we just disconnect the driver by stopping Playwright below.
+            if self._supply.owns_process:
+                await self._browser.close()
             self._browser = None  # idempotent
         if self._pw is not None:
             await self._pw.stop()
