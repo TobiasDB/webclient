@@ -329,6 +329,79 @@ def _rerooted(chain: str, url: str) -> object:
     return reroot(parse_query(chain), url)
 
 
+class _SeqLlm:
+    """Returns canned replies in sequence (the agent loop makes several distinct author calls)."""
+
+    def __init__(self, replies: "list[str]") -> None:
+        self._replies = replies
+        self.i = 0
+
+    async def complete(self, prompt: str) -> str:
+        reply = self._replies[min(self.i, len(self._replies) - 1)]
+        self.i += 1
+        return reply
+
+
+_LISTING = (
+    b"<html><body><ul>"
+    b"<li class='row'><span class='name'>A</span><a class='more' href='/detail/1'>read</a></li>"
+    b"<li class='row'><span class='name'>B</span><a class='more' href='/detail/2'>read</a></li>"
+    b"</ul></body></html>"
+)
+
+
+def test_author_agent_nests_a_detail_extraction(httpserver: HTTPServer) -> None:
+    # the agent loop: base query (name + link), then -- body missing, a record link exists -- a
+    # detail turn that resolves each record's link and extracts the body from the detail page.
+    from web.onboard import author_agent
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    httpserver.expect_request("/detail/1").respond_with_data(
+        b"<article class='body'>Body One</article>", content_type="text/html"
+    )
+    httpserver.expect_request("/detail/2").respond_with_data(
+        b"<article class='body'>Body Two</article>", content_type="text/html"
+    )
+    base = (
+        'wq.doc.select_all("li.row").extract('
+        'name=wq.doc.select(".name").attr("text"), url=wq.doc.select("a.more").attr("href"))'
+    )
+    detail = (
+        'wq.doc.select_all("li.row").extract('
+        'name=wq.doc.select(".name").attr("text"), url=wq.doc.select("a.more").attr("href"), '
+        'body=wq.doc.select("a.more").attr("href").resolve().select("article.body").attr("text"))'
+    )
+    llm = _SeqLlm([base, detail])
+
+    async def go() -> object:
+        async with Resolver() as r:
+            q, verdict = await author_agent(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                DatasetBrief(fields=["name", "url", "body"]),
+                resolver=r,
+                llm=cast("object", llm),
+            )
+            assert verdict.ok  # the loop reached done
+            assert q is not None
+            return await q.acollect(resolver=r)
+
+    rows = cast("list[dict[str, object]]", _run(go()))
+    assert any(row.get("body") == "Body One" for row in rows)  # the detail turn nested the body
+
+
+def test_guide_for_selects_examples_by_kind_and_situation() -> None:
+    from web.onboard.patterns import guide_for
+
+    html = guide_for([], "html")
+    assert "flat HTML list" in html and "JSON / API document" not in html  # html -> list example
+    js = guide_for([], "json")
+    assert "JSON / API document" in js and "flat HTML list" not in js  # json -> the JSON example
+    assert "DETAIL page" in guide_for(
+        [], "html", detail=True
+    )  # detail turn -> the follow-a-link ex
+    assert "Writing a `wq`" in html  # the preamble (core syntax) is always included
+
+
 def test_review_revises_the_query_to_add_a_missing_field(httpserver: HTTPServer) -> None:
     from web.onboard import review
     from web.onboard.compile import Query

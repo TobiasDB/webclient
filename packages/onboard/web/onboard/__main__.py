@@ -39,6 +39,7 @@ from web.fetch import WebException, using
 from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
 
 from .author import AuthorEvent, build_query
+from .authoring import author_agent
 from .compile import QueryError
 from .frontier import llm_frontier
 from .llm import AnthropicLlm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage
@@ -442,24 +443,34 @@ async def _author(args: argparse.Namespace) -> int:
         if reference is None:
             _err("no source located to author over (nothing scored above zero).")
             return 1
-        _err(f"authoring: resolving {_short(reference.url)} then asking the model for the query…")
-        try:
+        if args.agent:  # the authoring AGENT LOOP: base -> nested-detail -> ... (extends per brief)
+            _err(f"authoring (agent loop): {_short(reference.url)}…")
             with _Progress(args.verbose):
-                query, engine, notes = await build_query(
+                agent_query, verdict = await author_agent(
                     reference, brief, resolver=resolver, llm=llm
                 )
-        except (
-            QueryError
-        ) as exc:  # the model's reply was not a rebuildable wq chain (it was logged)
-            _err(f"authoring failed: the model's query did not parse — {exc}")
-            return 1
-        if args.review:  # run it, review the rows vs the schema, let the model extend/fix the query
-            _err(f"reviewing the extracted data ({args.review} round[s])…")
-            with _Progress(args.verbose):
-                query, rnotes = await review(
-                    query, reference, brief, resolver=resolver, llm=llm, rounds=args.review
-                )
-            notes += rnotes
+            if agent_query is None:
+                _err(f"authoring failed: the agent loop produced no query ({verdict.reason})")
+                return 1
+            query, engine = agent_query, "agent"
+            notes = [f"agent loop: {verdict.rounds} round(s) → {verdict.reason}"]
+        else:
+            _err(f"authoring: resolving {_short(reference.url)} then asking the model…")
+            try:
+                with _Progress(args.verbose):
+                    query, engine, notes = await build_query(
+                        reference, brief, resolver=resolver, llm=llm
+                    )
+            except QueryError as exc:  # the reply was not a rebuildable wq chain (it was logged)
+                _err(f"authoring failed: the model's query did not parse — {exc}")
+                return 1
+            if args.review:  # run it, review vs the schema, let the model extend/fix the query
+                _err(f"reviewing the extracted data ({args.review} round[s])…")
+                with _Progress(args.verbose):
+                    query, rnotes = await review(
+                        query, reference, brief, resolver=resolver, llm=llm, rounds=args.review
+                    )
+                notes += rnotes
         _explain_query(reference, brief, engine, query.describe(), notes)  # reasoning -> stderr
         print(query.to_blob())  # the serialised query -> stdout
         if isinstance(
@@ -564,12 +575,18 @@ def _parser() -> argparse.ArgumentParser:
         help="cache-write price ($/M tokens)",
     )
     aut.add_argument(
+        "--agent",
+        action="store_true",
+        help="author with the AGENT LOOP: base query, then extend per the brief (e.g. fetch a "
+        "sampled record's link and nest a detail extraction) until the schema is satisfied",
+    )
+    aut.add_argument(
         "--review",
         type=int,
         default=0,
         metavar="N",
         help="review the extracted data against the schema and let the model revise the query "
-        "(fix selectors, add detail, follow links) for N rounds (default 0 = off)",
+        "(fix selectors, add detail, follow links) for N rounds (default 0 = off; ignored with --agent)",
     )
     aut.add_argument(
         "--run", action="store_true", help="run the authored query and print a sample of rows"

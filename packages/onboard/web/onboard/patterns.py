@@ -24,6 +24,35 @@ from .models import DatasetBrief
 #: the query-writing guide (markdown + worked examples), rendered into every author prompt.
 PATTERNS_GUIDE: str = files("web.onboard").joinpath("patterns.md").read_text(encoding="utf-8")
 
+# Split the guide into the always-included PREAMBLE (core syntax) and the numbered worked EXAMPLES,
+# so a prompt carries only the examples relevant to THIS page -- the model gets the right worked
+# example without the whole guide blowing up the context.
+_PARTS = PATTERNS_GUIDE.split("\n### ")
+_PREAMBLE: str = _PARTS[0]
+_EXAMPLES: "dict[str, str]" = {c.split(" — ", 1)[0].strip(): "### " + c for c in _PARTS[1:]}
+
+
+def guide_for(flags: "list[Flag]", kind: str, *, detail: bool = False, lists: bool = False) -> str:
+    """The query-writing guide TRIMMED to what this page needs: the preamble (core syntax) + only
+    the worked examples selected by the document ``kind`` and the situation -- a JSON/XML doc, an
+    HTML list/table, a DETAIL-page follow (``detail``), a list-valued field (``lists``), and always
+    the filtering example. Keeps the prompt lean vs. dumping all nine examples."""
+    picks = {"json": ["3"], "xml": ["4"]}.get(kind, ["1", "2"])  # the record-shape example(s)
+    if lists:
+        picks.append("5")  # a list-valued field
+    picks.append("7")  # filtering out rows (small, near-always useful)
+    if detail:
+        picks.append("8")  # a field on the DETAIL page (follow a link)
+    if any(f.name == "record_list" and f.present for f in flags) and kind not in ("json", "xml"):
+        picks.append("9")  # two sections / grouped selector -- when there are repeating records
+    chosen: list[str] = []
+    taken: set[str] = set()
+    for p in picks:
+        if p in _EXAMPLES and p not in taken:
+            taken.add(p)
+            chosen.append(_EXAMPLES[p])
+    return _PREAMBLE.rstrip() + "\n\n" + "\n\n".join(chosen)
+
 
 def _flags_line(flags: "list[Flag]") -> str:
     """The page's fired flags as one advisory block: each present flag, its remedy, and the evidence
@@ -85,7 +114,7 @@ def author_prompt(brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, ki
     )
     hints = f"\nAuthor guidance: {brief.hints}" if brief.hints else ""
     return (
-        f"{PATTERNS_GUIDE}\n\n"
+        f"{guide_for(flags, kind)}\n\n"  # signal-selected examples -- lean context, not all nine
         "----\n"
         f"Using ONLY the query syntax above, write ONE wq query that extracts this dataset: {goal}.\n"
         f"{_fields_line(brief)}{kind_note}{pager}{hints}\n\n"
@@ -96,4 +125,4 @@ def author_prompt(brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, ki
     )
 
 
-__all__ = ["PATTERNS_GUIDE", "author_prompt"]
+__all__ = ["PATTERNS_GUIDE", "author_prompt", "guide_for"]
