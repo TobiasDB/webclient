@@ -59,7 +59,6 @@ from .models import (
     Snapshot,
     Wait,
 )
-from .pool import Pool
 from .proxy import Proxy
 from .replay import Recorder, ReplayBackend
 
@@ -91,7 +90,6 @@ __all__ = [
     "Script",
     "ScriptRegistry",
     "Proxy",
-    "Pool",
     "Fingerprint",
     "CHROME",
     "fleet",

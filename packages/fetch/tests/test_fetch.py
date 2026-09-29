@@ -427,35 +427,6 @@ def test_proxy_renders_for_each_backend() -> None:
     assert BrowserFetcher(proxy=p) is not None
 
 
-def test_pool_bounds_concurrency() -> None:
-    from web.fetch import Pool
-
-    class _Slow:  # a backend that tracks how many fetches overlap
-        def __init__(self):
-            self.max_overlap = 0
-            self.now = 0
-
-        async def fetch(self, request: Request) -> Snapshot:
-            self.now += 1
-            self.max_overlap = max(self.max_overlap, self.now)
-            await asyncio.sleep(0.02)
-            self.now -= 1
-            return Snapshot(request=request, status=200)
-
-        async def aclose(self):
-            pass
-
-    async def go() -> tuple[int, int]:
-        slow = _Slow()
-        pool = Pool(slow, limit=2)
-        await asyncio.gather(*[pool.fetch(Request(url=f"https://x/{i}")) for i in range(8)])
-        await pool.aclose()
-        return slow.max_overlap, pool.peak
-
-    max_overlap, peak = _run(go())
-    assert max_overlap == 2 and peak == 2  # 8 requests, never more than 2 in flight
-
-
 # -- wait strategies + rich capture + live actions --
 
 from web.fetch import ConsoleEvent, Wait  # noqa: E402
