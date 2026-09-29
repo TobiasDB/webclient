@@ -32,7 +32,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from .proxy import Proxy
+from ..proxy import Proxy
 
 if TYPE_CHECKING:
     from playwright.async_api import Browser, Playwright

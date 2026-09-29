@@ -14,7 +14,7 @@ richer capture.
 
 from __future__ import annotations
 
-from .models import Script
+from ..models import Script
 
 _DOM_RECORD_JS = """
 (() => {

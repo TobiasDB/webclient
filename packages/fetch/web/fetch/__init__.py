@@ -18,16 +18,21 @@ from __future__ import annotations
 from . import (  # named default transport identities (web.fetch.profiles.BASIC / BROWSER / ...)
     profiles,
 )
-from .browser import BrowserFetcher, BrowserSession
-from .bus import Event, EventBus, Subscription, Trace, emit, topic_matches, using
-from .chrome import (
+from .browser import (
+    DEEP_DOM,
+    DOM_RECORDER,
+    OPEN_SHADOW,
+    BrowserFetcher,
+    BrowserSession,
     BrowserSupply,
     CdpSupply,
     LaunchSupply,
+    ScriptRegistry,
     ensure_chromium,
     real_chrome_path,
     supply_for,
 )
+from .bus import Event, EventBus, Subscription, Trace, emit, topic_matches, using
 from .entry import Profile  # functional entry + pool
 from .entry import (
     ClientPool,
@@ -56,7 +61,6 @@ from .models import (
 from .pool import Pool
 from .proxy import Proxy
 from .replay import Recorder, ReplayBackend
-from .script import DEEP_DOM, DOM_RECORDER, OPEN_SHADOW, ScriptRegistry
 
 __all__ = [
     "Request",

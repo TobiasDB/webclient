@@ -16,12 +16,10 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Literal
 
-from . import mouse
-from .bus import emit
-from .chrome import BrowserSupply, supply_for
-from .errors import classify
-from .fingerprint import Fingerprint, as_fingerprint
-from .models import (
+from ..bus import emit
+from ..errors import classify
+from ..fingerprint import Fingerprint, as_fingerprint
+from ..models import (
     CaptureEvent,
     ConsoleEvent,
     DOMEvent,
@@ -32,7 +30,9 @@ from .models import (
     Snapshot,
     Wait,
 )
-from .proxy import Proxy, as_proxy
+from ..proxy import Proxy, as_proxy
+from . import mouse
+from .chrome import BrowserSupply, supply_for
 from .script import ScriptRegistry, default_scripts
 from .wait import apply_wait
 
