@@ -221,11 +221,30 @@ class Field(Generic[T]):
         return f"Field({self._value!r})" if self._ok else "Field(<empty>)"
 
 
+class Ref:
+    """A resolvable reference value: an (absolute) URL that ``.resolve()`` fetches into a Document.
+    ``attr('href')`` / ``attr('src')`` and ``links()`` yield these, so a link can be FOLLOWED
+    (``select('a').attr('href').resolve()...``); collected without resolving, a Ref reads as its
+    URL string."""
+
+    __slots__ = ("url", "base")
+
+    def __init__(self, url: str = "", base: str = "") -> None:
+        self.url = url
+        self.base = base
+
+    def __repr__(self) -> str:
+        return f"Ref({self.url!r})"
+
+
 def raw(value: object) -> JsonValue:
-    """Unwrap a ``Field`` to its raw value (missing -> None); pass anything else through, cleaned to
-    plain JSON data (a list is cleaned item-wise) -- the shape a projected row stores."""
+    """Unwrap a ``Field`` to its raw value (missing -> None); a ``Ref`` to its URL; pass anything
+    else through, cleaned to plain JSON data (a list is cleaned item-wise) -- the shape a projected
+    row stores."""
     if isinstance(value, Field):
         return raw(value.get())
+    if isinstance(value, Ref):
+        return value.url
     if isinstance(value, (list, Collection)):
         return [raw(v) for v in value]
     if isinstance(value, (str, int, float, bool)) or value is None or isinstance(value, dict):
@@ -337,4 +356,4 @@ def _flatten(row: "dict[str, JsonValue]", sep: str) -> "dict[str, JsonValue]":
     return out
 
 
-__all__ = ["Field", "Collection", "parse_when", "raw", "clean_row", "distinct_rows"]
+__all__ = ["Field", "Collection", "Ref", "parse_when", "raw", "clean_row", "distinct_rows"]

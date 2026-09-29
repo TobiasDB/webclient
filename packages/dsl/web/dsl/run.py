@@ -22,7 +22,10 @@ from web.parse import Document, Element, dig
 from web.resolve import Resolver
 
 from .plan import Arg, Plan, Step
-from .values import Collection, Field, raw
+from .values import Collection, Field, Ref, raw
+
+#: attributes that read as a resolvable reference (a URL), not a plain string value.
+_LINK_ATTRS = frozenset({"href", "src"})
 
 _MISSING: object = object()
 #: ops whose call args stay LAZY sub-plans, evaluated per element (not once, eagerly).
@@ -108,11 +111,20 @@ async def _invoke(cur: object, name: str, call: "Step | None", root: object, rs:
     return _one(cur, name, args, kwargs)
 
 
-async def _resolve(cur: object, rs: "Resolver") -> "Document | None":
-    """Resolve the current value to a Document: a URL string is fetched; a Document passes through;
-    anything else (a missed select) stays ``None``."""
-    if isinstance(cur, str) and cur:
-        return await rs.resolve(Request(url=cur))
+async def _resolve(cur: object, rs: "Resolver") -> object:
+    """Resolve the current value to a Document (or a Collection of them). A ``Ref`` / ``Field`` /
+    URL string is fetched; a Document passes through; a Collection or list of refs FANS OUT into a
+    Collection of Documents (``select_all('a').attr('href').resolve()``); a miss stays ``None``."""
+    if isinstance(cur, (Collection, list)):
+        docs: list[object] = []
+        for item in cur:
+            doc = await _resolve(item, rs)
+            if doc is not None:
+                docs.append(doc)
+        return Collection(docs)
+    url = cur.url if isinstance(cur, Ref) else (cur.get() if isinstance(cur, Field) else cur)
+    if isinstance(url, str) and url:
+        return await rs.resolve(Request(url=url))
     return cur if isinstance(cur, Document) else None
 
 
@@ -134,10 +146,14 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
         value = _json_get(obj, str(args[0]))  # the JSON array at the path becomes the collection
         nodes: "list[object]" = value if isinstance(value, list) else ([] if value is None else [value])
         return Collection(nodes, base=_base_of(obj))
-    if name == "attr":  # HTML attribute (attr('text') -> text); or a JSON leaf/key by path
+    if name == "attr":  # HTML attribute (attr('text') -> text, attr('href') -> a resolvable Ref)
         key = str(args[0]) if args else ""
         if isinstance(obj, Element):
-            return Field(_text_of(obj) if key in _TEXT_ATTRS else obj.attr(key), base=_base_of(obj))
+            if key in _TEXT_ATTRS:
+                return Field(_text_of(obj), base=_base_of(obj))
+            if key in _LINK_ATTRS:  # a link -> a Ref, so .resolve() can follow it
+                return Ref(obj.attr(key) or "", base=_base_of(obj))
+            return Field(obj.attr(key), base=_base_of(obj))
         if _markup(obj):  # a markup Document has no attributes of its own; text pseudo only
             return Field(_text_of(obj) if key in _TEXT_ATTRS else None, base=_base_of(obj))
         return Field(_json_get(obj, "" if key in _TEXT_ATTRS else key))  # JSON: value / key access
@@ -145,8 +161,8 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
         if _markup(obj):
             return Field(_text_of(obj), base=_base_of(obj))
         return Field(_json_get(obj, ""))  # the JSON scalar value itself
-    if name == "links" and isinstance(obj, Document):
-        return Collection([Field(u, base=obj.url) for u in obj.links()])
+    if name == "links" and isinstance(obj, Document):  # resolvable refs, so .resolve() can follow
+        return Collection([Ref(u, base=obj.url) for u in obj.links()])
     attr = getattr(obj, name, None)
     if attr is None:
         return None
@@ -341,6 +357,8 @@ def _smart(cur: object) -> object:
     items smart-unwrapped; a list maps through; a Document/Element/scalar passes as-is."""
     if isinstance(cur, Field):
         return cur.get()
+    if isinstance(cur, Ref):  # an unresolved reference reads as its URL
+        return cur.url
     if isinstance(cur, Collection):
         return cur.project() if cur._rows is not None else [_smart(i) for i in cur]
     if isinstance(cur, list):

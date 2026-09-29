@@ -198,6 +198,12 @@ async def evaluator(wc: WebClient, base: str, blob: str) -> None:
                       .acollect())
     print("enriched:", [(r["name"], r["sku"]) for r in enriched])
 
+    # attr('href') is a resolvable reference -> .resolve() follows it, fanned over the whole list
+    followed = await (wq.reference(base + "/").resolve()
+                      .select_all("li.product a.link").attr("href")   # -> a list of references
+                      .resolve().select("h1.sku").attr("text").acollect())  # follow each -> its SKU
+    print("attr('href').resolve() (fanned follow):", followed)
+
     # a labelled column with when/then/otherwise + a bound-client chain
     labelled = await (wc.resolve(base + "/").select_all("li.product")
                       .extract(name=wq.doc.select(".name").attr("text"),

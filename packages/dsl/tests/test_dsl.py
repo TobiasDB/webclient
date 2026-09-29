@@ -124,6 +124,18 @@ def test_attr_fanout_returns_a_list_of_values(httpserver: HTTPServer) -> None:
     assert [str(h).rsplit("/", 1)[-1] for h in hrefs] == ["1", "2", "3"]
 
 
+def test_attr_href_is_a_resolvable_reference(httpserver: HTTPServer) -> None:
+    url = _shop(httpserver)
+    # single: select a link, attr('href') -> a Ref, .resolve() follows it into the detail page
+    sku = _run(wq.reference(url).resolve().select(".card a.link").attr("href")
+               .resolve().select("h1.sku").attr("text").acollect())
+    assert sku == "SKU-1"
+    # fanned: attr('href') over a collection -> resolve() ALL -> a collection of detail docs
+    skus = _run(wq.reference(url).resolve().select_all(".card a.link").attr("href")
+                .resolve().select("h1.sku").attr("text").acollect())
+    assert skus == ["SKU-1", "SKU-2", "SKU-3"]
+
+
 def test_extract_follows_a_reference_into_detail_pages(httpserver: HTTPServer) -> None:
     url = _shop(httpserver)
     # per-element enrichment: extract a link, then resolve it and read the detail page's SKU
