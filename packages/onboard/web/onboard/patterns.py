@@ -38,12 +38,20 @@ def _flags_line(flags: "list[Flag]") -> str:
 
 
 def _fields_line(brief: DatasetBrief) -> str:
-    """The requested fields as a one-line schema, with any explicit selector override noted."""
+    """The requested fields as a schema line: each field with any explicit selector override, its
+    description (what the field is), and an ``(optional)`` marker so the model writes
+    ``select(..., optional=True)`` for fields that may legitimately be absent."""
     if not brief.fields:
         return "Fields: (none given -- extract the salient fields of each record)."
-    parts = [f"{name} [{brief.selectors[name]}]" if name in brief.selectors else name
-             for name in brief.fields]
-    return "Fields (the columns each record should carry): " + ", ".join(parts)
+    parts: list[str] = []
+    for name in brief.fields:
+        piece = f"{name} [{brief.selectors[name]}]" if name in brief.selectors else name
+        if name in brief.descriptions:
+            piece += f" -- {brief.descriptions[name]}"
+        if name in brief.optional:
+            piece += " (optional)"
+        parts.append(piece)
+    return "Fields (the columns each record should carry): " + "; ".join(parts)
 
 
 def author_prompt(brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, kind: str) -> str:
@@ -56,11 +64,12 @@ def author_prompt(brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, ki
              if any(f.name in ("paginated", "infinite_scroll") and f.present for f in flags) else "")
     kind_note = ("\nThis is a JSON document -- use dotted paths in select/select_all and read keys "
                  "with .attr(\"<key>\")." if kind == "json" else "")
+    hints = f"\nAuthor guidance: {brief.hints}" if brief.hints else ""
     return (
         f"{PATTERNS_GUIDE}\n\n"
         "----\n"
         f"Using ONLY the query syntax above, write ONE wq query that extracts this dataset: {goal}.\n"
-        f"{_fields_line(brief)}{kind_note}{pager}\n\n"
+        f"{_fields_line(brief)}{kind_note}{pager}{hints}\n\n"
         f"{_flags_line(flags)}\n\n"
         "Base your selectors on this page skeleton (a token-lean DOM/JSON outline; a RECORD LIST "
         f"mark shows a likely row selector):\n{skeleton}\n\n"

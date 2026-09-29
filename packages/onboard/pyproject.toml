@@ -5,6 +5,9 @@ description = "web-* onboard: the capstone — goal -> dataset, composing crawl 
 requires-python = ">=3.12"
 dependencies = ["web-fetch", "web-parse", "web-resolve", "web-crawl", "web-dsl", "pydantic>=2", "pyyaml>=6"]
 
+[project.scripts]
+web = "web.onboard.__main__:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

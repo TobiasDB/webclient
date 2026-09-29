@@ -20,8 +20,8 @@ from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 from web.crawl import Crawler, Goal
-from web.fetch import Request
-from web.parse import Document
+from web.fetch import NetworkEvent, Request
+from web.parse import Document, parse
 from web.resolve import Flag, Resolver, flags
 
 from .models import LocateBrief, Reference
@@ -122,14 +122,44 @@ def _consistent(page: Document, api: Document) -> bool:
     return hits >= max(2, len(leaves) // 4)
 
 
+async def _observed(page: Document, resolver: Resolver) -> "list[tuple[str, Document]]":
+    """The same-origin XHR/``fetch`` responses the page ACTUALLY made whose captured body is JSON --
+    the live data-API behind it, not a URL guessed from the DOM. It renders through the CALLER's
+    resolver (:meth:`Resolver.snapshot`), so it captures a network stream only when the caller chose
+    a browser profile; an HTTP-only resolver emits no network events and this returns ``[]`` (Locate
+    never launches a browser on its own). Bodies are already drained onto the Snapshot -- no re-fetch."""
+    snap = await resolver.snapshot(Request(url=page.url))
+    host = urlparse(page.url).hostname
+    out: "list[tuple[str, Document]]" = []
+    seen: set[str] = set()
+    for ev in snap.events:
+        if not isinstance(ev, NetworkEvent) or ev.resource_type not in ("xhr", "fetch"):
+            continue
+        if not ev.body or ev.url in seen or urlparse(ev.url).hostname != host:
+            continue
+        seen.add(ev.url)
+        doc = parse(ev.body, url=ev.url)
+        if doc.kind == "json":
+            out.append((ev.url, doc))
+    return out
+
+
 async def _prefer_api(page: Document, ref: Reference, resolver: Resolver) -> Reference:
     """Apply the XHR-preference rule: root the Reference at a same-origin JSON data-API that is
-    consistent with the page, instead of the page. Never a blind/hallucinated pick -- the endpoint
-    is resolved and its data checked against the page first."""
+    consistent with the page, instead of the page. Never a blind/hallucinated pick -- the endpoint's
+    data is checked against the page first. Two passes: the cheap DOM-declared/link endpoints
+    (resolved), then -- only when the page is JS-gated (``needs_browser``, so its data is loaded by
+    script, not in the static DOM) -- the real network stream it fires in a browser (:func:`_observed`,
+    bodies already captured). The first consistent JSON source wins. A plain static page never
+    launches a browser here."""
     for url in data_api_endpoints(page):
         api = await resolver.resolve(Request(url=url))
         if _consistent(page, api):
             return ref.model_copy(update={"url": url, "kind": api.kind, "api_endpoint": url})
+    if ref.needs_browser:  # a JS-gated page: mine the XHR/fetch stream for the API that feeds it
+        for url, api in await _observed(page, resolver):
+            if _consistent(page, api):
+                return ref.model_copy(update={"url": url, "kind": api.kind, "api_endpoint": url})
     return ref
 
 
@@ -152,10 +182,13 @@ async def locate(brief: "LocateBrief | str", *, resolver: Resolver, search: "Sea
     score, then the XHR/data-API preference is applied."""
     lb = LocateBrief(goal=brief) if isinstance(brief, str) else brief
     seeds = list(lb.seeds)
+    if lb.start_url and lb.start_url not in seeds:  # a known source to seed the crawl from
+        seeds.append(lb.start_url)
     if not lb.candidates and not seeds:
         if search is None:
             raise ValueError("locate needs seeds, candidates, or a search callable")
-        seeds = await search(lb.goal)
+        query = f"{lb.goal} {lb.search}".strip() if lb.search else lb.goal  # brief search qualifier
+        seeds = await search(query)
 
     if lb.candidates:
         docs = [await resolver.resolve(Request(url=u)) for u in lb.candidates]

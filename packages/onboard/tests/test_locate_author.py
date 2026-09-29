@@ -14,9 +14,13 @@ from typing import cast
 
 from pytest_httpserver import HTTPServer
 
+import pytest
+
+from web.dsl import Plan
 from web.resolve import Resolver
-from web.onboard import (DatasetBrief, LocateBrief, Reference, author, build_query, locate,
-                         locate_and_author)
+from web.onboard import (Brief, DatasetBrief, LocateBrief, Pricing, Reference, Usage, author,
+                         build_query, locate, locate_and_author)
+from web.onboard.__main__ import main
 
 
 class ScriptedLlm:
@@ -163,3 +167,77 @@ def test_locate_and_author_compose_end_to_end(httpserver: HTTPServer) -> None:
 
     rows = cast("list[dict[str, object]]", _run(go()))
     assert {"name": "Alice", "role": "CEO"} in rows
+
+
+# -- Brief loading + the CLI ----------------------------------------------------------------------
+
+def test_brief_loads_from_markdown_frontmatter() -> None:
+    text = ("---\n"
+            "name: team\n"
+            "seeds: [https://acme.com/team]\n"
+            "max_pages: 12\n"
+            "schema:\n"
+            "  - name: the person's full name\n"
+            "  - role\n"
+            "optional: [role]\n"
+            "---\n"
+            "Board members and their roles.\n")
+    brief = Brief.from_markdown(text)
+    assert brief.name == "team" and brief.seeds == ["https://acme.com/team"] and brief.max_pages == 12
+    assert brief.goal == "Board members and their roles."          # the body is the goal
+    assert brief.fields == ["name", "role"]                        # schema: -> fields
+    assert brief.descriptions == {"name": "the person's full name"}  # {path: desc} -> descriptions
+    assert brief.optional == ["role"]
+
+
+class _ClosableLlm(ScriptedLlm):
+    """A ScriptedLlm the CLI can close (it calls ``llm.aclose()``)."""
+
+    async def aclose(self) -> None:
+        return None
+
+
+def test_cli_locate_emits_serialised_reference(httpserver: HTTPServer, capsys: "pytest.CaptureFixture[str]") -> None:
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+    rc = main(["locate", "--goal", "team", "--candidate", httpserver.url_for("/people")])
+    out = capsys.readouterr()
+    assert rc == 0
+    ref = Reference.model_validate_json(out.out.strip())           # stdout is the serialised Reference
+    assert ref.record_selector == "li.row" and "record_list" in ref.flags
+    assert "flags:" in out.err and "records:" in out.err           # reasoning went to stderr
+
+
+def test_cli_author_emits_blob_and_runs(httpserver: HTTPServer, capsys: "pytest.CaptureFixture[str]",
+                                        monkeypatch: "pytest.MonkeyPatch") -> None:
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+    reply = ('wq.doc.select_all("li.row").extract('
+             'name=wq.doc.select(".name").attr("text"), role=wq.doc.select(".role").attr("text"))')
+    monkeypatch.setattr("web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(reply))
+    rc = main(["author", httpserver.url_for("/people"), "--field", "name", "--field", "role", "--run"])
+    out = capsys.readouterr()
+    assert rc == 0
+    Plan.from_blob(out.out.strip())                                # stdout is a rebuildable wq blob
+    assert "query:" in out.err and "rows:" in out.err              # reasoning + sample went to stderr
+
+
+def test_cli_locate_pipes_into_author(httpserver: HTTPServer, capsys: "pytest.CaptureFixture[str]",
+                                      monkeypatch: "pytest.MonkeyPatch") -> None:
+    # the composition: locate's stdout (a Reference JSON) is exactly what author --ref - consumes.
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+    rc = main(["locate", "--goal", "team", "--candidate", httpserver.url_for("/people")])
+    located = capsys.readouterr().out.strip()
+    assert rc == 0
+    monkeypatch.setattr("sys.stdin", type("S", (), {"read": staticmethod(lambda: located)})())
+    reply = 'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
+    monkeypatch.setattr("web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(reply))
+    rc = main(["author", "--ref", "-", "--field", "name"])
+    assert rc == 0 and Plan.from_blob(capsys.readouterr().out.strip())
+
+
+def test_llm_pricing_meters_spend_from_usage() -> None:
+    # $3/M input, $15/M output, $0.30/M cache-read, $3.75/M cache-write (a Sonnet-like schedule)
+    pricing = Pricing(input=3.0, output=15.0, cache_read=0.30, cache_write=3.75)
+    total = Usage(input=1000, output=500) + Usage(input=200, cache_read=4000)
+    assert total.input == 1200 and total.cache_read == 4000
+    cost = pricing.cost(total)
+    assert abs(cost - (1200 * 3.0 + 500 * 15.0 + 4000 * 0.30) / 1_000_000) < 1e-12

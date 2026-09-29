@@ -28,10 +28,10 @@ from .author import Authored as AuthoredQuery
 from .author import author, authored, build_query
 from .behaviours import Behaviour, apply_behaviours, behaviour, register_behaviour
 from .compile import Query, QueryError, parse_query, reroot
-from .llm import AnthropicLlm, Llm
+from .llm import AnthropicLlm, Llm, Pricing, RateLimit, Usage
 from .llm_driver import llm_driver
 from .locate import Search, data_api_endpoints, locate
-from .models import DatasetBrief, LocateBrief, Reference
+from .models import Brief, DatasetBrief, LocateBrief, Reference
 from .patterns import PATTERNS_GUIDE, author_prompt
 
 
@@ -45,7 +45,7 @@ class Onboarded(BaseModel):
 
 
 async def onboard(
-    goal: str, seeds: "str | list[str]", *, resolver: Resolver, llm: Llm, max_pages: int = 20,
+    goal: str, seeds: "str | list[str]", *, resolver: Resolver, llm: Llm, max_pages: int = 40,
 ) -> Onboarded:
     """Crawl the seeds, author a row extraction (agent + llm) on the first page that yields data,
     then apply it across every crawled page and aggregate the rows."""
@@ -81,10 +81,10 @@ async def locate_and_author(
     return await author(reference, brief, resolver=resolver, llm=llm)
 
 
-__all__ = ["onboard", "Onboarded", "Llm", "AnthropicLlm", "llm_driver",
+__all__ = ["onboard", "Onboarded", "Llm", "AnthropicLlm", "Usage", "Pricing", "RateLimit", "llm_driver",
            # the reusable Locate + Author phases and their value models
            "locate", "author", "authored", "build_query", "locate_and_author",
-           "Reference", "LocateBrief", "DatasetBrief", "AuthoredQuery", "Search", "data_api_endpoints",
+           "Reference", "Brief", "LocateBrief", "DatasetBrief", "AuthoredQuery", "Search", "data_api_endpoints",
            # the natural-language patterns knowledge + the safe query compiler
            "PATTERNS_GUIDE", "author_prompt", "Query", "QueryError", "parse_query", "reroot",
            # the flag/signal-keyed behaviours (advisory notes over the authored query)
