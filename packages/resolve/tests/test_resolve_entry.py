@@ -38,6 +38,25 @@ def test_resolve_as_session_reuses_state(httpserver: HTTPServer) -> None:
     assert _run(go()) == ("A", "B")
 
 
+def test_resolve_session_interacts_with_the_live_page(httpserver: HTTPServer) -> None:
+    from web.resolve import profiles
+
+    # a page whose DOM only changes after a click -- proves resolve -> interact -> re-resolve
+    page = (b"<html><body><div id='box'>before</div>"
+            b"<button id='go' onclick=\"document.getElementById('box').textContent='after'\">go"
+            b"</button></body></html>")
+    httpserver.expect_request("/app").respond_with_data(page, content_type="text/html")
+
+    async def go() -> tuple[str, str]:
+        async with resolve(httpserver.url_for("/app"), profile=profiles.FULL_BROWSER) as s:
+            before = (await s.doc()).select_all("#box")[0].text     # the live page, parsed
+            await s.click("#go")                                    # interaction on the live page
+            after = (await s.doc()).select_all("#box")[0].text      # re-parsed -> reflects the click
+            return before, after
+
+    assert _run(go()) == ("before", "after")
+
+
 def test_resolve_pagination_is_a_plain_kwarg(httpserver: HTTPServer) -> None:
     for n in (1, 2):
         httpserver.expect_request("/feed", query_string=f"page={n}").respond_with_data(

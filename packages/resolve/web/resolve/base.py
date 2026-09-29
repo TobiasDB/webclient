@@ -178,6 +178,13 @@ class Resolver:
         per-step resolve policy can reuse it -- one browser, not a relaunch)."""
         return self._pool
 
+    @property
+    def base(self) -> Fetcher:
+        """The base transport tier (``tiers[0]``). After :meth:`session` this is the LIVE fetch
+        session -- a browser session when the profile drives a browser -- that a
+        :class:`~web.resolve.entry.ResolveSession` drives for interaction + snapshot."""
+        return self._tiers[0]
+
     async def resolve(self, request: "Request | str") -> Document:
         """``Request -> Document`` (a bare URL string is a shorthand ``Request``). The middleware
         chain (retry / escalate / rate-limit / paginate) runs first; then, on a TRANSPORT failure

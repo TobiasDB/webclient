@@ -5,42 +5,104 @@ plain kwarg (not a middleware you assemble by hand):
 
     doc = await resolve(url)                          # one-shot Document
     doc = await resolve(url, paginate="page", max_pages=3)   # merged multi-page dataset
-    async with resolve(url, profile=vendor) as session:      # a persistent session
-        home = await session.doc()
-        more = await session.resolve(other_url)       # same cookies / connection
+    async with resolve(url, profile=browser) as s:    # a persistent session over a LIVE fetch page
+        doc  = await s.doc()                          # the current page as a Document (middleware+parse)
+        await s.click(".load-more")                   # interaction delegates to the live fetch page
+        more = await s.resolve(other_url)             # same live session, re-resolved
 
-Reuses the fetch layer's :class:`~web.fetch.Entry` (the dual awaitable / async-context-manager), so
-the one-shot/session pattern is identical at both layers.
+The session composes OVER the fetch layer's live :class:`~web.fetch.Session`: ``s.doc()`` is to a
+resolve session what ``session.snapshot()`` is to a fetch session (parse the current page), and the
+interactions (``goto``/``click``/``scroll``/``type``/``wait_for``) delegate straight to the live
+browser page -- so "resolve then interact then re-resolve" is coherent in ONE session. Interaction
+needs a browser-base profile; an HTTP-only session has no live page (``.doc()`` resolves the entry
+URL instead, and interaction raises). Reuses the fetch :class:`~web.fetch.Entry` (dual awaitable /
+async-context-manager), so the one-shot/session pattern is identical at both layers.
 """
 
 from __future__ import annotations
 
-from web.fetch import ClientPool, Entry, Middleware, Request
+from typing import Protocol, runtime_checkable
+
+from web.fetch import ClientPool, Entry, Fetcher, Middleware, Request, Snapshot, WebException, err
 from web.parse import Document
 
 from .base import Profile, Resolver, Slot
+from .document import document
 from .policy import EscalationPolicy
 
 
-class ResolveSession:
-    """A persistent resolve session: ``.doc()`` resolves the entry URL (once, memoised), ``.resolve``
-    reaches more URLs sharing the session's state (cookies / connections). Closed by the ``async
-    with`` that opened it."""
+@runtime_checkable
+class _Page(Protocol):
+    """The live-page surface a resolve session drives when its base transport is a browser: the
+    current DOM as a Snapshot, plus the interactions that mutate it. A stateless HTTP session has
+    none of this (no 'current page'), so it does not satisfy this Protocol."""
 
-    def __init__(self, resolver: Resolver, request: Request) -> None:
+    async def snapshot(self) -> Snapshot: ...
+    async def goto(self, request: Request) -> object: ...
+    async def click(self, selector: str, *, human: bool = False) -> object: ...
+    async def scroll(self, selector: "str | None" = None) -> object: ...
+    async def type(self, selector: str, text: str) -> object: ...
+    async def wait_for(self, selector: str) -> object: ...
+
+
+class ResolveSession:
+    """A persistent resolve session composed over a LIVE fetch session. ``.doc()`` is the current
+    page as a Document (a browser parses its live DOM -- reflecting any interaction; an HTTP session
+    resolves the entry URL, since it has no live page). ``.resolve`` reaches more URLs sharing the
+    session's state; ``goto``/``click``/``scroll``/``type``/``wait_for`` drive the live page (a
+    browser-base profile). Closed by the ``async with`` that opened it."""
+
+    def __init__(self, resolver: Resolver, live: Fetcher, request: Request) -> None:
         self._resolver = resolver
+        self._live = live  # the base tier's live fetch session (a browser session == a _Page)
         self._request = request
-        self._doc: "Document | None" = None
+        self._doc: "Document | None" = None  # memo for the HTTP (no-live-page) case only
+
+    def _page(self) -> _Page:
+        """The live page, or a clear error when this session's base transport is not a browser."""
+        if isinstance(self._live, _Page):
+            return self._live
+        raise WebException(err("resolve.no_browser",
+                               "interaction needs a browser-base profile (this session is HTTP-only)"))
 
     async def doc(self) -> Document:
-        """The entry URL resolved to a Document (memoised for the session)."""
+        """The session's CURRENT page as a Document -- the resolve analogue of a fetch session's
+        ``snapshot()``. A browser session parses its live DOM (so it reflects any interaction); an
+        HTTP session, which has no current page, resolves the entry URL (memoised)."""
+        if isinstance(self._live, _Page):
+            return document(await self._live.snapshot())
         if self._doc is None:
             self._doc = await self._resolver.resolve(self._request)
         return self._doc
 
     async def resolve(self, request: "Request | str") -> Document:
-        """Resolve another URL within this session (state persists)."""
+        """Resolve another URL within this session (state + live page persist; middleware runs)."""
         return await self._resolver.resolve(request)
+
+    async def goto(self, request: "Request | str") -> "ResolveSession":
+        """Navigate the live page to ``request`` (chainable). Then ``doc()`` / interact."""
+        await self._page().goto(Request(url=request) if isinstance(request, str) else request)
+        return self
+
+    async def click(self, selector: str, *, human: bool = False) -> "ResolveSession":
+        """Click ``selector`` on the live page (chainable)."""
+        await self._page().click(selector, human=human)
+        return self
+
+    async def scroll(self, selector: "str | None" = None) -> "ResolveSession":
+        """Scroll ``selector`` into view, or the page to its bottom (chainable)."""
+        await self._page().scroll(selector)
+        return self
+
+    async def type(self, selector: str, text: str) -> "ResolveSession":
+        """Type ``text`` into ``selector`` on the live page (chainable)."""
+        await self._page().type(selector, text)
+        return self
+
+    async def wait_for(self, selector: str) -> "ResolveSession":
+        """Wait for ``selector`` to appear on the live page (chainable)."""
+        await self._page().wait_for(selector)
+        return self
 
     async def aclose(self) -> None:
         await self._resolver.aclose()
@@ -70,7 +132,11 @@ def resolve(request: "Request | str", *, profile: "Profile | None" = None,
             await resolver.aclose()
 
     async def open_session() -> ResolveSession:
-        return ResolveSession(await resolver.session(), req)
+        session_resolver = await resolver.session()
+        live = session_resolver.base  # the base tier's live fetch session (a browser == a _Page)
+        if isinstance(live, _Page):  # position the live page at the entry URL (mirrors `fetch()`)
+            await live.goto(req)
+        return ResolveSession(session_resolver, live, req)
 
     return Entry(one_shot, open_session, resolver.aclose)
 
