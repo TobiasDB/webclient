@@ -1,9 +1,9 @@
 [project]
 name = "web-fetch"
 version = "0.1.0"
-description = "web-* fetch: the transport layer — Request -> Snapshot. Depends only on web-kernel and httpx."
+description = "web-* fetch: the transport layer — Request -> Snapshot. Depends only on httpx."
 requires-python = ">=3.12"
-dependencies = ["web-kernel", "httpx>=0.24", "pydantic>=2"]
+dependencies = ["httpx>=0.24", "pydantic>=2"]
 
 [project.optional-dependencies]
 browser = ["playwright>=1.30"]
@@ -16,4 +16,3 @@ build-backend = "hatchling.build"
 packages = ["web"]
 
 [tool.uv.sources]
-web-kernel = { path = "../kernel", editable = true }

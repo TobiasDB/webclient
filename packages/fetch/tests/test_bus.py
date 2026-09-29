@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from web.kernel import Event, EventBus, WebError, WebException, err
+from web.fetch import Event, EventBus, WebError, WebException, err
 
 
 class _Ev(BaseModel):
@@ -47,7 +47,7 @@ def test_bus_delivers_by_prefix_and_swallows_handler_errors() -> None:
 
 
 def test_emit_is_noop_without_a_trace_and_captured_within_one() -> None:
-    from web.kernel import Trace, emit
+    from web.fetch import Trace, emit
 
     emit(_Ev(topic="x"))  # no active trace -> no-op, no error
     with Trace() as t:

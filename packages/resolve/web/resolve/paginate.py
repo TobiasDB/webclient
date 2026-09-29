@@ -21,7 +21,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from pydantic import JsonValue
 
 from web.fetch import BrowserFetcher, Handler, Middleware, Request, Snapshot
-from web.kernel import err
+from web.fetch import err
 from web.parse import Document
 from .document import document
 

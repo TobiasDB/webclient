@@ -205,7 +205,7 @@ def test_custom_fingerprint_drives_ua_and_client_hints(httpserver: HTTPServer) -
 
 from web.fetch import Recorder, ReplayBackend  # noqa: E402
 from web.fetch import NetworkEvent  # noqa: E402
-from web.kernel import Trace  # noqa: E402
+from web.fetch import Trace  # noqa: E402
 
 
 def test_record_then_replay_offline(httpserver: HTTPServer) -> None:

@@ -13,7 +13,7 @@ import time
 
 import httpx
 
-from web.kernel import emit
+from .bus import emit
 
 from .errors import classify
 from .events import FetchEvent

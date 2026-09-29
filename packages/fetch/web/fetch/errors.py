@@ -1,7 +1,16 @@
-"""Failure modes -- classify raw backend errors into a clean, stable taxonomy.
+"""Structured errors + failure-mode classification.
+
+A :class:`WebError` is a small, serialisable value -- a stable ``code``, a human ``message`` and
+free-form ``detail`` -- that travels on results (a not-ok Snapshot/Document carries one) and on the
+bus, so a caller inspects a failure without catching. :class:`WebException` is its exception form.
+No error *catalog* is defined here -- each layer names its own codes (``"http.timeout"``,
+``"parse.not_html"``, ...). These are the shared base types (they lived in the removed ``web.kernel``
+bottom layer; fetch is now the lowest shared layer, so they live here).
+
+:func:`classify` then maps a raw backend error into a stable taxonomy.
 
 A fetch backend must never leak an ``httpx`` or ``playwright`` exception upward; it returns a
-Snapshot carrying a structured :class:`~web.kernel.WebError`. But a single ``fetch.transport``
+Snapshot carrying a structured :class:`WebError`. But a single ``fetch.transport``
 blob hides *why* it failed, and failure modes are what a caller (or the resolve escalation
 policy) branches on. :func:`classify` maps the raw exception to one stable code:
 
@@ -28,8 +37,34 @@ import socket
 import ssl
 
 import httpx
+from pydantic import BaseModel, JsonValue
 
-from web.kernel import WebError
+
+class WebError(BaseModel):
+    """A structured, serialisable error. ``code`` is a stable dotted identifier a caller can branch
+    on; ``message`` is for humans; ``detail`` carries anything else (status, url, ...)."""
+
+    code: str
+    message: str = ""
+    detail: dict[str, JsonValue] = {}
+
+    def __str__(self) -> str:
+        return f"{self.code}: {self.message}" if self.message else self.code
+
+
+class WebException(Exception):
+    """The exception form of a :class:`WebError` -- raised when a layer fails loudly rather than
+    returning a not-ok value. One ``except WebException`` catches any layer's failure and reads its
+    structured ``.error``."""
+
+    def __init__(self, error: "WebError | str", message: str = "") -> None:
+        self.error = WebError(code=error, message=message) if isinstance(error, str) else error
+        super().__init__(str(self.error))
+
+
+def err(code: str, message: str = "", **detail: JsonValue) -> WebError:
+    """Build a :class:`WebError` concisely: ``err("http.timeout", "no response", url=u)``."""
+    return WebError(code=code, message=message, detail=detail)
 
 
 def _causes(exc: BaseException) -> list[BaseException]:
@@ -64,7 +99,7 @@ def _playwright_code(exc: BaseException) -> "str | None":
 
 def classify(exc: BaseException, *, url: str = "") -> WebError:
     """Map a raw transport exception (httpx / playwright / stdlib) to a stable, structured
-    :class:`~web.kernel.WebError` (see the module docstring for the taxonomy)."""
+    :class:`WebError` (see the module docstring for the taxonomy)."""
     causes = _causes(exc)
     code: "str | None" = None
 
@@ -96,4 +131,4 @@ def classify(exc: BaseException, *, url: str = "") -> WebError:
                     detail={"url": url, "exc": type(exc).__name__})
 
 
-__all__ = ["classify"]
+__all__ = ["WebError", "WebException", "err", "classify"]

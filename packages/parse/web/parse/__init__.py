@@ -1,4 +1,4 @@
-"""web.parse -- interpretation: ``bytes -> Document``. Depends only on web.kernel.
+"""web.parse -- interpretation: ``bytes -> Document``. Depends on nothing else in the stack (pydantic + lxml only).
 
 Purely content: sniff the kind, decode the charset, build the tree, and expose the utilities to
 find / extract -- ``select`` / ``select_all`` / ``links`` / ``json`` on a :class:`Document`, and

@@ -2,8 +2,9 @@
 
 :class:`Event` is a structural :class:`~typing.Protocol` -- anything with a ``topic: str`` is an
 event -- NOT a base class to inherit. Every layer defines its own plain event models (a
-``FetchEvent``, a ``ResolveEvent``, ...) and publishes them on a shared bus; the kernel routes by
-``topic`` without knowing those types exist and without them importing a kernel base. Delivery is
+``FetchEvent``, a ``ResolveEvent``, ...) and publishes them on a shared bus; the bus routes by
+``topic`` without knowing those types exist and without them importing a base. (This was the
+``web.kernel`` bottom layer; fetch is now the lowest shared layer, so the bus lives here.) Delivery is
 synchronous and in subscription order; a subscriber that raises does not stop the others (its error
 is swallowed -- the bus is observation, not control flow). Matching is by dotted-topic prefix: a
 subscriber on ``"fetch"`` sees ``"fetch"`` and ``"fetch.retry"``; a subscriber on ``""`` sees all.

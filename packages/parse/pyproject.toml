@@ -1,9 +1,9 @@
 [project]
 name = "web-parse"
 version = "0.1.0"
-description = "web-* parse: interpretation — bytes | Snapshot -> Document (sniff, decode, select). Depends on web-kernel, web-fetch, lxml."
+description = "web-* parse: interpretation — bytes -> Document (sniff, decode, select). Depends on lxml + pydantic only (no other layer)."
 requires-python = ">=3.12"
-dependencies = ["web-kernel", "web-fetch", "lxml>=4.9", "cssselect>=1.2", "pydantic>=2"]
+dependencies = ["lxml>=4.9", "cssselect>=1.2", "pydantic>=2"]
 
 [build-system]
 requires = ["hatchling"]
@@ -12,6 +12,3 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["web"]
 
-[tool.uv.sources]
-web-kernel = { path = "../kernel", editable = true }
-web-fetch = { path = "../fetch", editable = true }

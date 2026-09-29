@@ -7,7 +7,7 @@ from typing import Protocol, runtime_checkable
 
 import httpx
 
-from web.kernel import WebException, err
+from web.fetch import WebException, err
 
 
 @runtime_checkable
@@ -21,7 +21,7 @@ class Llm(Protocol):
 class AnthropicLlm:
     """An :class:`Llm` over the Anthropic Messages API. ``auth`` defaults to ``ANTHROPIC_API_KEY``;
     ``model`` is configurable (the API model string). Never leaks httpx errors -- an API/transport
-    failure raises a structured :class:`~web.kernel.WebException` (``llm.request`` / ``llm.api``)."""
+    failure raises a structured :class:`~web.fetch.WebException` (``llm.request`` / ``llm.api``)."""
 
     def __init__(
         self, *, model: str = "claude-sonnet-5", auth: str | None = None,

@@ -94,7 +94,7 @@ def test_llm_driver_prompt_uses_skeleton_and_record_hints() -> None:
 
 
 def test_anthropic_llm_raises_structured_error_on_non_200(httpserver: HTTPServer) -> None:
-    from web.kernel import WebException
+    from web.fetch import WebException
     httpserver.expect_request("/v1/messages").respond_with_data(b"nope", status=500)
 
     async def go() -> str:

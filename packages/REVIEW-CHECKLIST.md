@@ -14,7 +14,7 @@ bug classes are section 5 below.
 
 ## 1. Architecture invariants (the arrangement is load-bearing)
 - [ ] **Acyclic layer DAG** — each package imports only *lower* layers. Order:
-      `kernel → fetch → parse → resolve → crawl → dsl` and `parse → … → agent → onboard`.
+      `fetch → parse → resolve → crawl → dsl` and `parse → … → agent → onboard`.
       Verify with **runtime imports** (`grep -rn "^from web\." packages/<L>/web`), not a graph
       tool's name-matching (those give false positives, e.g. a `.doc` attr ≠ the DSL's `.doc()`).
 - [ ] **`fetch` is backends only** — no ladder/tiers/escalation there; that is `resolve` policy.

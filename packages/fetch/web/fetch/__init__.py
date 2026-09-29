@@ -3,8 +3,7 @@
 Perform a request and report the raw response as a :class:`Snapshot` (request + bytes +
 transport metadata + any captured events). It does transport ONLY -- it never sniffs the
 content kind or decodes a charset (that is web.parse), and it never raises for a transport
-failure (that becomes ``snapshot.error``). Usable in isolation, depending only on web.kernel
-(and httpx):
+failure (that becomes ``snapshot.error``). Usable in isolation, depending only on httpx:
 
     from web.fetch import Request, HttpFetcher
     snap = await HttpFetcher().fetch(Request(url="https://example.com"))
@@ -18,6 +17,8 @@ from __future__ import annotations
 
 from .base import Fetcher
 from .browser import BrowserFetcher, BrowserSession
+from .bus import Event, EventBus, Subscription, Trace, emit, topic_matches, using
+from .errors import WebError, WebException, err
 from .events import ConsoleEvent, DOMEvent, FetchEvent, NetworkEvent
 from .fingerprint import CHROME, Fingerprint
 from .script import DOM_RECORDER, Script, ScriptRegistry
@@ -35,4 +36,6 @@ from .entry import Entry, Profile, fetch  # the functional entry (depends on the
 __all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "BrowserSession", "HttpSession", "Session",
            "fetch", "Entry", "Profile", "Script", "ScriptRegistry", "Proxy", "Pool", "Fingerprint", "CHROME", "Wait",
            "DOM_RECORDER", "NetworkEvent", "DOMEvent", "FetchEvent", "ConsoleEvent", "Middleware", "Handler", "stack",
-           "Recorder", "ReplayBackend"]
+           "Recorder", "ReplayBackend",
+           # the shared substrate (relocated from the removed web.kernel bottom layer)
+           "WebError", "WebException", "err", "Event", "EventBus", "Subscription", "topic_matches", "emit", "using", "Trace"]

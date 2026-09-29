@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 from web.fetch import Request
 from pydantic import BaseModel
 
-from web.kernel import emit
+from web.fetch import emit
 from web.parse import Document
 from web.resolve import Resolver
 

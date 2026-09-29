@@ -20,7 +20,7 @@ takes the ideas, not the code.
    below it. Each is independently installable and usable in isolation.
 3. **Every layer has a well-defined boundary + interface**, expressed as a small input→output
    contract (below).
-4. **Each layer defines its own event types.** They are plain models with a `topic`; the kernel `Event` is a structural Protocol (no inheritance), and the bus routes by `topic`.
+4. **Each layer defines its own event types.** They are plain models with a `topic`; the `Event` (in web.fetch) is a structural Protocol (no inheritance), and the bus routes by `topic`.
 5. **A failure is data.** A `WebError` travels on results (a not-ok `Snapshot`) and is raised as
    `WebException` only when a layer chooses to fail loudly.
 
@@ -33,14 +33,15 @@ web.onboard   goal → dataset (crawl + author + aggregate) · the LLM tier (Llm
 web.agent     observe→decide→apply loop; extraction authoring (LLM-AGNOSTIC — takes any Driver)   ← parse, fetch
 web.dsl       lazy engine, 4 dispatch modes (sync / async / lazy / API)   ← all below
 web.crawl     Goal → Documents                                            ← …, resolve
-web.resolve   Request → Document  · middleware impls · tiers · signals · sessions   ← kernel, fetch, parse
-web.parse     bytes → Document                                            ← kernel
-web.fetch     Request → Snapshot  · framework · backends · sessions · classify   ← kernel
-web.kernel    structured errors · the event bus                           ← (pydantic only)
+web.resolve   Request → Document  · middleware impls · tiers · signals · sessions   ← fetch, parse
+web.parse     bytes → Document                                            ← (pydantic + lxml only)
+web.fetch     Request → Snapshot  · framework · backends · sessions · classify · SHARED SUBSTRATE (errors + event bus)   ← (pydantic + httpx)
 ```
 
-`web.parse` depends on the kernel only (it never sees a Snapshot); the `Snapshot → Document`
-bridge lives in `web.resolve`, which has both.
+`web.fetch` is the lowest shared layer: besides transport it holds the shared substrate (structured
+errors + the event bus) that every layer above uses (there is no separate `web.kernel` — it was
+folded in here). `web.parse` depends on nothing else in the stack (it never sees a Snapshot); the
+`Snapshot → Document` bridge lives in `web.resolve`, which has both.
 
 ## Data contracts
 
@@ -62,8 +63,9 @@ resolve. The bridge `web.resolve.document(snap)` just hands parse the bytes.
 
 ## Layers
 
-### web.kernel — data + the event bus (depends on: pydantic)
-- `WebError` / `WebException` / `err(code, msg, **detail)` — structured errors.
+### The shared substrate — structured errors + the event bus (in web.fetch)
+These live in `web.fetch` (the lowest shared layer) — there is no separate `web.kernel` package.
+- `WebError` / `WebException` / `err(code, msg, **detail)` — structured errors (`web.fetch.errors`).
 - `Event` (a structural Protocol -- `topic: str`; layers do NOT inherit it) + `EventBus` (sync pub/sub over dotted topics).
 - **The ambient bus:** `emit(event)` publishes to the bus active in the current context (a free
   no-op otherwise — works across `await` via a `ContextVar`); `Trace()` is a `with`-scope that
@@ -107,7 +109,7 @@ backend just fetches (and maybe holds state).
   -> Snapshot`, `Handler`, and `stack(base: Fetcher, middleware) -> Fetcher`. A middleware-wrapped
   transport is still a Fetcher.
 
-### web.parse — `bytes → Document` (depends on: kernel)
+### web.parse — `bytes → Document` (depends on: pydantic + lxml)
 Purely content: sniff kind + charset, build the tree, expose find/extract utilities.
 - `parse(content: bytes, *, content_type=None, url="") -> Document` — `url` is only the link base.
 - `Document` / `Element` as above. Lazy lxml/JSON, cached; `Element.select` nests.

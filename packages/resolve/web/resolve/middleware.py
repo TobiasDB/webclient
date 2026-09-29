@@ -12,7 +12,7 @@ from collections.abc import Callable
 from urllib.parse import urlparse
 
 from web.fetch import Fetcher, Handler, Middleware, Request, Snapshot
-from web.kernel import emit
+from web.fetch import emit
 
 from .document import document
 from .events import ResolveEvent

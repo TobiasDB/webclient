@@ -39,7 +39,7 @@ class _FlakyFetcher:
     async def fetch(self, request: Request) -> Snapshot:
         self.calls += 1
         if self.calls <= self._fail:
-            from web.kernel import err
+            from web.fetch import err
 
             return Snapshot(request=request, error=err("fetch.transport", "boom"))
         return Snapshot(request=request, status=200, content=b"<p>ok</p>",
@@ -115,7 +115,7 @@ def test_anti_bot_reads_content_markers() -> None:
 
 
 def test_trace_captures_events_across_layers(httpserver: HTTPServer) -> None:
-    from web.kernel import Trace
+    from web.fetch import Trace
 
     httpserver.expect_request("/p").respond_with_data(b"<h1>hi</h1>", content_type="text/html")
     fetcher = _FlakyFetcher(fail=1)  # one transient failure -> a retry event too
@@ -242,7 +242,7 @@ def test_tabbed_widget() -> None:
 
 
 def test_retry_retries_real_transient_errors_not_persistent_ones() -> None:
-    from web.kernel import err
+    from web.fetch import err
     from web.resolve.middleware import _retriable
 
     # the common transient transport errors must be retried (previously only "fetch.transport" was)

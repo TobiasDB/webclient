@@ -5,7 +5,7 @@ everything above they are interchangeable. Fetch has no idea whether it is live 
 and no idea about tiers/ladders (that is resolve's concern).
 
 :class:`Recorder` wraps another backend and records each response as a :class:`NetworkEvent`
-(with its body) on the bus, so a :class:`~web.kernel.Trace` collects a replayable stream.
+(with its body) on the bus, so a :class:`~web.fetch.Trace` collects a replayable stream.
 :class:`ReplayBackend` answers each Request from such a stream -- offline and deterministic; a
 request with no recorded match returns a visible DRIFT Snapshot (status 599, ``replay.miss``), so
 a replay that diverges from its recording is obvious rather than silent.
@@ -13,7 +13,8 @@ a replay that diverges from its recording is obvious rather than silent.
 
 from __future__ import annotations
 
-from web.kernel import emit, err
+from .bus import emit
+from .errors import err
 
 from .base import Fetcher
 from .events import NetworkEvent

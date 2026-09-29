@@ -1,7 +1,7 @@
 """The fetch layer's event types -- what a browser fetch captures onto a Snapshot.
 
 Each is a PLAIN model with a ``topic`` field -- it does not inherit a kernel base; the bus routes
-it structurally (see :class:`web.kernel.Event`, a Protocol). Fetch captures :class:`NetworkEvent`
+it structurally (see :class:`web.fetch.Event`, a Protocol). Fetch captures :class:`NetworkEvent`
 for every response the page made and :class:`DOMEvent` for the DOM changes a page script recorded
 (rrweb or the built-in recorder -- see :mod:`.script`); those two streams are enough to REPLAY a
 fetch (network answers requests, DOM records reconstruct the page), so no separate HAR is needed.

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from web.kernel import WebError
+from .errors import WebError
 
 from .events import CaptureEvent
 from .request import Request

@@ -1,9 +1,9 @@
 [project]
 name = "web-resolve"
 version = "0.1.0"
-description = "web-* resolve: orchestration — Request -> Document with policies + middleware. Depends on web-kernel, web-fetch, web-parse."
+description = "web-* resolve: orchestration — Request -> Document with policies + middleware. Depends on web-fetch, web-parse."
 requires-python = ">=3.12"
-dependencies = ["web-kernel", "web-fetch", "web-parse", "pydantic>=2"]
+dependencies = ["web-fetch", "web-parse", "pydantic>=2"]
 
 [build-system]
 requires = ["hatchling"]
@@ -13,6 +13,5 @@ build-backend = "hatchling.build"
 packages = ["web"]
 
 [tool.uv.sources]
-web-kernel = { path = "../kernel", editable = true }
 web-fetch = { path = "../fetch", editable = true }
 web-parse = { path = "../parse", editable = true }

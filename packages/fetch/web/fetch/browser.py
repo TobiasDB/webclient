@@ -16,7 +16,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Literal
 
-from web.kernel import emit
+from .bus import emit
 
 from . import mouse
 from .errors import classify
