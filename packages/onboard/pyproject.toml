@@ -3,7 +3,7 @@ name = "web-onboard"
 version = "0.1.0"
 description = "web-* onboard: the capstone — goal -> dataset, composing crawl + the agent tier + llm."
 requires-python = ">=3.12"
-dependencies = ["web-fetch", "web-parse", "web-resolve", "web-crawl", "web-dsl", "pydantic>=2"]
+dependencies = ["web-fetch", "web-parse", "web-resolve", "web-crawl", "web-dsl", "pydantic>=2", "pyyaml>=6"]
 
 [build-system]
 requires = ["hatchling"]
