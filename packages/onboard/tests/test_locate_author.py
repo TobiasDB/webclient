@@ -15,8 +15,6 @@ from typing import cast
 import pytest
 from pytest_httpserver import HTTPServer
 from web.dsl import Plan
-from web.resolve import Resolver
-
 from web.onboard import (
     Brief,
     DatasetBrief,
@@ -30,6 +28,7 @@ from web.onboard import (
     locate_and_author,
 )
 from web.onboard.__main__ import main
+from web.resolve import Resolver
 
 
 class ScriptedLlm:
@@ -73,6 +72,44 @@ def test_locate_selects_the_record_list_candidate(httpserver: HTTPServer) -> Non
     assert ref is not None
     assert ref.kind == "html" and ref.record_selector == "li.row"
     assert "record_list" in ref.flags  # the whole flag surface fired on the page
+
+
+_BLOCKED = (
+    b"<html><body><h1>Access denied</h1><p>Please verify you are human.</p>"
+    b"<table><tr><td>1</td><td>x</td></tr><tr><td>2</td><td>y</td></tr>"
+    b"<tr><td>3</td><td>z</td></tr><tr><td>4</td><td>w</td></tr></table></body></html>"
+)
+
+
+def test_locate_rejects_a_blocked_bot_wall(httpserver: HTTPServer) -> None:
+    # a bot-wall with a table is NOT a source, however table-like -- it must not be picked.
+    httpserver.expect_request("/wall").respond_with_data(_BLOCKED, content_type="text/html")
+
+    async def go() -> "Reference | None":
+        async with Resolver() as r:
+            return await locate(
+                LocateBrief(goal="data", candidates=[httpserver.url_for("/wall")]), resolver=r
+            )
+
+    assert cast("Reference | None", _run(go())) is None
+
+
+def test_locate_prefers_a_clean_source_over_a_blocked_one(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/wall").respond_with_data(_BLOCKED, content_type="text/html")
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+
+    async def go() -> "Reference | None":
+        async with Resolver() as r:
+            return await locate(
+                LocateBrief(
+                    goal="people",
+                    candidates=[httpserver.url_for("/wall"), httpserver.url_for("/people")],
+                ),
+                resolver=r,
+            )
+
+    ref = cast("Reference | None", _run(go()))
+    assert ref is not None and ref.url == httpserver.url_for("/people")
 
 
 def test_locate_prefers_a_consistent_xhr_data_api(httpserver: HTTPServer) -> None:
@@ -365,7 +402,6 @@ def test_packaged_briefs_are_available_and_loadable() -> None:
 
 def test_ddg_search_parses_result_urls(monkeypatch: "pytest.MonkeyPatch") -> None:
     import ddgs
-
     from web.onboard import DdgSearch
 
     class _FakeDDGS:

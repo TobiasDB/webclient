@@ -32,11 +32,12 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Sequence
 
-from web.crawl import CrawlEvent
 from web.fetch import Event, EventBus, FetchEvent
 from web.fetch import Profile as FetchProfile
 from web.fetch import WebException, using
 from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
+
+from web.crawl import CrawlEvent
 
 from .author import build_query
 from .llm import AnthropicLlm, Pricing, RateLimit
@@ -71,7 +72,12 @@ class _Progress:
     def _on(self, event: Event) -> None:
         if isinstance(event, CrawlEvent):
             self.pages = event.fetched
-            _err(f"  · crawled {event.fetched}: {_short(event.url)}")
+            mark = "ok " if event.ok else "!! "  # !! = a bad status / transport failure
+            flags = f"  flags={','.join(event.flags)}" if event.flags else ""
+            _err(
+                f"  · [{event.fetched:>2}] {event.status or '---'} {mark}"
+                f"{_short(event.url, 62)}{flags}"
+            )
         elif isinstance(event, ResolveEvent):
             _err(f"  · {event.phase}: {_short(event.url)}")
         elif isinstance(event, FetchEvent) and self._verbose:

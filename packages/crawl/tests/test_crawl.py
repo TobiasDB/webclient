@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 
 from pytest_httpserver import HTTPServer
-from web.crawl import Crawler, Goal
 from web.fetch import HttpFetcher
 from web.parse import Document
 from web.resolve import Resolver
+
+from web.crawl import Crawler, Goal
 
 
 def _run(coro):
@@ -40,6 +41,71 @@ def test_crawl_follows_same_origin_links_bfs(httpserver: HTTPServer) -> None:
     seen = _run(go())
     assert any(u.endswith("/a") for u in seen) and any(u.endswith("/c") for u in seen)
     assert not any("other.example" in u for u in seen)  # off-origin not followed
+
+
+def test_frontier_policy_picks_which_edges_to_expand(httpserver: HTTPServer) -> None:
+    # a turn-based policy: expand the seed, then ONLY /b -- /a and /c are pruned (never fetched).
+    from web.crawl import FrontierItem
+
+    httpserver.expect_request("/").respond_with_data(
+        b"<a href='/a'>a</a><a href='/b'>b</a><a href='/c'>c</a>", content_type="text/html"
+    )
+    for p in ("a", "b", "c"):
+        httpserver.expect_request(f"/{p}").respond_with_data(
+            f"<p>{p}</p>".encode(), content_type="text/html"
+        )
+
+    async def pick(items: "tuple[FrontierItem, ...]") -> list[str]:
+        # expand the seed to discover links; thereafter only the /b edge
+        return [it.url for it in items if it.depth == 0 or it.url.endswith("/b")]
+
+    async def go() -> list[str]:
+        c = Crawler(Resolver())
+        try:
+            return [
+                doc.url
+                async for doc in c.crawl(
+                    Goal(start=httpserver.url_for("/"), max_pages=10, frontier=pick)
+                )
+            ]
+        finally:
+            await c.aclose()
+
+    seen = _run(go())
+    assert any(u.endswith("/b") for u in seen)  # the picked edge was expanded
+    assert not any(u.endswith("/a") or u.endswith("/c") for u in seen)  # the rest were pruned
+
+
+def test_crawl_event_carries_status_ok_and_flags(httpserver: HTTPServer) -> None:
+    # a page that 404s is reported (ok=False) and does not abort the crawl; assess adds flags.
+    from web.fetch import Trace
+
+    from web.crawl import CrawlEvent
+
+    body = b"<html><body><ul><li class='row'>a</li><li class='row'>b</li><li class='row'>c</li></ul></body></html>"
+    httpserver.expect_request("/list").respond_with_data(body, content_type="text/html")
+    httpserver.expect_request("/missing").respond_with_data(b"nope", status=404)
+
+    async def go() -> "list[CrawlEvent]":
+        with Trace() as t:
+            c = Crawler(Resolver())
+            try:
+                async for _doc in c.crawl(
+                    Goal(
+                        start=[httpserver.url_for("/list"), httpserver.url_for("/missing")],
+                        assess=True,
+                    )
+                ):
+                    pass
+            finally:
+                await c.aclose()
+        return [e for e in t.events if isinstance(e, CrawlEvent)]
+
+    events = {e.url.rstrip("/").rsplit("/", 1)[-1]: e for e in _run(go())}
+    assert (
+        events["list"].ok and events["list"].status == 200 and "record_list" in events["list"].flags
+    )
+    assert not events["missing"].ok and events["missing"].status == 404
 
 
 def test_max_pages_bounds_the_crawl(httpserver: HTTPServer) -> None:

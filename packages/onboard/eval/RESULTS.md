@@ -5,26 +5,26 @@ _Generated 2026-09-29 · Author LLM: **HeuristicLlm (deterministic stand-in, no 
 Two phases per example: **Locate** (find the right source -- the expected record selector, or a JSON/XML data document) and **Author** (write a `wq` query and RUN it, grading the rows against the fixture's published expected result).
 
 - **Locate:** PASS 21 · PARTIAL 0 · FAIL 3
-- **Author:** PASS 17 · PARTIAL 2 · FAIL 5
+- **Author:** PASS 8 · PARTIAL 7 · FAIL 9
 
 > With no `ANTHROPIC_API_KEY`, Author is driven by a deterministic `HeuristicLlm` that reads the prompt's skeleton + fields and writes the query by a fixed heuristic. This measures the PIPELINE MECHANICS (prompt -> parse -> reroot -> run) and how far a mechanical author gets, **not a model's selector quality** -- a real `AnthropicLlm` is a drop-in replacement.
 
 | example | category | Locate | Author | rows | detail |
 | --- | --- | --- | --- | --- | --- |
-| `shop` | static list | PASS | PASS | 3 | 3 rows, probe title~'Aeropress' found |
-| `store` | static list | PASS | PASS | 5 | 5 rows, probe name~'Ethiopia Yirgacheffe' found |
+| `shop` | static list | PASS | PARTIAL | 3 | 3 rows but probe title~'Aeropress' MISSING |
+| `store` | static list | PASS | PARTIAL | 5 | 5 rows but probe name~'Ethiopia Yirgacheffe' MISSING |
 | `board` | static list | PASS | PASS | 5 | 5 rows, probe title~'Senior Engineer' found |
 | `frozen` | static list | PASS | PASS | 3 | 3 rows, probe name~'Row A' found |
-| `large` | static list | PASS | PASS | 6000 | 6000 rows, probe v~'value 0' found |
-| `catalog` | static list | PASS | PASS | 6 | 6 rows, probe title~'A Light in the Attic' found |
-| `quotes` | list + list-field | PASS | PASS | 6 | 6 rows, probe author~'Albert Einstein' found |
-| `table` | table | PASS | PASS | 3 | 3 rows, probe item~'Aeropress' found |
-| `ranking` | table | PASS | PASS | 4 | 4 rows, probe population~'1412' found |
-| `merged` | table (rowspan) | PASS | PASS | 5 | 5 rows, probe category~'Fruit' found |
-| `pivot` | table (transposed) | PASS | PARTIAL | 3 | 3 rows but probe plan~'Starter' MISSING |
+| `large` | static list | PASS | PARTIAL | 6000 | 6000 rows but probe v~'value 0' MISSING |
+| `catalog` | static list | PASS | PARTIAL | 6 | 6 rows but probe title~'A Light in the Attic' MISSING |
+| `quotes` | list + list-field | PASS | PARTIAL | 6 | 6 rows but probe author~'Albert Einstein' MISSING |
+| `table` | table | PASS | FAIL | 0 | QueryError: query did not parse: invalid syntax (<unknown>, line 1) |
+| `ranking` | table | PASS | FAIL | 0 | QueryError: query did not parse: invalid syntax (<unknown>, line 1) |
+| `merged` | table (rowspan) | PASS | FAIL | 0 | QueryError: query did not parse: invalid syntax (<unknown>, line 1) |
+| `pivot` | table (transposed) | PASS | FAIL | 0 | QueryError: query did not parse: invalid syntax (<unknown>, line 1) |
 | `api` | json | PASS | PASS | 3 | 3 rows, probe name~'Aeropress' found |
 | `cursor` | json | PASS | PASS | 4 | 4 rows, probe name~'Item 1' found |
-| `rss` | xml feed | PASS | PASS | 3 | 3 rows, probe title~'Q3 earnings released' found |
+| `rss` | xml feed | PASS | PARTIAL | 3 | 3 rows but probe title~'Q3 earnings released' MISSING |
 | `paginated` | pagination | PASS | PASS | 4 | 4 rows, probe name~'Row 1' found |
 | `looppager` | pagination | PASS | PASS | 4 | 4 rows, probe name~'Item 1' found |
 | `overlap` | pagination | PASS | PASS | 5 | 5 rows, probe name~'Item 1' found |

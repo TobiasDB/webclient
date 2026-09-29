@@ -17,9 +17,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from web.resolve import Resolver
-
 from web.onboard import DatasetBrief, LocateBrief, Reference, build_query, locate
+from web.resolve import Resolver
 
 from .heuristic_llm import HeuristicLlm
 

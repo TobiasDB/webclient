@@ -20,10 +20,11 @@ import re
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 
-from web.crawl import Crawler, Goal
 from web.fetch import NetworkEvent, Request
 from web.parse import Document, parse
 from web.resolve import Flag, Resolver, flags
+
+from web.crawl import Crawler, Frontier, Goal
 
 from .models import LocateBrief, Reference
 
@@ -68,8 +69,13 @@ def _present(doc: Document, by: "dict[str, Flag]") -> bool:
 
 def _score(doc: Document, by: "dict[str, Flag]") -> float:
     """A deterministic dataset-likeness score (see :mod:`.evaluate` learnings): dataset-present x
-    scrapability, minus gates that block extraction. Higher is a better source."""
+    scrapability, minus gates that block extraction. Higher is a better source. A hard GATE (a login
+    wall, API docs, or an anti-bot block) disqualifies the page outright -- its "records" are the
+    wall/challenge, not the dataset, so it must never outrank a clean source no matter how table-like
+    it looks."""
     if "auth_required" in by:  # a login wall -- no query reaches the dataset
+        return -1.0
+    if "blocked" in by:  # an anti-bot wall / challenge page -- not the dataset (was picked wrongly)
         return -1.0
     if _is_docs(doc.url):  # API docs are never the data source
         return -1.0
@@ -78,15 +84,15 @@ def _score(doc: Document, by: "dict[str, Flag]") -> float:
     if doc.kind == "json":  # a served JSON/feed document is the dataset itself
         return 9.0
     regions = doc.records(top_k=1)
-    base = 4.0 + (regions[0].score * 0.1 if regions else 0.0)
+    # cap the record-region contribution so a huge nav/boilerplate table cannot dominate a real
+    # (smaller) dataset -- record PRESENCE matters more than raw region size.
+    base = 4.0 + (min(regions[0].score, 40.0) * 0.1 if regions else 0.0)
     if "structured_data" in by:
         base += 2.0  # machine-readable data about itself -- cleaner to extract
     if "data_api" in by:
         base += 1.0
     if "empty" in by:
         base -= 3.0
-    if "blocked" in by:
-        base -= 1.0
     return base
 
 
@@ -209,14 +215,19 @@ def _field_bonus(doc: Document, fields: "list[str]") -> float:
 
 
 async def locate(
-    brief: "LocateBrief | str", *, resolver: Resolver, search: "Search | None" = None
+    brief: "LocateBrief | str",
+    *,
+    resolver: Resolver,
+    search: "Search | None" = None,
+    frontier: "Frontier | None" = None,
 ) -> "Reference | None":
     """Find the best source for the goal and return a :class:`Reference` (or ``None`` if nothing
     holds the dataset). Pass a bare goal string for the common case. Seeds come from the brief,
     else ``search``; candidates from the brief, else a crawl; the winner is the highest dataset
     score (record-likeness + a schema-match bonus for the brief's fields), then the XHR/data-API
     preference is applied. An explicit source (seeds/candidates/start_url) makes ``search``
-    irrelevant -- it is only used when none is given."""
+    irrelevant -- it is only used when none is given. ``frontier`` is a turn-based crawl policy (an
+    LLM / heuristic that picks which frontier URLs to expand); default is breadth-first."""
     lb = LocateBrief(goal=brief) if isinstance(brief, str) else brief
     seeds = list(lb.seeds)
     if lb.start_url and lb.start_url not in seeds:  # a known source to seed the crawl from
@@ -231,7 +242,8 @@ async def locate(
     if lb.candidates:
         docs = [await resolver.resolve(Request(url=u)) for u in lb.candidates]
     else:
-        docs = [d async for d in Crawler(resolver).crawl(Goal(start=seeds, max_pages=lb.max_pages))]
+        goal = Goal(start=seeds, max_pages=lb.max_pages, frontier=frontier, assess=True)
+        docs = [d async for d in Crawler(resolver).crawl(goal)]
 
     best: "Reference | None" = None
     best_page: "Document | None" = None
