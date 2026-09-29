@@ -85,7 +85,11 @@ async def _perform(
     session. Never raises for a transport failure (it is classified onto ``snapshot.error``).
     """
     start = time.perf_counter()
-    headers = {**base_headers, **request.headers} if base_headers else request.headers
+    headers = {**base_headers, **request.headers} if base_headers else dict(request.headers)
+    # Drop any caller/fingerprint Accept-Encoding: httpx sets its own advertising ONLY the encodings
+    # it can actually decode (gzip/deflate always; br/zstd only if brotli/zstandard are installed).
+    # A fingerprint that advertises br/zstd we can't decode returns an undecoded (garbage) body.
+    headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
     try:
         resp = await client.request(
             request.method.upper(),
