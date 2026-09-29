@@ -16,7 +16,7 @@ from typing import Protocol, runtime_checkable
 
 import httpx
 from pydantic import BaseModel
-from web.fetch import WebException, err
+from web.fetch import WebException, emit, err
 
 
 @runtime_checkable
@@ -71,6 +71,18 @@ class RateLimit(BaseModel):
     no limit. The client serialises calls so the interval holds under concurrency."""
 
     min_interval: float = 0.0
+
+
+class LlmEvent(BaseModel):
+    """One LLM call, published on the event bus so a caller can report cost AS IT GOES: this call's
+    ``cost_usd`` + token :class:`Usage`, and the client's RUNNING ``spent_usd`` / ``calls``."""
+
+    topic: str = "llm"
+    model: str = ""
+    calls: int = 0
+    cost_usd: float = 0.0
+    spent_usd: float = 0.0
+    usage: Usage = Usage()
 
 
 def _int(obj: object, key: str) -> int:
@@ -133,9 +145,19 @@ class AnthropicLlm:
             cache_read=_int(raw, "cache_read_input_tokens"),
             cache_write=_int(raw, "cache_creation_input_tokens"),
         )
+        cost = self._pricing.cost(one)
         self.usage = self.usage + one
-        self.spent_usd += self._pricing.cost(one)
+        self.spent_usd += cost
         self.calls += 1
+        emit(
+            LlmEvent(
+                model=self._model,
+                calls=self.calls,
+                cost_usd=cost,
+                spent_usd=self.spent_usd,
+                usage=one,
+            )
+        )  # report this call live
 
     async def complete(self, prompt: str) -> str:
         await self._throttle()
@@ -172,4 +194,4 @@ class AnthropicLlm:
         await self._client.aclose()
 
 
-__all__ = ["Llm", "AnthropicLlm", "Usage", "Pricing", "RateLimit"]
+__all__ = ["Llm", "AnthropicLlm", "Usage", "Pricing", "RateLimit", "LlmEvent"]

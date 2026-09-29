@@ -40,7 +40,7 @@ from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
 
 from .author import build_query
 from .frontier import llm_frontier
-from .llm import AnthropicLlm, Pricing, RateLimit, Usage
+from .llm import AnthropicLlm, LlmEvent, Pricing, RateLimit, Usage
 from .locate import locate
 from .models import Brief, Reference
 from .search import DdgSearch
@@ -77,6 +77,8 @@ class _Progress:
         self._verbose = verbose
         self._bus = EventBus()
         self.pages = 0
+        self.llm_calls = 0
+        self.llm_spent = 0.0
         self._start = 0.0
 
     def _on(self, event: Event) -> None:
@@ -87,6 +89,13 @@ class _Progress:
             _err(
                 f"  · [{event.fetched:>2}] {event.status or '---'} {mark}"
                 f"{_short(event.url, 62)}{flags}"
+            )
+        elif isinstance(event, LlmEvent):  # cost AS IT GOES -- one line per model call
+            self.llm_calls = event.calls
+            self.llm_spent = event.spent_usd
+            _err(
+                f"  · llm [{event.model}] call {event.calls}: ${event.cost_usd:.4f}"
+                f"  (running ${event.spent_usd:.4f})"
             )
         elif isinstance(event, ResolveEvent):
             _err(f"  · {event.phase}: {_short(event.url)}")
@@ -330,9 +339,12 @@ async def _locate(args: argparse.Namespace) -> int:
         return 1
     finally:
         await resolver.aclose()
-    _err(
-        f"  evaluated {prog.pages or '?'} page(s) in {prog.elapsed:.1f}s (deterministic — no LLM cost)"
+    cost = (
+        f"LLM frontier: ${prog.llm_spent:.4f} over {prog.llm_calls} call(s)"
+        if prog.llm_calls
+        else "deterministic — no LLM cost"
     )
+    _err(f"  evaluated {prog.pages or '?'} page(s) in {prog.elapsed:.1f}s ({cost})")
     if reference is None:
         _err(
             "no source holds the dataset; add seeds/candidates/start_url to the brief, "
@@ -416,14 +428,15 @@ async def _author(args: argparse.Namespace) -> int:
             query, engine, notes = await build_query(reference, brief, resolver=resolver, llm=llm)
         _explain_query(reference, brief, engine, query.describe(), notes)  # reasoning -> stderr
         print(query.to_blob())  # the serialised query -> stdout
-        if isinstance(llm, _Metered):  # a metered API client (not the unmetered claude -p shim)
+        if isinstance(llm, _Metered):  # AnthropicLlm (priced) OR the shim (claude -p's own cost)
             u = llm.usage
+            est = (
+                " est." if args.shim else ""
+            )  # the shim's cost is claude's API-equivalent estimate
             _err(
-                f"  spend:     ${llm.spent_usd:.4f} over {llm.calls} call(s)"
+                f"  spend:     ${llm.spent_usd:.4f}{est} over {llm.calls} call(s)"
                 f"  (tokens in {u.input}, out {u.output}, cache r/w {u.cache_read}/{u.cache_write})"
             )
-        elif args.shim:
-            _err("  spend:     — (claude -p shim: on the Claude Code plan, unmetered here)")
         if not args.run:
             return 0
         _err("running the query…")

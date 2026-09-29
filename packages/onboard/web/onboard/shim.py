@@ -12,7 +12,14 @@ import asyncio
 import json
 from asyncio.subprocess import PIPE
 
-from web.fetch import WebException, err
+from web.fetch import WebException, emit, err
+
+from .llm import LlmEvent, Usage
+
+
+def _int(value: object) -> int:
+    return int(value) if isinstance(value, (int, float)) else 0
+
 
 _SYSTEM = (
     "You are a precise text function. Do exactly what the user's message instructs and output ONLY "
@@ -31,6 +38,10 @@ class ClaudeShim:
         self._timeout = timeout
         self.prompt = ""
         self.reply = ""
+        #: real metering from claude -p's own accounting (``total_cost_usd`` + ``usage``).
+        self.usage = Usage()
+        self.spent_usd = 0.0
+        self.calls = 0
 
     async def complete(self, prompt: str) -> str:
         self.prompt = prompt
@@ -67,9 +78,38 @@ class ClaudeShim:
             raise WebException(
                 err("llm.shim", f"claude -p did not return JSON: {out[:200]!r}")
             ) from exc
-        result = payload.get("result") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            raise WebException(err("llm.shim", "claude -p JSON was not an object"))
+        result = payload.get("result")
         self.reply = result if isinstance(result, str) else ""
+        self._meter(payload)  # report cost live from claude's own accounting
         return self.reply
+
+    def _meter(self, payload: "dict[str, object]") -> None:
+        """Fold this call's cost (``total_cost_usd``) + token usage into the running totals and
+        publish an :class:`~web.onboard.LlmEvent` so a caller reports cost as it goes."""
+        raw = payload.get("usage")
+        usage = raw if isinstance(raw, dict) else {}
+        one = Usage(
+            input=_int(usage.get("input_tokens")),
+            output=_int(usage.get("output_tokens")),
+            cache_read=_int(usage.get("cache_read_input_tokens")),
+            cache_write=_int(usage.get("cache_creation_input_tokens")),
+        )
+        cost_raw = payload.get("total_cost_usd")
+        cost = float(cost_raw) if isinstance(cost_raw, (int, float)) else 0.0
+        self.usage = self.usage + one
+        self.spent_usd += cost
+        self.calls += 1
+        emit(
+            LlmEvent(
+                model=self._model or "claude -p",
+                calls=self.calls,
+                cost_usd=cost,
+                spent_usd=self.spent_usd,
+                usage=one,
+            )
+        )
 
     async def aclose(self) -> None:
         """Nothing to close -- each call is a fresh subprocess (for a uniform ``Llm`` lifecycle)."""

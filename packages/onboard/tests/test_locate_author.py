@@ -377,6 +377,34 @@ def test_cli_author_locates_from_the_brief_and_runs(
     assert "query:" in out.err and "rows:" in out.err  # reasoning + sample went to stderr
 
 
+def test_anthropic_meter_emits_a_live_llm_event() -> None:
+    from web.fetch import Trace
+
+    from web.onboard import AnthropicLlm, LlmEvent, Pricing
+
+    llm = AnthropicLlm(pricing=Pricing(input=3.0, output=15.0))
+    with Trace() as t:
+        llm._meter({"usage": {"input_tokens": 1000, "output_tokens": 500}})
+    events = [e for e in t.events if isinstance(e, LlmEvent)]
+    assert len(events) == 1
+    assert events[0].calls == 1
+    assert abs(events[0].cost_usd - (1000 * 3.0 + 500 * 15.0) / 1_000_000) < 1e-12
+
+
+def test_progress_streams_llm_cost_as_it_goes(capsys: "pytest.CaptureFixture[str]") -> None:
+    from web.fetch import emit
+
+    from web.onboard import LlmEvent
+    from web.onboard.__main__ import _Progress
+
+    with _Progress(verbose=False) as prog:
+        emit(LlmEvent(model="haiku", calls=1, cost_usd=0.004, spent_usd=0.004))
+        emit(LlmEvent(model="haiku", calls=2, cost_usd=0.006, spent_usd=0.010))
+    assert prog.llm_calls == 2 and abs(prog.llm_spent - 0.010) < 1e-9
+    err = capsys.readouterr().err
+    assert "llm [haiku] call 1" in err and "running $0.0100" in err
+
+
 def test_llm_frontier_middleware_picks_edges_by_model() -> None:
     from web.crawl import FrontierItem
 
@@ -421,7 +449,7 @@ def test_cli_author_shim_writes_query(
     out = capsys.readouterr()
     assert rc == 0
     Plan.from_blob(out.out.strip())  # the shim wrote a rebuildable wq blob
-    assert "claude -p shim" in out.err  # the unmetered-spend note
+    assert "query:" in out.err
 
 
 def test_cli_locate_then_author_chain_via_cache(
