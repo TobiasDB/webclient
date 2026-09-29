@@ -85,6 +85,17 @@ class LlmEvent(BaseModel):
     usage: Usage = Usage()
 
 
+class ReasonEvent(BaseModel):
+    """A WHY published on the bus -- the reasoning behind a choice, so a caller can log why things
+    were chosen: ``stage`` names the phase (``frontier`` / ``evaluate`` / ``author`` / ``review``)
+    and ``text`` is the reason (optionally about ``subject`` -- e.g. the URL picked)."""
+
+    topic: str = "reason"
+    stage: str = ""
+    subject: str = ""
+    text: str = ""
+
+
 def _int(obj: object, key: str) -> int:
     """A non-negative int field from a decoded-JSON object (0 when absent / not a number)."""
     if isinstance(obj, dict):
@@ -194,4 +205,4 @@ class AnthropicLlm:
         await self._client.aclose()
 
 
-__all__ = ["Llm", "AnthropicLlm", "Usage", "Pricing", "RateLimit", "LlmEvent"]
+__all__ = ["Llm", "AnthropicLlm", "Usage", "Pricing", "RateLimit", "LlmEvent", "ReasonEvent"]

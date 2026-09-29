@@ -11,13 +11,14 @@ import json
 from collections.abc import Sequence
 
 from web.crawl import FrontierItem, FrontierMiddleware, Select
-from web.fetch import WebException
+from web.fetch import WebException, emit
 
-from .llm import Llm
+from .llm import Llm, ReasonEvent
 
 
-def _indices(reply: str, n: int) -> "list[int]":
-    """The distinct in-range indices in a model's JSON-array reply (``[3, 0, 7]``); ``[]`` if none."""
+def _picks(reply: str, n: int) -> "list[tuple[int, str]]":
+    """The reasoned picks in a model reply: a JSON array of ``{"n": <index>, "why": "<reason>"}``
+    objects (or bare indices for robustness) -> ``[(index, why), ...]``, in range and deduped."""
     start, end = reply.find("["), reply.rfind("]")
     if start == -1 or end == -1:
         return []
@@ -25,10 +26,17 @@ def _indices(reply: str, n: int) -> "list[int]":
         data: object = json.loads(reply[start : end + 1])
     except ValueError:
         return []
-    out: list[int] = []
-    for x in data if isinstance(data, list) else []:
-        if isinstance(x, int) and 0 <= x < n and x not in out:
-            out.append(x)
+    out: list[tuple[int, str]] = []
+    seen: set[int] = set()
+    for item in data if isinstance(data, list) else []:
+        if isinstance(item, dict):
+            idx = item.get("n", item.get("index"))
+            why = str(item.get("why") or item.get("reason") or "")
+        else:
+            idx, why = item, ""
+        if isinstance(idx, int) and 0 <= idx < n and idx not in seen:
+            seen.add(idx)
+            out.append((idx, why))
     return out
 
 
@@ -71,9 +79,10 @@ def _prompt(
         f"You are crawling a website to find this dataset: {goal or 'the target dataset'}.{guides}\n\n"
         f"These links are on the frontier (not yet fetched). Each shows its link text and the "
         f"status / title / detection flags of the page it was found on:\n{listing}\n\n"
-        f"Reply with ONLY a JSON array of the indices to fetch next, most-promising first, at most "
-        f"{k} (e.g. [3, 0, 7]). Choose the links most likely to reach the dataset (a listing / "
-        f"records / a data API); omit nav, legal, login and unrelated sections."
+        f"Reply with ONLY a JSON array of the links to fetch next, most-promising first, at most "
+        f'{k}, each as {{"n": <index>, "why": "<short reason>"}} (e.g. '
+        f'[{{"n": 3, "why": "the board listing"}}]). Choose the links most likely to reach the '
+        f"dataset (a listing / records / a data API); omit nav, legal, login and unrelated sections."
     )
 
 
@@ -98,7 +107,12 @@ def llm_frontier(
             reply = await llm.complete(_prompt(goal, fields, look, ignore, pending, k))
         except WebException:
             return await nxt(pending)  # model unavailable -> plain breadth-first, don't break
-        picks = [pending[i] for i in _indices(reply, len(pending))[:k]]
+        picks: list[FrontierItem] = []
+        for idx, why in _picks(reply, len(pending))[:k]:
+            picks.append(pending[idx])
+            emit(
+                ReasonEvent(stage="frontier", subject=pending[idx].url, text=why)
+            )  # WHY it was picked
         return picks or await nxt(pending)
 
     return mw

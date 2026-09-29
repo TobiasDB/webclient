@@ -468,6 +468,29 @@ def test_llm_frontier_prompt_carries_link_text_and_parent_assessment() -> None:
     assert "name, role" in llm.prompt  # the schema/fields
 
 
+def test_llm_frontier_emits_reasoning() -> None:
+    from web.crawl import FrontierItem
+    from web.fetch import Trace
+
+    from web.onboard import ReasonEvent, llm_frontier
+
+    items = (FrontierItem(url="http://x/board"), FrontierItem(url="http://x/careers"))
+    mw = llm_frontier(ScriptedLlm('[{"n": 0, "why": "the board listing"}]'), "board members")
+
+    async def nxt(pending: "tuple[FrontierItem, ...]") -> "list[FrontierItem]":
+        return [pending[0]]
+
+    with Trace() as t:
+        picked = cast("list[FrontierItem]", _run(mw(items, nxt)))
+    assert [it.url for it in picked] == ["http://x/board"]
+    reasons = [e for e in t.events if isinstance(e, ReasonEvent) and e.stage == "frontier"]
+    assert (
+        reasons
+        and reasons[0].text == "the board listing"
+        and reasons[0].subject == "http://x/board"
+    )
+
+
 def test_llm_frontier_falls_back_to_fifo_on_bad_reply() -> None:
     from web.crawl import FrontierItem
 

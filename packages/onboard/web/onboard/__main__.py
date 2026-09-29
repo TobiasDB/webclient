@@ -41,7 +41,7 @@ from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
 from .author import AuthorEvent, build_query
 from .compile import QueryError
 from .frontier import llm_frontier
-from .llm import AnthropicLlm, LlmEvent, Pricing, RateLimit, Usage
+from .llm import AnthropicLlm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage
 from .locate import locate
 from .models import Brief, Reference
 from .search import DdgSearch
@@ -98,6 +98,9 @@ class _Progress:
                 f"  · llm [{event.model}] call {event.calls}: ${event.cost_usd:.4f}"
                 f"  (running ${event.spent_usd:.4f})"
             )
+        elif isinstance(event, ReasonEvent):  # WHY a choice was made
+            subj = f"{_short(event.subject, 60)} — " if event.subject else ""
+            _err(f"  ⋯ {event.stage}: {subj}{event.text}")
         elif isinstance(event, AuthorEvent):  # the authoring stages
             if event.phase == "sample":
                 fl = ", ".join(event.flags) or "—"
@@ -305,11 +308,12 @@ def _explain_reference(ref: Reference) -> None:
                 _err(f"        · {s.name} ({s.confidence:.2f}){extra}")
     elif ref.flags:
         _err("  flags:     " + ", ".join(ref.flags))
+    reason = ref.detail.get("reason")
+    if reason:
+        _err(f"  chosen:    {reason}")
     score = ref.detail.get("score")
     if score is not None:
-        _err(
-            f"  score:     {score}   (dataset-likeness × scrapability -- why this source ranked top)"
-        )
+        _err(f"  score:     {score}   (dataset-likeness × scrapability)")
 
 
 def _entity_arg(entity: "str | None") -> str:

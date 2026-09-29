@@ -28,7 +28,7 @@ from .author import AuthorEvent, author, authored, build_query
 from .behaviours import Behaviour, apply_behaviours, behaviour, register_behaviour
 from .compile import Query, QueryError, parse_query, reroot
 from .frontier import llm_frontier
-from .llm import AnthropicLlm, Llm, LlmEvent, Pricing, RateLimit, Usage
+from .llm import AnthropicLlm, Llm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage
 from .llm_driver import llm_driver
 from .locate import Search, data_api_endpoints, locate
 from .models import Brief, DatasetBrief, LocateBrief, Reference
@@ -102,6 +102,7 @@ __all__ = [
     "Pricing",
     "RateLimit",
     "LlmEvent",
+    "ReasonEvent",
     "llm_driver",
     "llm_frontier",
     # the reusable Locate + Author phases and their value models

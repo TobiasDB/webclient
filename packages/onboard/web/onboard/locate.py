@@ -197,8 +197,24 @@ def _reference(doc: Document, by: "dict[str, Flag]") -> Reference:
         record_selector=_record_selector(doc),
         pagination=_pagination(by),
         needs_browser=any(n in by for n in render),
-        detail={"score": round(_score(doc, by), 3)},
+        detail={"score": round(_score(doc, by), 3), "reason": _reason(doc, by)},
     )
+
+
+def _reason(doc: Document, by: "dict[str, Flag]") -> str:
+    """A human WHY this candidate was chosen -- what made it look like the dataset."""
+    bits: list[str] = []
+    if doc.kind == "json":
+        bits.append("a JSON data document (the dataset itself)")
+    elif "record_list" in by:
+        bits.append(f"a repeating record region ({_record_selector(doc)})")
+    if "structured_data" in by:
+        bits.append("machine-readable structured data (JSON-LD/microdata)")
+    if "data_api" in by:
+        bits.append("a JSON data-API backs the page")
+    if "paginated" in by:
+        bits.append("paginated (the pipeline follows the pager)")
+    return "; ".join(bits) or "the highest dataset-likeness score among the candidates"
 
 
 def _field_bonus(doc: Document, fields: "list[str]") -> float:
