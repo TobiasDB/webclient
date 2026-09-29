@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from web.dsl import LazyCollection, wq
 from web.fetch import emit
 from web.parse import Document
+
 from web.resolve import Resolver, flags
 
 from .behaviours import apply_behaviours

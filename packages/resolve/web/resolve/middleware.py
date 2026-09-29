@@ -27,7 +27,7 @@ from web.fetch import fleet as _default_fleet
 
 from .document import document
 from .models import ResolveEvent
-from .signals import anti_bot, spa
+from .signals import js_challenge, spa
 
 _RETRIABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 #: TRANSIENT transport errors worth retrying the same request for. NOT here: tls (cert),
@@ -89,13 +89,17 @@ def rate_limit(min_interval: float) -> Middleware:
 
 
 def _blocked(snap: Snapshot) -> bool:
-    """The default 'this tier was insufficient, climb' rule: a bad TRANSPORT status (a block), or
-    a content signal -- an anti-bot wall or a JS-gated shell (a static tier sees an empty page).
-    """
-    if not snap.ok:  # transport-level block (401/403/429/5xx)
+    """The default 'this tier was insufficient, climb the REALNESS ladder' rule (ANTI-BOT.md §5).
+    Climb only when a MORE REAL transport can plausibly clear it: a hard 401/403 deny, or a content
+    verdict a real browser answers -- a JS/PoW challenge shell or a JS-gated (SPA) page a weak tier
+    sees as an empty holder. A 429 (back off) and a 5xx / transport error (retry -- transient) are
+    NOT climbs: a realer browser does not fix a throughput limit or a flaky server, so ``retry``
+    handles them. A visible CAPTCHA is likewise not cleared by a tier climb, so it does not fire here.
+    (The content check runs even on a non-2xx, because a 403/503 often CARRIES the challenge JS.)"""
+    if snap.status in (401, 403):
         return True
     doc = document(snap)
-    return spa(doc) is not None or anti_bot(doc) is not None
+    return spa(doc) is not None or js_challenge(doc) is not None
 
 
 def escalate(

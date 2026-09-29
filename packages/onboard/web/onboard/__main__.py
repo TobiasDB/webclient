@@ -36,6 +36,7 @@ from web.crawl import CrawlEvent, FrontierMiddleware
 from web.fetch import Event, EventBus, FetchEvent
 from web.fetch import Profile as FetchProfile
 from web.fetch import WebException, using
+
 from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
 
 from .author import AuthorEvent, build_query

@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 from web.crawl import Crawler, FrontierMiddleware, Goal
 from web.fetch import FetchEvent, NetworkEvent, Request, Trace, WebException, emit
 from web.parse import Document, parse
+
 from web.resolve import Flag, Resolver, document, flags
 
 from .llm import Llm, ReasonEvent
@@ -75,7 +76,9 @@ def _score(doc: Document, by: "dict[str, Flag]") -> float:
     it looks."""
     if "auth_required" in by:  # a login wall -- no query reaches the dataset
         return -1.0
-    if "blocked" in by:  # an anti-bot wall / challenge page -- not the dataset (was picked wrongly)
+    # any tier of anti-bot wall (ANTI-BOT.md §4) is the challenge/block page, not the dataset -- its
+    # "records" are the wall, so it must never outrank a clean source however table-like it looks.
+    if any(f in by for f in ("js_challenge", "captcha", "ip_blocked", "rate_limited")):
         return -1.0
     if _is_docs(doc.url):  # API docs are never the data source
         return -1.0

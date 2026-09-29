@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from pydantic import JsonValue
+
 from web.resolve import Resolver
 
 from .compile import Query

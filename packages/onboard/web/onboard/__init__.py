@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 from web.crawl import Crawler, Goal
+
 from web.resolve import Resolver
 
 from .agent import Author, Selection, extract

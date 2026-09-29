@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from typing import cast
 
 from web.fetch import WebException, emit
+
 from web.resolve import Resolver
 
 from .author import AuthorEvent

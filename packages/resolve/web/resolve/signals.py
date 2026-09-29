@@ -57,23 +57,88 @@ def pagination(doc: Document) -> "Signal | None":
     return None
 
 
-def anti_bot(doc: Document) -> "Signal | None":
-    """An anti-bot wall in the CONTENT -- a CAPTCHA / challenge interstitial. (A blocking STATUS
-    is a transport fact, checked on the Snapshot, not here.)"""
+#: bot-wall COPY served in place of the content -- a real dataset page never says these. Cloudflare
+#: "Just a moment" / "Checking your browser", generic JS-gate / DDoS walls, and the classic
+#: "verify you are human" interstitials. A CONTENT wall is a browser-fingerprint verdict, so the
+#: default remedy is to climb REALNESS (ANTI-BOT.md §2.3/§5), which is cheaper than swapping IP; a
+#: block that persists as a bare 401/403 without this copy is the IP-reputation tier instead.
+_CHALLENGE_TEXT = (
+    "just a moment",
+    "checking your browser",
+    "verifying you are human",
+    "verify you are human",
+    "please wait while we verify",
+    "enable javascript and cookies to continue",
+    "ddos protection by",
+    "attention required",
+    "unusual traffic",
+    "are you a robot",
+    "cf-challenge",
+)
+#: challenge-platform script hosts / tokens (matched in raw HTML, not visible text): the Cloudflare
+#: challenge platform + Turnstile, DataDome's captcha-delivery, and the `cf_chl` challenge markers.
+_CHALLENGE_MARKUP = (
+    "challenges.cloudflare.com",
+    "challenge-platform",
+    "captcha-delivery.com",
+    "_cf_chl",
+    "cf_chl_opt",
+    "cf-mitigated",
+)
+
+
+def _visible_chars(doc: Document) -> int:
+    body = doc.select("body")
+    return len(body.text) if body is not None else 0
+
+
+def js_challenge(doc: Document) -> "Signal | None":
+    """An INVISIBLE / interactive JS or proof-of-work challenge INTERSTITIAL -- the middle of the
+    provider escalation ladder (ANTI-BOT.md §4: passive score -> JS/PoW challenge -> interactive).
+    A near-empty holder page served IN PLACE OF the content that runs JS to mint a clearance token:
+    Cloudflare Managed Challenge / Turnstile, DataDome Device Check, Akamai/Kasada sensor shells.
+    The remedy is a MORE REAL browser (climb the realness ladder), NOT a proxy -- this is a
+    browser-fingerprint verdict (ANTI-BOT.md §2.3), not an IP one. Gated on low visible content so a
+    normal page that merely embeds a Turnstile/reCAPTCHA form widget does not read as blocked."""
+    if doc.kind != "html":
+        return None
+    if any(m in doc.text.lower() for m in _CHALLENGE_TEXT):
+        return Signal(name="js_challenge", confidence=0.85)
+    html = doc.content.decode("utf-8", "ignore").lower()
+    if _visible_chars(doc) < 500 and any(h in html for h in _CHALLENGE_MARKUP):
+        return Signal(name="js_challenge", confidence=0.8)
+    return None
+
+
+def captcha(doc: Document) -> "Signal | None":
+    """A VISIBLE CAPTCHA puzzle -- the TOP of the provider ladder (ANTI-BOT.md §3 CAPTCHA layer):
+    reCAPTCHA v2 image grid, hCaptcha, Arkose FunCaptcha / press-and-hold. Distinct from a silent
+    :func:`js_challenge`: a HUMAN puzzle is being demanded, so no transport tier alone clears it --
+    the remedy is a real browser and (ultimately) a solver, or avoiding the flow. Detected by the
+    puzzle's own prompt text, or a vendor widget on an otherwise near-empty interstitial (a full page
+    that merely embeds a form captcha is NOT blocked)."""
     if doc.kind != "html":
         return None
     text = doc.text.lower()
-    markers = (
-        "captcha",
-        "cf-challenge",
-        "verify you are human",
-        "unusual traffic",
-        "access denied",
-        "are you a robot",
-        "checking your browser",
-    )
-    if any(m in text for m in markers):
-        return Signal(name="anti_bot", confidence=0.7)
+    if any(
+        m in text
+        for m in (
+            "select all images",
+            "select each image",
+            "i'm not a robot",
+            "press & hold",
+            "press and hold",
+        )
+    ):
+        return Signal(name="captcha", confidence=0.8)
+    if _visible_chars(doc) < 500 and (
+        doc.select(
+            ".g-recaptcha, .h-captcha, iframe[src*=recaptcha], iframe[src*=hcaptcha], "
+            "script[src*=arkoselabs], script[src*=funcaptcha]"
+        )
+        is not None
+    ):
+        return Signal(name="captcha", confidence=0.75)
     return None
 
 
@@ -120,17 +185,22 @@ def empty(doc: Document) -> "Signal | None":
     return None
 
 
-def blocked_status(snap: Snapshot) -> "Signal | None":
-    """A transport-level block by STATUS -- 401/403 (denied), 429 (rate-limited). A Snapshot fact,
-    not content: the remedy differs (backoff for 429; a stronger tier/proxy for 403)."""
+def denied_status(snap: Snapshot) -> "Signal | None":
+    """A hard transport DENY -- 401/403. Per ANTI-BOT.md §2.2 an IP/ASN reputation block is checked
+    BEFORE the fingerprint and surfaces as a 401/403 with no challenge served, so the remedy is a
+    residential/mobile IP, not more browser realness. (A 403 that CARRIES a challenge is a realness
+    verdict instead -- the flag layer's contra evidence separates the two.)"""
     if snap.status in (401, 403):
-        return Signal(name="blocked_status", confidence=0.9, detail={"status": snap.status})
+        return Signal(name="denied_status", confidence=0.9, detail={"status": snap.status})
+    return None
+
+
+def rate_limited(snap: Snapshot) -> "Signal | None":
+    """A 429 rate-limit / tarpit tier (ANTI-BOT.md §4). The remedy is to BACK OFF and retry the SAME
+    identity -- climbing the realness ladder or swapping IP wastes budget on a throughput limit, which
+    a realer transport does not fix."""
     if snap.status == 429:
-        return Signal(
-            name="blocked_status",
-            confidence=0.8,
-            detail={"status": 429, "rate_limited": True},
-        )
+        return Signal(name="rate_limited", confidence=0.85, detail={"status": 429})
     return None
 
 
@@ -214,11 +284,13 @@ __all__ = [
     "spa",
     "login_wall",
     "pagination",
-    "anti_bot",
+    "js_challenge",
+    "captcha",
     "consent_wall",
     "infinite_scroll",
     "empty",
-    "blocked_status",
+    "denied_status",
+    "rate_limited",
     "server_error",
     "structured_data",
     "data_api",

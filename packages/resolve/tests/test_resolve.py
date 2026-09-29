@@ -142,7 +142,7 @@ def test_rate_limit_spaces_same_host_requests() -> None:
 
 from web.parse import parse  # noqa: E402
 
-from web.resolve import Signal, anti_bot, login_wall, pagination, spa  # noqa: E402
+from web.resolve import Signal, js_challenge, login_wall, pagination, spa  # noqa: E402
 
 
 def _d(html: bytes):  # a parsed Document from bytes
@@ -163,11 +163,16 @@ def test_login_and_pagination_detectors() -> None:
     assert pagination(_d(b"<a rel='next' href='/2'>next</a>")) is not None
 
 
-def test_anti_bot_reads_content_markers() -> None:
+def test_js_challenge_reads_wall_copy() -> None:
+    # a content bot-wall ("verify you are human") is a JS/fingerprint verdict -> js_challenge
     assert (
-        anti_bot(_d(b"<html><body>Please verify you are human (captcha)</body></html>")) is not None
+        js_challenge(_d(b"<html><body>Please verify you are human to continue</body></html>"))
+        is not None
     )
-    assert anti_bot(_d(b"<html><body>normal page</body></html>")) is None
+    assert (
+        js_challenge(_d(b"<html><body>normal page with plenty of real content here</body></html>"))
+        is None
+    )
 
 
 def test_trace_captures_events_across_layers(httpserver: HTTPServer) -> None:
@@ -232,24 +237,51 @@ def test_flags_use_the_snapshot_for_transport_conclusions() -> None:
         headers={"content-type": "text/html"},
         content=doc.content,
     )
-    names = {f.name for f in flags(doc, snap)}
-    assert "blocked" in names  # 429 -> blocked_status evidence -> blocked conclusion
+    by = {f.name: f for f in flags(doc, snap)}
+    assert "rate_limited" in by  # 429 -> rate_limited tier
+    assert by["rate_limited"].remedy == "retry:backoff"  # back off, don't climb the ladder
 
 
 def test_flags_noisy_or_combines_independent_evidence() -> None:
-    # anti-bot content AND a 403 status both feed "blocked" -> combined confidence exceeds either
+    # a thin JS-mount shell fires BOTH spa and empty -> needs_browser combines them by noisy-OR,
+    # so the conclusion is more confident than either single piece of evidence.
     doc = parse(
-        b"<html><body>Please verify you are human to continue</body></html>",
+        b"<html><body><div id='root'></div><script src='/app.js'></script></body></html>",
         content_type="text/html",
     )
-    snap = Snapshot(
-        request=Request(url="https://x/"),
-        url="https://x/",
-        status=403,
-        content=doc.content,
+    nb = next(f for f in flags(doc) if f.name == "needs_browser")
+    assert nb.confidence > 0.8 and len(nb.signals) == 2
+
+
+def _snap403(doc: "Document") -> Snapshot:
+    return Snapshot(
+        request=Request(url="https://x/"), url="https://x/", status=403, content=doc.content
     )
-    blocked = next(f for f in flags(doc, snap) if f.name == "blocked")
-    assert blocked.confidence > 0.9 and len(blocked.signals) == 2
+
+
+def test_anti_bot_tiers_route_to_distinct_remedies() -> None:
+    # a JS challenge interstitial (403 that CARRIES the challenge) -> js_challenge -> climb realness,
+    # and its contra suppresses ip_blocked: a challenge is a fingerprint verdict, not an IP one.
+    chal = parse(
+        b"<html><body><h1>Just a moment...</h1><p>Checking your browser before you continue.</p></body></html>",
+        content_type="text/html",
+    )
+    by = {f.name: f for f in flags(chal, _snap403(chal))}
+    assert by["js_challenge"].remedy == "escalate:realness"
+    assert "ip_blocked" not in by
+
+    # a bare 403 deny with no challenge served -> ip_blocked -> escalate to a proxy/residential IP.
+    bare = parse(b"<html><body>Access is denied.</body></html>", content_type="text/html")
+    by2 = {f.name: f for f in flags(bare, _snap403(bare))}
+    assert by2["ip_blocked"].remedy == "escalate:proxy"
+
+    # a visible CAPTCHA puzzle -> captcha -> needs a solver, not a tier climb.
+    cap = parse(
+        b"<html><body><h1>Verify</h1><p>Select all images with a bus. I'm not a robot.</p></body></html>",
+        content_type="text/html",
+    )
+    by3 = {f.name: f for f in flags(cap)}
+    assert by3["captcha"].remedy == "solve:captcha"
 
 
 def test_paginate_cursor_concatenates_json_pages(httpserver: HTTPServer) -> None:

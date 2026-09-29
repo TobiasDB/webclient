@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from web.fetch import WebException, emit
+
 from web.resolve import Resolver
 
 from .agent import BoundedLoop, Done, Verdict

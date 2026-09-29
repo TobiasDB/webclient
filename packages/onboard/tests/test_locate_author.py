@@ -15,8 +15,6 @@ from typing import cast
 import pytest
 from pytest_httpserver import HTTPServer
 from web.dsl import Plan
-from web.resolve import Resolver
-
 from web.onboard import (
     Brief,
     DatasetBrief,
@@ -30,6 +28,8 @@ from web.onboard import (
     locate_and_author,
 )
 from web.onboard.__main__ import main
+
+from web.resolve import Resolver
 
 
 class ScriptedLlm:
@@ -654,7 +654,6 @@ def test_cli_author_locates_from_the_brief_and_runs(
 
 def test_anthropic_meter_emits_a_live_llm_event() -> None:
     from web.fetch import Trace
-
     from web.onboard import AnthropicLlm, LlmEvent, Pricing
 
     llm = AnthropicLlm(pricing=Pricing(input=3.0, output=15.0))
@@ -668,7 +667,6 @@ def test_anthropic_meter_emits_a_live_llm_event() -> None:
 
 def test_progress_streams_llm_cost_as_it_goes(capsys: "pytest.CaptureFixture[str]") -> None:
     from web.fetch import emit
-
     from web.onboard import LlmEvent
     from web.onboard.__main__ import _Progress
 
@@ -682,7 +680,6 @@ def test_progress_streams_llm_cost_as_it_goes(capsys: "pytest.CaptureFixture[str
 
 def test_llm_frontier_middleware_picks_edges_by_model() -> None:
     from web.crawl import FrontierItem
-
     from web.onboard import llm_frontier
 
     items = tuple(FrontierItem(url=f"http://x/{i}") for i in range(4))
@@ -697,7 +694,6 @@ def test_llm_frontier_middleware_picks_edges_by_model() -> None:
 
 def test_llm_frontier_prompt_carries_link_text_and_parent_assessment() -> None:
     from web.crawl import FrontierItem
-
     from web.onboard import llm_frontier
 
     items = (
@@ -726,7 +722,6 @@ def test_llm_frontier_prompt_carries_link_text_and_parent_assessment() -> None:
 def test_llm_frontier_emits_reasoning() -> None:
     from web.crawl import FrontierItem
     from web.fetch import Trace
-
     from web.onboard import ReasonEvent, llm_frontier
 
     items = (FrontierItem(url="http://x/board"), FrontierItem(url="http://x/careers"))
@@ -748,7 +743,6 @@ def test_llm_frontier_emits_reasoning() -> None:
 
 def test_llm_frontier_falls_back_to_fifo_on_bad_reply() -> None:
     from web.crawl import FrontierItem
-
     from web.onboard import llm_frontier
 
     items = tuple(FrontierItem(url=f"http://x/{i}") for i in range(3))
@@ -837,7 +831,6 @@ def test_packaged_briefs_are_available_and_loadable() -> None:
 
 def test_ddg_search_parses_result_urls(monkeypatch: "pytest.MonkeyPatch") -> None:
     import ddgs
-
     from web.onboard import DdgSearch
 
     class _FakeDDGS:

@@ -63,12 +63,42 @@ _CONCLUSIONS: tuple[_Conclusion, ...] = (
         "JS-gated / near-empty static HTML -- render in a browser",
         doc_detectors=(_s.spa, _s.empty),
     ),
+    # The anti-bot RESPONSE ladder (ANTI-BOT.md §4 provider tiers -> §5 our evasion ladder). The
+    # remedy is chosen by WHICH tier blocked us, per the doc's core rule: a JS/fingerprint verdict is
+    # answered by climbing browser REALNESS, an IP/ASN verdict by climbing to a residential proxy, a
+    # rate-limit by backing off. These are different axes and must not be conflated into one "blocked".
     _Conclusion(
-        "blocked",
+        "js_challenge",
+        "escalate:realness",
+        "an invisible/interactive JS or proof-of-work challenge (Cloudflare Managed Challenge / "
+        "Turnstile, DataDome Device Check, Akamai/Kasada sensor) -- a browser-fingerprint verdict "
+        "(ANTI-BOT.md §2.3/§3); climb browser REALNESS (headless -> headed -> real Chrome), not a proxy",
+        doc_detectors=(_s.js_challenge,),
+    ),
+    _Conclusion(
+        "captcha",
+        "solve:captcha",
+        "a visible CAPTCHA puzzle (reCAPTCHA / hCaptcha / Arkose) -- the top of the provider ladder "
+        "(ANTI-BOT.md §3); a human puzzle no transport tier alone clears: a real browser and a solver, "
+        "or avoid the flow",
+        doc_detectors=(_s.captcha,),
+    ),
+    _Conclusion(
+        "ip_blocked",
         "escalate:proxy",
-        "an anti-bot wall or a blocking status (401/403/429) -- NOT the dataset",
-        doc_detectors=(_s.anti_bot,),
-        snap_detectors=(_s.blocked_status,),
+        "a hard 401/403 deny with no challenge served -- an IP/ASN reputation block (ANTI-BOT.md §2.2, "
+        "checked BEFORE the fingerprint); climb to a residential/mobile IP, not more browser realness",
+        snap_detectors=(_s.denied_status,),
+        # a 403 that CARRIES a challenge/CAPTCHA is a REALNESS verdict, not an IP one -- pull ip_blocked
+        # back down so js_challenge/captcha win and the ladder climbs realness instead of swapping IP.
+        contra=(_s.js_challenge, _s.captcha),
+    ),
+    _Conclusion(
+        "rate_limited",
+        "retry:backoff",
+        "a 429 rate-limit / tarpit tier (ANTI-BOT.md §4) -- back off and retry the same identity; "
+        "climbing realness or swapping IP wastes budget on a throughput limit",
+        snap_detectors=(_s.rate_limited,),
     ),
     _Conclusion(
         "auth_required",
