@@ -54,6 +54,11 @@ class BrowserSupply(Protocol):
 
     async def connect(self, pw: "Playwright") -> "Browser": ...
 
+    def key(self) -> object:
+        """A hashable LAUNCH identity: two supplies with the same key produce the same process, so
+        the :class:`~web.fetch.browser.manager.BrowserManager` shares one between them."""
+        ...
+
 
 @dataclass
 class LaunchSupply:
@@ -76,6 +81,11 @@ class LaunchSupply:
             ignore_default_args=list(_DROP_DEFAULT_ARGS),
         )
 
+    def key(self) -> object:
+        # the launch identity -- NOT the fingerprint, which is a per-CONTEXT option, so two tiers
+        # that differ only by fingerprint can still share one launched process.
+        return ("launch", self.headless, self.channel, self.executable_path, str(self.proxy))
+
 
 @dataclass
 class CdpSupply:
@@ -87,6 +97,9 @@ class CdpSupply:
 
     async def connect(self, pw: "Playwright") -> "Browser":
         return await pw.chromium.connect_over_cdp(self.endpoint)
+
+    def key(self) -> object:
+        return ("cdp", self.endpoint)
 
 
 #: genuine-Chrome install locations per platform (NOT the Playwright bundle / Chrome for Testing).

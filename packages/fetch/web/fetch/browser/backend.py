@@ -33,6 +33,7 @@ from ..models import (
 from ..proxy import Proxy, as_proxy
 from . import mouse
 from .chrome import BrowserSupply, supply_for
+from .manager import BrowserManager
 from .script import ScriptRegistry, default_scripts
 from .wait import apply_wait
 
@@ -312,6 +313,7 @@ class BrowserFetcher:
         wait: "Wait | None" = None,
         executable_path: "str | None" = None,
         supply: "BrowserSupply | None" = None,
+        manager: "BrowserManager | None" = None,
         scripts: "tuple[Script, ...] | ScriptRegistry | None" = None,
     ) -> None:
         self._headless = headless
@@ -341,20 +343,19 @@ class BrowserFetcher:
             if scripts is None
             else (scripts if isinstance(scripts, ScriptRegistry) else ScriptRegistry(scripts))
         )
-        self._pw: "Playwright | None" = None
+        #: the process-management layer. A pool hands in its SHARED manager so every tier reuses one
+        #: Playwright + pooled processes; a standalone fetcher owns a private one (identical
+        #: behaviour to before) and shuts it on ``aclose``.
+        self._owns_manager = manager is None
+        self._manager: BrowserManager = manager or BrowserManager()
         self._browser: "Browser | None" = None
 
     async def _browser_ready(self) -> "Browser":
-        browser = self._browser
-        if browser is None:
-            from playwright.async_api import async_playwright
-
-            self._pw = await async_playwright().start()
-            # the supply obtains the browser -- launch a local process (with the real-browser launch
-            # args) or attach to a running one over CDP; see :mod:`.chrome`.
-            browser = await self._supply.connect(self._pw)
-            self._browser = browser
-        return browser
+        # ask the manager for the browser this fetcher's supply describes (launched or attached),
+        # holding ONE ref for the fetcher's lifetime; the manager pools it across fetchers.
+        if self._browser is None:
+            self._browser = await self._manager.acquire(self._supply)
+        return self._browser
 
     async def session(self) -> BrowserSession:
         """Open a session that OWNS a fresh context + page (isolated cookies/state). Builds a REAL
@@ -423,14 +424,12 @@ class BrowserFetcher:
 
     async def aclose(self) -> None:
         if self._browser is not None:
-            # only CLOSE a browser we launched; an attached (CDP) supply must leave the user's /
-            # remote process running -- we just disconnect the driver by stopping Playwright below.
-            if self._supply.owns_process:
-                await self._browser.close()
+            # give the process back to the manager (it closes a launched one when the last fetcher
+            # releases it, and leaves an attached CDP process running).
+            await self._manager.release(self._supply)
             self._browser = None  # idempotent
-        if self._pw is not None:
-            await self._pw.stop()
-            self._pw = None
+        if self._owns_manager:  # a standalone fetcher owns its manager -> shut its Playwright too
+            await self._manager.aclose()
 
 
 __all__ = ["BrowserFetcher", "BrowserSession"]

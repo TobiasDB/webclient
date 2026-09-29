@@ -7,6 +7,7 @@ import asyncio
 
 from web.fetch import (
     BrowserFetcher,
+    BrowserManager,
     CdpSupply,
     LaunchSupply,
     real_chrome_path,
@@ -43,9 +44,25 @@ class _FakeChromium:
 class _FakePlaywright:
     def __init__(self) -> None:
         self.chromium = _FakeChromium()
+        self.stopped = False
 
     async def stop(self) -> None:
-        pass
+        self.stopped = True
+
+
+class _FakeSupply:
+    """A supply that hands the manager a fresh fake browser; `owns_process` drives close-on-release."""
+
+    def __init__(self, owns: bool, key: str = "k") -> None:
+        self.owns_process = owns
+        self._key = key
+        self.browser = _FakeBrowser()
+
+    async def connect(self, pw):
+        return self.browser
+
+    def key(self) -> object:
+        return self._key
 
 
 def test_launch_supply_launches_a_real_browser_not_a_harness() -> None:
@@ -84,23 +101,49 @@ def test_browser_fetcher_derives_its_supply_from_kwargs() -> None:
     assert isinstance(BrowserFetcher(channel="chrome")._supply, LaunchSupply)
 
 
-def test_attached_browser_is_left_running_on_close() -> None:
-    # a CDP-attached fetcher must NOT close the remote browser -- only disconnect (stop Playwright).
-    f = BrowserFetcher(cdp="http://x:9222")
-    fake = _FakeBrowser()
-    f._browser = fake  # type: ignore[assignment]
-    f._pw = _FakePlaywright()  # type: ignore[assignment]
-    _run(f.aclose())
-    assert fake.closed is False
+def test_manager_pools_a_process_by_identity_and_ref_counts_it() -> None:
+    # two acquires of the same launch identity SHARE one process, closed only when the last releases.
+    m = BrowserManager()
+    m._pw = (
+        _FakePlaywright()
+    )  # pre-set so acquire skips starting a real Playwright  # type: ignore[assignment]
+    sup = _FakeSupply(owns=True)
+    b1 = _run(m.acquire(sup))
+    b2 = _run(m.acquire(sup))
+    assert b1 is b2  # same identity -> one shared process
+    _run(m.release(sup))
+    assert b1.closed is False  # still one holder
+    _run(m.release(sup))
+    assert b1.closed is True  # last holder released -> a LAUNCHED process is closed
 
 
-def test_launched_browser_is_closed_on_close() -> None:
-    f = BrowserFetcher(channel="chromium")
-    fake = _FakeBrowser()
-    f._browser = fake  # type: ignore[assignment]
-    f._pw = _FakePlaywright()  # type: ignore[assignment]
-    _run(f.aclose())
-    assert fake.closed is True
+def test_manager_never_closes_an_attached_process() -> None:
+    m = BrowserManager()
+    m._pw = _FakePlaywright()  # type: ignore[assignment]
+    sup = _FakeSupply(owns=False)  # attached over CDP
+    b = _run(m.acquire(sup))
+    _run(m.release(sup))
+    assert b.closed is False  # attached -> the remote/user process is left running
+
+
+def test_manager_aclose_stops_playwright_and_closes_held_processes() -> None:
+    m = BrowserManager()
+    pw = _FakePlaywright()
+    m._pw = pw  # type: ignore[assignment]
+    sup = _FakeSupply(owns=True)
+    b = _run(m.acquire(sup))
+    _run(m.aclose())
+    assert b.closed is True and pw.stopped is True and m._pw is None
+
+
+def test_pool_shares_one_manager_across_browser_tiers() -> None:
+    from web.fetch import ClientPool, Profile
+
+    pool = ClientPool()
+    a = pool.lease(Profile(browser=True))
+    b = pool.lease(Profile(browser=True, headless=False))
+    # different browser profiles, but they were handed the pool's ONE shared manager
+    assert a._manager is b._manager is pool._browser_manager  # type: ignore[attr-defined]
 
 
 def test_real_chrome_path_returns_a_path_or_none() -> None:

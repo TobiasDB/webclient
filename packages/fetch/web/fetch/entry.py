@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass, field
 from typing import Generic, Protocol, TypeVar, runtime_checkable
 
-from .browser import BrowserFetcher, BrowserSession
+from .browser import BrowserFetcher, BrowserManager, BrowserSession
 from .fingerprint import Fingerprint
 from .http import HttpFetcher
 from .impersonate import ImpersonateFetcher
@@ -127,10 +127,14 @@ class Profile:
             impersonate=self.impersonate if isinstance(impersonate, _Keep) else impersonate,
         )
 
-    def fetcher(self) -> "BrowserFetcher | ImpersonateFetcher | HttpFetcher":
+    def fetcher(
+        self, *, manager: "BrowserManager | None" = None
+    ) -> "BrowserFetcher | ImpersonateFetcher | HttpFetcher":
         """The backend this transport identity describes -- so a fetch profile can be used directly
         as a tier in a resolve profile's escalation ladder (an HTTP tier, an impersonating HTTP tier,
-        a browser tier, ...). A browser wins over impersonation wins over plain HTTP.
+        a browser tier, ...). A browser wins over impersonation wins over plain HTTP. ``manager`` is
+        the shared browser-process manager (a pool hands in its own so every tier reuses one
+        Playwright); ignored by the HTTP tiers.
         """
         if self.browser:
             return BrowserFetcher(
@@ -139,6 +143,7 @@ class Profile:
                 proxy=self.proxy,
                 fingerprint=self.fingerprint,
                 executable_path=self.executable_path,
+                manager=manager,
             )
         if self.impersonate:  # rung 2: a real TLS/HTTP2 fingerprint at the HTTP layer (curl_cffi)
             return ImpersonateFetcher(impersonate=self.impersonate, proxy=self.proxy)
@@ -178,20 +183,25 @@ class ClientPool:
         self._backends: (
             "dict[tuple[object, ...], BrowserFetcher | ImpersonateFetcher | HttpFetcher]"
         ) = {}
+        #: ONE browser-process manager shared by every browser tier this pool leases, so the realness
+        #: ladder (several browser profiles) reuses a single Playwright runtime and pools processes.
+        self._browser_manager = BrowserManager()
 
     def lease(self, profile: "Profile") -> "BrowserFetcher | ImpersonateFetcher | HttpFetcher":
         """The shared backend for ``profile`` -- created on first use, reused thereafter."""
         key = profile.key()
         backend = self._backends.get(key)
         if backend is None:
-            backend = profile.fetcher()
+            backend = profile.fetcher(manager=self._browser_manager)
             self._backends[key] = backend
         return backend
 
     async def aclose(self) -> None:
-        """Close every pooled backend (shuts any launched browser)."""
+        """Close every pooled backend, then shut the shared browser manager (its Playwright + any
+        launched processes still held)."""
         for backend in self._backends.values():
             await backend.aclose()
+        await self._browser_manager.aclose()
         self._backends.clear()
 
     async def __aenter__(self) -> "ClientPool":
