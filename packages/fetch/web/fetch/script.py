@@ -39,6 +39,32 @@ _DOM_DRAIN_JS = "() => { const e = window.__wc_dom || []; window.__wc_dom = []; 
 DOM_RECORDER = Script(name="dom", on="load", js=_DOM_RECORD_JS, drain=_DOM_DRAIN_JS)
 
 
+# Force every shadow root OPEN so the snapshot can read it (a closed root is otherwise invisible).
+# An INIT script: it runs before the page attaches any shadow root.
+_OPEN_SHADOW_JS = (
+    "(()=>{const o=Element.prototype.attachShadow;"
+    "Element.prototype.attachShadow=function(i){return o.call(this,Object.assign({},i,{mode:'open'}))};})();"
+)
+
+# At snapshot time, INLINE the open shadow roots and same-origin iframe/frame documents into the
+# light DOM, so the read HTML (and every selector) sees data that lives inside a web component or a
+# frame -- the OG client's "deep DOM". Cross-origin frames are skipped (unreadable). Idempotent.
+_DEEP_DOM_JS = (
+    "(()=>{function inline(r){for(const el of r.querySelectorAll('*')){"
+    "if(el.shadowRoot&&!el.__deep){el.__deep=1;const h=document.createElement('shadow-root');"
+    "h.innerHTML=el.shadowRoot.innerHTML;el.appendChild(h);inline(h);}}}"
+    "inline(document);"
+    "for(const f of document.querySelectorAll('iframe,frame')){if(f.__deep)continue;try{"
+    "const d=f.contentDocument;if(d&&d.body){f.__deep=1;const h=document.createElement('frame-body');"
+    "h.innerHTML=d.body.innerHTML;(f.parentNode||document.body).insertBefore(h,f.nextSibling);}}catch(e){}}})();"
+)
+
+#: force shadow roots open (before navigation) so :data:`DEEP_DOM` can read them.
+OPEN_SHADOW = Script(name="open_shadow", on="init", js=_OPEN_SHADOW_JS)
+#: inline shadow roots + same-origin frames into the light DOM at each snapshot (the deep DOM).
+DEEP_DOM = Script(name="deep_dom", on="snapshot", js=_DEEP_DOM_JS)
+
+
 class ScriptRegistry:
     """A named, mutable collection of page scripts the browser backend installs. Register scripts,
     ``enable`` / ``disable`` them by name; only the enabled ones are installed. This lets a caller
@@ -71,9 +97,11 @@ class ScriptRegistry:
         return tuple(s for n, s in self._scripts.items() if self._enabled.get(n))
 
 
-#: the default registry: the DOM recorder, enabled.
+#: the default registry: the DOM recorder + the deep-DOM pair (open shadow roots, inline them and
+#: same-origin frames at snapshot), all enabled. Disable ``deep_dom`` / ``open_shadow`` by name for
+#: a raw light-DOM capture.
 def default_scripts() -> ScriptRegistry:
-    return ScriptRegistry((DOM_RECORDER,))
+    return ScriptRegistry((DOM_RECORDER, OPEN_SHADOW, DEEP_DOM))
 
 
-__all__ = ["DOM_RECORDER", "ScriptRegistry", "default_scripts"]
+__all__ = ["DOM_RECORDER", "OPEN_SHADOW", "DEEP_DOM", "ScriptRegistry", "default_scripts"]

@@ -47,7 +47,7 @@ from .models import (
 from .pool import Pool
 from .proxy import Proxy
 from .replay import Recorder, ReplayBackend
-from .script import DOM_RECORDER, ScriptRegistry
+from .script import DEEP_DOM, DOM_RECORDER, OPEN_SHADOW, ScriptRegistry
 
 __all__ = [
     "Request",
@@ -75,6 +75,8 @@ __all__ = [
     "generate",
     "Wait",
     "DOM_RECORDER",
+    "OPEN_SHADOW",
+    "DEEP_DOM",
     "NetworkEvent",
     "DOMEvent",
     "FetchEvent",

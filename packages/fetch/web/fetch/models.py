@@ -123,13 +123,15 @@ class Wait(BaseModel):
 
 
 class Script(BaseModel):
-    """A page script the browser transport injects. ``on`` picks the lifecycle stage (``init``
-    before navigation, ``load`` after); ``drain`` (optional) is a JS expression the fetcher
-    evaluates after the page settles to pull buffered output into an event."""
+    """A page script the browser transport injects. ``on`` picks the lifecycle stage: ``init``
+    (before navigation), ``load`` (after the page settles), or ``snapshot`` (a DOM transform run at
+    EACH snapshot, before the HTML is read -- e.g. inlining shadow roots / frames). ``drain``
+    (optional) is a JS expression the fetcher evaluates after the page settles to pull buffered
+    output into an event."""
 
     name: str
     js: str
-    on: Literal["init", "load"] = "load"
+    on: Literal["init", "load", "snapshot"] = "load"
     drain: str = ""
 
 
