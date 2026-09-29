@@ -24,8 +24,16 @@ from web.agent import Author, Selection, extract
 from web.crawl import Crawler, Goal
 from web.resolve import Resolver
 
+from .patterns import Query
+
+from .author import Authored as AuthoredQuery
+from .author import author, authored, build_query
+from .behaviours import Behaviour, apply_behaviours, behaviour, register_behaviour
 from .llm import AnthropicLlm, Llm
 from .llm_driver import llm_driver
+from .locate import Search, data_api_endpoints, locate
+from .models import DatasetBrief, LocateBrief, Reference
+from .patterns import Pattern, best_pattern, pattern
 
 
 class Onboarded(BaseModel):
@@ -60,4 +68,24 @@ async def onboard(
     return Onboarded(rows=rows, selection=selection, pages=len(docs))
 
 
-__all__ = ["onboard", "Onboarded", "Llm", "AnthropicLlm", "llm_driver"]
+async def locate_and_author(
+    goal: "str | LocateBrief", brief: "DatasetBrief | None" = None, *,
+    resolver: Resolver, search: "Search | None" = None,
+) -> "Query | None":
+    """The thin composition ``author ∘ locate``: find the best source for ``goal`` (:func:`locate`)
+    and, if one is found, write the extraction query for it (:func:`author`) -- the reusable,
+    registry-driven path (no LLM). Returns the ``wq`` query (run or ship it), or ``None`` if no
+    source holds the dataset. Both phases share ``resolver``."""
+    reference = await locate(goal, resolver=resolver, search=search)
+    if reference is None:
+        return None
+    return await author(reference, brief, resolver=resolver)
+
+
+__all__ = ["onboard", "Onboarded", "Llm", "AnthropicLlm", "llm_driver",
+           # the reusable Locate + Author phases and their value models
+           "locate", "author", "authored", "build_query", "locate_and_author",
+           "Reference", "LocateBrief", "DatasetBrief", "AuthoredQuery", "Search", "data_api_endpoints",
+           # the extensible registries
+           "Pattern", "pattern", "best_pattern", "Behaviour", "behaviour", "register_behaviour",
+           "apply_behaviours"]

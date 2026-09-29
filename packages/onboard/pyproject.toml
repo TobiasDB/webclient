@@ -3,7 +3,7 @@ name = "web-onboard"
 version = "0.1.0"
 description = "web-* onboard: the capstone — goal -> dataset, composing crawl + agent + llm."
 requires-python = ">=3.12"
-dependencies = ["web-kernel", "web-fetch", "web-parse", "web-resolve", "web-crawl", "web-agent", "pydantic>=2"]
+dependencies = ["web-kernel", "web-fetch", "web-parse", "web-resolve", "web-crawl", "web-agent", "web-dsl", "pydantic>=2"]
 
 [build-system]
 requires = ["hatchling"]
@@ -19,3 +19,4 @@ web-parse = { path = "../parse", editable = true }
 web-resolve = { path = "../resolve", editable = true }
 web-crawl = { path = "../crawl", editable = true }
 web-agent = { path = "../agent", editable = true }
+web-dsl = { path = "../dsl", editable = true }
