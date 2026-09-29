@@ -432,13 +432,12 @@ async def _author(args: argparse.Namespace) -> int:
             query, engine, notes = await build_query(reference, brief, resolver=resolver, llm=llm)
         _explain_query(reference, brief, engine, query.describe(), notes)  # reasoning -> stderr
         print(query.to_blob())  # the serialised query -> stdout
-        if isinstance(llm, _Metered):  # AnthropicLlm (priced) OR the shim (claude -p's own cost)
+        if isinstance(
+            llm, _Metered
+        ):  # AnthropicLlm (priced) OR the shim (claude -p's API-equiv cost)
             u = llm.usage
-            est = (
-                " est." if args.shim else ""
-            )  # the shim's cost is claude's API-equivalent estimate
             _err(
-                f"  spend:     ${llm.spent_usd:.4f}{est} over {llm.calls} call(s)"
+                f"  spend:     ${llm.spent_usd:.4f} over {llm.calls} call(s)"
                 f"  (tokens in {u.input}, out {u.output}, cache r/w {u.cache_read}/{u.cache_write})"
             )
         if not args.run:
