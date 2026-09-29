@@ -80,30 +80,36 @@ class Profile:
     fingerprint: "bool | Fingerprint" = False
     headers: "dict[str, str]" = field(default_factory=dict)
     browser: bool = False
+    #: an explicit browser binary to launch (a driver/executable path) when ``browser`` is set --
+    #: for a pinned/self-managed Chromium; ``None`` uses the bundled/channel browser.
+    executable_path: "str | None" = None
 
     def with_(self, *, proxy: "str | Proxy | None | _Keep" = _KEEP,
               fingerprint: "bool | Fingerprint | _Keep" = _KEEP,
               headers: "dict[str, str] | _Keep" = _KEEP,
-              browser: "bool | _Keep" = _KEEP) -> "Profile":
+              browser: "bool | _Keep" = _KEEP,
+              executable_path: "str | None | _Keep" = _KEEP) -> "Profile":
         """A copy with some slots overridden (the rest inherited) -- adjust a base profile."""
         return Profile(
             proxy=self.proxy if isinstance(proxy, _Keep) else proxy,
             fingerprint=self.fingerprint if isinstance(fingerprint, _Keep) else fingerprint,
             headers=self.headers if isinstance(headers, _Keep) else headers,
             browser=self.browser if isinstance(browser, _Keep) else browser,
+            executable_path=self.executable_path if isinstance(executable_path, _Keep) else executable_path,
         )
 
     def fetcher(self) -> "BrowserFetcher | HttpFetcher":
         """The backend this transport identity describes -- so a fetch profile can be used directly
         as a tier in a resolve profile's escalation ladder (an HTTP tier, a browser tier, ...)."""
         if self.browser:
-            return BrowserFetcher(proxy=self.proxy, fingerprint=self.fingerprint)
+            return BrowserFetcher(proxy=self.proxy, fingerprint=self.fingerprint,
+                                  executable_path=self.executable_path)
         return HttpFetcher(proxy=self.proxy, fingerprint=self.fingerprint)
 
     def key(self) -> "tuple[object, ...]":
         """A hashable identity for pooling: two profiles with the same key share one backend."""
         fp = self.fingerprint if isinstance(self.fingerprint, bool) else self.fingerprint.model_dump_json()
-        return (self.browser, str(self.proxy), fp, tuple(sorted(self.headers.items())))
+        return (self.browser, str(self.proxy), fp, tuple(sorted(self.headers.items())), self.executable_path)
 
 
 _EMPTY = Profile()

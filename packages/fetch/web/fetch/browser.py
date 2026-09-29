@@ -181,10 +181,14 @@ class BrowserFetcher:
         self, *, headless: bool = True, channel: str = "chromium",
         proxy: "str | Proxy | None" = None, fingerprint: "bool | Fingerprint" = False,
         cdp: "str | None" = None, wait: "Wait | None" = None,
+        executable_path: "str | None" = None,
         scripts: "tuple[Script, ...] | ScriptRegistry | None" = None,
     ) -> None:
         self._headless = headless
         self._channel = channel  # "chromium" = bundled; "chrome" = the real Chrome install
+        #: an explicit browser BINARY to launch (a driver/executable path), instead of the one the
+        #: channel resolves to -- for a pinned/self-managed Chromium or a custom build.
+        self._executable = executable_path
         self._proxy = as_proxy(proxy)
         self._fingerprint = as_fingerprint(fingerprint)
         self._wait = wait  # the default readiness milestone for every session's goto
@@ -212,6 +216,7 @@ class BrowserFetcher:
                 browser = await self._pw.chromium.launch(
                     headless=self._headless,
                     channel=None if self._channel == "chromium" else self._channel,
+                    executable_path=self._executable,  # an explicit binary overrides the channel
                     proxy=self._proxy.playwright() if self._proxy else None,
                 )
             self._browser = browser

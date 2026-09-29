@@ -7,7 +7,7 @@ from typing import Any
 
 from pytest_httpserver import HTTPServer
 
-from web.fetch import ClientPool, Profile, Request, fetch
+from web.fetch import BrowserFetcher, ClientPool, Profile, Request, fetch
 
 
 def _run(coro: Any) -> Any:
@@ -24,6 +24,16 @@ def test_pool_leases_one_shared_backend_per_profile() -> None:
 
     same, different = _run(go())
     assert same is True and different is False
+
+
+def test_browser_profile_carries_an_executable_path() -> None:
+    base = Profile(browser=True)
+    pinned = base.with_(executable_path="/opt/chromium/chrome")
+    assert pinned.executable_path == "/opt/chromium/chrome"
+    assert base.executable_path is None                       # inherited copy, base unchanged
+    assert base.key() != pinned.key()                         # a different binary -> its own backend
+    fetcher = pinned.fetcher()
+    assert isinstance(fetcher, BrowserFetcher) and fetcher._executable == "/opt/chromium/chrome"
 
 
 def test_fetch_reuses_the_pooled_backend_across_calls(httpserver: HTTPServer) -> None:

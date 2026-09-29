@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, TypeAlias, runtime_checkable
 
-from web.fetch import ClientPool, Fetcher, Middleware, Request, WebException, default_pool, stack
+from web.fetch import ClientPool, Fetcher, Middleware, Request, Snapshot, WebException, default_pool, stack
 from web.fetch import Profile as FetchProfile
 from web.parse import Document
 from .document import document
@@ -184,11 +184,19 @@ class Resolver:
         (no response), this raises a structured :class:`~web.fetch.WebException` by default -- the
         resolve POLICY's choice (``raise_on_error=False`` returns the not-ok empty Document instead).
         An HTTP status (404/500) is a valid response and is never raised."""
-        req = Request(url=request) if isinstance(request, str) else request
-        snap = await self._fetcher.fetch(req)  # runs the whole middleware chain (retry, escalate, ...)
+        snap = await self.snapshot(request)
         if snap.error is not None and self._raise:
             raise WebException(snap.error)
         return document(snap)
+
+    async def snapshot(self, request: "Request | str") -> Snapshot:
+        """The raw :class:`~web.fetch.Snapshot` behind :meth:`resolve` -- the full middleware chain
+        runs, but the bytes are NOT parsed and a transport failure is NOT raised (the Snapshot's
+        ``error`` carries it). This exposes what ``resolve`` discards: the captured browser network
+        stream (XHR/fetch responses with bodies), which Locate mines for the real data-API a page
+        calls. A bare URL string is a shorthand ``Request``."""
+        req = Request(url=request) if isinstance(request, str) else request
+        return await self._fetcher.fetch(req)  # runs the whole middleware chain (retry, escalate, ...)
 
     async def __aenter__(self) -> "Resolver":
         """Enter a resolver scope -- ``async with Resolver(...) as rs:`` (closes on exit)."""

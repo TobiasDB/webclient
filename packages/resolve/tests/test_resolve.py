@@ -29,6 +29,35 @@ def test_resolver_fetches_and_parses(httpserver: HTTPServer) -> None:
     assert doc.kind == "html" and doc.select_all("h1")[0].text == "hi"
 
 
+def test_snapshot_returns_the_raw_unparsed_snapshot(httpserver: HTTPServer) -> None:
+    # snapshot() is what resolve() discards: the raw bytes + captured events, unparsed and
+    # (unlike resolve) never raising on a transport failure -- Locate mines it for the XHR stream.
+    httpserver.expect_request("/p").respond_with_data(b'{"ok":true}', content_type="application/json")
+
+    async def go() -> Snapshot:
+        r = Resolver()
+        try:
+            return await r.snapshot(httpserver.url_for("/p"))
+        finally:
+            await r.aclose()
+
+    snap = _run(go())
+    assert snap.error is None and snap.ok and snap.content == b'{"ok":true}'
+
+
+def test_snapshot_does_not_raise_on_transport_failure() -> None:
+    # a resolver that raises on resolve() still hands back an errored Snapshot from snapshot().
+    async def go() -> Snapshot:
+        r = Resolver()
+        try:
+            return await r.snapshot(Request(url="http://127.0.0.1:1/nope"))
+        finally:
+            await r.aclose()
+
+    snap = _run(go())
+    assert snap.error is not None and not snap.ok
+
+
 class _FlakyFetcher:
     """Fails (transport error) for the first ``fail`` calls, then succeeds -- to exercise retry."""
 
