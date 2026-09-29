@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Iterator, NoReturn, TypeVar, cast
+from typing import TYPE_CHECKING, Iterator, NoReturn, cast
 
 from pydantic import JsonValue
 
@@ -22,8 +22,6 @@ from .run import arun
 
 if TYPE_CHECKING:
     from web.resolve import Resolver
-
-T = TypeVar("T")
 
 
 def _run_sync(coro: "Coroutine[object, object, object]") -> object:
@@ -187,11 +185,6 @@ def to_arg(value: object) -> Arg:
     return Arg(value=cast(JsonValue, value))  # a literal arg must be JSON (it rides the wire blob)
 
 
-def lazy(cls: type[T], *, plan: Plan | None = None) -> T:
-    """A recording root for ``cls`` -- statically ``cls``, at runtime an ``Expr``."""
-    return cast(T, Expr(plan or Plan(root=cls.__name__)))
-
-
 def from_plan(plan: "Plan | dict[str, object] | str") -> Expr:
     """Rebuild an ``Expr`` from its wire form -- a ``Plan``, its dict, or a ``to_blob`` string --
     validating its names first (the wire safety boundary for the service/remote modes).
@@ -211,4 +204,4 @@ def from_blob(blob: str) -> Expr:
     return from_plan(blob)
 
 
-__all__ = ["Expr", "lazy", "from_plan", "from_blob", "to_arg"]
+__all__ = ["Expr", "from_plan", "from_blob", "to_arg"]
