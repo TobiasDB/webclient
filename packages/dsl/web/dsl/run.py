@@ -19,7 +19,11 @@ from pydantic import JsonValue
 
 from web.fetch import Request, WebException, err
 from web.parse import Document, Element, dig
-from web.resolve import Resolver
+from web.resolve import Resolver, paginate_param, profiles as _profiles
+
+#: the resolve-step keywords that carry a per-step POLICY (build a Resolver for that fetch); any
+#: other keyword (e.g. optional) is not a policy.
+_RESOLVE_POLICY = frozenset({"profile", "paginate", "max_pages", "rate_limit", "retry", "rotate", "raise_on_error"})
 
 from .plan import Arg, Plan, Step
 from .values import Collection, Field, Ref, raw
@@ -96,8 +100,8 @@ async def _invoke(cur: object, name: str, call: "Step | None", root: object, rs:
     Collection)."""
     if name == "doc":  # the reference -> document join spelling (wc.resolve(url).doc()); identity
         return cur
-    if name == "resolve":  # the reference -> document fetch join
-        return await _resolve(cur, rs, optional=_flag(call, "optional"))
+    if name == "resolve":  # the reference -> document fetch join (with optional per-step policy)
+        return await _resolve(cur, _effective_resolver(rs, call), optional=_flag(call, "optional"))
     if name == "reference":  # a URL held in an earlier-extracted column
         col = _literal(call)
         return (row or {}).get(str(col)) if row is not None else None
@@ -136,6 +140,38 @@ async def _resolve(cur: object, rs: "Resolver", *, optional: bool = False) -> ob
     if not optional:
         raise WebException(err("dsl.resolve_miss", "nothing to resolve -- a prior select / attr matched nothing"))
     return None
+
+
+def _effective_resolver(rs: "Resolver", call: "Step | None") -> "Resolver":
+    """The resolver a ``resolve(...)`` step uses: the bound one when the step carries no policy, else
+    a per-step Resolver built from its recorded (JSON-safe) policy kwargs -- a named ``profile`` +
+    ``paginate`` / ``retry`` / ``rate_limit`` / ``rotate`` / ``raise_on_error`` -- reusing the bound
+    resolver's pool (so a browser is still shared, not relaunched)."""
+    opts = {k: a.value for k, a in call.kwargs.items()} if call is not None else {}
+    if not (opts.keys() & _RESOLVE_POLICY):
+        return rs
+    name = opts.get("profile")
+    pager = opts.get("paginate")
+    return Resolver(
+        profile=_profiles.get(str(name)) if isinstance(name, str) else None,
+        paginate=paginate_param(pager, max_pages=int(_num(opts.get("max_pages"), 20)))
+                 if isinstance(pager, str) else None,
+        rate_limit=_num(opts["rate_limit"], 0.0) if "rate_limit" in opts else None,
+        retry=int(_num(opts["retry"], 0)) if "retry" in opts else None,
+        rotate=bool(opts["rotate"]) if "rotate" in opts else None,
+        raise_on_error=bool(opts["raise_on_error"]) if "raise_on_error" in opts else None,
+        pool=rs.pool,
+    )
+
+
+def _num(value: object, default: float) -> float:
+    """A number from a JSON literal (int/float/str), or ``default`` when absent/unparseable."""
+    if isinstance(value, (int, float, str)):
+        try:
+            return float(value)
+        except ValueError:
+            return default
+    return default
 
 
 def _flag(call: "Step | None", key: str) -> bool:

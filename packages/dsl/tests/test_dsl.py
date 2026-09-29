@@ -176,6 +176,16 @@ def test_attr_href_is_a_resolvable_reference(httpserver: HTTPServer) -> None:
     assert skus == ["SKU-1", "SKU-2", "SKU-3"]
 
 
+def test_lazy_resolve_takes_a_named_profile_and_policy(httpserver: HTTPServer) -> None:
+    url = _shop(httpserver)
+    # resolve mirrors the resolve() signature: a named profile + per-step policy (JSON-safe, so the
+    # plan still serialises)
+    chain = (wq.reference(url).resolve(profile="basic", retry=1, raise_on_error=True)
+             .select(".card .title").attr("text"))
+    assert chain.collect() == "Aeropress"
+    assert '"resolve"' in chain.to_blob()  # policy args recorded, plan stays serialisable
+
+
 def test_extract_follows_a_reference_into_detail_pages(httpserver: HTTPServer) -> None:
     url = _shop(httpserver)
     # per-element enrichment: extract a link, then resolve it and read the detail page's SKU

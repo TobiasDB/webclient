@@ -183,6 +183,12 @@ class Resolver:
             return rot
         return None
 
+    @property
+    def pool(self) -> ClientPool:
+        """The client pool this resolver leases its backends from (shared with a WebClient's, so a
+        per-step resolve policy can reuse it -- one browser, not a relaunch)."""
+        return self._pool
+
     async def resolve(self, request: "Request | str") -> Document:
         """``Request -> Document`` (a bare URL string is a shorthand ``Request``). The middleware
         chain (retry / escalate / rate-limit / paginate) runs first; then, on a TRANSPORT failure
