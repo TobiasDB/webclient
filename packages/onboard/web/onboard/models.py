@@ -41,7 +41,8 @@ class Brief(BaseModel):
     # ── SHARED (both Locate and Author read these) ──────────────────────────────────────────────
     goal: str = ""  # the dataset, free text (the markdown body fills this)
     fields: list[str] = []  # the record fields wanted -- Author extracts them; Locate finds them
-    descriptions: dict[str, str] = {}  # field -> what it is (a `schema:` list fills both)
+    descriptions: dict[str, str] = {}  # field -> what it is (a `schema:` list fills all three)
+    types: dict[str, str] = {}  # field -> its type (string / url / number / datetime / ...)
 
     # ── LOCATE (find WHERE the dataset is) ──────────────────────────────────────────────────────
     seeds: list[str] = []  # known sources to crawl (an explicit source makes `search` irrelevant)
@@ -77,10 +78,11 @@ class Brief(BaseModel):
         if "description" in front and "goal" not in data:  # webclient calls the ask `description`
             data["goal"] = front["description"]
         data.setdefault("goal", body.strip())
-        if "schema" in front:  # a list of `path: desc` items (or bare field names)
-            fields, descriptions = _schema(front["schema"])
+        if "schema" in front:  # a list of `path: {type, description}` items (or bare names)
+            fields, descriptions, types = _schema(front["schema"])
             data.setdefault("fields", fields)
             data.setdefault("descriptions", descriptions)
+            data.setdefault("types", types)
         return cls.model_validate(data)
 
     @classmethod
@@ -105,20 +107,29 @@ def _parse_frontmatter(text: str) -> "tuple[dict[str, JsonValue], str]":
     return {}, text
 
 
-def _schema(schema: JsonValue) -> "tuple[list[str], dict[str, str]]":
-    """A ``schema`` frontmatter list -> (field paths, path->description). Each item is a bare field
-    name (string) or a single-key ``{path: description}`` mapping."""
+def _schema(schema: JsonValue) -> "tuple[list[str], dict[str, str], dict[str, str]]":
+    """A ``schema`` frontmatter list -> (field paths, path->description, path->type). Each item is a
+    bare field name (string), a ``{path: description}`` mapping (description only), or a
+    ``{path: {type: ..., description: ...}}`` mapping (the rich form: each field gets a type and a
+    description)."""
     fields: list[str] = []
     descriptions: dict[str, str] = {}
+    types: dict[str, str] = {}
     for item in schema if isinstance(schema, list) else []:
         if isinstance(item, str):
             fields.append(item)
         elif isinstance(item, dict):
-            for path, desc in item.items():
-                fields.append(str(path))
-                if desc:
-                    descriptions[str(path)] = str(desc)
-    return fields, descriptions
+            for path, spec in item.items():
+                name = str(path)
+                fields.append(name)
+                if isinstance(spec, dict):  # {type: ..., description: ...}
+                    if spec.get("description"):
+                        descriptions[name] = str(spec["description"])
+                    if spec.get("type"):
+                        types[name] = str(spec["type"])
+                elif spec:  # a bare description string
+                    descriptions[name] = str(spec)
+    return fields, descriptions, types
 
 
 class Reference(BaseModel):

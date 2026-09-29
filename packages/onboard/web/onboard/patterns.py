@@ -43,20 +43,27 @@ def _flags_line(flags: "list[Flag]") -> str:
 
 
 def _fields_line(brief: DatasetBrief) -> str:
-    """The requested fields as a schema line: each field with any explicit selector override, its
-    description (what the field is), and an ``(optional)`` marker so the model writes
-    ``select(..., optional=True)`` for fields that may legitimately be absent."""
+    """The requested fields as a per-line schema: each field with its type, description (what it is),
+    any explicit selector override, and an ``(optional)`` marker so the model writes
+    ``select(..., optional=True)`` for fields that may legitimately be absent. One field per line so
+    a rich schema (type + description each) reads clearly."""
     if not brief.fields:
         return "Fields: (none given -- extract the salient fields of each record)."
-    parts: list[str] = []
+    lines: list[str] = []
     for name in brief.fields:
-        piece = f"{name} [{brief.selectors[name]}]" if name in brief.selectors else name
+        piece = name
+        if name in brief.types:
+            piece += f" ({brief.types[name]})"
         if name in brief.descriptions:
             piece += f" -- {brief.descriptions[name]}"
+        if name in brief.selectors:
+            piece += f"  [selector: {brief.selectors[name]}]"
         if name in brief.optional:
-            piece += " (optional)"
-        parts.append(piece)
-    return "Fields (the columns each record should carry): " + "; ".join(parts)
+            piece += "  (optional)"
+        lines.append("  - " + piece)
+    return "Fields (each record should carry these -- name (type) -- description):\n" + "\n".join(
+        lines
+    )
 
 
 def author_prompt(brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, kind: str) -> str:

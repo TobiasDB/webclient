@@ -394,6 +394,7 @@ def _explain_query(
             "  schema:    "
             + ", ".join(
                 f
+                + (f":{brief.types[f]}" if f in brief.types else "")
                 + ("*" if f in brief.optional else "")
                 + (f" [{brief.descriptions[f]}]" if f in brief.descriptions else "")
                 for f in brief.fields

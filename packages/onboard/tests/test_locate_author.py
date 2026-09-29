@@ -316,6 +316,26 @@ def test_brief_loads_from_markdown_frontmatter() -> None:
     assert brief.optional == ["role"]
 
 
+def test_brief_schema_parses_type_and_description() -> None:
+    text = (
+        "---\n"
+        "name: news\n"
+        "schema:\n"
+        "  - headline: {type: string, description: the article headline}\n"
+        "  - published: {type: datetime, description: the publish time}\n"
+        "  - url\n"
+        "---\n"
+        "news\n"
+    )
+    brief = Brief.from_markdown(text)
+    assert brief.fields == ["headline", "published", "url"]
+    assert brief.types == {"headline": "string", "published": "datetime"}  # {type,description} form
+    assert brief.descriptions == {
+        "headline": "the article headline",
+        "published": "the publish time",
+    }
+
+
 class _ClosableLlm(ScriptedLlm):
     """A ScriptedLlm the CLI can close (it calls ``llm.aclose()``)."""
 
