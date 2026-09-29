@@ -425,6 +425,44 @@ def test_author_agent_nests_a_detail_extraction(httpserver: HTTPServer) -> None:
     assert any(row.get("body") == "Body One" for row in rows)  # the detail turn nested the body
 
 
+def test_run_to_sink_routes_rows_to_table_and_documents_to_store(httpserver: HTTPServer) -> None:
+    from web.onboard import MemorySink, run_to_sink
+
+    listing = (
+        b"<html><body><ul>"
+        b"<li class='row'><span class='title'>Report A</span><a class='file' href='/files/a.txt'>dl</a></li>"
+        b"<li class='row'><span class='title'>Report B</span><a class='file' href='/files/b.txt'>dl</a></li>"
+        b"</ul></body></html>"
+    )
+    httpserver.expect_request("/docs").respond_with_data(listing, content_type="text/html")
+    httpserver.expect_request("/files/a.txt").respond_with_data(
+        b"BODY-A", content_type="text/plain"
+    )
+    httpserver.expect_request("/files/b.txt").respond_with_data(
+        b"BODY-B", content_type="text/plain"
+    )
+    chain = (
+        'wq.doc.select_all("li.row").extract('
+        'title=wq.doc.select(".title").attr("text"), file=wq.doc.select("a.file").attr("href"))'
+    )
+    brief = DatasetBrief(fields=["title", "file"], types={"file": "document"})  # file is a blob
+
+    async def go() -> MemorySink:
+        async with Resolver() as r:
+            q = cast("object", _rerooted(chain, httpserver.url_for("/docs")))
+            sink = MemorySink()
+            rows, blobs = await run_to_sink(cast("object", q), brief, sink, resolver=r)
+            assert (rows, blobs) == (2, 2)
+            return sink
+
+    sink = cast("MemorySink", _run(go()))
+    # scalar rows -> the table (the document field is NOT a table column)
+    assert {"title": "Report A"} in sink.rows and all("file" not in row for row in sink.rows)
+    # documents -> the object store, each keyed by its URL + carrying its row's metadata
+    a_url = httpserver.url_for("/files/a.txt")
+    assert sink.blobs[a_url][0] == b"BODY-A" and sink.blobs[a_url][1] == {"title": "Report A"}
+
+
 def test_guide_for_selects_examples_by_kind_and_situation() -> None:
     from web.onboard.patterns import guide_for
 

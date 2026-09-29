@@ -37,6 +37,7 @@ from .patterns import PATTERNS_GUIDE, author_prompt
 from .review import review
 from .search import DdgSearch
 from .shim import ClaudeShim
+from .sink import MemorySink, Sink, document_fields, run_to_sink
 
 
 class Onboarded(BaseModel):
@@ -136,4 +137,8 @@ __all__ = [
     "register_behaviour",
     "apply_behaviours",
     "review",
+    "run_to_sink",
+    "Sink",
+    "MemorySink",
+    "document_fields",
 ]
