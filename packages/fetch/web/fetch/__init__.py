@@ -20,7 +20,7 @@ from .models import (ConsoleEvent, DOMEvent, Fetcher, FetchEvent, NetworkEvent, 
 from .browser import BrowserFetcher, BrowserSession
 from .bus import Event, EventBus, Subscription, Trace, emit, topic_matches, using
 from .errors import WebError, WebException, err
-from .fingerprint import CHROME, Fingerprint
+from .fingerprint import CHROME, Fingerprint, fleet, generate
 from .script import DOM_RECORDER, ScriptRegistry
 from .http import HttpFetcher, HttpSession
 from .middleware import Handler, Middleware, stack
@@ -31,7 +31,7 @@ from .entry import ClientPool, Entry, Profile, aclose_default_pool, default_pool
 
 __all__ = ["Request", "Snapshot", "Fetcher", "HttpFetcher", "BrowserFetcher", "BrowserSession", "HttpSession", "Session",
            "fetch", "Entry", "Profile", "ClientPool", "default_pool", "aclose_default_pool",
-           "Script", "ScriptRegistry", "Proxy", "Pool", "Fingerprint", "CHROME", "Wait",
+           "Script", "ScriptRegistry", "Proxy", "Pool", "Fingerprint", "CHROME", "fleet", "generate", "Wait",
            "DOM_RECORDER", "NetworkEvent", "DOMEvent", "FetchEvent", "ConsoleEvent", "Middleware", "Handler", "stack",
            "Recorder", "ReplayBackend",
            # the shared substrate (relocated from the removed web.kernel bottom layer)

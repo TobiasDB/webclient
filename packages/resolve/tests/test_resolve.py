@@ -290,3 +290,21 @@ def test_paginate_param_aggregates_rows_across_full_html_pages(httpserver: HTTPS
 
     rows = _run(go())
     assert rows == ["p1-0", "p1-1", "p2-0", "p2-1", "p3-0", "p3-1"]  # all 3 pages aggregated
+
+
+def test_rotate_middleware_presents_fleet_identities(httpserver: HTTPServer) -> None:
+    from web.fetch import ClientPool, Fingerprint
+
+    httpserver.expect_request("/").respond_with_data(b"<html></html>", content_type="text/html")
+    fp1 = Fingerprint(user_agent="Agent/1")
+    fp2 = Fingerprint(user_agent="Agent/2")
+
+    async def go() -> None:
+        async with ClientPool() as pool:  # rotation re-leases a fresh-identity backend per request
+            rs = Resolver(rotate=(fp1, fp2), pool=pool)
+            for _ in range(6):
+                await rs.resolve(Request(url=httpserver.url_for("/")))
+
+    _run(go())
+    seen = {req.headers.get("User-Agent", "") for req, _ in httpserver.log}
+    assert seen and seen <= {"Agent/1", "Agent/2"}  # every request presented a fleet identity

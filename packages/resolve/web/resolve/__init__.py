@@ -25,7 +25,7 @@ from .document import document
 from .entry import ResolveSession, resolve
 from .models import ResolveEvent
 from .flags import Flag, flags
-from .middleware import escalate, rate_limit, retry
+from .middleware import escalate, rate_limit, retry, rotate
 from .paginate import Until, paginate_clicks, paginate_cursor, paginate_links, paginate_param
 from .signals import (Signal, anti_bot, blocked_status, consent_wall, data_api, empty, iframe,
                       infinite_scroll, login_wall, pagination, record_list, server_error, spa,
@@ -36,7 +36,7 @@ from .tiers import ladder
 __all__ = [
     "Resolver", "resolve", "ResolveSession", "Profile", "Tier", "Middleware", "Handler", "stack",
     # middleware implementations (consumer-pluggable; these are the reference ones)
-    "retry", "rate_limit", "escalate", "ladder",
+    "retry", "rate_limit", "escalate", "rotate", "ladder",
     "paginate_links", "paginate_param", "paginate_clicks", "paginate_cursor", "Until",
     # pagination stop conditions (composable, some stateful)
     "until_empty", "until_match", "first_n", "until_repeat", "any_of",

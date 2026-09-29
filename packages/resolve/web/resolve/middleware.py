@@ -8,11 +8,12 @@ parse, not in fetch). Compose them into a per-vendor profile and hand it to a Re
 from __future__ import annotations
 
 import asyncio
+import random
 from collections.abc import Callable
 from urllib.parse import urlparse
 
-from web.fetch import Fetcher, Handler, Middleware, Request, Snapshot
-from web.fetch import emit
+from web.fetch import ClientPool, Fetcher, Fingerprint, Handler, Middleware, Profile, Request, Snapshot
+from web.fetch import emit, fleet as _default_fleet
 
 from .document import document
 from .models import ResolveEvent
@@ -96,4 +97,20 @@ def escalate(tiers: "list[Fetcher]", *, blocked: "Callable[[Snapshot], bool] | N
     return mw
 
 
-__all__ = ["retry", "rate_limit", "escalate"]
+def rotate(pool: ClientPool, fleet: "tuple[Fingerprint, ...] | None" = None) -> Middleware:
+    """Present a fresh identity per request: lease a differently-fingerprinted backend from ``pool``
+    (a browserforge ``fleet``) and fetch through IT, so repeated requests do not all look identical.
+    The fingerprint-rotation POLICY -- unlike retry (which re-issues on the same backend), it
+    RE-LEASES a backend per request. ``next`` (the base tier) is unused: rotation owns the fetch,
+    and the pool keeps one backend per identity so nothing is relaunched."""
+    members = fleet or _default_fleet()
+
+    async def mw(request: Request, nxt: Handler) -> Snapshot:
+        backend = pool.lease(Profile(fingerprint=random.choice(members)))
+        emit(ResolveEvent(phase="rotate", url=request.url))
+        return await backend.fetch(request)
+
+    return mw
+
+
+__all__ = ["retry", "rate_limit", "escalate", "rotate"]

@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, TypeAlias, runtime_checkable
 
-from web.fetch import ClientPool, Fetcher, Middleware, Request, WebException, default_pool, stack
+from web.fetch import ClientPool, Fetcher, Fingerprint, Middleware, Request, WebException, default_pool, stack
 from web.fetch import Profile as FetchProfile
 from web.parse import Document
 from .document import document
@@ -30,6 +30,11 @@ from .document import document
 from .middleware import escalate as _escalate
 from .middleware import rate_limit as _rate_limit
 from .middleware import retry as _retry
+from .middleware import rotate as _rotate
+
+#: the fingerprint-rotation slot: True (a browserforge fleet), a fixed fleet of Fingerprints, or a
+#: ready rotation Middleware.
+Rotate: TypeAlias = bool | tuple[Fingerprint, ...] | Middleware
 
 #: a transport ladder tier: a ready :class:`~web.fetch.Fetcher`, or a fetch :class:`Profile`
 #: (materialised to its fetcher) -- so a resolve profile's escalation ladder is written as fetch
@@ -57,6 +62,10 @@ class Profile:
     retry: "int | Middleware | None" = None
     paginate: "Middleware | None" = None
     middleware: "tuple[Middleware, ...]" = ()
+    #: fingerprint rotation (a resolve middleware that re-leases a fresh-identity backend per
+    #: request): True = a browserforge fleet, a tuple of Fingerprints = a fixed fleet, a Middleware
+    #: = a ready one; None/False = off.
+    rotate: "Rotate | None" = None
     #: on a TRANSPORT failure (no response, after the middleware chain -- retry/escalate -- has run),
     #: raise a structured WebException by default; set False for a policy that returns the not-ok
     #: (empty) Document instead. An HTTP status (404/500) is a valid response, never a transport
@@ -68,6 +77,7 @@ class Profile:
               retry: "int | Middleware | None | _Keep" = _KEEP,
               paginate: "Middleware | None | _Keep" = _KEEP,
               middleware: "tuple[Middleware, ...] | _Keep" = _KEEP,
+              rotate: "Rotate | None | _Keep" = _KEEP,
               raise_on_error: "bool | _Keep" = _KEEP) -> "Profile":
         """A copy with some slots overridden (the rest inherited) -- combine or adjust a base profile."""
         return Profile(
@@ -76,6 +86,7 @@ class Profile:
             retry=self.retry if isinstance(retry, _Keep) else retry,
             paginate=self.paginate if isinstance(paginate, _Keep) else paginate,
             middleware=self.middleware if isinstance(middleware, _Keep) else middleware,
+            rotate=self.rotate if isinstance(rotate, _Keep) else rotate,
             raise_on_error=self.raise_on_error if isinstance(raise_on_error, _Keep) else raise_on_error,
         )
 
@@ -112,6 +123,7 @@ class Resolver:
         retry: "int | Middleware | None" = None,
         paginate: "Middleware | None" = None,
         middleware: tuple[Middleware, ...] = (),
+        rotate: "Rotate | None" = None,
         raise_on_error: "bool | None" = None,
         pool: "ClientPool | None" = None,
         _own: bool = False,
@@ -119,6 +131,7 @@ class Resolver:
         p = profile or _EMPTY
         self._pool = pool or default_pool()
         self._raise = raise_on_error if raise_on_error is not None else p.raise_on_error
+        self._rot = rotate if rotate is not None else p.rotate
         chosen = ladder if ladder is not None else p.ladder
         # LEASE each tier from the pool -- a fetch Profile leases its SHARED backend (browser
         # launched once, reused); a ready Fetcher (a caller's, or an opened session) passes through.
@@ -144,17 +157,31 @@ class Resolver:
         esc = _escalate(list(tiers[1:])) if len(tiers) > 1 else None
         retry_mw = _retry(self._rt) if isinstance(self._rt, int) else self._rt
         rate_mw = _rate_limit(self._rl) if isinstance(self._rl, (int, float)) else self._rl
+        rot_mw = self._rotate_mw()
         chain = tuple(
             m for m in (
                 *self._mw,          # custom, outermost
                 self._pg,           # drives the page loop
                 esc,                # climb the transport ladder on a signal
                 retry_mw,           # same request on transient failure
-                rate_mw,            # host politeness, innermost
+                rate_mw,            # host politeness
+                rot_mw,             # rotate the fetch identity, innermost (owns the fetch)
             )
             if m is not None
         )
         return stack(base_tier, chain)
+
+    def _rotate_mw(self) -> "Middleware | None":
+        """Build the fingerprint-rotation middleware from the ``rotate`` slot (over this resolver's
+        pool), or ``None`` when rotation is off."""
+        rot = self._rot
+        if rot is True:
+            return _rotate(self._pool)
+        if isinstance(rot, tuple):
+            return _rotate(self._pool, rot)
+        if rot:  # a ready Middleware (False/None already fell through)
+            return rot
+        return None
 
     async def resolve(self, request: "Request | str") -> Document:
         """``Request -> Document`` (a bare URL string is a shorthand ``Request``). The middleware
