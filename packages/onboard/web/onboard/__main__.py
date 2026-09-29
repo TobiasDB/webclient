@@ -30,20 +30,30 @@ import sys
 import time
 from importlib.resources import files
 from pathlib import Path
-from typing import Sequence
+from typing import Protocol, Sequence, runtime_checkable
 
-from web.crawl import CrawlEvent
+from web.crawl import CrawlEvent, FrontierMiddleware
 from web.fetch import Event, EventBus, FetchEvent
 from web.fetch import Profile as FetchProfile
 from web.fetch import WebException, using
-
 from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
 
 from .author import build_query
-from .llm import AnthropicLlm, Pricing, RateLimit
+from .frontier import llm_frontier
+from .llm import AnthropicLlm, Pricing, RateLimit, Usage
 from .locate import locate
 from .models import Brief, Reference
 from .search import DdgSearch
+from .shim import ClaudeShim
+
+
+@runtime_checkable
+class _Metered(Protocol):
+    """A client that meters its own spend (the Anthropic client does; the shim does not)."""
+
+    calls: int
+    spent_usd: float
+    usage: Usage
 
 
 def _err(*lines: str) -> None:
@@ -234,6 +244,13 @@ def _transport_args(sub: argparse.ArgumentParser) -> None:
         "--no-cache", action="store_true", help="do not read/write the located-reference cache"
     )
     sub.add_argument(
+        "--shim",
+        action="store_true",
+        help="use a REAL model via the local `claude -p` CLI (no API key): drives the LLM crawl "
+        "frontier in `locate`, and writes the query in `author` (--model is a CLI alias, e.g. haiku)",
+    )
+    sub.add_argument("--model", default=None, help="LLM model id / CLI alias (else the default)")
+    sub.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -285,6 +302,12 @@ def _entity_arg(entity: "str | None") -> str:
 async def _locate(args: argparse.Namespace) -> int:
     brief = _apply_entity(_load_brief(args.brief), args.entity)
     resolver = _resolver(args.profile, args.proxy, args.browser_path)
+    # --shim drives the CRAWL FRONTIER with a real model (claude -p): each round it picks which
+    # pending edges to expand toward the dataset, guided by the brief's goal + look/ignore.
+    frontier: "tuple[FrontierMiddleware, ...]" = ()
+    if args.shim:
+        shim = ClaudeShim(model=args.model) if args.model else ClaudeShim()
+        frontier = (llm_frontier(shim, brief.goal, look=brief.look, ignore=brief.ignore),)
     seeded = bool(brief.seeds or brief.candidates or brief.start_url)
     tag = f"{brief.name or args.brief}" + (f" · {args.entity}" if args.entity else "")
     _err(
@@ -294,11 +317,14 @@ async def _locate(args: argparse.Namespace) -> int:
             if seeded
             else f"searching {brief.search or brief.goal!r}"
         )
+        + (" · LLM frontier" if args.shim else "")
         + f" then evaluating candidates (max {brief.max_pages} pages)…"
     )
     try:
         with _Progress(args.verbose) as prog:
-            reference = await locate(brief, resolver=resolver, search=DdgSearch(k=args.search_k))
+            reference = await locate(
+                brief, resolver=resolver, search=DdgSearch(k=args.search_k), frontier=frontier
+            )
     except WebException as exc:
         _err(f"locate failed: {exc}")
         return 1
@@ -390,14 +416,14 @@ async def _author(args: argparse.Namespace) -> int:
             query, engine, notes = await build_query(reference, brief, resolver=resolver, llm=llm)
         _explain_query(reference, brief, engine, query.describe(), notes)  # reasoning -> stderr
         print(query.to_blob())  # the serialised query -> stdout
-        if getattr(llm, "calls", 0):  # metered spend (a real, priced client) -> stderr
+        if isinstance(llm, _Metered):  # a metered API client (not the unmetered claude -p shim)
             u = llm.usage
             _err(
                 f"  spend:     ${llm.spent_usd:.4f} over {llm.calls} call(s)"
                 f"  (tokens in {u.input}, out {u.output}, cache r/w {u.cache_read}/{u.cache_write})"
             )
-        else:
-            _err("  spend:     $0.0000 (set --price-* to meter, or no LLM call was billed)")
+        elif args.shim:
+            _err("  spend:     — (claude -p shim: on the Claude Code plan, unmetered here)")
         if not args.run:
             return 0
         _err("running the query…")
@@ -413,9 +439,12 @@ async def _author(args: argparse.Namespace) -> int:
         await llm.aclose()
 
 
-def _build_llm(args: argparse.Namespace) -> AnthropicLlm:
-    """The metered LLM client from CLI config: a rate limit (a shared key) and per-million-token
-    prices (so the run reports real spend)."""
+def _build_llm(args: argparse.Namespace) -> "AnthropicLlm | ClaudeShim":
+    """The LLM for the run. ``--shim`` routes through the local ``claude -p`` CLI (a real model, NO
+    API key -- ``--model`` is a CLI alias like ``haiku``); otherwise the Anthropic Messages API
+    (needs ``ANTHROPIC_API_KEY``), metered by the ``--rate`` limit and per-million-token prices."""
+    if args.shim:
+        return ClaudeShim(model=args.model) if args.model else ClaudeShim()
     pricing = Pricing(
         input=args.price_input,
         output=args.price_output,
@@ -453,7 +482,6 @@ def _parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="use this Reference instead of the cache: '-' reads locate's JSON from stdin, else a file",
     )
-    aut.add_argument("--model", default=None, help="LLM model id (else the default)")
     aut.add_argument(
         "--rate",
         type=float,

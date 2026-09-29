@@ -1,11 +1,9 @@
-"""A REAL-model :class:`~web.onboard.Llm` for the eval, backed by the local ``claude -p`` CLI
-(Claude Code, subscription -- no API key). This is what the eval authors with: an actual model,
-not a hand-rolled stand-in, so PASS/FAIL reflects real query-writing quality.
-
-``claude -p`` is driven headless with the agent system prompt REPLACED by a minimal "be a precise
-text function" one, tools disabled, and the dynamic (cwd/git/memory) sections stripped -- so it
-behaves like a raw text completion and returns clean output. One CLI turn per call (slow), and it
-draws on the Claude Code plan's usage/rate limits.
+"""A REAL-model :class:`Llm` backed by the local ``claude -p`` CLI (Claude Code, subscription --
+NO API key), for authoring without an Anthropic key. It drives ``claude -p`` headless with the
+agent system prompt REPLACED by a minimal "be a precise text function" one, tools disabled, and the
+dynamic (cwd/git/memory) sections stripped -- so it behaves like a raw text completion and returns
+clean output. One CLI turn per call (slow), and it draws on the Claude Code plan's usage/rate
+limits. Needs the ``claude`` CLI on ``PATH``.
 """
 
 from __future__ import annotations
@@ -24,10 +22,9 @@ _SYSTEM = (
 
 
 class ClaudeShim:
-    """An :class:`~web.onboard.Llm` (``complete(prompt) -> str``) over ``claude -p``. ``model`` picks
-    a CLI model alias (``"haiku"`` -- the cheapest -- by default; ``None`` uses the CLI default).
-    Records the last prompt/reply for the report. Raises :class:`~web.fetch.WebException` on failure.
-    """
+    """An :class:`Llm` (``complete(prompt) -> str``) over ``claude -p``. ``model`` picks a CLI model
+    alias (``"haiku"`` -- the cheapest -- by default; ``None`` uses the CLI default). Records the
+    last prompt/reply. Raises :class:`~web.fetch.WebException` on failure."""
 
     def __init__(self, *, model: "str | None" = "haiku", timeout: float = 180.0) -> None:
         self._model = model
@@ -73,6 +70,10 @@ class ClaudeShim:
         result = payload.get("result") if isinstance(payload, dict) else None
         self.reply = result if isinstance(result, str) else ""
         return self.reply
+
+    async def aclose(self) -> None:
+        """Nothing to close -- each call is a fresh subprocess (for a uniform ``Llm`` lifecycle)."""
+        return None
 
 
 __all__ = ["ClaudeShim"]

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 from web.crawl import Crawler, Goal
-
 from web.resolve import Resolver
 
 from .agent import Author, Selection, extract
@@ -28,12 +27,14 @@ from .author import Authored as AuthoredQuery
 from .author import author, authored, build_query
 from .behaviours import Behaviour, apply_behaviours, behaviour, register_behaviour
 from .compile import Query, QueryError, parse_query, reroot
+from .frontier import llm_frontier
 from .llm import AnthropicLlm, Llm, Pricing, RateLimit, Usage
 from .llm_driver import llm_driver
 from .locate import Search, data_api_endpoints, locate
 from .models import Brief, DatasetBrief, LocateBrief, Reference
 from .patterns import PATTERNS_GUIDE, author_prompt
 from .search import DdgSearch
+from .shim import ClaudeShim
 
 
 class Onboarded(BaseModel):
@@ -96,10 +97,12 @@ __all__ = [
     "Onboarded",
     "Llm",
     "AnthropicLlm",
+    "ClaudeShim",
     "Usage",
     "Pricing",
     "RateLimit",
     "llm_driver",
+    "llm_frontier",
     # the reusable Locate + Author phases and their value models
     "locate",
     "author",

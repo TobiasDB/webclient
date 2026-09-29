@@ -377,6 +377,53 @@ def test_cli_author_locates_from_the_brief_and_runs(
     assert "query:" in out.err and "rows:" in out.err  # reasoning + sample went to stderr
 
 
+def test_llm_frontier_middleware_picks_edges_by_model() -> None:
+    from web.crawl import FrontierItem
+
+    from web.onboard import llm_frontier
+
+    items = tuple(FrontierItem(url=f"http://x/{i}") for i in range(4))
+    mw = llm_frontier(ScriptedLlm("the picks are [2, 0]"), "find the data")
+
+    async def nxt(pending: "tuple[FrontierItem, ...]") -> "list[FrontierItem]":
+        return [pending[0]]  # FIFO fallback (should NOT be used here)
+
+    picked = cast("list[FrontierItem]", _run(mw(items, nxt)))
+    assert [it.url for it in picked] == ["http://x/2", "http://x/0"]  # model's order, subset
+
+
+def test_llm_frontier_falls_back_to_fifo_on_bad_reply() -> None:
+    from web.crawl import FrontierItem
+
+    from web.onboard import llm_frontier
+
+    items = tuple(FrontierItem(url=f"http://x/{i}") for i in range(3))
+    mw = llm_frontier(ScriptedLlm("sorry, no idea"), "goal")  # no JSON array -> fall back
+
+    async def nxt(pending: "tuple[FrontierItem, ...]") -> "list[FrontierItem]":
+        return [pending[0]]
+
+    picked = cast("list[FrontierItem]", _run(mw(items, nxt)))
+    assert [it.url for it in picked] == ["http://x/0"]  # FIFO
+
+
+def test_cli_author_shim_writes_query(
+    httpserver: HTTPServer,
+    capsys: "pytest.CaptureFixture[str]",
+    monkeypatch: "pytest.MonkeyPatch",
+    tmp_path: object,
+) -> None:
+    # --shim routes author through ClaudeShim (the local claude -p) instead of the API client.
+    httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
+    brief = _brief_file(tmp_path, httpserver.url_for("/people"))
+    monkeypatch.setattr("web.onboard.__main__.ClaudeShim", lambda **_k: _ClosableLlm(_REPLY))
+    rc = main(["author", brief, "--shim", "--no-cache"])
+    out = capsys.readouterr()
+    assert rc == 0
+    Plan.from_blob(out.out.strip())  # the shim wrote a rebuildable wq blob
+    assert "claude -p shim" in out.err  # the unmetered-spend note
+
+
 def test_cli_locate_then_author_chain_via_cache(
     httpserver: HTTPServer,
     capsys: "pytest.CaptureFixture[str]",

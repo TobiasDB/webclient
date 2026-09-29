@@ -28,7 +28,6 @@ from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, JsonValue
-
 from web.resolve import Flag
 
 

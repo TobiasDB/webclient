@@ -5,7 +5,7 @@ For every case below we run the two phases against a live lab fixture:
 * **Locate** -- does :func:`web.onboard.locate` find the right source (the expected record
   selector, or a JSON/XML data document, preferring an XHR/data-API when one backs the page)?
 * **Author** -- does :func:`web.onboard.author` produce a ``wq`` query that, run, extracts the
-  intended rows? Author is driven by a REAL model via :class:`~eval.shim.ClaudeShim` (the local
+  intended rows? Author is driven by a REAL model via :class:`~web.onboard.ClaudeShim` (the local
   ``claude -p`` CLI -- no API key), so this grades actual query-writing quality end to end.
 
 Each case is graded PASS / PARTIAL / FAIL against the fixture's published expected result, so a
@@ -19,9 +19,7 @@ from dataclasses import dataclass
 
 from web.resolve import Resolver
 
-from web.onboard import DatasetBrief, LocateBrief, Reference, build_query, locate
-
-from .shim import ClaudeShim
+from web.onboard import ClaudeShim, DatasetBrief, LocateBrief, Reference, build_query, locate
 
 
 @dataclass
