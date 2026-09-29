@@ -366,6 +366,41 @@ def test_escalate_climbs_on_a_challenge_but_not_a_rate_limit() -> None:
     assert calls2 == 0
 
 
+def test_escalate_is_sticky_per_domain() -> None:
+    # domain stickiness: once a host needs the climb tier, the next same-host request STARTS there
+    # instead of re-fetching (and re-failing) the base -- a crawl pays a domain's climb once.
+    from web.resolve.middleware import escalate
+
+    class _Tier:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch(self, request: Request) -> Snapshot:
+            self.calls += 1
+            return _page(200, b"<html><body>the real content, plenty of it now</body></html>")
+
+        async def aclose(self) -> None:
+            pass
+
+    async def go() -> "tuple[int, int]":
+        tier = _Tier()
+        base_calls = {"n": 0}
+
+        async def nxt(_request: Request) -> Snapshot:  # a JS-challenge base -- always blocked
+            base_calls["n"] += 1
+            return _page(403, b"<html>Just a moment... Checking your browser</html>")
+
+        mw = escalate((tier,))  # ONE middleware instance keeps the per-host memory
+        req = Request(url="https://acme.example/a")
+        await mw(req, nxt)  # 1st: base (blocked) -> climb to the tier
+        await mw(Request(url="https://acme.example/b"), nxt)  # 2nd same host: start at the tier
+        return base_calls["n"], tier.calls
+
+    base_calls, tier_calls = _run(go())
+    assert base_calls == 1  # the base was fetched only on the FIRST request; the 2nd skipped it
+    assert tier_calls == 2  # both requests were served by the climb tier
+
+
 def test_paginate_cursor_concatenates_json_pages(httpserver: HTTPServer) -> None:
     import json
 

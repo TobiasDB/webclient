@@ -121,7 +121,10 @@ def transport_remedy(snap: Snapshot) -> "str | None":
 
 
 def escalate(
-    tiers: "Sequence[Fetcher]", *, blocked: "Callable[[Snapshot], bool] | None" = None
+    tiers: "Sequence[Fetcher]",
+    *,
+    blocked: "Callable[[Snapshot], bool] | None" = None,
+    sticky: bool = True,
 ) -> Middleware:
     """Walk the escalation LADDER: after the base fetch (via ``next``), decide from the RESULT which
     stronger tier to try next, re-issue the SAME request there, and so on until one succeeds or the
@@ -131,11 +134,28 @@ def escalate(
     on a rate-limit / CAPTCHA / transient error. Passing an explicit ``blocked`` predicate (e.g. from
     an ``EscalationPolicy(on=...)`` status list) restores the plain climb-while-true behaviour. (A
     tier's fetch is a different transport, so it does not re-enter retry/rate_limit; wrap a tier with
-    those if it needs them.)"""
+    those if it needs them.)
+
+    DOMAIN STICKINESS (a general resolve principle): the ladder remembers, per host, the highest
+    tier a request to that host has needed, and STARTS the next same-host request there instead of
+    re-climbing from the base every time. So a domain that needed a real browser once pays the climb
+    once, not on every page of a crawl. It never DOWN-grades (a remembered tier is a floor, not a
+    cap -- a still-blocked page climbs further from it) and never skips a needed climb, so the final
+    tier is unchanged; it only skips the doomed lower rungs. ``sticky=False`` disables it (each
+    request climbs from the base). The memory is per-``escalate`` instance, i.e. per Resolver -- a
+    crawl session shares one, unrelated resolves do not."""
+    seen: dict[str, int] = {}  # host -> highest tier index reached (0 = base fetch was enough)
 
     async def mw(request: Request, nxt: Handler) -> Snapshot:
-        snap = await nxt(request)
-        for i, tier in enumerate(tiers):
+        host = urlparse(request.url).hostname or ""
+        start = seen.get(host, 0) if sticky else 0
+        if start > 0:  # domain stickiness: skip straight to the rung this host already needed
+            emit(ResolveEvent(phase="sticky", url=request.url, detail={"tier": start}))
+            snap = await tiers[start - 1].fetch(request)
+        else:
+            snap = await nxt(request)  # the base tier (via the inner chain: retry / rate / rotate)
+        used, i = start, start
+        while i < len(tiers):
             if blocked is not None:  # explicit predicate (status/error tokens) -- plain climb
                 if not blocked(snap):
                     break
@@ -149,7 +169,10 @@ def escalate(
                     phase="escalate", url=request.url, detail={"tier": i + 1, "remedy": remedy}
                 )
             )
-            snap = await tier.fetch(request)
+            snap = await tiers[i].fetch(request)
+            used, i = i + 1, i + 1
+        if sticky and used > seen.get(host, 0):
+            seen[host] = used  # remember the floor so the next same-host request starts here
         return snap
 
     return mw

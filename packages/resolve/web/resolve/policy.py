@@ -82,6 +82,9 @@ class EscalationPolicy(BaseModel):
 
     tiers: "tuple[FetchProfile, ...]" = ()
     on: "tuple[str, ...]" = ()
+    #: DOMAIN STICKINESS: reuse the tier a host already needed instead of re-climbing per request
+    #: (a general resolve principle -- a crawl pays a domain's climb once). See :func:`escalate`.
+    sticky: bool = True
 
     def base(self, pool: ClientPool) -> Fetcher:
         """The base tier (``tiers[0]``, leased), or the minimal default identity when unset."""
@@ -90,7 +93,7 @@ class EscalationPolicy(BaseModel):
     def build(self, pool: ClientPool) -> "Middleware | None":
         """The escalate middleware over the tiers ABOVE the base, or ``None`` when there are none."""
         climb = [pool.lease(t) for t in self.tiers[1:]]
-        return _escalate(climb, blocked=_triggers(self.on)) if climb else None
+        return _escalate(climb, blocked=_triggers(self.on), sticky=self.sticky) if climb else None
 
 
 def _triggers(on: "tuple[str, ...]") -> "Callable[[Snapshot], bool] | None":
