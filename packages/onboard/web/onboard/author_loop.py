@@ -117,8 +117,13 @@ async def _check_source(state: AuthorState) -> "tuple[bool, str]":
     if state.review is None:
         return True, ""
     want = state.brief.goal or "the target dataset"
+    schema = (
+        ("\nEach record should have: " + ", ".join(state.brief.fields))
+        if state.brief.fields
+        else ""
+    )
     prompt = (
-        f"You are verifying a page holds a dataset BEFORE extracting it. Dataset: {want}."
+        f"You are verifying a page holds a dataset BEFORE extracting it. Dataset: {want}.{schema}"
         f"{_scope(state)}\n\nPage ({state.reference.url}):\n{state.listing_skeleton}\n\n"
         "Is this dataset actually PRESENT on THIS page (its records visible in the skeleton, not an "
         "empty section, a login wall, or an unfilled iframe)? Answer YES or NO on the first line, "
@@ -141,8 +146,8 @@ async def _review_rows(state: AuthorState) -> "tuple[bool, str]":
     # brief-SPECIFIC strictness comes from the brief, not the generic prompt -- so an ir-events
     # timeliness rule ("require upcoming, not only archived") never taints, say, a products brief.
     extra = (
-        f"\nBrief-specific check (be strict on this): {state.brief.review}"
-        if state.brief.review
+        f"\nBrief-specific check (be strict on this): {state.brief.review_hint}"
+        if state.brief.review_hint
         else ""
     )
     prompt = (
@@ -173,10 +178,10 @@ async def _author(state: AuthorState) -> None:
         "Requirements:\n" + "\n".join("  - " + i for i in state.instructions),
         f"LISTING page skeleton (the records are here):\n{state.listing_skeleton}",
     ]
-    if (
-        state.brief.hints
-    ):  # brief-supplied author guidance (e.g. suggested patterns for this dataset)
-        parts.append(f"Author guidance from the brief: {state.brief.hints}")
+    if state.brief.author_hint:  # brief author guidance (e.g. suggested patterns for this dataset)
+        parts.append(f"Author guidance from the brief: {state.brief.author_hint}")
+    if state.brief.review_hint:  # the review criteria are requirements -- the author must know them
+        parts.append(f"The extracted data MUST satisfy this requirement: {state.brief.review_hint}")
     if state.check_note:  # the entry review flagged a concern -- surface it, but still attempt
         parts.append(f"NOTE from a reviewer of this page: {state.check_note}")
     if state.detail_skeleton:

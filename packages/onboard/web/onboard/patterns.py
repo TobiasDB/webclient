@@ -118,7 +118,7 @@ def author_prompt(brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, ki
         if kind == "json"
         else ""
     )
-    hints = f"\nAuthor guidance: {brief.hints}" if brief.hints else ""
+    hints = f"\nAuthor guidance: {brief.author_hint}" if brief.author_hint else ""
     return (
         f"{guide_for(flags, kind)}\n\n"  # signal-selected examples -- lean context, not all nine
         "----\n"

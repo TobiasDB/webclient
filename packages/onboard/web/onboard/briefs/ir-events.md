@@ -10,11 +10,11 @@ look:
 ignore:
   - third-party finance aggregators and data vendors (Benzinga, MarketScreener, Yahoo Finance,
     Quartr, Seeking Alpha, TipRanks), stock exchanges, brokerages, and single news/press-release pages
-hints: >
+author_hint: >
   Events are usually a repeating record region (an events widget, a table of rows, or a calendar
   list), often in an UPCOMING section and a separate ARCHIVED/PAST section — capture records from
   both. If the page has a JSON event API, prefer it. Each row typically links to an event detail page.
-review: >
+review_hint: >
   Be strict on completeness and timeliness: the dataset must include the UPCOMING events, not only
   the archived/past ones — reject a sample that is archived-only or whose "upcoming" rows have dates
   in the past. Each row's status (upcoming vs archived) must be correct.

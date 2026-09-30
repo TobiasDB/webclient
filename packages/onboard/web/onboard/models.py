@@ -34,44 +34,45 @@ from web.resolve import Flag
 class Brief(BaseModel):
     """The onboarding spec, in three sections (see the module docstring). SHARED: ``goal`` +
     ``fields``/``descriptions``/``types`` (the schema). LOCATE: ``seeds``/``candidates``/``start_url``/
-    ``search``/``look``/``ignore``/``max_pages``/``prefer_api``. AUTHOR: ``selectors``/``optional``/
-    ``hints``/``download`` (and ``types``, which the Author + Review prompts render). REVIEW:
-    ``review`` (brief-specific strictness for the sample review). ``name``/``title`` identify it;
-    ``exit_when`` is an advisory exit hint. Each stage takes NL guidance from the brief so a
-    brief-specific rule (e.g. ir-events timeliness) never has to be hardcoded in the pipeline.
+    ``search``/``look``/``ignore``/``max_pages``/``prefer_api``. AUTHOR: ``author_hint``/
+    ``selectors``/``optional``/``download``. REVIEW: ``review_hint`` (brief-specific strictness).
+    ``name``/``title`` identify it; ``exit_when`` is an advisory exit hint. The CORE (``goal`` +
+    schema) is REQUIRED and rendered into every stage; every stage hint is OPTIONAL. ``review_hint``
+    is a requirement, so it is given to the AUTHOR (author to satisfy it) AND the REVIEW (check it) --
+    so a brief-specific rule (e.g. ir-events timeliness) is never hardcoded in the pipeline.
     """
 
-    # ── SHARED (both Locate and Author read these) ──────────────────────────────────────────────
-    goal: str = ""  # the dataset, free text (the markdown body fills this)
+    # ══ CORE (REQUIRED) -- what the dataset IS. Rendered into EVERY stage that needs it. ═════════
+    goal: str = ""  # the dataset, free text (the markdown body fills this) -- REQUIRED
     fields: list[str] = []  # the record fields wanted -- Author extracts them; Locate finds them
     descriptions: dict[str, str] = {}  # field -> what it is (a `schema:` list fills all three)
     types: dict[str, str] = {}  # field -> its type (string / url / number / datetime / ...)
 
-    # ── LOCATE (find WHERE the dataset is) ──────────────────────────────────────────────────────
-    seeds: list[str] = []  # known sources to crawl (an explicit source makes `search` irrelevant)
-    candidates: list[str] = []  # evaluate EXACTLY these URLs (skip crawling)
-    start_url: str = ""  # one known source to seed the crawl from
+    # ══ STAGE HINTS (ALL OPTIONAL) -- steer one pipeline stage; empty => that stage's default. ═══
+    # -- LOCATE / CRAWL: where to look --
     search: str = (
         ""  # a web-search qualifier -- used ONLY when no seed/candidate/start_url is given
     )
-    look: list[str] = []  # natural-language "prefer" page guide
-    ignore: list[str] = []  # natural-language "avoid" page guide
+    seeds: list[str] = []  # known sources to crawl (an explicit source makes `search` irrelevant)
+    candidates: list[str] = []  # evaluate EXACTLY these URLs (skip crawling)
+    start_url: str = ""  # one known source to seed the crawl from
+    look: list[str] = []  # NL "prefer pages like…" guide for the crawl frontier
+    ignore: list[str] = []  # NL "avoid pages like…" guide for the crawl frontier
     max_pages: int = 15  # crawl page bound
     prefer_api: bool = True  # prefer a live XHR/data-API over the HTML page
-
-    # ── AUTHOR (how to EXTRACT it) ──────────────────────────────────────────────────────────────
+    # -- AUTHOR: how to extract --
+    author_hint: str = (
+        ""  # NL guidance for the query author (e.g. suggested patterns for this dataset)
+    )
     selectors: dict[str, str] = {}  # field -> css/JSON-path override
-    optional: list[str] = []  # fields that may legitimately be absent
-    hints: str = ""  # NL structural guidance for the query author (e.g. suggested patterns)
+    optional: list[str] = []  # fields that may legitimately be absent (not required in the review)
     download: bool = False  # harvest the file(s) themselves, not parsed rows
+    # -- REVIEW: how strict on the extracted sample --
+    review_hint: str = ""  # NL brief-SPECIFIC strictness for the per-sample review (e.g. ir-events:
+    #                        "require UPCOMING events, not only archived; upcoming dates must be
+    #                        current"). Empty => the default (fields present, real values, on-entity).
 
-    # ── REVIEW (how strict to be about the extracted sample) ────────────────────────────────────
-    #: NL guidance for the per-sample dataset review -- brief-SPECIFIC strictness the generic
-    #: pipeline must not hardcode (e.g. "require UPCOMING events, not only archived; dates must be
-    #: current"). Empty = the default (fields present, real values, on-entity).
-    review: str = ""
-
-    # ── identity / advisory ─────────────────────────────────────────────────────────────────────
+    # ══ identity / advisory ══════════════════════════════════════════════════════════════════════
     name: str = ""
     title: str = ""
     exit_when: str = ""

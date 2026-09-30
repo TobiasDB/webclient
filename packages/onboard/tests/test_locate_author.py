@@ -589,7 +589,7 @@ def test_author_agent_threads_brief_hints_and_review_guidance(httpserver: HTTPSe
 
     author, review = _Rec([good]), _Rec(["YES present", "YES the rows are good"])
     brief = DatasetBrief(
-        fields=["name"], hints="EVENTS-HINT-TOKEN", review="TIMELINESS-REVIEW-TOKEN"
+        fields=["name"], author_hint="EVENTS-HINT-TOKEN", review_hint="TIMELINESS-REVIEW-TOKEN"
     )
 
     async def go() -> None:
@@ -604,8 +604,10 @@ def test_author_agent_threads_brief_hints_and_review_guidance(httpserver: HTTPSe
             )
 
     _run(go())
-    assert any("EVENTS-HINT-TOKEN" in p for p in author.prompts)  # hints -> author
-    assert any("TIMELINESS-REVIEW-TOKEN" in p for p in review.prompts)  # review guidance -> review
+    assert any("EVENTS-HINT-TOKEN" in p for p in author.prompts)  # author_hint -> author
+    assert any("TIMELINESS-REVIEW-TOKEN" in p for p in review.prompts)  # review_hint -> review
+    # review_hint is a REQUIREMENT: the author must know it up front, not just be judged on it
+    assert any("TIMELINESS-REVIEW-TOKEN" in p for p in author.prompts)
 
 
 def test_author_agent_review_drives_a_repair(httpserver: HTTPServer) -> None:
