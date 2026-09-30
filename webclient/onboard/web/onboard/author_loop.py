@@ -280,11 +280,12 @@ async def _review_rows(state: AuthorState) -> "tuple[bool, str]":
     )
     prompt = (
         f"You are reviewing extracted sample rows against a brief. Dataset: {want}.{_scope(state)}\n"
-        f"Schema:\n{schema}{extra}\n\nSample rows (JSON):\n{sample}\n\n"
+        f"Schema:\n{schema}{extra}\n\nSample rows (JSON; long values are CLIPPED for display -- a "
+        f"trailing … and '+N more' mark the preview cut, NOT a truncated extraction):\n{sample}\n\n"
         "Do these rows correctly match the brief -- the right entity, real values (not nulls or raw "
         "markup), every non-optional field populated, and any brief-specific check above satisfied? "
-        "Answer YES or NO on the first line, then one short reason naming exactly what is wrong or "
-        "missing."
+        "Judge what a value IS, not its displayed length. Answer YES or NO on the first line, then "
+        "one short reason naming exactly what is wrong or missing."
     )
     reply = await state.review.complete(prompt)
     emit(ReasonEvent(stage="review", text=reply.strip()))

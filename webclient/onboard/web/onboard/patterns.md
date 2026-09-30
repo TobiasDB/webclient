@@ -44,6 +44,13 @@ Chain these after a leaf read to shape the value: `.number()` (first number in t
 `.regex(pattern, group=1)` (pull a substring out of the text — `"Only $19.99!"` →
 `.regex(r"\$([\d.]+)", group=1)` → `"19.99"`).
 
+For a LONG TEXT field — an article body, a press release, a description that spans many
+paragraphs — do not read a container's `.attr("text")` (it drags in captions, "share" chrome and
+player notices). On the page that holds it, use the document-level readers: `wq.doc.readable()`
+(the main content as clean text) or `wq.doc.markdown()` (the same, with headings/links kept). Inside
+a per-record `.resolve().extract(...)` fan-out, `wq.doc` IS the detail page, so
+`body=wq.doc.readable()` is the whole article.
+
 There is no `.as_json()`; on a JSON document, `.at("dotted.path")` reads a scalar leaf directly.
 For a whole `<table>` whose cells are hard to select positionally, a document-level
 `.tables("table.x")` returns the rows keyed by header (and `.tables("table.x", transpose=True)`
