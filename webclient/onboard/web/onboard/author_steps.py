@@ -167,6 +167,7 @@ class StepSession:
     verbs: "Counter[str]" = field(default_factory=Counter)
     unknown: "list[str]" = field(default_factory=list)
     steps: int = 0
+    record_selector: str = ""  # the record selector LOCATE detected (a nudge on a different pick)
     pending: str = ""  # the next turn's text (a result / the outer loop's note)
     done: bool = False  # the last run reached done()
     sibling: str = ""
@@ -640,6 +641,12 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
         session.draft = new
         text = f"{head}\nmatched {n} record(s). The FIRST record's structure (wq.doc for field(...)):\n"
         text += _first_record(doc, new.records) or "(not a markup record)"
+        if session.record_selector and new.records != session.record_selector:
+            text += (
+                f"\n(note: the page analysis detected the record list at "
+                f"{session.record_selector!r} -- if these {n} matches include non-records, "
+                "re-pick with that.)"
+            )
         if rows:
             text += "\n\n" + _values(new, rows)
         return True, text, f"matched {n} record(s)"
@@ -757,6 +764,7 @@ async def run_steps(
     (a failure / a detail-page hint / a sibling offer) and becomes the next turn; the draft carries
     over. ``flags`` / ``recency`` render the opening on the first run. Detail pages fetched by the
     probes are memoised for the whole run (one fetch per URL, not one per step)."""
+    session.record_selector = reference.record_selector or ""
     if not session.opening:
         session.opening = steps_prompt(
             brief,

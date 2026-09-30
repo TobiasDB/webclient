@@ -498,7 +498,9 @@ def _summarize_author(
     its test verdict (rows / timeliness / absent fields), a SAMPLE TABLE, the rejection trail that
     led to it, the portable blob(s), and the spend. Enough to judge it -- or re-run it by hand."""
     ok = art.complete and art.row_count > 0
-    if ok:
+    if ok and art.review:  # extracts, but the reviewer rejected the final sample -- not "ready"
+        outcome = "extracts, but the sample was REJECTED by the review (see review: below)"
+    elif ok:
         outcome = "ready"
     elif art.reason.startswith("one-shot"):
         outcome = "authored, not tested (one-shot; run with --run to test it)"
@@ -554,6 +556,8 @@ def _summarize_author(
         f"  tested:    {'✓' if art.tested else '✗'}  {art.row_count} row(s)"
         + (" combined" if split else "")
     )
+    if art.review:  # the reviewer rejected the FINAL sample -- say so next to the row count
+        lines.append(f"  review:    ✗ rejected — {art.review}")
     if art.verbs:  # the DSL verbs the model reached for -- and the ones the DSL lacks (gaps)
         used = ", ".join(f"{v}×{n}" for v, n in art.verbs.items())
         lines.append(f"  verbs:     {used}")

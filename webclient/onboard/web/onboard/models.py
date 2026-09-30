@@ -296,6 +296,9 @@ class QueryArtifact(BaseModel):
     #: and what the surface offers.
     verbs: dict[str, int] = {}
     unknown_verbs: list[str] = []
+    #: the reviewer's verdict on the FINAL sample: ``""`` = accepted (or unreviewed), else the
+    #: rejection reason -- so a query that extracts but does not satisfy the brief is not "ready".
+    review: str = ""
 
 
 class Reference(BaseModel):

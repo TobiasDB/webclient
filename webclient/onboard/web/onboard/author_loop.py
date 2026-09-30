@@ -138,6 +138,9 @@ class AuthorState:
     #: again means they are genuinely ABSENT from the source: stop re-authoring, keep the partial.
     prev_missing: "set[str]" = field(default_factory=set)
     absent: "set[str]" = field(default_factory=set)
+    #: the reviewer's LAST verdict on the final sample: ``""`` = accepted (or no reviewer), else
+    #: its rejection -- carried on the artifact so "ready" never hides a rejected sample.
+    review_note: str = ""
     #: a DEFINED stop decided from ground truth before any authoring turn (``js_gated: ...`` when
     #: the fetched page's own signals say JS-app and it carries no records at the HTTP tier):
     #: the loop ends without guessing selectors, and the artifact carries this as its reason.
@@ -278,6 +281,11 @@ async def _review_rows(state: AuthorState) -> "tuple[bool, str]":
         if state.brief.review_hint
         else ""
     )
+    if state.absent:  # a field the source does not carry is not a defect of the sample
+        extra += (
+            f"\nFields established as ABSENT from this source (do NOT fail the sample for them): "
+            + ", ".join(sorted(state.absent))
+        )
     prompt = (
         f"You are reviewing extracted sample rows against a brief. Dataset: {want}.{_scope(state)}\n"
         f"Schema:\n{schema}{extra}\n\nSample rows (JSON; long values are CLIPPED for display -- a "
@@ -616,6 +624,7 @@ async def _observe(state: AuthorState) -> _Obs:
     link = _record_link(good) if (missing and not state.nested) else None
     if not state.last_error and good and not missing and state.review is not None:
         ok, note = await _review_rows(state)  # a real, complete sample -> REVIEW it
+        state.review_note = "" if ok else note
         if not ok:
             state.last_error = f"the sample does not satisfy the brief: {note}"
             state.hint = ""
@@ -833,6 +842,7 @@ def _artifact(state: AuthorState, verdict: Verdict) -> QueryArtifact:
         reason=reason,
         verbs=dict(state.verbs.most_common()),
         unknown_verbs=list(state.unknown_verbs),
+        review=" ".join(state.review_note.split()),
     )
 
 

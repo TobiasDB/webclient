@@ -1682,3 +1682,45 @@ def test_steps_engine_shows_the_raw_text_when_a_transform_empties_a_column(
     assert "The RAW text it read was:" in llm.turns[2] and "published at 17:09 BST" in llm.turns[2]
     assert [r["published"] for r in cast("list[dict[str, str]]", art.sample)] == ["17:09", "16:40"]
     assert art.verbs["select_all"] == 1 and art.verbs["extract"] == 1 and art.verbs["regex"] == 1
+
+
+def test_artifact_carries_a_rejected_review_and_absent_fields_are_not_review_defects(
+    httpserver: HTTPServer,
+) -> None:
+    # A query that extracts but whose final sample the reviewer rejects is not "ready": the
+    # artifact carries the rejection (`review`), and the review prompt names the fields established
+    # as absent so the reviewer does not fail the sample for them.
+    from web.onboard import QueryArtifact, write_query
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    good = 'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
+
+    class _Rejecting(ScriptedLlm):
+        def __init__(self) -> None:
+            super().__init__(good)
+            self.reviews: list[str] = []
+
+        async def complete(self, prompt: str) -> str:
+            if "reviewing extracted sample rows" in prompt:
+                self.reviews.append(prompt)
+                return "NO\nThe names are placeholders, not real product names."
+            return await super().complete(prompt)
+
+    llm = _Rejecting()
+
+    async def go() -> QueryArtifact:
+        async with Resolver() as r:
+            return await write_query(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                DatasetBrief(fields=["name", "rating"], optional=["rating"]),
+                resolver=r,
+                llm=cast("object", llm),  # type: ignore[arg-type]
+                review=cast("object", llm),  # type: ignore[arg-type]
+                max_rounds=6,
+            )
+
+    art = _run(go())
+    assert isinstance(art, QueryArtifact)
+    assert art.tested and art.row_count == 2
+    assert art.review.startswith("NO") and "placeholders" in art.review
+    assert "CLIPPED for display" in llm.reviews[0]
