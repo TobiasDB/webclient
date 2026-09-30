@@ -43,6 +43,7 @@ _RESOLVE_POLICY = frozenset(
     }
 )
 
+from .identity import DOC_COLUMN, KEY_COLUMN, doc_key, row_key
 from .plan import Arg, Plan, Step
 from .values import Collection, Field, Ref, raw
 
@@ -180,7 +181,13 @@ async def _invoke(
         rows = await _row_op(Collection([cur]), name, call, rs)
         if name == "filter":
             return cur if len(rows) else None
-        return (rows._rows or [{}])[0]
+        row = (rows._rows or [{}])[0]
+        if isinstance(cur, Document):  # the document's IDENTITY rides on the row it produced
+            row[DOC_COLUMN] = {"url": cur.url, "hash": doc_key(cur)}
+        return row
+    if name == "key" and isinstance(cur, Collection):  # the rows' identity (see identity.py)
+        args, kwargs = await _eager_args(call, root, rs, row)
+        return _key_rows(cur, [str(a) for a in args], kwargs.get("document"))
     args, kwargs = await _eager_args(call, root, rs, row)
     if isinstance(cur, Collection):
         return _fan(cur, name, args, kwargs)
@@ -281,6 +288,9 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
     """
     if obj is None:
         return None
+    if name == "key" and isinstance(obj, (Document, Element)):  # a stable content hash
+        selector = kwargs.get("selector", args[0] if args else None)
+        return Field(doc_key(obj, str(selector) if selector else None), base=_base_of(obj))
     if name == "select":
         if _markup(obj):
             el = obj.select(str(args[0])) if isinstance(obj, (Document, Element)) else None
@@ -416,6 +426,40 @@ async def _row_op(
 
 
 # -- operators / functions / branches ---------------------------------------
+
+
+def _key_rows(
+    coll: "Collection[object]", fields: "list[str]", document: object
+) -> "Collection[object]":
+    """The ``key`` verb: every extracted row gets its :data:`KEY_COLUMN` (the digest of ``fields``,
+    or of every scalar column when none are given); with ``document=<css>`` each nested document
+    identity (:data:`DOC_COLUMN`) is re-hashed over that STABLE selector, using the run's resolve
+    memo (the page is already fetched -- no refetch)."""
+    rows = coll._rows
+    if rows is None:  # nothing extracted yet: nothing to key
+        return coll
+    memo = _RESOLVE_CACHE.get() or {}
+    selector = str(document) if isinstance(document, str) and document else None
+    keyed: list[dict[str, object]] = []
+    for row in rows:
+        out = dict(row)
+        out[KEY_COLUMN] = row_key(out, fields)
+        if selector:
+            _rehash(out, selector, memo)
+        keyed.append(out)
+    return coll.derive(list(coll), keyed)
+
+
+def _rehash(row: "dict[str, object]", selector: str, memo: "dict[str, object]") -> None:
+    """Re-hash every nested document identity in ``row`` over ``selector`` (memoised pages)."""
+    for value in row.values():
+        if isinstance(value, dict):
+            ident = value.get(DOC_COLUMN)
+            if isinstance(ident, dict):
+                page = memo.get(str(ident.get("url")))
+                if isinstance(page, Document):
+                    ident["hash"] = doc_key(page, selector)
+            _rehash(value, selector, memo)
 
 
 def _apply_op(cur: object, name: str, other: object) -> bool:

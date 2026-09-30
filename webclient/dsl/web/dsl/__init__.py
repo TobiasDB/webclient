@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from .expr import Expr, from_blob, from_plan
 from .facade import WebClient
+from .identity import DOC_COLUMN, KEY_COLUMN, doc_key, document_selector, key_fields, row_key
 from .plan import Arg, Plan, Step
 from .run import resolve_memo, run_blob
 from .surface import (
@@ -55,6 +56,12 @@ __all__ = [
     "unknown_verbs",
     "run_blob",
     "resolve_memo",
+    "KEY_COLUMN",
+    "DOC_COLUMN",
+    "row_key",
+    "doc_key",
+    "key_fields",
+    "document_selector",
     "Plan",
     "Step",
     "Arg",

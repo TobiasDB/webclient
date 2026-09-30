@@ -176,6 +176,8 @@ def _present_keys(value: object, out: "set[str]") -> None:
     branch (a detail-page fan-out: ``detail={body: ...}``) counts as present."""
     if isinstance(value, dict):
         for k, v in value.items():
+            if str(k).startswith("_"):  # a reserved column (_key / _doc identity) is not a field
+                continue
             if v not in (None, "", [], {}):
                 out.add(str(k))
             _present_keys(v, out)
@@ -259,8 +261,8 @@ def _clip_value(value: object) -> object:
             value[:_PREVIEW_VALUE_CHARS]
             + f" [+{len(value) - _PREVIEW_VALUE_CHARS} more chars, clipped for display]"
         )
-    if isinstance(value, dict):
-        return {k: _clip_value(v) for k, v in value.items()}
+    if isinstance(value, dict):  # reserved identity columns are not for the reviewer
+        return {k: _clip_value(v) for k, v in value.items() if not str(k).startswith("_")}
     if isinstance(value, list):
         head = [_clip_value(v) for v in value[:3]]
         return head + (

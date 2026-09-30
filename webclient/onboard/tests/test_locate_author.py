@@ -1508,7 +1508,11 @@ def test_steps_engine_follows_a_detail_link_once_then_fans_out(httpserver: HTTPS
     after_detail = llm.turns[3]
     assert "followed " in after_detail and "article.body" in after_detail
     assert 'detail.body: "Body One", "Body Two"' in llm.turns[4]
-    assert art.sample[0] == {"name": "A", "detail": {"body": "Body One"}}
+    first = cast("dict[str, object]", art.sample[0])
+    detail = cast("dict[str, object]", first["detail"])
+    ident = cast("dict[str, str]", detail.pop("_doc"))  # the document's identity rides along
+    assert first == {"name": "A", "detail": {"body": "Body One"}}
+    assert ident["url"] == httpserver.url_for("/detail/1") and len(ident["hash"]) == 24
 
 
 def test_steps_engine_reverts_a_failed_op_and_rejects_prose(httpserver: HTTPServer) -> None:
@@ -1757,7 +1761,9 @@ def test_steps_engine_precondition_failures_are_not_repeats_and_names_are_unique
     assert art.complete and art.absent == [], (art.reason, art.absent)
     assert "NOT APPLIED -- call detail" in llm.turns[3]
     assert "you already called" not in llm.turns[6]  # the retry after detail() went through
-    assert art.sample[0] == {"detail": {"body": "Body One", "name": "Body One"}}
+    first = cast("dict[str, object]", art.sample[0])
+    cast("dict[str, object]", first["detail"]).pop("_doc")
+    assert first == {"detail": {"body": "Body One", "name": "Body One"}}
 
 
 def test_steps_engine_hints_name_closest_selectors_and_available_attributes(

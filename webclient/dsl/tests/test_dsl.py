@@ -440,10 +440,10 @@ def test_extract_after_a_per_record_resolve_fans_out_on_the_detail_page(
         .acollect()
     )
     assert rows[0]["title"] == "Aeropress"
-    assert rows[0]["detail"] == {
-        "sku": "SKU-1",
-        "again": "SKU-1",
-    }  # selected INSIDE the detail page
+    detail = dict(rows[0]["detail"])
+    ident = detail.pop("_doc")  # the resolved document's identity rides on the row it produced
+    assert detail == {"sku": "SKU-1", "again": "SKU-1"}  # selected INSIDE the detail page
+    assert ident["url"] == httpserver.url_for("/i/1") and len(ident["hash"]) == 24
     assert [r["detail"]["sku"] for r in rows] == ["SKU-1", "SKU-2", "SKU-3"]
     for n in (1, 2, 3):
         assert sum(1 for req, _ in httpserver.log if req.path == f"/i/{n}") == 1  # one fetch each
@@ -540,3 +540,74 @@ def test_parse_when_reads_a_bare_time_as_today_and_fuzzy_prose() -> None:
     assert parse_when("this may lead to more", now=now) is None
     assert parse_when("2 hours ago", now=now) == dt.datetime(2026, 9, 30, 10, 0, 0)
     assert parse_when("2026-09-30T16:26:51.555Z") is not None
+
+
+def test_identity_key_rows_and_stable_document_hashes(httpserver: HTTPServer) -> None:
+    # USER: queries run daily; syncs append only -- so a row's identity is its KEY FIELDS and a
+    # document's identity is those plus a STABLE content hash (a clock changing on the article page
+    # must not change it). `key(*fields)` writes `_key`; every fan-out row carries `_doc`
+    # {url, hash}; `wq.doc.key("article")` hashes just that element; `key(..., document=css)`
+    # re-hashes the fan-out documents over that selector (from the run's memo, no refetch).
+    from web.dsl import DOC_COLUMN, KEY_COLUMN, document_selector, key_fields, row_key
+    from web.parse import Document
+
+    clock = {"t": "10:00"}
+
+    def article(_req: object) -> "Response":
+        return Response(
+            f"<html><body><nav>menu</nav><p class='clock'>{clock['t']}</p>"
+            "<article><h1>T</h1><p>Body one.</p></article></body></html>",
+            content_type="text/html",
+        )
+
+    httpserver.expect_request("/a/1").respond_with_handler(article)
+    listing = Document(
+        content=(
+            f"<ul><li class='r'><span class='t'>T</span><a href='{httpserver.url_for('/a/1')}'>go"
+            "</a></li></ul>"
+        ).encode(),
+        kind="html",
+    )
+    q = (
+        wq.doc.select_all("li.r")
+        .extract(
+            title=wq.doc.select("span.t").attr("text"),
+            detail=wq.doc.select("a")
+            .attr("href")
+            .resolve()
+            .extract(body=wq.doc.select("p").attr("text")),
+        )
+        .key("title", document="article")
+    )
+    assert key_fields(q._plan) == ["title"] and document_selector(q._plan) == "article"
+
+    async def go() -> "tuple[dict[str, object], dict[str, object]]":
+        async with Resolver() as r:
+            first = await q.acollect(listing, resolver=r)
+            clock["t"] = "11:00"  # the clock moved; the article did not
+            second = await q.acollect(listing, resolver=r)
+            return first[0], second[0]  # type: ignore[index]
+
+    a, b = asyncio.run(go())
+    assert a[KEY_COLUMN] == row_key({"title": "T"}, ["title"]) == b[KEY_COLUMN]
+    ident_a, ident_b = a["detail"][DOC_COLUMN], b["detail"][DOC_COLUMN]  # type: ignore[index]
+    assert ident_a["url"] == httpserver.url_for("/a/1") and ident_a["hash"] == ident_b["hash"]
+    # the default (main-content) hash also ignores the clock; the explicit verb hashes an element
+    page = Document(
+        content=b"<article><p>Body one.</p></article><p class='clock'>10:00</p>", kind="html"
+    )
+    assert wq.doc.key("article").collect(page) == wq.doc.key("article").collect(
+        Document(
+            content=b"<article><p>Body one.</p></article><p class='clock'>11:00</p>", kind="html"
+        )
+    )
+    # no key fields declared -> every scalar column counts
+    rows = (
+        wq.doc.select_all("li.r")
+        .extract(title=wq.doc.select("span.t").attr("text"))
+        .key()
+        .collect(listing)
+    )
+    assert rows[0][KEY_COLUMN] == row_key({"title": "T"})  # type: ignore[index]
+    # the blob round-trips the key step
+    assert key_fields(Plan.from_blob(q.to_blob())) == ["title"]
