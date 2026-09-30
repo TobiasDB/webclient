@@ -167,6 +167,30 @@ def test_extract_constant_column_yields_the_literal(httpserver: HTTPServer) -> N
     assert rows[0]["name"] == "Aeropress"  # the sibling expression column still works
 
 
+def test_resolve_is_memoised_per_run_so_a_detail_page_is_fetched_once(
+    httpserver: HTTPServer,
+) -> None:
+    # Two detail-page columns follow the SAME record link. The DSL can't bind one resolved document
+    # to many columns, so a naive query resolves the link once PER field; the executor memoises
+    # policy-free resolves by URL within a run, so each item page is fetched ONCE, not per field.
+    url = _shop(httpserver)
+    rows = _run(
+        wq.reference(url)
+        .resolve()
+        .select_all(".card")
+        .extract(
+            title=wq.doc.select(".title").attr("text"),
+            sku=wq.doc.select("a.link").attr("href").resolve().select(".sku").attr("text"),
+            sku_again=wq.doc.select("a.link").attr("href").resolve().select(".sku").attr("text"),
+        )
+        .acollect()
+    )
+    assert rows[0]["sku"] == rows[0]["sku_again"] == "SKU-1"
+    for n in (1, 2, 3):  # each item page hit exactly once despite two resolves of it
+        got = sum(1 for req, _ in httpserver.log if req.path == f"/i/{n}")
+        assert got == 1, f"/i/{n} was fetched {got}x (resolve memo not applied)"
+
+
 def test_when_then_without_otherwise_defaults_to_none(httpserver: HTTPServer) -> None:
     url = _shop(httpserver)
     rows = _run(

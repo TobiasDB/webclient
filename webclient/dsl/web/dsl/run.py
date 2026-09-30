@@ -12,6 +12,7 @@ share this one implementation. Lean by design: no browser/pool/remote/streaming 
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import cast
 
 from pydantic import JsonValue
@@ -46,6 +47,14 @@ from .values import Collection, Field, Ref, raw
 #: attributes that read as a resolvable reference (a URL), not a plain string value.
 _LINK_ATTRS = frozenset({"href", "src"})
 
+#: a per-RUN resolve memo (URL -> Document), so following a record's link for SEVERAL detail-page
+#: fields fetches that page ONCE, not once per field. A query that writes `select('a').attr('href')
+#: .resolve().select(X)` for each of N detail fields would otherwise refetch the same page N times
+#: (the DSL cannot bind one resolved doc to many columns). Scoped to the outermost `arun` and shared
+#: by every nested sub-walk in the same run; only for policy-free resolves (a paginate/retry/rotate
+#: resolve is not memoised). Never crosses runs.
+_RESOLVE_CACHE: "ContextVar[dict[str, object] | None]" = ContextVar("_resolve_cache", default=None)
+
 _MISSING: object = object()
 #: ops whose call args stay LAZY sub-plans, evaluated per element (not once, eagerly).
 _ROW_OPS = frozenset({"extract", "filter"})
@@ -57,10 +66,15 @@ async def arun(plan: Plan, root: object = None, *, resolver: "Resolver | None" =
     """Async terminal: walk ``plan`` and return its materialised, smart-shaped result. Uses
     ``resolver`` to fetch, or a transient one opened + closed for the call when omitted.
     """
-    if resolver is not None:
-        return _smart(await _walk(plan, root, resolver, None))
-    async with Resolver() as rs:  # clean entry: no hand-built fetcher/request
-        return _smart(await _walk(plan, root, rs, None))
+    # install a per-run resolve memo for the OUTERMOST run; a nested arun reuses the live one.
+    token = _RESOLVE_CACHE.set(_RESOLVE_CACHE.get() or {})
+    try:
+        if resolver is not None:
+            return _smart(await _walk(plan, root, resolver, None))
+        async with Resolver() as rs:  # clean entry: no hand-built fetcher/request
+            return _smart(await _walk(plan, root, rs, None))
+    finally:
+        _RESOLVE_CACHE.reset(token)
 
 
 async def run_blob(blob: str, root: object = None, *, resolver: "Resolver | None" = None) -> object:
@@ -127,7 +141,13 @@ async def _invoke(
     if name == "doc":  # the reference -> document join spelling (wc.resolve(url).doc()); identity
         return cur
     if name == "resolve":  # the reference -> document fetch join (with optional per-step policy)
-        return await _resolve(cur, _effective_resolver(rs, call), optional=_flag(call, "optional"))
+        policy = call is not None and any(k in _RESOLVE_POLICY for k in call.kwargs)
+        return await _resolve(
+            cur,
+            _effective_resolver(rs, call),
+            optional=_flag(call, "optional"),
+            memo=not policy,  # a policy-free resolve is memoised by URL (dedupe detail-page fetches)
+        )
     if name == "reference":  # a URL held in an earlier-extracted column
         col = _literal(call)
         return (row or {}).get(str(col)) if row is not None else None
@@ -141,27 +161,37 @@ async def _invoke(
     return _one(cur, name, args, kwargs)
 
 
-async def _resolve(cur: object, rs: "Resolver", *, optional: bool = False) -> object:
+async def _resolve(
+    cur: object, rs: "Resolver", *, optional: bool = False, memo: bool = True
+) -> object:
     """Resolve the current value to a Document (or a Collection of them). A ``Ref`` / ``Field`` /
     URL string is fetched; a Document passes through; a Collection or list of refs FANS OUT into a
     Collection of Documents (``select_all('a').attr('href').resolve()``). Loud by default: nothing
-    to resolve (a prior select/attr missed) raises unless ``optional`` -- then it is ``None``.
+    to resolve (a prior select/attr missed) raises unless ``optional`` -- then it is ``None``. When
+    ``memo`` (a policy-free resolve), a URL fetched earlier in this run is served from the run's memo
+    -- so N detail-page fields following one record's link cost ONE fetch, not N.
     """
     if isinstance(cur, (Collection, list)):
         docs: list[object] = []
         for item in cur:
-            doc = await _resolve(item, rs, optional=optional)
+            doc = await _resolve(item, rs, optional=optional, memo=memo)
             if doc is not None:
                 docs.append(doc)
         return Collection(docs)
     url = cur.url if isinstance(cur, Ref) else (cur.get() if isinstance(cur, Field) else cur)
     if isinstance(url, str) and url:
+        cache = _RESOLVE_CACHE.get() if memo else None
+        if cache is not None and url in cache:
+            return cache[url]  # already fetched this page in this run -- reuse it
         try:
-            return await rs.resolve(Request(url=url))
+            doc = await rs.resolve(Request(url=url))
         except WebException:  # a TRANSPORT failure (resolve policy raised); optional tolerates it
             if optional:
                 return None
             raise
+        if cache is not None:
+            cache[url] = doc
+        return doc
     if isinstance(cur, Document):
         return cur
     if not optional:
