@@ -164,6 +164,40 @@ def test_locate_llm_review_can_veto_the_only_candidate(httpserver: HTTPServer) -
     assert ref_no is None  # model vetoed -> Locate fails (allowed)
 
 
+def test_locate_seeds_the_model_guessed_official_ir_url(httpserver: HTTPServer) -> None:
+    # search returns only a third-party aggregator; the reviewer LLM supplies the entity's OWN IR URL
+    # as a seed, so locate reaches + returns the official page instead of failing on aggregators.
+    httpserver.expect_request("/events").respond_with_data(_ACME_EVENTS, content_type="text/html")
+    httpserver.expect_request("/aggregator").respond_with_data(
+        b"<html><body>Benzinga quote page for ACME</body></html>", content_type="text/html"
+    )
+    official = httpserver.url_for("/events")
+
+    class _Stub:  # answers the official-URL guess, and the YES/NO candidate review
+        async def complete(self, prompt: str) -> str:
+            if "OFFICIAL investor-relations page" in prompt:
+                return f"The events page is {official}"
+            if "Answer YES or NO" in prompt:
+                return "YES" if "/events" in prompt else "NO — third-party aggregator"
+            return "[]"
+
+    async def go() -> "Reference | None":
+        async def search(_q: str) -> "list[str]":
+            return [httpserver.url_for("/aggregator")]  # search finds only the aggregator
+
+        async with Resolver() as r:
+            return await locate(
+                LocateBrief(goal="investor events"),
+                resolver=r,
+                search=search,
+                entity="Acme Corp",
+                review=cast("object", _Stub()),
+            )
+
+    ref = cast("Reference | None", _run(go()))
+    assert ref is not None and ref.url == official  # the seeded official page won
+
+
 def test_locate_reference_carries_flag_descriptions_and_signals(httpserver: HTTPServer) -> None:
     httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
 

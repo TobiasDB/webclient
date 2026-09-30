@@ -72,9 +72,11 @@ def _prompt(
     if entity:
         guides += (
             f"\nThis dataset belongs to '{entity}'. ONLY expand links on {entity}'s OWN site (its "
-            f"domain, or its name-based investor-relations host, e.g. {entity.split()[0].lower()}."
-            f"q4cdn.com). REJECT third-party sources — news, market-data aggregators, exchanges, "
-            f"brokerages — that merely mention it; those are NOT the company's own data."
+            f"corporate domain, or its name-based investor-relations host, e.g. "
+            f"{entity.split()[0].lower()}.q4cdn.com / {entity.split()[0].lower()}.gcs-web.com). "
+            f"REJECT any third-party host that merely mentions {entity} — market-data aggregators "
+            f"(Benzinga, MarketScreener, Yahoo Finance, Quartr, Seeking Alpha), news sites, stock "
+            f"exchanges, brokerages: those are NOT the company's own data, never expand them."
         )
     if fields:
         guides += "\nEach record should have: " + ", ".join(fields)
