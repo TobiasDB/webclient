@@ -218,6 +218,16 @@ class Field(Generic[T]):
         text = str(self.get() or "").strip()
         return Field(urljoin(base or self._base or "", text) if text else "")
 
+    def regex(
+        self, pattern: str, *, group: "int | str" = 0, flags: int = 0, default: object = None
+    ) -> "Field[str]":
+        """A substring of the value's TEXT: the first ``pattern`` match reduced to ``group`` --
+        ``"Only $19.99!"`` -> ``.regex(r"\\$([\\d.]+)", group=1)`` -> ``"19.99"``; ``default``
+        (``None``) when nothing matches. The leaf counterpart of a document's ``regex``."""
+        text = str(self.get() if self.get() is not None else "")
+        m = re.search(pattern, text, flags)
+        return Field(m.group(group) if m else default, base=self._base)
+
     def map(self, mapping: "dict[str, JsonValue]", default: object = None) -> "Field[JsonValue]":
         """The value looked up in ``mapping`` (strings compare case-insensitively); ``default`` when
         it is not there."""

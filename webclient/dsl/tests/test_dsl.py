@@ -505,3 +505,18 @@ def test_resolve_memo_shares_fetches_across_runs(httpserver: HTTPServer) -> None
             assert calls["n"] == 2  # outside the block each run fetches
 
     asyncio.run(go())
+
+
+def test_field_regex_is_a_leaf_transform() -> None:
+    # The query guide teaches `.regex(pattern, group=1)` on a leaf; only the document-level regex
+    # existed, so a chain using it on a value raised (and, before the loud unknown-verb check,
+    # silently read None). Found through the authoring verb record.
+    from web.parse import Document
+
+    doc = Document(
+        content=b"<p class='h'>Storm hits coast, published at 17:09 BST</p>", kind="html"
+    )
+    read = wq.doc.select("p.h").attr("text")
+    assert read.regex(r"at (\d\d:\d\d)", group=1).collect(doc) == "17:09"
+    assert read.regex(r"never").collect(doc) is None
+    assert read.regex(r"never", default="n/a").collect(doc) == "n/a"

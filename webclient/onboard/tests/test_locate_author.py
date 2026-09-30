@@ -1652,3 +1652,33 @@ def test_openings_carry_the_detected_record_selector() -> None:
     for fn in (author_prompt, steps_prompt):
         text = fn(DatasetBrief(fields=["a"]), "<ul>", [], kind="html", record_selector="li.item")
         assert "DETECTED RECORD SELECTOR (from the page analysis): li.item" in text
+
+
+def test_steps_engine_shows_the_raw_text_when_a_transform_empties_a_column(
+    httpserver: HTTPServer,
+) -> None:
+    # BBC live run: the timestamp sits INSIDE the headline text, so `.datetime()` on it read EMPTY
+    # and the model guessed three more selectors. Now the revert shows the RAW text the selector
+    # matched, pointing at a .regex(...) instead of another selector; the final tally also carries
+    # the query's structural verbs (select_all / extract), not only the column chains.
+    from web.onboard import QueryArtifact
+
+    page = (
+        b"<ul><li class='row'><span class='h'>Storm hits coast, published at 17:09 BST</span></li>"
+        b"<li class='row'><span class='h'>Vote counted, published at 16:40 BST</span></li></ul>"
+    )
+    httpserver.expect_request("/list").respond_with_data(page, content_type="text/html")
+    llm = _StepConv(
+        [
+            'records("li.row")',
+            'field(published, wq.doc.select("span.h").attr("text").datetime())',
+            'field(published, wq.doc.select("span.h").attr("text").regex(r"at (\\d\\d:\\d\\d)", group=1))',
+            "done()",
+        ]
+    )
+    art = _steps_art(httpserver, llm, ["published"])
+    assert isinstance(art, QueryArtifact)
+    assert art.complete, art.reason
+    assert "The RAW text it read was:" in llm.turns[2] and "published at 17:09 BST" in llm.turns[2]
+    assert [r["published"] for r in cast("list[dict[str, str]]", art.sample)] == ["17:09", "16:40"]
+    assert art.verbs["select_all"] == 1 and art.verbs["extract"] == 1 and art.verbs["regex"] == 1

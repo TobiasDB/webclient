@@ -365,6 +365,47 @@ def _typical_link(links: "list[str]") -> "str | None":
     return next(u for u in links if shape(u) == best)
 
 
+#: the leaf-shaping transforms a chain may end with -- stripped to see what a selector READ.
+_TRANSFORMS = ("number", "date", "datetime", "split", "map", "link", "regex")
+
+
+def _reads(chain: str) -> str:
+    """``chain`` cut after its last ``.attr(...)`` / ``.text()`` read -- the selector + read without
+    the trailing transforms, so a failed transform can be shown the raw text it was given."""
+    last = max(chain.rfind(".attr("), chain.rfind(".text("))
+    if last == -1:
+        return chain
+    depth = 0
+    for i in range(last, len(chain)):
+        if chain[i] == "(":
+            depth += 1
+        elif chain[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return chain[: i + 1]
+    return chain
+
+
+async def _raw_values(draft: Draft, op: Op, doc: Document, resolver: Resolver) -> str:
+    """For a column that read EMPTY: the RAW values its selector + read produce (transforms
+    stripped) on the probed records -- ``""`` when the selector itself matched nothing."""
+    raw_chain = _reads(op.args[1])
+    if raw_chain == op.args[1] or not any(f".{t}(" in op.args[1] for t in _TRANSFORMS):
+        return ""
+    probe = draft.copy()
+    if op.name == "detail_field":
+        probe.detail_fields[op.args[0]] = raw_chain
+    else:
+        probe.fields[op.args[0]] = raw_chain
+    try:
+        rows = await _probe(probe, doc, resolver)
+    except (WebException, asyncio.TimeoutError):
+        return ""
+    key = f"{DETAIL_COLUMN}.{op.args[0]}" if op.name == "detail_field" else op.args[0]
+    vals = [_dig(r, key) for r in rows]
+    return "" if all(_empty(v) for v in vals) else ", ".join(_short(v) for v in vals)
+
+
 def _dig(row: object, name: str) -> object:
     cur = row
     for part in name.split("."):
@@ -663,6 +704,16 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
         # optional select that legitimately misses is the one exception) so the draft never
         # degrades and the model must try a different read -- or declare the field absent.
         if all(_empty(v) for v in vals) and "optional=True" not in op.args[1]:
+            raw = await _raw_values(new, op, doc, resolver)
+            if raw:  # the selector DID match -- the transform threw the value away
+                return (
+                    False,
+                    f"{head}\nEMPTY on every probed record -- REVERTED. The selector matched, but "
+                    f"the transform produced nothing. The RAW text it read was: {raw}. Pull the "
+                    "value out of that text with .regex(pattern, group=1) before the transform, "
+                    "or pick the element that holds just the value.",
+                    "EMPTY after the transform (reverted)",
+                )
             return (
                 False,
                 f"{head}\nEMPTY on every probed record -- REVERTED. The selector matched nothing "
@@ -755,6 +806,15 @@ async def run_steps(
             except (WebException, asyncio.TimeoutError) as exc:
                 emit(ReasonEvent(stage="author", text=f"section {d.source()} failed: {exc}"))
             sections.append((reroot(parse_query(d.source()), reference.url, profile=profile), rows))
+    # the STRUCTURAL verbs the finished query uses (the tally so far counts the chains the model
+    # wrote for columns / predicates) -- so the record reads as the whole query's verb use.
+    for d in (*session.finished, session.draft):
+        structural = (
+            ["select_all"] + (["filter"] if d.where else []) + (["extract"] if d.columns() else [])
+        )
+        if d.link and d.detail_fields:
+            structural += ["select", "attr", "resolve", "extract"]
+        _tally(session, structural, ())
     remark = (
         "" if session.done else f"the step budget ran out ({verdict.reason}) — taking the draft"
     )
