@@ -822,6 +822,18 @@ def test_has_records_requires_schema_corroboration() -> None:
     assert _has_records(nav, DatasetBrief())  # no fields to corroborate -> the region is the signal
 
 
+def test_ignored_hard_filters_brief_forbidden_hosts() -> None:
+    # a brief's `ignore` entries HARD-exclude their hosts, so a forbidden aggregator never wins even
+    # as the only survivor when the real source 404s (Locate then fails, which is correct).
+    from web.onboard.locate import _ignored
+
+    ignore = ["third-party aggregators", "Benzinga", "MarketScreener", "Yahoo Finance"]
+    assert _ignored("https://www.benzinga.com/quote/AMD", ignore)
+    assert _ignored("https://finance.yahoo.com/quote/AMD", ignore)  # a two-word host token matches
+    assert not _ignored("https://investors.amd.com/events", ignore)  # the entity's OWN IR host kept
+    assert not _ignored("https://ir.example.com/calendar", ignore)  # no ignore token in the host
+
+
 def test_run_returns_a_dataset_of_rows_and_documents(httpserver: HTTPServer) -> None:
     # the clean execute interface: run(query, brief=...) -> Dataset(rows=[...], documents=[...]).
     from web.onboard import Dataset, run

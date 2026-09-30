@@ -103,10 +103,9 @@ class _Progress:
             self.pages = event.fetched
             mark = "ok " if event.ok else "!! "  # !! = a bad status / transport failure
             flags = f"  flags={','.join(event.flags)}" if event.flags else ""
-            _err(
-                f"  · [{event.fetched:>2}] {event.status or '---'} {mark}"
-                f"{_short(event.url, 62)}{flags}"
-            )
+            # show the FULL url -- a truncated one can't be verified/pasted when a page 404s or a wrong
+            # candidate wins (the whole point of the log is to SEE which URL was actually fetched).
+            _err(f"  · [{event.fetched:>2}] {event.status or '---'} {mark}{event.url}{flags}")
         elif isinstance(event, LlmEvent):  # cost AS IT GOES -- one line per model call
             self.llm_calls = event.calls
             self.llm_spent = event.spent_usd
@@ -115,7 +114,7 @@ class _Progress:
                 f"  (running ${event.spent_usd:.4f})"
             )
         elif isinstance(event, ReasonEvent):  # WHY a choice was made
-            subj = f"{_short(event.subject, 60)} — " if event.subject else ""
+            subj = f"{event.subject} — " if event.subject else ""  # full URL/subject, not truncated
             _err(f"  ⋯ {event.stage}: {subj}{event.text}")
         elif isinstance(event, AuthorEvent):  # the authoring stages
             if event.phase == "sample":
@@ -140,16 +139,13 @@ class _Progress:
             d = event.detail
             if event.phase == "escalate":
                 remedy = f" ({d['remedy']})" if d.get("remedy") else ""
-                _err(f"  · escalate → tier {d.get('tier')}{remedy}: {_short(event.url)}")
+                _err(f"  · escalate → tier {d.get('tier')}{remedy}: {event.url}")
             elif event.phase == "sticky":
-                _err(
-                    f"  · sticky → tier {d.get('tier')} (domain already needed it): "
-                    f"{_short(event.url)}"
-                )
+                _err(f"  · sticky → tier {d.get('tier')} (domain already needed it): {event.url}")
             else:
-                _err(f"  · {event.phase}: {_short(event.url)}")
+                _err(f"  · {event.phase}: {event.url}")
         elif isinstance(event, FetchEvent) and self._verbose:
-            _err(f"  · fetch {event.status} ({event.elapsed:.2f}s): {_short(event.url)}")
+            _err(f"  · fetch {event.status} ({event.elapsed:.2f}s): {event.url}")
 
     def __enter__(self) -> "_Progress":
         self._start = time.monotonic()
@@ -506,7 +502,7 @@ async def _author(args: argparse.Namespace) -> int:
             _err("no source located to author over (nothing scored above zero).")
             return 1
         if not args.simple:  # DEFAULT: the agent loop (check -> base -> repair/review -> split)
-            _err(f"authoring (agent loop): {_short(reference.url)}…")
+            _err(f"authoring (agent loop): {reference.url}…")
             with _Progress(args.verbose) as prog:
                 queries, verdict = await author_agent(
                     reference, brief, resolver=resolver, llm=llm, review=llm, entity=args.entity
@@ -528,7 +524,7 @@ async def _author(args: argparse.Namespace) -> int:
             if len(queries) > 1:
                 notes.append(f"{len(queries)} sections (run + concatenated)")
         else:
-            _err(f"authoring: resolving {_short(reference.url)} then asking the model…")
+            _err(f"authoring: resolving {reference.url} then asking the model…")
             try:
                 with _Progress(args.verbose):
                     query, engine, notes = await build_query(
@@ -695,7 +691,7 @@ async def _fetch(args: argparse.Namespace) -> int:
     ):  # a TRANSPORT failure (no response) -- a 4xx is still a valid snapshot
         _err(f"  transport error: {snap.error.code}: {snap.error.message}")
         return 1
-    _err(f"  {snap.status} · {len(snap.content)} bytes · {snap.elapsed:.2f}s · {_short(snap.url)}")
+    _err(f"  {snap.status} · {len(snap.content)} bytes · {snap.elapsed:.2f}s · {snap.url}")
     sys.stdout.buffer.write(snap.content)
     return 0 if snap.status and snap.status < 400 else 1
 
@@ -714,7 +710,7 @@ async def _resolve(args: argparse.Namespace) -> int:
         return 1
     finally:
         await resolver.aclose()
-    _err(f"  {doc.kind} · {len(doc.content)} bytes · {_short(doc.url or args.url)}")
+    _err(f"  {doc.kind} · {len(doc.content)} bytes · {doc.url or args.url}")
     sys.stdout.buffer.write(doc.content)
     return 0
 

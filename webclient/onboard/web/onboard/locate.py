@@ -232,6 +232,24 @@ def _download_targets(doc: Document) -> "list[str]":
     return [u for u in doc.links() if u.lower().split("?")[0].endswith(DOWNLOAD_EXTENSIONS)]
 
 
+def _ignored(url: str, ignore: "list[str]") -> bool:
+    """Whether the URL's HOST matches any brief ``ignore`` entry -- a HARD exclusion of the sources the
+    brief forbids (third-party aggregators), so one never wins even as the only survivor when the real
+    source 404s (Locate then FAILS, which is right -- better than handing Author a forbidden page).
+    Matches domain-ish ignore tokens (``benzinga`` -> benzinga.com, ``marketscreener`` -> ...) as host
+    substrings; a purely descriptive entry simply doesn't match -- best-effort, the LLM frontier +
+    review still apply on top. Host-only (never the path), so a real source with an aggregator word
+    elsewhere in its URL is not dropped."""
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        return False
+    for entry in ignore:
+        for token in re.findall(r"[a-z0-9]+", entry.lower()):
+            if len(token) >= 4 and token in host:  # a meaningful domain token is IN the host
+                return True
+    return False
+
+
 def _field_bonus(doc: Document, fields: "list[str]") -> float:
     """A small score boost when the page actually SHOWS the fields the brief's schema asks for --
     so Locate recognises the RIGHT dataset among several record lists (the schema is SHARED: Author
@@ -303,6 +321,13 @@ async def locate(
 
     scored: "list[tuple[float, Reference, Document]]" = []
     for doc in docs:
+        if _ignored(doc.url, lb.ignore):  # a brief-forbidden host (an aggregator) never wins, even
+            emit(  # as the only survivor when the real source 404s -- Locate FAILS instead
+                ReasonEvent(
+                    stage="score", subject=doc.url, text="skipped — matches the brief's ignore list"
+                )
+            )
+            continue
         by = {f.name: f for f in flags(doc)}
         score = _score(doc, by)
         if lb.download:  # a DOWNLOAD brief: a page that LISTS the target files IS the source
