@@ -51,6 +51,28 @@ def _run(coro: object) -> object:
     return asyncio.run(cast("asyncio.Future[object]", coro))
 
 
+@pytest.fixture(autouse=True)
+def _stub_locate_render(monkeypatch: "pytest.MonkeyPatch") -> None:
+    """Locate renders the WINNING candidate in a real browser to detect JS-gating (static vs
+    rendered record count). A unit test must not launch a browser, so stub the render to fetch the
+    page over plain HTTP on the shared pool: a static test page renders to the SAME content, so
+    Locate correctly bakes ``basic``. A JS-gating test overrides this to return a richer snapshot.
+    """
+    import importlib
+
+    from web.fetch import Request as _Req
+    from web.resolve import Resolver as _R
+    from web.resolve import profiles as _rp
+
+    async def _http_render(url: str, pool: object) -> object:
+        return await _R(profile=_rp.BASIC, pool=cast("Any", pool)).snapshot(_Req(url=url))
+
+    # patch on the MODULE object: the package re-exports the `locate` FUNCTION, which shadows the
+    # submodule under any attribute access (`web.onboard.locate` -> the function), so importlib is the
+    # only way to reach the real module to set its `_render_page`.
+    monkeypatch.setattr(importlib.import_module("web.onboard.locate"), "_render_page", _http_render)
+
+
 _PEOPLE = (
     b"<html><body><ul class='team'>"
     b"<li class='row'><span class='name'>Alice</span><span class='role'>CEO</span></li>"
@@ -246,6 +268,49 @@ def test_locate_stamps_the_working_transport_profile(httpserver: HTTPServer) -> 
 
     ref = cast("Reference | None", _run(go()))
     assert ref is not None and ref.profile == "basic"
+
+
+def test_locate_bakes_a_browser_profile_for_a_js_gated_page(
+    httpserver: HTTPServer, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    # a server-rendered SHELL carries only a couple of teaser rows; the real list is injected by JS.
+    # Rendering reveals materially more records, so Locate must bake `full_browser`, not `basic`.
+    shell = (
+        b"<html><body><main><ul>"
+        + b"".join(
+            b"<li class='row'><span class='name'>Teaser %d</span></li>" % i for i in range(3)
+        )
+        + b"</ul></main></body></html>"
+    )  # 3 teaser rows -- enough to be a candidate, but the real list is bigger and JS-injected
+    httpserver.expect_request("/js").respond_with_data(shell, content_type="text/html")
+    rendered = (
+        b"<html><body><main><ul>"
+        + b"".join(
+            b"<li class='row'><span class='name'>Person %d</span></li>" % i for i in range(10)
+        )
+        + b"</ul></main></body></html>"
+    )
+
+    import importlib
+
+    from web.fetch import Request as _Req
+    from web.fetch import Snapshot as _Snap
+
+    async def _render(url: str, pool: object) -> _Snap:
+        return _Snap(request=_Req(url=url), url=url, status=200, content=rendered)
+
+    # reveals 8 rows vs 2 static; patch the real module (see the autouse fixture's note on shadowing)
+    monkeypatch.setattr(importlib.import_module("web.onboard.locate"), "_render_page", _render)
+
+    async def go() -> "Reference | None":
+        async with Resolver() as r:
+            return await locate(
+                LocateBrief(goal="people", fields=["name"], candidates=[httpserver.url_for("/js")]),
+                resolver=r,
+            )
+
+    ref = cast("Reference | None", _run(go()))
+    assert ref is not None and ref.profile == "full_browser" and ref.needs_browser
 
 
 def test_author_bakes_the_working_profile_into_the_query(httpserver: HTTPServer) -> None:

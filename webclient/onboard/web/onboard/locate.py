@@ -21,7 +21,7 @@ from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 from web.crawl import Crawler, FrontierMiddleware, Goal
-from web.fetch import NetworkEvent, Request, Snapshot, WebException, emit
+from web.fetch import ClientPool, NetworkEvent, Request, Snapshot, WebException, emit
 from web.parse import Document, parse
 from web.resolve import Flag, Resolver, document, flags
 from web.resolve import profiles as _rp
@@ -433,33 +433,52 @@ def _record_count(doc: Document) -> int:
     return regions[0].count if regions else 0
 
 
+async def _render_page(url: str, pool: ClientPool) -> Snapshot:
+    """Render ``url`` in a real browser (the top realness tier) and return the snapshot -- how Locate
+    sees a page as a BROWSER would, to detect JS-gating. A module-level seam so a test can stub the
+    render (the comparison logic in :func:`_loading_requirements` is what's under test, not a live
+    browser)."""
+    browser = Resolver(profile=_rp.FULL_BROWSER, pool=pool)
+    return await browser.snapshot(Request(url=url))
+
+
 async def _loading_requirements(
     page: Document, ref: Reference, resolver: Resolver, brief: "LocateBrief"
 ) -> Reference:
-    """Determine HOW to actually LOAD the dataset and bake it into the Reference -- so Author is not
-    silently restricted to HTTP. If the records are already in the static page, ``basic`` loads it
-    (and a DOM-declared JSON API, if any, is preferred). If they are NOT (a server-rendered shell
-    whose rows are injected by script -- no ``spa`` signal need fire), RENDER the page in a browser:
-    when the records then appear it is JS-gated, so bake ``full_browser`` -- and mine the XHR/fetch
-    stream the render fired for the JSON data-API that feeds it (fetchable at ``basic``, cheaper than
-    the browser). Rendering is a best effort: if no browser can launch, fall back to ``basic``."""
-    if _has_records(page, brief):  # the data is in the static HTML -- HTTP loads it
+    """Determine HOW to actually LOAD the dataset and bake it into the Reference -- so Author uses the
+    right transport instead of HTTP-by-default.
+
+    The static page is NOT trusted on its own: a JS app server-renders a thin shell (nav + a few
+    teasers) whose GENERIC text passes a lenient static check while the REAL dataset is injected by
+    script (no ``spa`` signal need fire). So RENDER the winner once (:func:`_render_page`) and decide
+    EMPIRICALLY by comparing static vs rendered -- when the render reveals materially more of the
+    dataset it is JS-gated, so bake ``full_browser`` and mine the XHR/fetch stream for the JSON
+    data-API that feeds it (fetchable at ``basic``, cheaper). Rendering the single winner is cheap
+    (the pool reuses the browser); best-effort -- no browser -> trust the static verdict."""
+    static_ct = _record_count(page)
+    static_ok = _has_records(page, brief)
+    try:
+        snap = await _render_page(page.url, resolver.pool)
+    except Exception:  # no browser can launch here -> trust the static verdict (never sink Locate)
+        ref = ref.model_copy(update={"profile": "basic"})
+        return await _prefer_api(page, ref, resolver) if (brief.prefer_api and static_ok) else ref
+    rendered = document(snap)
+    rendered_ct = _record_count(rendered)
+    # JS-gated iff the render revealed MORE of the dataset than the static HTML: the record count grew
+    # materially (rows appeared that the static HTML lacked), OR the rendered page passes the schema
+    # check while the static page did not. If neither, the static HTML already had it -- ``basic``.
+    gained = rendered_ct >= 2 and rendered_ct > static_ct + 1
+    js_gated = gained or (_has_records(rendered, brief) and not static_ok)
+    if not js_gated:
         ref = ref.model_copy(update={"profile": "basic"})
         return await _prefer_api(page, ref, resolver) if brief.prefer_api else ref
-    emit(ReasonEvent(stage="load", subject=page.url, text="records not in static HTML — rendering"))
-    browser = Resolver(profile=_rp.FULL_BROWSER, pool=resolver.pool)
-    try:
-        snap = await browser.snapshot(Request(url=page.url))
-    except Exception:  # a browser that cannot launch here must not sink Locate
-        return ref.model_copy(update={"profile": "basic"})
-    rendered = document(snap)
-    # JS-gated iff the RENDER revealed the dataset: it now passes the schema check, OR the record
-    # count jumped (records appeared that the static HTML lacked). If neither, the static page was
-    # all there is -- ``basic`` (a wasted render, but never a wrong profile).
-    gained = _record_count(rendered) >= 2 and _record_count(rendered) > _record_count(page) + 1
-    if not (_has_records(rendered, brief) or gained):
-        return ref.model_copy(update={"profile": "basic"})
-    emit(ReasonEvent(stage="load", subject=page.url, text="JS-gated — needs a browser render"))
+    emit(
+        ReasonEvent(
+            stage="load",
+            subject=page.url,
+            text=f"JS-gated ({static_ct}→{rendered_ct} records on render) — needs a browser",
+        )
+    )
     ref = ref.model_copy(update={"profile": "full_browser", "needs_browser": True})
     for url, api in _json_xhr(snap):  # the JSON API the render actually called (reuse the render)
         if _consistent(rendered, api):

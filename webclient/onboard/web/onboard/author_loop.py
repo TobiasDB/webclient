@@ -339,7 +339,21 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
         state.checked = True
         if not ok:  # advisory only -- attempt anyway; a skeleton read is not a reliable veto
             state.check_note = note
-            emit(ReasonEvent(stage="check", text=f"concern (advisory, attempting anyway): {note}"))
+            # if the records look absent AND we are on the HTTP tier, the likely cause is a JS-gated
+            # page Locate mis-tiered -- the author cannot change transport (that is Locate's call), so
+            # say so plainly instead of silently proceeding to a doomed 0-row extraction.
+            basic = (state.reference.profile or "basic") == "basic"
+            hint = (
+                " — the page is on the HTTP tier but looks JS-gated; if extraction comes back empty, "
+                "re-run locate (it should bake a browser profile) or force --full-browser"
+                if basic
+                else ""
+            )
+            emit(
+                ReasonEvent(
+                    stage="check", text=f"concern (advisory, attempting anyway): {note}{hint}"
+                )
+            )
     elif turn == "base":
         state.instructions = ["extract every listed record with the fields above"]
         emit(ReasonEvent(stage="author", text="authoring the base query for the listed records"))
