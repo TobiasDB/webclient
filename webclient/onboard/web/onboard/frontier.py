@@ -8,12 +8,50 @@ failure / unparseable reply it defers to the next handler (FIFO), so the crawl n
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 
 from web.crawl import FrontierItem, FrontierMiddleware, Select
 from web.fetch import WebException, emit
 
 from .llm import Llm, ReasonEvent
+
+#: Cap how many frontier edges are shown to the model PER ROUND. The crawl frontier GROWS every round
+#: (each fetched page adds all its anchors; only the picked few are removed), so sending the whole
+#: pending list re-sends hundreds of URLs on EVERY round -- the crawl's runaway LLM token cost. A
+#: keyword-ranked window of this size bounds the prompt regardless of how link-rich the site is.
+_FRONTIER_WINDOW = 40
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _tokens(*groups: "Sequence[str]") -> "set[str]":
+    return {t for g in groups for s in g for t in _WORD.findall(s.lower()) if len(t) >= 3}
+
+
+def _window(
+    pending: "Sequence[FrontierItem]",
+    goal: str,
+    fields: "Sequence[str]",
+    look: "Sequence[str]",
+    ignore: "Sequence[str]",
+) -> "list[FrontierItem]":
+    """The most-promising slice of the frontier to show the model -- so the prompt stays bounded on a
+    link-rich site. Ranks each edge by how many goal/field/look terms appear in its link text + URL
+    (minus ignore terms), keeping the top :data:`_FRONTIER_WINDOW`. Below the cap it is a no-op (order
+    preserved), so small crawls are unchanged."""
+    if len(pending) <= _FRONTIER_WINDOW:
+        return list(pending)
+    want = _tokens([goal], fields, look)
+    bad = _tokens(ignore)
+
+    def score(i: int) -> "tuple[int, int]":
+        it = pending[i]
+        hay = set(_WORD.findall(f"{it.text} {it.url}".lower()))
+        rel = sum(w in hay for w in want) - 2 * sum(w in hay for w in bad)
+        return (-rel, i)  # highest relevance first; ties keep discovery order
+
+    top = sorted(range(len(pending)), key=score)[:_FRONTIER_WINDOW]
+    return [pending[i] for i in top]
 
 
 def _picks(reply: str, n: int) -> "list[tuple[int, str]]":
@@ -116,15 +154,18 @@ def llm_frontier(
     async def mw(pending: "Sequence[FrontierItem]", nxt: Select) -> "Sequence[FrontierItem]":
         if len(pending) <= 1:
             return await nxt(pending)  # nothing to choose
+        # show the model only a BOUNDED, keyword-ranked window of the frontier -- the pending list
+        # grows every round, so sending all of it is the crawl's runaway token cost.
+        window = _window(pending, goal, fields, look, ignore)
         try:
-            reply = await llm.complete(_prompt(goal, fields, look, ignore, pending, k, entity))
+            reply = await llm.complete(_prompt(goal, fields, look, ignore, window, k, entity))
         except WebException:
             return await nxt(pending)  # model unavailable -> plain breadth-first, don't break
         picks: list[FrontierItem] = []
-        for idx, why in _picks(reply, len(pending))[:k]:
-            picks.append(pending[idx])
+        for idx, why in _picks(reply, len(window))[:k]:
+            picks.append(window[idx])
             emit(
-                ReasonEvent(stage="frontier", subject=pending[idx].url, text=why)
+                ReasonEvent(stage="frontier", subject=window[idx].url, text=why)
             )  # WHY it was picked
         return picks or await nxt(pending)
 

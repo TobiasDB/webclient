@@ -1047,6 +1047,41 @@ def test_llm_frontier_middleware_picks_edges_by_model() -> None:
     assert [it.url for it in picked] == ["http://x/2", "http://x/0"]  # model's order, subset
 
 
+def test_llm_frontier_caps_the_prompt_to_a_keyword_ranked_window() -> None:
+    # the crawl frontier GROWS every round; sending all of it is the runaway LLM token cost. The
+    # model is shown only a bounded, keyword-ranked window -- so the prompt stays small AND the
+    # relevant edge (buried among hundreds) is surfaced into it.
+    from web.crawl import FrontierItem
+    from web.onboard import llm_frontier
+    from web.onboard.frontier import _FRONTIER_WINDOW, _prompt, _window
+
+    pending = [FrontierItem(url=f"http://x/junk/{i}", text="misc") for i in range(300)]
+    pending.append(FrontierItem(url="http://x/investors/events", text="Events Calendar earnings"))
+    win = _window(pending, "earnings events", ["date"], ["events calendar"], [])
+    assert len(win) == _FRONTIER_WINDOW < len(pending)  # bounded
+    assert any("investors/events" in it.url for it in win)  # the relevant edge made the window
+    # the prompt lists only the window, so its size does not grow with the frontier
+    assert (
+        _prompt("earnings events", ["date"], [], [], win, 5).count("http://x/") <= _FRONTIER_WINDOW
+    )
+
+    captured: "list[str]" = []
+
+    class _Spy:
+        async def complete(self, prompt: str) -> str:
+            captured.append(prompt)
+            return '[{"n": 0, "why": "top-ranked"}]'
+
+    mw = llm_frontier(_Spy(), "earnings events", look=["events calendar"])
+
+    async def nxt(p: "tuple[FrontierItem, ...]") -> "list[FrontierItem]":
+        return list(p)
+
+    picked = cast("list[FrontierItem]", _run(mw(tuple(pending), nxt)))
+    assert captured and captured[0].count("http://x/") <= _FRONTIER_WINDOW  # bounded prompt sent
+    assert "investors/events" in picked[0].url  # index 0 maps into the WINDOW, not raw pending
+
+
 def test_llm_frontier_prompt_carries_link_text_and_parent_assessment() -> None:
     from web.crawl import FrontierItem
     from web.onboard import llm_frontier
