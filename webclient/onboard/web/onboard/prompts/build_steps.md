@@ -8,7 +8,7 @@ OPS -- each turn, reply with EXACTLY ONE call (no prose, no code fence):
   field(<name>, <wq.doc chain>)    add (or replace) a column read INSIDE each record -- there wq.doc IS the record
   detail("<link css>")             follow each record's link ONCE (that element's href); the result shows a typical detail page
   detail_field(<name>, <chain>)    a column read on the record's DETAIL page -- there wq.doc IS the detail page
-  where(<predicate>)               keep only the records matching a predicate (see filtering above)
+  where(<predicate>)               keep only the records matching a predicate (see filtering above): wq.doc.select(...) reads inside the record, wq.field("<col>") reads a column already added -- never a bare column name
   drop(<name>)                     remove a column
   absent(<name>)                   the field is NOT on this page nor its detail page -- say so instead of guessing a selector
   section("<css>")                 the dataset CONTINUES in another section of this page with a DIFFERENT record shape (e.g. an "Upcoming" tab vs a "Past" list): start a new section rooted at that record selector, add its fields, then done() -- the pipeline concatenates every section's rows. (Sections that SHARE a record shape need no section(): one grouped selector "a.x, b.y" in records(...) does it.)
