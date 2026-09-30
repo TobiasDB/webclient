@@ -56,6 +56,25 @@ class Pricing(BaseModel):
     cache_read: float = 0.0
     cache_write: float = 0.0
 
+    @classmethod
+    def from_env(cls) -> "Pricing":
+        """Prices from ``WEB_PRICE_INPUT`` / ``WEB_PRICE_OUTPUT`` / ``WEB_PRICE_CACHE_READ`` /
+        ``WEB_PRICE_CACHE_WRITE`` ($/million tokens; unset / unparsable -> 0.0). So a spend report
+        is configured purely from the env -- for ANY :class:`AnthropicLlm`, not only the CLI's."""
+
+        def _price(name: str) -> float:
+            try:
+                return float(os.environ.get(name, "0") or "0")
+            except ValueError:
+                return 0.0
+
+        return cls(
+            input=_price("WEB_PRICE_INPUT"),
+            output=_price("WEB_PRICE_OUTPUT"),
+            cache_read=_price("WEB_PRICE_CACHE_READ"),
+            cache_write=_price("WEB_PRICE_CACHE_WRITE"),
+        )
+
     def cost(self, usage: Usage) -> float:
         """The USD cost of ``usage`` at these prices."""
         return (
@@ -138,9 +157,11 @@ class AnthropicLlm:
     """An :class:`Llm` over the Anthropic Messages API. Fully env-configurable (an explicit argument
     always wins): ``model`` <- ``WEB_LLM_MODEL``; ``auth`` <- ``WEB_LLM_API_KEY`` / ``ANTHROPIC_API_KEY``;
     ``base_url`` <- ``WEB_LLM_BASE_URL`` / ``ANTHROPIC_BASE_URL``. ``rate`` throttles calls (a shared
-    key); ``pricing`` turns the API's usage counts into a running spend (:attr:`spent_usd`,
-    :attr:`usage`, :attr:`calls`). Never leaks httpx errors -- an API/transport failure raises a
-    structured :class:`~web.fetch.WebException` (``llm.request`` / ``llm.api``)."""
+    key) <- ``WEB_LLM_RATE``; ``pricing`` turns the API's usage counts into a running spend
+    (:attr:`spent_usd`, :attr:`usage`, :attr:`calls`) <- ``WEB_PRICE_*`` when not passed, so the
+    spend report is configured from the env for ANY client, not only the CLI's. Never leaks httpx
+    errors -- an API/transport failure raises a structured
+    :class:`~web.fetch.WebException` (``llm.request`` / ``llm.api``)."""
 
     def __init__(
         self,
@@ -161,7 +182,9 @@ class AnthropicLlm:
         self._system = system
         #: WEB_LLM_RATE (min seconds between calls) applies even to a directly-built AnthropicLlm().
         self._gate = _Gate(rate)
-        self._pricing = pricing or Pricing()
+        #: WEB_PRICE_* ($/M tokens) apply even to a directly-built AnthropicLlm(), so a spend report
+        #: is configured from the env everywhere -- not only through the CLI's --price-* flags.
+        self._pricing = pricing or Pricing.from_env()
         self._client = httpx.AsyncClient(base_url=base or "https://api.anthropic.com", timeout=60.0)
         #: cumulative metering across this client's calls.
         self.usage = Usage()

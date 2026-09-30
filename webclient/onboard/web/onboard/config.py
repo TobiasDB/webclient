@@ -16,6 +16,10 @@ variable always overrides the file.
   WEB_LLM_BASE_URL      Anthropic base URL                            (else ``ANTHROPIC_BASE_URL``)
   WEB_LLM_RATE          minimum seconds between LLM calls                                  [float]
   WEB_LLM_TIMEOUT       per-call timeout for the shim                                      [float]
+  WEB_PRICE_INPUT       spend report: input price ($/million tokens)                       [float]
+  WEB_PRICE_OUTPUT      spend report: output price ($/M tokens)                            [float]
+  WEB_PRICE_CACHE_READ  spend report: cache-read price ($/M tokens)                        [float]
+  WEB_PRICE_CACHE_WRITE spend report: cache-write price ($/M tokens)                       [float]
   WEB_PROFILE           resolve profile: ``basic`` / ``basic_browser`` / ``full_browser``
   WEB_PROXY             proxy URL for all traffic (``http://[user:pass@]host:port``)
   WEB_BROWSER_PATH      an explicit browser binary for every browser tier
