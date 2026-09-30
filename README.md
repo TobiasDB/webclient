@@ -1,436 +1,119 @@
-# webclient
+# web
 
-A declarative web client: fetch pages, select and extract structured data,
-render to markdown, drive a real browser, and run the **same plan** synchronously,
-asynchronously, or against a remote "browser-as-a-service" backend.
+A web client for turning messy, defended, JavaScript-heavy websites into clean structured data —
+and for doing it *politely and only as hard as a given site forces you to*.
 
-The whole library is one idea: the surface you call **is** a typed `Core` model,
-and calling it dispatches an op that runs immediately -- `wc.fetch(url)` hands
-back a `Document`, no ceremony. Sync / async / remote are just different
-*dispatchers* on the same cores; `.lazy` on any surface records a **plan** you
-batch or defer instead. Behaviour lives in small `Backing` classes attached to
-the cores, and the typed surface is **generated** from those backings
-(`scripts/gen_stubs.py`), so the types never drift from the runtime.
-
-> Status: a solid, well-typed engine kernel with a task-verb layer
-> (`webclient.llm.tools`), truly incremental streaming, a stateful **crawl** +
-> **sitemap.xml** discovery, token-lean **summary** facets, a resiliency policy
-> layer (adaptive browser modes + proxy/rate/retry headers), serialisable
-> lazy-expression **blobs**, and an **MCP** adapter. Runnable case studies live in
-> [`examples/`](examples/).
-
-## Install
-
-```bash
-pip install -e ".[local]"      # local parsing (lxml/cssselect) -- the common case
-pip install -e ".[browser]"    # + Playwright, for live browser pages
-pip install -e ".[service]"    # + FastAPI/uvicorn, for the HTTP service
-```
-
-## Quickstart
+It's built as a stack of small, independent layers (`web.fetch`, `web.parse`, `web.resolve`,
+`web.crawl`, `web.dsl`, `web.onboard`). Each one is useful on its own and depends only on the ones
+below it, so you can reach for a single layer (just fetch a page, just parse some HTML) or drive the
+whole thing (give it a goal and a company and let it find and extract the dataset for you).
 
 ```python
-from webclient import WebClient
+from web.dsl import wq
 
-with WebClient() as wc:
-    page = wc.fetch("https://example.com")   # eager -> a Document
-    print(page.ok, page.title)
-    print(page.markdown())                              # page as markdown
-    for link in page.links():                           # a Collection[Reference]
-        print(link.url)
-```
-
-`wc.fetch(url)` resolves immediately and returns a `Document` (sugar for
-`wc.ref(url).resolve()`). To batch or defer, use `wc.lazy` -- it records a plan
-run by `.collect()`: `wc.lazy.fetch(url).select(".t").text_content.collect()`.
-
-The response kind (`html` / `json` / `xml` / `binary`) is sniffed from the
-`Content-Type` then the leading bytes, and each kind gets its own ops (dotted-path
-`select` on json, tree `select` on html/xml). If a server mislabels or omits its
-type, pass an explicit hint: `wc.fetch(url, expect="json")` (`None` by default, so
-a wrong guess is never forced).
-
-### Select and extract
-
-```python
-from webclient import WebClient, doc
-
-with WebClient() as wc:
-    page = wc.fetch("https://shop.example/")
-
-    # eager: walk a materialised Document
-    for card in page.select_all(".card"):
-        title = card.select(".title").text_content            # a str
-        href = card.select("a").attr("href")          # a Reference (link attrs narrow)
-        print(title, href.url)
-
-    # a Collection fans out per element, then flattens to rows
-    rows = (
-        wc.fetch("https://shop.example/")
-        .select_all(".card")
-        .extract(
-            title=doc.select(".title").text_content,
-            link=doc.select("a").attr("href"),
-        )
-        .project()      # -> list[dict]
-    )
-```
-
-`select` takes CSS or XPath; a selected node is itself a `Document`, so selection
-nests. `attr("href"/"src"/"action")` returns a `Reference` you can `.resolve()`;
-other attributes return a `Field`. Rendering has typed named methods —
-`.markdown()`, `.text(main_content_only=True)`, `.links()`, `.elements()` (typed
-blocks), `.html()`, `.skeleton()` — over the generic `render(format)` dispatch.
-
-`page.skeleton()` is a **token-lean DOM outline** (HTML open-tags, bloat removed,
-every sibling shown; `collapse=True` merges uniform ones) — feed it to an LLM to write CSS selectors for the
-page cheaply, then use them with `select`/`extract`. See
-[docs/llm-lazy-queries.md](docs/llm-lazy-queries.md) for a guide to building lazy
-extraction queries with concrete examples.
-
-## Task verbs -- for scripts and LLM tools
-
-`webclient.llm.tools` wraps the surface in a few functions that hide the plan
-machinery and return ready-to-use values (markdown / text / links / rows) -- the
-shape a quick script or an LLM tool wants:
-
-```python
-from webclient.llm.tools import fetch_markdown, fetch_text, links, page_skeleton, extract
-
-md = fetch_markdown("https://example.com")               # -> str (markdown)
-text = fetch_text("https://example.com")                 # -> str (nav stripped)
-urls = links("https://example.com")                      # -> list[str]
-skel = page_skeleton("https://example.com")              # -> str (selector map)
-rows = extract(                                          # -> list[dict]
-    "https://shop.example/",
-    ".card",                                             # a CSS selector per row
-    {"title": ".title", "price": ".price"},              # column -> CSS selector
-    limit=20,
+rows = await (
+    wq.reference("https://example.com/investors/events")
+      .resolve()
+      .select_all("article.event")
+      .extract(
+          title=wq.doc.select(".title").attr("text"),
+          date=wq.doc.select("time").attr("datetime").datetime(),
+          webcast=wq.doc.select("a.webcast").attr("href"),
+      )
+      .acollect()
 )
 ```
 
-The same verbs are exposed as MCP tools and HTTP endpoints (incl. `POST /skeleton`);
-`page_skeleton(url)` returns the token-lean selector map for a page.
+That's the shape of it: you *record* a plan against a typed surface, and it runs — synchronously,
+asynchronously, or serialized and shipped to a remote worker. Same plan, every mode.
 
-> NOTE (updated 2026-09-20): there is no `wc.search(query)` client verb in the
-> current code — web search lives in the onboarding pipeline (`search_web`), not on
-> the client. `summary` is likewise not a task verb; a page's lean self-descriptor
-> is `doc.card()` (see the Summary section below).
+## How it's put together
 
-Each accepts an optional `client=` (defaults to a process-local one; pass your own
-`with WebClient() as wc` for lifecycle control).
+Each layer is its own package under [`webclient/`](webclient/), with its own tests and gate.
 
-## Async -- the same plans, awaited
+| Layer | Package | What it does |
+|-------|---------|--------------|
+| **fetch** | `web.fetch` | Transport only: `Request → Snapshot`. HTTP, TLS-impersonating HTTP, and real browsers, behind one interface. Never parses, never raises for a bad response. |
+| **parse** | `web.parse` | Bytes → `Document`. Sniff the kind, decode, select, extract records, render markdown, read JSON. Pure and offline. |
+| **resolve** | `web.resolve` | The opinionated face: wraps fetch in a policy chain — retry, rate-limit, and the **anti-bot escalation ladder** (below). Detects *why* a page is blocked and climbs accordingly. |
+| **crawl** | `web.crawl` | Bounded, goal-directed crawling over a resolver — robots/sitemap aware, with a pluggable frontier. |
+| **dsl** | `web.dsl` | The `wq` query language: record a lazy plan, run it four ways (sync / async / service-blob / remote). This is the surface most code touches. |
+| **onboard** | `web.onboard` | The capstone: *goal + company → dataset*. Locate the right source, then have a model author the extraction query. |
 
-```python
-import asyncio
-from webclient import AsyncWebClient, doc
+## The anti-bot problem, and our strategy
 
-async def main():
-    async with AsyncWebClient() as ac:
-        page = await ac.fetch("https://example.com")   # await at the IO boundary
-        rows = await (
-            ac.lazy.fetch("https://shop.example/")
-            .select_all(".card")
-            .extract(title=doc.select(".title").text_content)
-            .project()
-            .acollect()
-        )
-    return page.title, rows
+Modern sites don't just serve you HTML. Before you see a byte, a defender may have already
+fingerprinted your TLS handshake, checked your IP's reputation, and decided whether to hand you the
+page, a JavaScript challenge, or a CAPTCHA. There are two ladders here, and **detection is cheap
+while evasion is expensive** — so both sides climb only as far as they're forced to.
 
-asyncio.run(main())
+Our strategy is to climb the *realness* ladder from the cheapest possible request up to a genuine
+Chrome on a residential IP, adding one layer of authenticity at a time, and **only as far as a
+given site actually pushes back**. The escalation is *reason-aware* (it reads the specific block
+signal and picks the rung that answers it) and *domain-sticky* (once a host needed a browser, we
+start there next time instead of re-climbing).
+
+```
+     WHAT THE SITE CHECKS                       HOW WE ANSWER IT
+     (cheap → expensive)                        (cheap → real)
+
+  ┌───────────────────────────┐            ┌──────────────────────────────────────────┐
+  │ IP / ASN reputation        │──────────▶ │  + Proxy   residential / mobile IP        │  ◀ strongest
+  ├───────────────────────────┤            ├──────────────────────────────────────────┤
+  │ Behaviour, CAPTCHA         │            │  REAL_CHROME   genuine installed Chrome    │
+  ├───────────────────────────┤            │                (real build / GPU / CDM)    │
+  │ Browser fingerprint        │──────────▶ │  HEADED_BROWSER headed window, no          │
+  │ (canvas / WebGL / JS)      │            │                 headless tells (Xvfb)      │
+  ├───────────────────────────┤            │  BROWSER   headless stealth Chromium —     │
+  │ JavaScript / PoW challenge │──────────▶ │            runs JS, real fingerprint       │
+  ├───────────────────────────┤            ├──────────────────────────────────────────┤
+  │ TLS / HTTP-2 fingerprint   │──────────▶ │  BASIC   real Chrome TLS/HTTP-2            │  ◀ cheapest
+  │ (JA3/JA4, read first)      │            │          (curl_cffi), no JS                │
+  └───────────────────────────┘            └──────────────────────────────────────────┘
 ```
 
-The async client is the same eager surface over an async dispatcher: `await
-ac.fetch(url)` resolves and returns a `Document`; in-memory ops on it are
-synchronous. Chain deeper IO through `ac.lazy` plans, realized with
-`.acollect()` / `.astream()` (the async twins of `.collect()` / `.stream()`). A
-*reusable* plan built from the `doc`/`ref` module roots is run against a supplied
-context: `plan.acollect(ac.ref(url))` (sync: `plan.collect(wc.ref(url))`).
+A few things worth knowing about how those rungs are chosen:
 
-## Sessions
+- **`BASIC` is not plain `httpx`.** It presents a real Chrome's TLS + HTTP/2 fingerprint (via
+  `curl_cffi`) at plain-HTTP cost — because a stock client's JA3/JA4 is flagged before a byte of
+  content is read. Plain `httpx` is only the fallback when that library isn't installed.
+- **The first real jump is `BROWSER`** — a leak-patched (patchright) headless Chromium that actually
+  runs JavaScript and presents a full, coherent browser fingerprint (canvas, WebGL, navigator).
+- **`HEADED_BROWSER` and `REAL_CHROME`** shed the remaining "this is automation" tells — a real
+  on-screen window, then the genuine installed Chrome binary rather than the bundled test build.
+- **Proxies** are the answer to IP/ASN reputation, orthogonal to all of the above.
 
-A session is a scoped identity (cookies/headers/ttl) sharing the client's engine.
-It is a context manager, so it always closes.
+Each rung earns its place: it closes a *distinct* detection layer at a *distinct* cost. The full
+write-up — the papers, the provider tiers, the fingerprinting surface — lives in
+[`webclient/ANTI-BOT.md`](webclient/ANTI-BOT.md).
 
-```python
-with WebClient() as wc, wc.session(ttl=300, headers={"x-app": "demo"}) as s:
-    s.fetch("https://site/login")      # sets cookies, kept on the session
-    me = s.fetch("https://site/whoami")
+## Onboarding: from a goal to a dataset
+
+`web.onboard` is the part that ties it all together. Give it a brief (a goal + a schema, plus
+optional per-stage hints) and a company, and it runs two phases:
+
+1. **Locate** — search + crawl for the company's *own* source (not a third-party aggregator), score
+   the candidates, and review the winner. It also works out *how the data actually loads* — if the
+   records aren't in the static HTML, it renders in a browser and, when there's a JSON data-API
+   behind the page, prefers that.
+2. **Author** — a model writes a `wq` extraction query, in a loop that *checks* the data is really
+   there, *reviews* each sample against the brief, *repairs* a query that fails or comes back empty,
+   and, when a dataset spans two pages (an "upcoming" list and a separate "archived" one), authors
+   both and concatenates them.
+
+The brief drives each stage in plain language — what to look for while crawling, patterns to suggest
+while authoring, how strict to be while reviewing — so a dataset-specific rule (say, "the events
+list must include upcoming ones, not only past") lives in the brief, never hardcoded in the pipeline.
+
+## Layout & the gate
+
+```
+webclient/
+  fetch/  parse/  resolve/  crawl/  dsl/  onboard/   # one package each: web/<pkg>/ + tests/
+  demo.py                                            # an offline tour of the whole stack
+  ANTI-BOT.md  ARCHITECTURE.md  REVIEW-CHECKLIST.md
+pyproject.toml                                       # authoritative black / isort / pyright config
 ```
 
-## Live browser pages
-
-With the `browser` extra, resolve on a real page and interact with it:
-
-```python
-live = wc.ref("https://app.example/").resolve(browser=True)
-live.click("#load-more")
-print(live.select("#cart li").text_content)
-wc.release(live)   # return the page to the pool
-```
-
-## Summary -- a page's token-lean view (for LLMs)
-
-A page projects into small, uniform structures -- keys and counts, not raw HTML --
-that an LLM reads *instead of* the page. `doc.card()` is the lean self-descriptor
-(the default crawl projection); the individual facet ops give more detail:
-
-```python
-doc = wc.fetch("https://example.com/")
-card = doc.card()          # a PageCard: url / final_url / kind / title /
-                           # description / flags / final_tier / escalation
-card.title                 # "Example Domain"
-card.flags                 # detected flags (e.g. "spa", "login-wall"), by name
-
-doc.metadata()             # a Metadata facet (head/schema; None-ish on a non-html page)
-doc.structure()            # a Structure facet: word_count, toc, ...
-doc.transport()            # a Transport facet: final_url, final_tier, escalation, ...
-```
-
-> NOTE (updated 2026-09-20): the old bundled `summary()` op (a faceted `Summary`
-> object with `.metadata` / `.structure` / `.probe` / `.extra`) has been replaced by
-> the flat `doc.card()` (`PageCard`) plus the separate facet ops `doc.metadata()` /
-> `doc.structure()` / `doc.transport()`. There is no `wc.summary(url)` client verb,
-> and the `runtime` / `probe` facets no longer exist as ops.
-
-## Crawl & sitemap
-
-A crawl is a stateful, client-held context manager -- a steerable frontier you
-drive turn by turn, or let auto-drive best-first by keyword:
-
-```python
-with wc.crawl("https://books.example/", auto=True, max_pages=20,
-              keywords=["pricing"]) as crawl:
-    crawl.run()                     # or crawl.step(select=...) to steer each round
-for page in crawl.pages:            # each a lean PageCard (the doc.card() projection)
-    print(page.final_url, page.title)               # flat fields; None when N/A
-for edge in crawl.frontier:         # discovered-but-unfetched, best links first
-    print(edge.score, edge.url)     # nav/"read more"/article high; footer/legal low
-```
-
-The frontier is cleaned and ranked for you: links to page **resources**
-(images/scripts/media) are dropped, and each edge carries an importance `score`
-(page region + anchor text + URL shape) that the frontier is **sorted by**, so the
-useful links (nav, "read more", article permalinks) lead and footer/legal/social
-links sink. Set `browser=True` to render JS-heavy pages first (each load waits for
-the DOM to settle, so client-rendered links are captured); a browser crawl also
-adds the page's XHR/data-API endpoints to the frontier.
-
-Each page is retained as a lean `PageCard` (the `doc.card()` projection: url /
-final_url / kind / title / description / flags / final_tier / escalation) -- enough
-to rebuild a `Reference`. Pass a `project=` document expression to `wc.crawl(...)`
-to reshape what `.pages` holds. `wc.sitemap(url)` hunts a site's real `sitemap.xml`
-page URLs (robots `Sitemap:` directives, the well-known path, one level of
-`<sitemapindex>`) and returns them as References -- feed them to a crawl with
-`wc.crawl(wc.sitemap(url))`. `wc.robots(url)` returns the site's `robots.txt`
-rules + `Sitemap:` directives.
-
-## Resiliency -- browser tiers & policies
-
-`browser=` picks the transport tier, escalation is opt-in:
-
-- `False` / `"never"` (default) -- static only.
-- `"auto"` -- static, escalate to a browser only if the page looks JS-gated
-  (empty / SPA shell). Conservative, to avoid paying for a browser needlessly.
-- `True` / `"always"` -- straight to a browser.
-
-> NOTE (updated 2026-09-20): the `browser=` kwarg is now
-> `bool | Literal["never", "auto", "always"]`. The old `"probe"` tier (resolve both
-> tiers and compare, exposing a `probe` facet via `summary().probe`) has been
-> removed — both the tier and the `probe` facet are gone.
-
-A `Resolve` policy bundle (`retry` / `rate` / `proxy`) can be set on the client; its
-rate/retry/proxy concerns are declared to a downstream proxy service as
-`X-WebClient-*` request headers (`WebClient(resolve=Resolve(proxy=ProxyPolicy(...)))`).
-
-## Lazy plans as portable blobs
-
-A recorded plan serialises to a short, url-safe **blob** an agent can store, log or
-send over the wire, then rebuild + validate + pretty-print before running:
-
-```python
-from webclient import from_blob, wq
-
-plan = wq.ref.resolve().select_all(".quote").extract(
-    text=wq.doc.select(".text").text_content).project()
-blob = plan.to_blob()                       # "p1:..." (a few dozen chars)
-rows = from_blob(blob, wc).collect(wc.ref(url))   # rebuilt + name-validated, then run
-```
-
-## MCP & task-verb endpoints
-
-`webclient.llm.mcp` exposes the verbs (fetch_markdown / fetch_text / links /
-skeleton / sitemap / robots / crawl) plus plan authoring (validate_plan / run_plan /
-lazy_query_guide) as Model Context Protocol tools -- the way agents consume this
-category. The registry (`build_tools` / `dispatch`) works with no MCP SDK installed;
-`serve()` runs an stdio server. The HTTP service mirrors them as task-verb endpoints
-(`POST /markdown`, `/crawl`, `/plan`, ...).
-
-## Dispatch modes -- sync, async, remote
-
-The surface **is** the core; how an op actually runs is the core's *dispatch
-mode* -- one concept, three modes, same interface:
-
-- **sync** (`WebClient`) -- IO blocks on a background engine loop.
-- **async** (`AsyncWebClient`) -- loop-native: IO runs on your loop, `await`ed.
-  Only the sync client uses the engine loop.
-- **remote** (`RemoteWebClient`) -- every op that needs the server becomes a
-  one-request POST to a `webclient.service` app.
-
-`.lazy` on any surface records a **plan** instead of running op-by-op, so a whole
-chain or fan-out realises in a single pass (`.collect()` / `await .acollect()`).
-
-## Remote -- browser-as-a-service
-
-The remote client is *literally* a `WebClient` in remote mode: the same eager
-surface, executed server-side over HTTP (no local browser or lxml needed). A
-fetched document comes back as a real `Document` handle (metadata inline); its
-content ops run **eagerly, one round trip each**, and a reference comes back as a
-real `Reference`.
-
-```python
-from webclient import RemoteWebClient
-
-with RemoteWebClient("http://host:8000", token="secret") as rc:
-    handle = rc.fetch("https://example.com")        # one round trip -> a handle
-    markdown = handle.render("markdown")            # each op round-trips eagerly
-    # batch a chain (or a fan-out) into ONE round trip via .lazy:
-    titles = handle.lazy.select_all(".title").text_content.collect()
-```
-
-**Chattiness**: because remote content ops are eager, a long op-by-op chain is a
-round trip per op. Reach for `.lazy` (above) to batch a chain/fan-out into one
-request -- the client logs a one-time nudge toward it once a chain gets greedy.
-Sessions are the same surface, scoped: `with rc.session() as s: s.fetch(url)`
-resolves through a server-side session (its cookies/identity).
-
-Serve it with `webclient.service.create_app(token=..., max_docs=..., max_sessions=...)`.
-
-## Errors and safety
-
-```python
-from webclient import RETURN
-
-d = wc.fetch("https://might-fail/")                      # raises on non-2xx (loud by default)
-d = wc.fetch("https://might-fail/", optional=True)       # or lenient: a not-ok Document
-if not d.ok:
-    print(d.error.type, d.error.status_code, d.error.retriable)  # retriable: transport/429/5xx
-```
-
-- `error=RETURN` / `optional=True` turn a failure into a not-ok `Document` instead
-  of raising; `extract`/`filter` run their sub-expressions leniently so one bad
-  field never aborts a whole plan.
-- `WebClient(block_private_hosts=True)` is an opt-in SSRF guard: requests to
-  loopback / private / link-local hosts (resolved, so a public name pointing
-  inward is caught too) are refused before any transport. Off by default.
-
-## Architecture (one screen)
-
-- `core/web_core.py` -- `WebCore` + `Backing`: a core CHOOSES which backings
-  apply to its state and DISPATCHES an op to the first that provides it. The
-  eager surface IS the core (`WebCore.__getattr__` dispatches); sync/async/remote
-  are just dispatchers on it.
-- `core/<kind>/` -- one package per core (`reference` / `document` / `client` /
-  `session` / `crawl`), each with the core (a pydantic model) and one backing per
-  module. Remote is **not** a core package -- it is a dispatch mode of the engine
-  (`core/engine.py` + `core/service.py`, the remote transport).
-- `query/` -- the recorder engine: `expr.py` (the `Expr` recorder), `plan.py`
-  (the serialisable `Plan` IR + `to_blob`/`from_blob` -- the wire form for the
-  service/remote), `executor.py` (one async walk over a `Plan`), and
-  `collection.py` (the fan-out `Collection`).
-- `policy/` -- the `Resolve` bundle + concern policies (`models.py`) and the
-  `X-WebClient-*` policy headers (`headers.py`). Response classification that
-  decides what to escalate now lives in `signals/`.
-- `interface.py` -- the typed eager, async, remote and lazy surfaces in one file
-  (generated by `scripts/gen_stubs.py` from the backing signatures); it also holds
-  the `wq` authoring roots.
-- `service.py` + `llm/mcp.py` + `clients/` -- the HTTP service (task verbs +
-  `/execute` + `/plan`), the MCP adapter, and the transport pool (http/browser
-  leases). Task verbs live in `llm/tools.py`.
-- `examples/` -- runnable live case studies (news scraper, catalogue crawler,
-  lazy-expression extractor, sitemap mapper, browser events, error handling).
-
-## Events, traces and replay
-
-Everything the engine does is an event on `wc.bus` (network, DOM, actions, console, plan,
-loop, pipeline, error, script). `with wc.trace("run.jsonl"):` writes that stream to ONE file:
-a document snapshot after every fetch / load / interaction, every response body the static
-tier and the browser saw, the rrweb DOM chunks, and the plan that produced the run in the
-footer. Every replay is a translation of that one stream -- there are no sidecar artefacts:
-
-```python
-from webclient import WebClient, BrowserConfig
-from webclient.replay import Replay
-
-with Replay("run.jsonl") as rep:                 # static: offline projections, no network
-    doc = rep.documents()[0]
-    doc.select(".card"), doc.skeleton(), doc.flags(), rep.timeline(), rep.errors()
-    rep.state(n)                                 # the unified cursor: everything known at event n
-    rep.rrweb()                                  # the stream as rrweb events (DOM + custom) for one player
-
-WebClient(har="run.jsonl")                       # har: the network served from the trace itself
-BrowserConfig(replay_har=str(rep.har_path))      # ...the browser tier too (a derived HAR file)
-rep.plan(wc).collect()                           # live: re-execute the recorded Plan
-```
-
-The service streams the same events: `ws /events?since=<n>` resumes from a cursor,
-`?trace=<dir>` streams a stored trace.
-
-## Errors and the ledger
-
-Every `WebError` is catalogued (`docs/errors.md`): a `code`, a `remedy` from a closed
-vocabulary (`retry` / `browser` / `proxy` / `stealth` / `credentials` / `fix_selector` / ...),
-a `hint`, and the `op` / `subject` it is bound to. Nothing disappears: raised, returned
-under `RETURN`, or swallowed by a fallback, every error is an `ErrorEvent` on the bus and on
-`doc.errors` / `wc.errors`.
-
-## Loops, drivers and human-in-the-loop
-
-Every auto mode -- the crawl drive, `browser="auto"`'s escalation ladder, the interaction
-and query loops, `wc.locate(seeds, until=...)` -- is one `BoundedLoop` with a swappable
-driver (`wc.driver("resolve", fn)`, `wc.crawl(..., driver=fn)`), manual stepping, and a
-checkpoint: a driver returns an `Ask`, the loop reports `waiting`, and `resume(answer)` /
-`crawl.resume(picks)` / `wc.escalate(doc, "browser")` continues by hand. Pipelines
-(`webclient.pipeline`) are stage DAGs with gates, reviews and the same checkpoints; the
-onboarding pipeline runs `interactive=True` to confirm the chosen source.
-
-## Tools -- one registry, three transports
-
-`webclient.tools` declares every high-level tool once (typed input, documented output, a
-user story); the Python verbs, the MCP tools and the service's `POST /tools/{name}` (+
-`GET /tools`) are generated from it. `docs/tools.md` lists them; `@tool` adds one to all
-three.
-
-## Scripts
-
-Page scripts are named, phased (`init` / `inline` / `load` / `drain` / `unload`), togglable
-and governed: `wc.scripts.register(Script("probe", "() => document.title", on="load"))`,
-`wc.scripts.disable("wc.rrweb")`, `ScriptPolicy(deny=("wc.",))`. A topic script
-(`on="action"`) runs on the live page whenever such an event is published; every run is a
-`ScriptEvent`.
-
-## The lab
-
-`python -m webclient.lab` serves one fixture page per feature (a static shop, a JS-gated
-SPA, an XHR feed, pagination, tabs, shadow DOM, an iframe, a login wall, an anti-bot
-interstitial, redirects, JSON / RSS / PDF, a large page, sitemap + robots, a live app, ...),
-each publishing its expected result at `/lab/<name>.json`. Tests, demos and the docs assert
-against it; `scripts/profile.py` measures against it.
-
-## Development
-
-```bash
-env/bin/python -m pytest -q                              # tests
-env/bin/python scripts/gen_stubs.py                      # regenerate typed stubs
-env/bin/python scripts/gen_stubs.py --check              # fail if stubs are stale
-env/bin/mypy --strict webclient && env/bin/pyright webclient   # full strictness
-env/bin/black webclient scripts tests demo.py            # format
-env/bin/python demo.py                                   # end-to-end showcase
-make check                                              # the whole gate (stubs, types, docs, tests)
-make docs                                               # generated reference + the mkdocs site
-```
-
-If you change the typed surface (a Core field or a backing op signature),
-regenerate the stubs and re-run `--check`; the whole package is kept
-`mypy --strict` and `pyright` clean by tests in `tests/test_typing.py`.
+Every package holds the same bar green — `mypy --strict`, `pyright`, `pytest`, and `isort`/`black`
+(line length 100). `webclient/demo.py` runs the whole stack offline against a local server.
