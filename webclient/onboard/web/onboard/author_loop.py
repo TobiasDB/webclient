@@ -24,8 +24,9 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 
-from web.fetch import WebException, emit
-from web.resolve import Resolver
+from web.fetch import ClientPool, WebException, emit
+from web.resolve import EscalationPolicy, Resolver
+from web.resolve import profiles as _rp
 
 from .agent import BoundedLoop, Done, Verdict
 from .author import AuthorEvent, sample_skeleton
@@ -33,6 +34,16 @@ from .compile import Query, QueryError, parse_query, reroot
 from .llm import Llm, ReasonEvent
 from .models import DatasetBrief, Reference
 from .patterns import field_schema, fields_line, guide_for
+
+
+def _fetch_resolver(reference: Reference, pool: ClientPool) -> Resolver:
+    """The transport LOCATE determined (``reference.profile``) as a FIXED single tier -- a FETCH, not
+    the escalation ladder: choosing the transport is Locate's job, done. The author writes the query
+    over exactly what this fetch returns; if the dataset is not there, LOCATE picked the wrong source
+    / profile, not the author. Shares the pool (so a browser tier is reused, not relaunched)."""
+    prof = _rp.get(reference.profile or "basic") or _rp.BASIC
+    base = prof.escalation.tiers[:1] if prof.escalation else ()
+    return Resolver(escalation=EscalationPolicy(tiers=base), pool=pool)
 
 
 @dataclass
@@ -381,8 +392,15 @@ async def author_agent(
     ``budget_s`` is a hard wall-clock cap: the loop chains several model calls, so a slow model or a
     stuck page must not run forever -- on the cap we return the sections so far with a ``budget``
     verdict rather than hang."""
+    # the author FETCHES with the transport Locate baked, not the pipeline's escalating resolver --
+    # so it writes selectors over the SAME content the query samples, and never does transport itself.
     state = AuthorState(
-        reference=reference, brief=brief, resolver=resolver, llm=llm, review=review, entity=entity
+        reference=reference,
+        brief=brief,
+        resolver=_fetch_resolver(reference, resolver.pool),
+        llm=llm,
+        review=review,
+        entity=entity,
     )
     loop: "BoundedLoop[AuthorState, _Obs, str | Done]" = BoundedLoop(
         observe=_observe,
