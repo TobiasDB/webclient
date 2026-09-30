@@ -23,6 +23,10 @@ _NOISE_PREFIX = (
     "jss",
 )
 _HEX_SEG = re.compile(r"[0-9a-f]*[0-9][0-9a-f]*")
+#: an emotion / styled-components generated class: lowercase letters and digits INTERLEAVED with no
+#: separator (``e1d6xluq5``, ``ej9ium94``, ``e4wm5bw1``) -- a semantic name keeps its digits at the
+#: end (``col12``) or behind a separator (``col-xs-6``).
+_INTERLEAVED = re.compile(r"[a-z]+\d+[a-z]+[a-z0-9]*")
 #: unambiguous bare Tailwind utilities (ambiguous words like ``container``/``block`` are spared).
 _UTILITY_BARE = frozenset(
     {
@@ -77,6 +81,8 @@ def is_noise_class(tok: str) -> bool:
         and any(c.isdigit() for c in tok)
     ):
         return True  # mixed-case + digit -> generated hash
+    if len(tok) >= 7 and _INTERLEAVED.fullmatch(tok):
+        return True  # letters / digits interleaved, no separator -> an emotion-style hash
     return any(len(seg) >= 8 and _HEX_SEG.fullmatch(seg) for seg in re.split(r"[-_]", tok))
 
 

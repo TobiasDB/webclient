@@ -113,10 +113,18 @@ def _pager_note(flags: "list[Flag]") -> str:
     )
 
 
-def _notes(brief: DatasetBrief, flags: "list[Flag]", kind: str) -> str:
+def _notes(
+    brief: DatasetBrief, flags: "list[Flag]", kind: str, *, record_selector: str = ""
+) -> str:
     """The advisory block every opening carries: the JSON-kind steer, the brief's structural
-    guidance + requirement, and the page's fired flags (ground truth)."""
+    guidance + requirement, the record selector LOCATE detected (a durable hook the model should
+    prefer over a guessed class), and the page's fired flags (ground truth)."""
     notes: list[str] = []
+    if record_selector:
+        notes.append(
+            f"DETECTED RECORD SELECTOR (from the page analysis): {record_selector} -- the repeating "
+            "record region; prefer it (or a selector at least as durable) for the records."
+        )
     if kind == "json":
         notes.append(
             "This is a JSON document -- use dotted paths in select/select_all and read keys with "
@@ -140,6 +148,7 @@ def author_prompt(
     kind: str,
     detail: bool = False,
     recency: str = "",
+    record_selector: str = "",
 ) -> str:
     """The OPENING turn that asks the model to write the extraction query -- rendered from the
     ``write_query`` prompt template (one prompt source, tunable as data): the signal-selected
@@ -156,7 +165,7 @@ def author_prompt(
         fields_line="\n" + fields_line(brief),
         pager=_pager_note(flags),
         skeleton=skeleton,
-        hints=_notes(brief, flags, kind),
+        hints=_notes(brief, flags, kind, record_selector=record_selector),
         recency=(f"\n\nRECENCY (from the page evaluation): {recency}" if recency else ""),
     )
 
@@ -174,10 +183,12 @@ def steps_prompt(
     *,
     kind: str,
     recency: str = "",
+    record_selector: str = "",
 ) -> str:
     """The OPENING turn of the STEP-BY-STEP engine (``build_steps`` template): the leaf-reading
-    guide, the ask, the op menu (records / field / detail / detail_field / where / drop / done),
-    the page's flags + notes, and the skeleton -- sent ONCE; every step is a short result turn."""
+    guide, the ask, the op menu (records / field / detail / detail_field / where / drop / absent /
+    section / done), the page's flags + notes (incl. the detected record selector), and the
+    skeleton -- sent ONCE; every step is a short result turn."""
     return render_prompt(
         "build_steps",
         guide=LEAF_GUIDE,
@@ -185,7 +196,7 @@ def steps_prompt(
         fields_line="\n" + fields_line(brief),
         pager=_pager_note(flags),
         skeleton=skeleton,
-        hints=_notes(brief, flags, kind),
+        hints=_notes(brief, flags, kind, record_selector=record_selector),
         recency=(f"\n\nRECENCY (from the page evaluation): {recency}" if recency else ""),
     )
 

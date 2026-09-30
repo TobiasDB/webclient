@@ -1397,7 +1397,7 @@ def test_author_stops_on_a_js_gated_page_without_guessing_selectors(httpserver: 
 
 
 def test_parse_diagnosis_names_the_cause_and_shows_the_reply() -> None:
-    # An invalid reply is diagnosed, not just "invalid syntax": WHAT the model replied (a snippet),
+    # An invalid reply is diagnosed, not just "invalid syntax": WHAT the model replied (in FULL),
     # WHY it failed (the likely mistake), and a hint targeted at that mistake.
     from web.onboard.author_loop import _parse_diagnosis
     from web.onboard.compile import QueryError
@@ -1412,7 +1412,7 @@ def test_parse_diagnosis_names_the_cause_and_shows_the_reply() -> None:
     }
     for reply, expect in cases.items():
         reason, hint = _parse_diagnosis(reply, exc)
-        assert expect in reason and "reply began:" in reason and hint, (reply, reason)
+        assert expect in reason and "the reply was:" in reason and hint, (reply, reason)
 
 
 # -- the STEP-BY-STEP authoring engine -------------------------------------------------------------
@@ -1545,3 +1545,108 @@ def test_parse_op_rejects_bad_calls() -> None:
         except StepError:
             continue
         raise AssertionError(f"{bad!r} must be rejected")
+
+
+def test_steps_engine_absent_repeat_empty_and_unknown_verb(httpserver: HTTPServer) -> None:
+    # The four guards against guessing / repeating: a column reading EMPTY on every record is
+    # REVERTED; an op already tried is refused with its earlier result; an unknown DSL verb is
+    # rejected AND recorded as a gap; absent(<name>) records a field the page does not carry instead
+    # of a guessed selector -- and the artifact is complete with that field absent.
+    from web.onboard import QueryArtifact
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    llm = _StepConv(
+        [
+            'records("li.row")',
+            'field(name, wq.doc.select(".name").attr("data-x"))',  # EMPTY on every record
+            'field(name, wq.doc.select(".name").attr("data-x"))',  # the same again -> refused
+            'field(name, wq.doc.select_all(".name").attr("text").join(","))',  # unknown verb
+            'field(name, wq.doc.select(".name").attr("text"))',
+            "absent(rating)",
+            "done()",
+        ]
+    )
+    art = _steps_art(httpserver, llm, ["name", "rating"])
+    assert isinstance(art, QueryArtifact)
+    assert art.complete and art.absent == ["rating"], (art.reason, art.attempts)
+    assert "EMPTY on every probed record -- REVERTED" in llm.turns[2]
+    assert "you already called exactly" in llm.turns[3]
+    assert "unknown DSL verb(s): join" in llm.turns[4]
+    assert "absent(<name>), never a guessed selector" in llm.turns[1]
+    assert art.unknown_verbs == ["join"] and art.verbs["select"] >= 2
+    assert any("declared absent" in a for a in art.attempts)
+
+
+def test_steps_engine_section_op_splits_the_page_into_two_queries(httpserver: HTTPServer) -> None:
+    # ir-events style: an UPCOMING callout and a PAST list with different record shapes on one
+    # page. section("<css>") starts a second section; both queries land in the artifact's sections
+    # and their rows are concatenated.
+    from web.onboard import QueryArtifact
+
+    page = (
+        b"<div class='up'><span class='what'>Q3 call</span></div>"
+        b"<ul><li class='past'><a class='t'>Q2 call</a></li>"
+        b"<li class='past'><a class='t'>Q1 call</a></li></ul>"
+    )
+    httpserver.expect_request("/list").respond_with_data(page, content_type="text/html")
+    llm = _StepConv(
+        [
+            'records("div.up")',
+            'field(title, wq.doc.select("span.what").attr("text"))',
+            'section("li.past")',
+            'field(title, wq.doc.select("a.t").attr("text"))',
+            "done()",
+        ]
+    )
+    art = _steps_art(httpserver, llm, ["title"])
+    assert isinstance(art, QueryArtifact)
+    assert art.complete and art.row_count == 3, art.reason
+    assert len(art.sections) == 2 and [s.row_count for s in art.sections] == [1, 2]
+    assert "SECTION 2 started: matched 2 record(s)" in llm.turns[3]
+    assert "SECTION 1 (finished)" in llm.turns[3] and "SECTION 2 (current)" in llm.turns[3]
+    assert [r["title"] for r in cast("list[dict[str, str]]", art.sample)] == [
+        "Q3 call",
+        "Q2 call",
+        "Q1 call",
+    ]
+
+
+def test_chain_engine_splits_a_reply_on_section_lines(httpserver: HTTPServer) -> None:
+    # The write_query prompt promises `---`-separated section queries for a split dataset; the
+    # chain engine honours it: each segment is parsed + tested, the rows concatenated.
+    from web.onboard import QueryArtifact, write_query
+
+    page = (
+        b"<div class='up'><span class='what'>Q3 call</span></div>"
+        b"<ul><li class='past'><a class='t'>Q2 call</a></li></ul>"
+    )
+    httpserver.expect_request("/list").respond_with_data(page, content_type="text/html")
+    reply = (
+        'wq.doc.select_all("div.up").extract(title=wq.doc.select("span.what").attr("text"))\n'
+        "---\n"
+        'wq.doc.select_all("li.past").extract(title=wq.doc.select("a.t").attr("text"))'
+    )
+
+    async def go() -> QueryArtifact:
+        async with Resolver() as r:
+            return await write_query(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                DatasetBrief(fields=["title"]),
+                resolver=r,
+                llm=cast("object", ScriptedLlm(reply)),  # type: ignore[arg-type]
+            )
+
+    art = _run(go())
+    assert isinstance(art, QueryArtifact)
+    assert art.complete and art.row_count == 2 and len(art.sections) == 2, art.reason
+    assert art.verbs == {"select_all": 2, "extract": 2, "select": 2, "attr": 2}
+
+
+def test_openings_carry_the_detected_record_selector() -> None:
+    # LOCATE's detected record selector is the durable hook: both engines' openings name it so the
+    # model prefers it over a hashed class read off the skeleton.
+    from web.onboard.patterns import author_prompt, steps_prompt
+
+    for fn in (author_prompt, steps_prompt):
+        text = fn(DatasetBrief(fields=["a"]), "<ul>", [], kind="html", record_selector="li.item")
+        assert "DETECTED RECORD SELECTOR (from the page analysis): li.item" in text

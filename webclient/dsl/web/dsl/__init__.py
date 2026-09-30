@@ -24,15 +24,19 @@ from __future__ import annotations
 from .expr import Expr, from_blob, from_plan
 from .facade import WebClient
 from .plan import Arg, Plan, Step
-from .run import run_blob
+from .run import resolve_memo, run_blob
 from .surface import (
+    KNOWN_VERBS,
     LazyCollection,
     LazyDocument,
     LazyField,
     LazyReference,
     LazyThen,
     SourceError,
+    UnknownVerb,
     from_source,
+    unknown_verbs,
+    verbs_of,
     wq,
 )
 from .values import Collection, Field, Ref
@@ -45,7 +49,12 @@ __all__ = [
     "from_plan",
     "from_source",
     "SourceError",
+    "UnknownVerb",
+    "KNOWN_VERBS",
+    "verbs_of",
+    "unknown_verbs",
     "run_blob",
+    "resolve_memo",
     "Plan",
     "Step",
     "Arg",

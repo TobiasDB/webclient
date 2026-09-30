@@ -12,6 +12,8 @@ share this one implementation. Lean by design: no browser/pool/remote/streaming 
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import cast
 
@@ -55,6 +57,20 @@ _LINK_ATTRS = frozenset({"href", "src"})
 #: resolve is not memoised). Never crosses runs.
 _RESOLVE_CACHE: "ContextVar[dict[str, object] | None]" = ContextVar("_resolve_cache", default=None)
 
+
+@contextmanager
+def resolve_memo() -> "Iterator[None]":
+    """Share ONE resolve memo across SEVERAL runs: inside the block every ``arun`` reuses the same
+    URL -> document memo, so probing a chain repeatedly (an author testing each step) fetches each
+    detail page once instead of once per run. Nested inside a run, it joins the live memo."""
+    live = _RESOLVE_CACHE.get()
+    token = _RESOLVE_CACHE.set({} if live is None else live)  # an EMPTY live memo is still live
+    try:
+        yield
+    finally:
+        _RESOLVE_CACHE.reset(token)
+
+
 _MISSING: object = object()
 #: ops whose call args stay LAZY sub-plans, evaluated per element (not once, eagerly).
 _ROW_OPS = frozenset({"extract", "filter"})
@@ -67,7 +83,8 @@ async def arun(plan: Plan, root: object = None, *, resolver: "Resolver | None" =
     ``resolver`` to fetch, or a transient one opened + closed for the call when omitted.
     """
     # install a per-run resolve memo for the OUTERMOST run; a nested arun reuses the live one.
-    token = _RESOLVE_CACHE.set(_RESOLVE_CACHE.get() or {})
+    live = _RESOLVE_CACHE.get()
+    token = _RESOLVE_CACHE.set({} if live is None else live)  # an EMPTY live memo is still live
     try:
         if resolver is not None:
             return _smart(await _walk(plan, root, resolver, None))
@@ -307,9 +324,11 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
         return Field(_json_get(obj, ""))  # the JSON scalar value itself
     if name == "links" and isinstance(obj, Document):  # resolvable refs, so .resolve() can follow
         return Collection([Ref(u, base=obj.url) for u in obj.links()])
-    attr = getattr(obj, name, None)
-    if attr is None:
-        return None
+    attr = getattr(obj, name, _MISSING)
+    if attr is _MISSING:  # a verb this value does not have -- LOUD, never a silent null
+        raise WebException(
+            err("dsl.unknown_verb", f"{type(obj).__name__} has no verb {name!r}", verb=name)
+        )
     value = attr(*args, **kwargs) if callable(attr) else attr
     return _wrap(value, _base_of(obj))
 

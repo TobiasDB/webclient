@@ -33,10 +33,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import JsonValue
+from web.dsl import verbs_of
 from web.fetch import ClientPool, WebException, emit
 from web.parse import Document
 from web.resolve import EscalationPolicy, Resolver, flags
@@ -56,6 +60,9 @@ from .timeliness import timeliness
 #: ``steps`` builds it one op at a time with per-step feedback (:mod:`.author_steps`).
 Engine = Literal["chain", "steps"]
 ENGINES: "tuple[Engine, ...]" = ("chain", "steps")
+#: the default wall clock per engine (``budget_s=0``): the step engine makes one model call per op,
+#: so it needs several times the room of a whole-chain turn.
+_DEFAULT_BUDGET_S: "dict[str, float]" = {"chain": 240.0, "steps": 720.0}
 
 #: hard wall-clock cap on running ONE authored query against the source: a pathological query (a
 #: per-record .resolve() fanning out to hundreds of fetches) must never hang the loop.
@@ -99,6 +106,13 @@ class AuthorState:
     doc: "Document | None" = None
     steps: "StepSession | None" = None
     query: "Query | None" = None
+    #: the FINISHED earlier sections authored on THIS page (a split dataset: an Upcoming tab and a
+    #: Past list with different record shapes) -- ``query`` is the last; the runner concatenates.
+    page_sections: "list[tuple[Query, list[object]]]" = field(default_factory=list)
+    #: the DSL verbs the model reached for (name -> count, every attempt) and the ones the DSL does
+    #: not have -- the record of the gaps between what a model wants and what the surface offers.
+    verbs: "Counter[str]" = field(default_factory=Counter)
+    unknown_verbs: "list[str]" = field(default_factory=list)
     rows: "list[object]" = field(default_factory=list)  # the first few rows (review / preview)
     rows_full: "list[object]" = field(default_factory=list)  # every row (artifact / timeliness)
     listing_skeleton: str = ""
@@ -227,6 +241,30 @@ async def _check_source(state: AuthorState) -> "tuple[bool, str]":
     return _yes(reply), reply.strip()
 
 
+#: per-VALUE cap in a review sample: every column stays visible (a long nested body no longer
+#: pushes the headline / url off the end of a whole-JSON cut and gets them called "missing").
+_PREVIEW_VALUE_CHARS = 160
+_PREVIEW_CHARS = 3_000
+
+
+def _clip_value(value: object) -> object:
+    if isinstance(value, str):
+        return value if len(value) <= _PREVIEW_VALUE_CHARS else value[:_PREVIEW_VALUE_CHARS] + "…"
+    if isinstance(value, dict):
+        return {k: _clip_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        head = [_clip_value(v) for v in value[:3]]
+        return head + ([f"… +{len(value) - 3} more"] if len(value) > 3 else [])
+    return value
+
+
+def _preview(rows: "list[object]") -> str:
+    """The sample rows as JSON with every LEAF clipped (long strings, long lists) -- so a reviewer
+    sees each column of each row, and the whole stays within :data:`_PREVIEW_CHARS`."""
+    text = json.dumps([_clip_value(r) for r in rows], ensure_ascii=False, default=str)
+    return text if len(text) <= _PREVIEW_CHARS else text[:_PREVIEW_CHARS] + "…"
+
+
 async def _review_rows(state: AuthorState) -> "tuple[bool, str]":
     """Per-sample review: do the rows really match the brief + entity, with real values and the
     WHOLE dataset the brief asks for (its ``review_hint`` is the brief-specific strictness)?"""
@@ -234,7 +272,7 @@ async def _review_rows(state: AuthorState) -> "tuple[bool, str]":
         return True, ""
     want = state.brief.goal or "the target dataset"
     schema = "\n".join(field_schema(state.brief)) if state.brief.fields else "(the salient fields)"
-    sample = json.dumps(state.rows[:_SAMPLE], ensure_ascii=False, default=str)[:1500]
+    sample = _preview(state.rows[:_SAMPLE])
     extra = (
         f"\nBrief-specific check (be strict on this): {state.brief.review_hint}"
         if state.brief.review_hint
@@ -272,6 +310,7 @@ def _opening(state: AuthorState) -> str:
         kind=state.reference.kind,
         detail=bool(state.detail_skeleton),
         recency=recency,
+        record_selector=state.reference.record_selector or "",
     )
 
 
@@ -358,14 +397,52 @@ async def _author(state: AuthorState) -> None:
             state.last_error = state.hint = ""
             emit(ReasonEvent(stage="author", subject=url, text="a sibling page holds the rest"))
             return
-    try:
-        state.query = reroot(
-            parse_query(reply), state.reference.url, profile=state.reference.profile or None
-        )
-        state.last_error = state.hint = ""
-    except QueryError as exc:  # unparseable / disallowed -> a repair turn re-authors with this
-        state.last_error, state.hint = _parse_diagnosis(reply, exc)
-        emit(ReasonEvent(stage="author", text=f"query rejected: {state.last_error}"))
+    profile = state.reference.profile or None
+    segments = _sections(reply)
+    queries: list[Query] = []
+    for i, seg in enumerate(segments):
+        try:
+            expr = parse_query(seg)
+        except QueryError as exc:  # unparseable / disallowed -> a repair turn re-authors with this
+            _tally(state, exc.verbs, exc.unknown)
+            where = f"section {i + 1} of {len(segments)}: " if len(segments) > 1 else ""
+            reason, state.hint = _parse_diagnosis(seg, exc)
+            state.last_error = where + reason
+            emit(ReasonEvent(stage="author", text=f"query rejected: {state.last_error}"))
+            return
+        _tally(state, verbs_of(expr), ())
+        queries.append(reroot(expr, state.reference.url, profile=profile))
+    state.page_sections = []
+    for q in queries[:-1]:  # a split dataset: test the earlier sections now; the last is sampled
+        try:
+            _ran, rows = await _test_query(q, state.resolver)
+        except (WebException, asyncio.TimeoutError) as exc:
+            state.last_error = f"section {q.describe()} failed to run: {exc}"
+            state.hint = "Fix that section's selectors (or drop the section if it is empty)."
+            emit(ReasonEvent(stage="author", text=f"query rejected: {state.last_error}"))
+            return
+        state.page_sections.append((q, rows))
+        emit(ReasonEvent(stage="author", text=f"section {q.describe()} → {len(rows)} row(s)"))
+    state.query = queries[-1]
+    state.last_error = state.hint = ""
+
+
+#: the line that separates SECTION queries in a reply (a split dataset: one chain per section).
+_SECTION_SEP = re.compile(r"^\s*---+\s*$", re.MULTILINE)
+
+
+def _sections(reply: str) -> "list[str]":
+    """The reply split into its section chains on ``---`` lines (segments without ``wq.`` dropped);
+    one segment when there is no separator."""
+    parts = [p for p in _SECTION_SEP.split(reply) if "wq." in p]
+    return parts or [reply]
+
+
+def _tally(state: AuthorState, verbs: "Sequence[str]", unknown: "Sequence[str]") -> None:
+    state.verbs.update(verbs)
+    for v in unknown:
+        if v not in state.unknown_verbs:
+            state.unknown_verbs.append(v)
 
 
 async def _author_steps(state: AuthorState, note: str) -> None:
@@ -411,6 +488,13 @@ async def _author_steps(state: AuthorState, note: str) -> None:
         return
     if result.note:
         state.attempts.append(result.note)
+    _tally(state, [], state.steps.unknown)
+    state.verbs = Counter(state.steps.verbs)  # the session's running tally IS this page's
+    if result.absent - state.absent:
+        declared = sorted(result.absent - state.absent)
+        state.attempts.append(f"field(s) {', '.join(declared)} declared absent by the model")
+    state.absent |= result.absent
+    state.page_sections = list(result.sections)
     state.query = result.query
     state.last_error, state.hint = result.error, result.hint
     if result.query is not None:
@@ -422,9 +506,17 @@ def _parse_diagnosis(reply: str, exc: QueryError) -> "tuple[str, str]":
     WHAT the model actually replied (a snippet) -- so the log shows the cause, not just "invalid
     syntax" -- and a hint targeted at the most likely mistake."""
     text = reply.strip()
-    snippet = " ".join(text.split())[:160]
+    full = " ".join(text.split())  # the WHOLE reply -- a human must be able to see why
     code = text[text.find("wq.") :] if "wq." in text else ""
-    if not code:
+    if exc.unknown:
+        why, hint = (
+            f"unknown DSL verb(s) {', '.join(exc.unknown)} -- the DSL has no such verb",
+            f"The verb(s) {', '.join(exc.unknown)} do not exist. Use ONLY the verbs in the guide "
+            "(select / select_all / attr / text / number / date / datetime / split / map / link / "
+            "regex / resolve / extract / filter / limit / is_ok / is_empty / project); a list of "
+            "values is a select_all(...).attr('text') column -- there is no join.",
+        )
+    elif not code:
         why, hint = (
             "no wq chain in the reply (prose instead of code)",
             "You replied with prose. Reply with ONLY the query code -- one wq.doc... chain, nothing "
@@ -462,7 +554,7 @@ def _parse_diagnosis(reply: str, exc: QueryError) -> "tuple[str, str]":
             "Reply with ONLY query code -- one wq.doc... chain (or, for a split dataset, one chain "
             "per section separated by a line containing only ---). Use only the syntax in the guide.",
         )
-    return f"the reply was not a valid wq query: {why} — reply began: {snippet!r}", hint
+    return f"the reply was not a valid wq query: {why}\n  the reply was: {full!r}", hint
 
 
 def _fail_reason(state: AuthorState, rows: "list[object]") -> "tuple[str, str]":
@@ -568,6 +660,8 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
     if turn == "split":
         # finalise the current section, then re-target the loop at the sibling page as a NEW section
         # (a fresh check -> base there, in a fresh conversation over THAT page's skeleton).
+        state.sections.extend(state.page_sections)
+        state.page_sections = []
         if state.query is not None:
             state.sections.append((state.query, list(state.rows_full)))
         state.tried.add(state.reference.url)
@@ -706,10 +800,7 @@ def _json_rows(rows: "list[object]") -> "list[JsonValue]":
 
 def _artifact(state: AuthorState, verdict: Verdict) -> QueryArtifact:
     """Fold the loop's outcome into the :class:`QueryArtifact` (see the module docstring)."""
-    parts = [
-        *state.sections,
-        *([(state.query, list(state.rows_full))] if state.query is not None else []),
-    ]
+    parts = _parts(state)
     all_rows: list[object] = [r for _, rows in parts for r in _populated(rows)]
     json_rows = _json_rows(all_rows)
     tested = bool(parts) and all(len(rows) > 0 for _, rows in parts)
@@ -739,7 +830,19 @@ def _artifact(state: AuthorState, verdict: Verdict) -> QueryArtifact:
         timeliness=tnote,
         stale=stale,
         reason=reason,
+        verbs=dict(state.verbs.most_common()),
+        unknown_verbs=list(state.unknown_verbs),
     )
+
+
+def _parts(state: AuthorState) -> "list[tuple[Query, list[object]]]":
+    """Every section query with its rows: the sibling pages' sections, then this page's earlier
+    sections, then the current query."""
+    return [
+        *state.sections,
+        *state.page_sections,
+        *([(state.query, list(state.rows_full))] if state.query is not None else []),
+    ]
 
 
 async def _run(
@@ -772,12 +875,11 @@ async def _run(
         progress=lambda s: (len(s.sections), s.query.to_blob() if s.query is not None else ""),
         max_rounds=max_rounds,
     )
+    wall = budget_s if budget_s > 0 else _DEFAULT_BUDGET_S[engine]
     try:
-        verdict = await asyncio.wait_for(loop.arun(state), timeout=budget_s)
+        verdict = await asyncio.wait_for(loop.arun(state), timeout=wall)
     except asyncio.TimeoutError:  # a slow model / stuck page -- take the sections so far
-        emit(
-            ReasonEvent(stage="author", text=f"authoring hit the {budget_s:.0f}s budget — stopping")
-        )
+        emit(ReasonEvent(stage="author", text=f"authoring hit the {wall:.0f}s budget — stopping"))
         verdict = Verdict(reason="budget", rounds=state.repairs)
     if verdict.reason == "error" and verdict.error:
         emit(ReasonEvent(stage="author", text=f"authoring aborted — {verdict.error}"))
@@ -799,13 +901,14 @@ async def write_query(
     review: "Llm | None" = None,
     entity: str = "",
     max_rounds: int = 12,
-    budget_s: float = 240.0,
+    budget_s: float = 0.0,
     engine: Engine = "chain",
 ) -> QueryArtifact:
     """Author the query for ``reference`` per ``brief`` and return the :class:`QueryArtifact`: the
     runnable query + its validation verdict (see the module docstring). ``review`` enables the
-    entry check + per-sample review; ``budget_s`` is a hard wall clock for the whole loop;
-    ``engine`` picks how each author turn writes the query (see :data:`ENGINES`)."""
+    entry check + per-sample review; ``budget_s`` is a hard wall clock for the whole loop (``0`` =
+    the engine's default, 240s for ``chain`` / 720s for ``steps``); ``engine`` picks how each
+    author turn writes the query (see :data:`ENGINES`)."""
     state, verdict = await _run(
         reference,
         brief,
@@ -829,7 +932,7 @@ async def author_agent(
     review: "Llm | None" = None,
     entity: str = "",
     max_rounds: int = 12,
-    budget_s: float = 240.0,
+    budget_s: float = 0.0,
     engine: Engine = "chain",
 ) -> "tuple[list[Query], Verdict]":
     """The section QUERIES (usually one; more for a split dataset) + the loop's
@@ -846,10 +949,7 @@ async def author_agent(
         budget_s=budget_s,
         engine=engine,
     )
-    queries = [q for q, _ in state.sections]
-    if state.query is not None:
-        queries.append(state.query)
-    return queries, verdict
+    return [q for q, _ in _parts(state)], verdict
 
 
 __all__ = ["author_agent", "write_query", "AuthorState", "Engine", "ENGINES"]

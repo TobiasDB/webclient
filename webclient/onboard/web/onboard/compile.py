@@ -18,6 +18,7 @@ the :mod:`patterns <web.onboard.patterns>` guide documents. This module turns th
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import cast
 
 from web.dsl import (
@@ -26,6 +27,7 @@ from web.dsl import (
     LazyDocument,
     Plan,
     SourceError,
+    UnknownVerb,
     from_plan,
     from_source,
     wq,
@@ -48,7 +50,16 @@ _SMART = {
 
 
 class QueryError(ValueError):
-    """The model's reply was not a rebuildable ``wq`` chain (unparseable, empty, or disallowed)."""
+    """The model's reply was not a rebuildable ``wq`` chain (unparseable, empty, or disallowed).
+    ``verbs`` are the DSL verbs the reply reached for anyway and ``unknown`` the ones the DSL does
+    not have -- kept so a rejected reply still counts toward the verb record (the gap list)."""
+
+    def __init__(
+        self, message: str, *, verbs: "Sequence[str]" = (), unknown: "Sequence[str]" = ()
+    ) -> None:
+        super().__init__(message)
+        self.verbs = list(verbs)
+        self.unknown = list(unknown)
 
 
 def clean_reply(reply: str) -> str:
@@ -88,6 +99,8 @@ def parse_query(reply: str) -> Expr:
         raise QueryError("no query in the reply")
     try:
         return from_source(code)
+    except UnknownVerb as exc:  # a verb the DSL lacks -> the reason names the gap
+        raise QueryError(str(exc), verbs=exc.used, unknown=exc.verbs) from exc
     except SourceError as exc:  # the DSL's parse error -> the onboard tier's QueryError
         raise QueryError(str(exc)) from exc
 

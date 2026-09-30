@@ -210,6 +210,26 @@ def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "brief"
 
 
+def _record_verbs(brief_arg: str, url: str, engine: str, art: QueryArtifact) -> Path:
+    """Append this run's DSL-verb tally (and the unknown verbs -- the gaps) to the persistent
+    ``verbs.jsonl`` next to the located-reference cache, so gaps show up ACROSS runs."""
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    path = Path(base) / "web-onboard" / "verbs.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = {
+        "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "brief": brief_arg,
+        "url": url,
+        "engine": engine,
+        "complete": art.complete,
+        "verbs": art.verbs,
+        "unknown": art.unknown_verbs,
+    }
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line, ensure_ascii=False) + "\n")
+    return path
+
+
 def _cache_path(brief: Brief, brief_arg: str, entity: "str | None") -> Path:
     """Where a located Reference is cached, keyed by brief + entity -- so ``author`` picks up what
     ``locate`` found. Under ``$XDG_CACHE_HOME`` (else ``~/.cache``)/``web-onboard``."""
@@ -534,6 +554,14 @@ def _summarize_author(
         f"  tested:    {'✓' if art.tested else '✗'}  {art.row_count} row(s)"
         + (" combined" if split else "")
     )
+    if art.verbs:  # the DSL verbs the model reached for -- and the ones the DSL lacks (gaps)
+        used = ", ".join(f"{v}×{n}" for v, n in art.verbs.items())
+        lines.append(f"  verbs:     {used}")
+        if art.unknown_verbs:
+            lines.append(
+                f"  ⚠️ unknown verbs (DSL gaps): {', '.join(art.unknown_verbs)}   "
+                "(the model wanted these; the DSL has no such verb)"
+            )
     if art.timeliness:  # a FLAG for the human: is the newest extracted row recent?
         lines.append(f"  timeliness:{' ⚠️ STALE —' if art.stale else ' ✓'} {art.timeliness}")
     if art.absent:
@@ -649,6 +677,8 @@ async def _author(args: argparse.Namespace) -> int:
             )
         spent = (llm.spent_usd, llm.calls) if isinstance(llm, _Metered) else None
         _summarize_author(reference, brief, art, spent=spent)  # the summary -> stderr
+        if art.verbs:  # the persistent verb record: every run appends what the model reached for
+            _err(f"  verb log:  {_record_verbs(args.brief, reference.url, args.engine, art)}")
         blobs = [sec.blob for sec in art.sections] or [art.blob]
         for blob in blobs:  # each section's serialised query -> stdout (newline-separated)
             print(blob)

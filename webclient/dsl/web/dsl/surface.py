@@ -386,7 +386,61 @@ def from_source(src: str) -> Expr:
     result = _eval_src(tree)
     if not isinstance(result, Expr):
         raise SourceError(f"source is a {type(result).__name__}, not a wq chain")
+    bad = unknown_verbs(result)
+    if bad:
+        raise UnknownVerb(bad, used=verbs_of(result))
     return result
+
+
+class UnknownVerb(SourceError):
+    """The source used verb(s) the DSL does not have (``.join(...)``, ``.first()``, ...) -- refused
+    at parse time so a model-written chain fails LOUDLY, naming the gap, instead of yielding nulls
+    at run time. ``verbs`` lists the unknown ones; ``used`` every verb the source called."""
+
+    def __init__(self, verbs: "Sequence[str]", *, used: "Sequence[str]" = ()) -> None:
+        self.verbs = list(verbs)
+        self.used = list(used)
+        super().__init__(
+            f"unknown DSL verb(s): {', '.join(self.verbs)} -- not in the wq surface (a chain may "
+            "only use the documented verbs)"
+        )
+
+
+def _surface_names(*classes: type) -> "frozenset[str]":
+    return frozenset(n for c in classes for n in vars(c) if not n.startswith("_"))
+
+
+#: every VERB the ``wq`` surface has -- the public names of the lazy tiers + the ``wq`` roots /
+#: builders. The single answer to "is this a DSL verb?" (:func:`unknown_verbs`, the runtime).
+KNOWN_VERBS: "frozenset[str]" = _surface_names(
+    LazyField, LazyCollection, LazyDocument, LazyReference, LazyThen, _Wq
+) | frozenset({"doc", "ref", "then", "otherwise"})
+
+
+def verbs_of(expr: Expr) -> "list[str]":
+    """Every verb the chain calls, in order, nested sub-expressions included (each ``get`` step) --
+    for tallying what an author actually reaches for."""
+    out: list[str] = []
+
+    def walk(plan: Plan) -> None:
+        for step in plan.steps:
+            if step.kind == "get":
+                out.append(step.name)
+            for arg in (*step.args, *step.kwargs.values()):
+                if arg.plan is not None:
+                    walk(arg.plan)
+
+    walk(expr._plan)
+    return out
+
+
+def unknown_verbs(expr: Expr) -> "list[str]":
+    """The verbs in the chain that are NOT in :data:`KNOWN_VERBS` (deduplicated, in order)."""
+    seen: list[str] = []
+    for v in verbs_of(expr):
+        if v not in KNOWN_VERBS and v not in seen:
+            seen.append(v)
+    return seen
 
 
 __all__ = [

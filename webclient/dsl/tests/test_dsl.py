@@ -447,3 +447,61 @@ def test_extract_after_a_per_record_resolve_fans_out_on_the_detail_page(
     assert [r["detail"]["sku"] for r in rows] == ["SKU-1", "SKU-2", "SKU-3"]
     for n in (1, 2, 3):
         assert sum(1 for req, _ in httpserver.log if req.path == f"/i/{n}") == 1  # one fetch each
+
+
+def test_unknown_verbs_fail_loudly_at_parse_and_run_time() -> None:
+    # A model-written `.join(...)` used to yield nulls silently. Now from_source names the gap (and
+    # still reports every verb the chain used, for the tally), and a recorded chain with a verb the
+    # value does not have raises `dsl.unknown_verb` at run time instead of returning None.
+    from web.dsl import KNOWN_VERBS, UnknownVerb, from_source, verbs_of
+    from web.fetch import WebException
+    from web.parse import Document
+
+    try:
+        from_source('wq.doc.select_all("p").attr("text").join("\\n")')
+    except UnknownVerb as exc:
+        assert exc.verbs == ["join"] and exc.used == ["select_all", "attr", "join"]
+    else:
+        raise AssertionError("an unknown verb must be refused at parse time")
+    assert {"select", "select_all", "attr", "extract", "filter", "limit", "resolve"} <= KNOWN_VERBS
+    assert verbs_of(from_source('wq.doc.select_all("li").extract(a=wq.doc.attr("x"))')) == [
+        "select_all",
+        "extract",
+        "attr",
+    ]
+    doc = Document(content=b"<p>hi</p>", kind="html")
+    try:
+        wq.doc.select("p").frobnicate().collect(doc)
+    except WebException as exc:
+        assert exc.error.code == "dsl.unknown_verb" and "frobnicate" in exc.error.message
+    else:
+        raise AssertionError("a runtime unknown verb must raise")
+
+
+def test_resolve_memo_shares_fetches_across_runs(httpserver: HTTPServer) -> None:
+    # Inside `resolve_memo()` several runs share one URL -> document memo (an author probing a
+    # chain step by step fetches each detail page once, not once per probe).
+    from web.dsl import resolve_memo
+    from web.parse import Document
+    from werkzeug.wrappers import Response
+
+    calls = {"n": 0}
+
+    def handler(_req: object) -> "Response":
+        calls["n"] += 1
+        return Response("<b class='x'>one</b>", content_type="text/html")
+
+    httpserver.expect_request("/d").respond_with_handler(handler)
+    listing = Document(content=f"<a href='{httpserver.url_for('/d')}'>go</a>".encode(), kind="html")
+    chain = wq.doc.select("a").attr("href").resolve().select("b.x").attr("text")
+
+    async def go() -> None:
+        async with Resolver() as r:
+            with resolve_memo():
+                assert await chain.acollect(listing, resolver=r) == "one"
+                assert await chain.acollect(listing, resolver=r) == "one"
+            assert calls["n"] == 1  # the second run hit the memo
+            await chain.acollect(listing, resolver=r)
+            assert calls["n"] == 2  # outside the block each run fetches
+
+    asyncio.run(go())

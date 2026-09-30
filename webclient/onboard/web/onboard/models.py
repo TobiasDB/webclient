@@ -291,6 +291,11 @@ class QueryArtifact(BaseModel):
     timeliness: str = ""
     stale: bool = False
     reason: str = ""  # why authoring stopped: done / budget / stalled / error(...)
+    #: the DSL verbs the model reached for over the whole run (name -> count, every attempt) and
+    #: the ones the DSL does NOT have -- a record of the gaps between what a model wants to write
+    #: and what the surface offers.
+    verbs: dict[str, int] = {}
+    unknown_verbs: list[str] = []
 
 
 class Reference(BaseModel):
