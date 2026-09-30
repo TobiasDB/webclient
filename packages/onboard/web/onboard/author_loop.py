@@ -27,7 +27,7 @@ from web.resolve import Resolver
 
 from .agent import BoundedLoop, Done, Verdict
 from .author import AuthorEvent, sample_skeleton
-from .compile import Query, parse_query, reroot
+from .compile import Query, QueryError, parse_query, reroot
 from .llm import Llm, ReasonEvent
 from .models import DatasetBrief, Reference
 from .patterns import fields_line, guide_for
@@ -48,6 +48,13 @@ class AuthorState:
     listing_skeleton: str = ""
     detail_skeleton: str = ""
     nested: bool = False
+    #: the last authoring/run FAILURE (a parse reject, a select-miss, an empty sample) -- fed back to
+    #: the model on a repair turn; cleared once repaired.
+    last_error: str = ""
+    #: repair turns taken so far, and the cap (a repair edge re-authors with the failure fed back;
+    #: bounded so a persistently-broken query cannot loop forever).
+    repairs: int = 0
+    max_repairs: int = 3
 
 
 @dataclass
@@ -55,6 +62,9 @@ class _Obs:
     phase: str  # "base" | "extend"
     missing: "list[str]" = field(default_factory=list)
     detail_link: "str | None" = None
+    error: str = ""  # a query FAILURE this sample hit (parse/select-miss/empty) -> a repair turn
+    rows_empty: bool = False
+    can_repair: bool = True  # repair budget not yet spent
 
 
 def _missing(brief: DatasetBrief, rows: "list[object]") -> "list[str]":
@@ -78,10 +88,11 @@ def _record_link(rows: "list[object]") -> "str | None":
     return None
 
 
-async def _author(state: AuthorState) -> Query:
+async def _author(state: AuthorState) -> None:
     """Author the query for the current instructions + skeletons (one model call), over the
-    signal-selected pattern examples, rooted at the reference. The model's raw reply is emitted
-    before parse, so it is visible even on failure."""
+    signal-selected pattern examples, rooted at the reference. Sets ``state.query`` on success; on a
+    parse REJECT it records ``state.last_error`` (for a repair turn) and leaves the query unchanged,
+    so an unparseable reply never crashes the loop. The raw reply is emitted before parse."""
     guide = guide_for([], state.reference.kind, detail=bool(state.detail_skeleton))
     parts = [
         guide,
@@ -99,28 +110,58 @@ async def _author(state: AuthorState) -> Query:
             "For a field that is on the DETAIL page, resolve each record's link and select on it, "
             "e.g. body=wq.doc.select('a.headline').attr('href').resolve().select('article').attr('text')."
         )
+    if state.last_error:  # a repair turn: show the model its prior query + why it failed
+        prior = state.query.describe() if state.query is not None else "(no parseable query yet)"
+        parts.append(
+            f"Your PREVIOUS query FAILED and must be fixed:\n{prior}\nFAILURE: {state.last_error}\n"
+            "Write a CORRECTED wq.doc... chain -- fix the selector that missed / the disallowed "
+            "syntax; a field that may be absent on some records must be optional "
+            "(select(css, optional=True)); do NOT use a Python dict literal."
+        )
     parts.append("Reply with ONLY the wq.doc... chain -- no prose, no code fence.")
     reply = await state.llm.complete("\n\n".join(parts))
     emit(AuthorEvent(phase="reply", reply=reply))
-    return reroot(parse_query(reply), state.reference.url, profile=state.reference.profile or None)
+    try:
+        state.query = reroot(
+            parse_query(reply), state.reference.url, profile=state.reference.profile or None
+        )
+        state.last_error = ""
+    except QueryError as exc:  # unparseable / disallowed -> a repair turn re-authors with this
+        state.last_error = f"the reply did not parse as a wq query -- {exc}"
+        emit(ReasonEvent(stage="author", text=f"query rejected, will repair: {exc}"))
 
 
 async def _observe(state: AuthorState) -> _Obs:
-    if state.query is None:
+    if state.query is None and not state.last_error:
         return _Obs(phase="base")
+    if state.last_error:  # the base/repair author just REJECTED the reply -- no query to sample
+        return _Obs(phase="extend", error=state.last_error, rows_empty=True)
     try:  # SAMPLE: run the current query
+        assert state.query is not None
         result = await state.query.acollect(resolver=state.resolver)
         state.rows = result[:5] if isinstance(result, list) else [result]
-    except WebException:
+    except (
+        WebException
+    ) as exc:  # a select-miss / transport failure -> feed it back on a repair turn
         state.rows = []
+        state.last_error = f"running the query failed -- {exc.error.code}: {exc.error.detail}"
     missing = _missing(state.brief, state.rows)
     link = _record_link(state.rows) if (missing and not state.nested) else None
-    return _Obs(phase="extend", missing=missing, detail_link=link)
+    return _Obs(
+        phase="extend",
+        missing=missing,
+        detail_link=link,
+        error=state.last_error,
+        rows_empty=not state.rows,
+        can_repair=state.repairs < state.max_repairs,
+    )
 
 
 async def _decide(obs: _Obs) -> "str | Done":
     if obs.phase == "base":
         return "base"
+    if obs.error or obs.rows_empty:  # a failed/empty query -> repair while the budget lasts
+        return "repair" if obs.can_repair else Done()
     if obs.missing and obs.detail_link is not None:  # fields on a linked detail page -> nest
         return "detail"
     return Done()  # every required field is present (or unreachable) -- stop
@@ -132,7 +173,16 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
         state.listing_skeleton = sample_skeleton(sample)
         state.instructions = ["extract every listed record with the fields above"]
         emit(ReasonEvent(stage="author", text="authoring the base query for the listed records"))
-        state.query = await _author(state)
+        await _author(state)
+    elif turn == "repair":
+        state.repairs += 1
+        if not state.last_error:  # an empty sample with no explicit error: the selector missed
+            state.last_error = (
+                "the query ran but matched 0 records -- the record selector (select_all) is wrong; "
+                "pick a different repeating element from the skeleton"
+            )
+        emit(ReasonEvent(stage="author", text=f"repair {state.repairs}: {state.last_error[:90]}"))
+        await _author(state)  # re-authors with last_error shown, then clears it on success
     elif turn == "detail":
         link = _record_link(state.rows)
         if link is None:
@@ -151,7 +201,7 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
                 text="the brief needs per-record detail -- nesting a detail extraction",
             )
         )
-        state.query = await _author(state)
+        await _author(state)
 
 
 async def author_agent(

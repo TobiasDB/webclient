@@ -479,6 +479,34 @@ def test_author_agent_nests_a_detail_extraction(httpserver: HTTPServer) -> None:
     assert any(row.get("body") == "Body One" for row in rows)  # the detail turn nested the body
 
 
+def test_author_agent_repairs_a_failed_query(httpserver: HTTPServer) -> None:
+    # the repair edge: the base query first (a) does not parse, then (b) matches 0 records, then
+    # (c) is correct -- the loop feeds each failure back and re-authors, reaching rows.
+    from web.onboard import author_agent
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    bad_parse = 'wq.doc.select_all("li.row").extract(name={"x": 1})'  # disallowed Dict -> reject
+    zero_rows = 'wq.doc.select_all(".nope").extract(name=wq.doc.select(".name").attr("text"))'
+    good = 'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
+    llm = _SeqLlm([bad_parse, zero_rows, good])
+
+    async def go() -> object:
+        async with Resolver() as r:
+            q, verdict = await author_agent(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                DatasetBrief(fields=["name"]),
+                resolver=r,
+                llm=cast("object", llm),
+            )
+            assert verdict.ok  # the loop repaired its way to done
+            assert q is not None
+            return await q.acollect(resolver=r)
+
+    rows = cast("list[dict[str, object]]", _run(go()))
+    assert [row.get("name") for row in rows] == ["A", "B"]  # repaired past parse-reject + 0 rows
+    assert llm.i >= 3  # it took the two repair turns (base + repair + repair)
+
+
 def test_run_to_sink_routes_rows_to_table_and_documents_to_store(httpserver: HTTPServer) -> None:
     from web.onboard import MemorySink, run_to_sink
 
