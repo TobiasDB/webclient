@@ -1,7 +1,8 @@
 # web -- the layered web.* packages under webclient/. Install helpers + the developer gate.
 #
-#   make install    create env/ (if missing) and editable-install every package + its optional
-#                   runtime deps (browser / impersonate / stealth / search) + the dev tools
+#   make install    create env/ (if missing) and editable-install every package (fetch's browser
+#                   stack -- playwright + patchright -- is a core dep) + its optional runtime deps
+#                   (impersonate / search) + the dev tools (incl. lxml / PyYAML type stubs)
 #   make browsers   download the Chromium the browser tier drives (playwright / patchright)
 #   make check      the full gate across EVERY package: fmt-check, mypy --strict, pyright, pytest
 #   make test       pytest across every package
@@ -26,12 +27,13 @@ venv:
 install: venv
 	$(UV) pip install --python $(PY) \
 	  -e ./webclient/parse \
-	  -e "./webclient/fetch[browser,impersonate,stealth]" \
+	  -e "./webclient/fetch[impersonate]" \
 	  -e ./webclient/resolve \
 	  -e ./webclient/crawl \
 	  -e ./webclient/dsl \
 	  -e "./webclient/onboard[search]"
-	$(UV) pip install --python $(PY) pytest pytest-httpserver mypy pyright isort black
+	$(UV) pip install --python $(PY) \
+	  pytest pytest-httpserver mypy pyright isort black lxml-stubs types-PyYAML
 
 browsers:
 	$(PY) -m playwright install chromium

@@ -1,16 +1,24 @@
 [project]
 name = "web-fetch"
 version = "0.1.0"
-description = "web-* fetch: the transport layer — Request -> Snapshot. Depends only on httpx."
+description = "web-* fetch: the transport layer — Request -> Snapshot (httpx + a real browser)."
 requires-python = ">=3.12"
-dependencies = ["httpx>=0.24", "pydantic>=2", "browserforge>=1.2"]
+# The browser tier is a first-class rung of the evasion ladder, not an add-on: every browser
+# profile drives the leak-patched `patchright` fork (§5), which reuses Playwright's Chromium and
+# APIs, so BOTH ship as core deps -- `pip install web-fetch` gets a working browser out of the box
+# (a pinned WEB_BROWSER_PATH / channel=chrome then just launches). `make browsers` fetches Chromium.
+dependencies = [
+    "httpx>=0.24",
+    "pydantic>=2",
+    "browserforge>=1.2",
+    "playwright>=1.30",
+    "patchright>=1.5",
+]
 
 [project.optional-dependencies]
-browser = ["playwright>=1.30"]
-# rung 2 of the evasion ladder: a real Chrome TLS/HTTP2 fingerprint at the HTTP layer (ANTI-BOT.md §2.1).
+# rung 2 of the evasion ladder: a real Chrome TLS/HTTP2 fingerprint at the HTTP layer (ANTI-BOT.md
+# §2.1). Optional -- the cheap HTTP tier falls back to httpx when curl_cffi isn't installed.
 impersonate = ["curl_cffi>=0.7"]
-# the leak-patched browser driver (drop-in Playwright fork) that suppresses the CDP Runtime.enable leak (§5).
-stealth = ["patchright>=1.5"]
 
 [build-system]
 requires = ["hatchling"]
