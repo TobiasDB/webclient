@@ -11,6 +11,8 @@ OPS -- each turn, reply with EXACTLY ONE call (no prose, no code fence):
   where(<predicate>)               keep only the records matching a predicate (see filtering above): wq.doc.select(...) reads inside the record, wq.field("<col>") reads a column already added -- never a bare column name
   drop(<name>)                     remove a column
   absent(<name>)                   the field is NOT on this page nor its detail page -- say so instead of guessing a selector
+  identity(<field|css>, ...)       ONLY when the brief asks for a specific identity: the fields and/or a css selector (resolved on the record) that identify it -- otherwise identity is implicit (every extracted field)
+  detail_identity("<css>")         ONLY when the brief asks: the STABLE element that IS the detail page's document (e.g. "article"), so a clock or sidebar changing does not make a new document
   section("<css>")                 the dataset CONTINUES in another section of this page with a DIFFERENT record shape (e.g. an "Upcoming" tab vs a "Past" list): start a new section rooted at that record selector, add its fields, then done() -- the pipeline concatenates every section's rows. (Sections that SHARE a record shape need no section(): one grouped selector "a.x, b.y" in records(...) does it.)
   done()                           the query is complete: every required field added (or declared absent) and reading real values
 

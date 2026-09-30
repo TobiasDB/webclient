@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 from typing import Any
 
 from pytest_httpserver import HTTPServer
@@ -24,6 +25,15 @@ _ITEM = b'<html><body><h1 class="sku">SKU-%d</h1></body></html>'
 
 def _run(coro: Any) -> Any:
     return asyncio.run(coro)
+
+
+def plain(value: object) -> object:
+    """Rows without the implicit identity columns (`_identity` / `_url`) -- exact comparisons."""
+    if isinstance(value, dict):
+        return {k: plain(v) for k, v in value.items() if not str(k).startswith("_")}
+    if isinstance(value, list):
+        return [plain(v) for v in value]
+    return value
 
 
 def _shop(server: HTTPServer) -> str:
@@ -146,7 +156,7 @@ def test_extract_filter_number_and_smart_collect(httpserver: HTTPServer) -> None
         .filter(wq.doc.select(".price").attr("text") != "")
         .acollect()
     )
-    assert rows == [
+    assert plain(rows) == [
         {"title": "Aeropress", "price": 39},
         {"title": "Grinder", "price": 129},
     ]
@@ -366,7 +376,7 @@ def test_same_verbs_query_a_json_data_api(httpserver: HTTPServer) -> None:
         )
         .acollect()
     )
-    assert rows == [{"sku": "W1", "name": "Widget"}, {"sku": "G2", "name": "Gadget"}]
+    assert plain(rows) == [{"sku": "W1", "name": "Widget"}, {"sku": "G2", "name": "Gadget"}]
 
 
 def test_webclient_is_context_managed(httpserver: HTTPServer) -> None:
@@ -440,10 +450,10 @@ def test_extract_after_a_per_record_resolve_fans_out_on_the_detail_page(
         .acollect()
     )
     assert rows[0]["title"] == "Aeropress"
-    detail = dict(rows[0]["detail"])
-    ident = detail.pop("_doc")  # the resolved document's identity rides on the row it produced
-    assert detail == {"sku": "SKU-1", "again": "SKU-1"}  # selected INSIDE the detail page
-    assert ident["url"] == httpserver.url_for("/i/1") and len(ident["hash"]) == 24
+    assert plain(rows[0]["detail"]) == {
+        "sku": "SKU-1",
+        "again": "SKU-1",
+    }  # selected INSIDE the detail page
     assert [r["detail"]["sku"] for r in rows] == ["SKU-1", "SKU-2", "SKU-3"]
     for n in (1, 2, 3):
         assert sum(1 for req, _ in httpserver.log if req.path == f"/i/{n}") == 1  # one fetch each
@@ -542,14 +552,15 @@ def test_parse_when_reads_a_bare_time_as_today_and_fuzzy_prose() -> None:
     assert parse_when("2026-09-30T16:26:51.555Z") is not None
 
 
-def test_identity_key_rows_and_stable_document_hashes(httpserver: HTTPServer) -> None:
-    # USER: queries run daily; syncs append only -- so a row's identity is its KEY FIELDS and a
-    # document's identity is those plus a STABLE content hash (a clock changing on the article page
-    # must not change it). `key(*fields)` writes `_key`; every fan-out row carries `_doc`
-    # {url, hash}; `wq.doc.key("article")` hashes just that element; `key(..., document=css)`
-    # re-hashes the fan-out documents over that selector (from the run's memo, no refetch).
-    from web.dsl import DOC_COLUMN, KEY_COLUMN, document_selector, key_fields, row_key
+def test_identity_verb_on_rows_and_documents(httpserver: HTTPServer) -> None:
+    # USER: queries run daily; syncs are append-only -- so a record needs an IDENTITY, declared by
+    # the author with ONE verb. `.identity()` after extract: every field; `.identity("title")`:
+    # just those fields; a part that is not a field is a css selector resolved on the record and
+    # hashed. A fanned-out DETAIL page gets its own `.identity("article")` -- stable across a clock
+    # change -- and carries the url it came from. Nested as deep as the data goes.
+    from web.dsl import IDENTITY_COLUMN, URL_COLUMN, identity_of
     from web.parse import Document
+    from werkzeug.wrappers import Response
 
     clock = {"t": "10:00"}
 
@@ -563,8 +574,8 @@ def test_identity_key_rows_and_stable_document_hashes(httpserver: HTTPServer) ->
     httpserver.expect_request("/a/1").respond_with_handler(article)
     listing = Document(
         content=(
-            f"<ul><li class='r'><span class='t'>T</span><a href='{httpserver.url_for('/a/1')}'>go"
-            "</a></li></ul>"
+            f"<ul><li class='r'><span class='t'>T</span><span class='n'>3</span>"
+            f"<a href='{httpserver.url_for('/a/1')}'>go</a></li></ul>"
         ).encode(),
         kind="html",
     )
@@ -572,14 +583,16 @@ def test_identity_key_rows_and_stable_document_hashes(httpserver: HTTPServer) ->
         wq.doc.select_all("li.r")
         .extract(
             title=wq.doc.select("span.t").attr("text"),
+            views=wq.doc.select("span.n").attr("text").number(),
             detail=wq.doc.select("a")
             .attr("href")
             .resolve()
-            .extract(body=wq.doc.select("p").attr("text")),
+            .extract(body=wq.doc.select("article p").attr("text"))
+            .identity("article"),
         )
-        .key("title", document="article")
+        .identity("title")
     )
-    assert key_fields(q._plan) == ["title"] and document_selector(q._plan) == "article"
+    assert ".identity('article')" in q.describe() and q.describe().endswith(".identity('title')")
 
     async def go() -> "tuple[dict[str, object], dict[str, object]]":
         async with Resolver() as r:
@@ -589,28 +602,40 @@ def test_identity_key_rows_and_stable_document_hashes(httpserver: HTTPServer) ->
             return first[0], second[0]  # type: ignore[index]
 
     a, b = asyncio.run(go())
-    assert a[KEY_COLUMN] == row_key({"title": "T"}, ["title"]) == b[KEY_COLUMN]
-    ident_a, ident_b = a["detail"][DOC_COLUMN], b["detail"][DOC_COLUMN]  # type: ignore[index]
-    assert ident_a["url"] == httpserver.url_for("/a/1") and ident_a["hash"] == ident_b["hash"]
-    # the default (main-content) hash also ignores the clock; the explicit verb hashes an element
+    assert a[IDENTITY_COLUMN] == identity_of({"title": "T"}, None, ["title"]) == b[IDENTITY_COLUMN]
+    da = cast("dict[str, object]", a["detail"])
+    db = cast("dict[str, object]", b["detail"])
+    assert da[URL_COLUMN] == httpserver.url_for("/a/1")
+    assert da[IDENTITY_COLUMN] == db[IDENTITY_COLUMN]
+    assert da["body"] == "Body one." and "_doc" not in da
+    # no parts: every extracted field counts (views included -> a changed count is a new record)
+    rows = (
+        wq.doc.select_all("li.r")
+        .extract(
+            title=wq.doc.select("span.t").attr("text"), views=wq.doc.select("span.n").attr("text")
+        )
+        .identity()
+        .collect(listing)
+    )
+    assert rows[0][IDENTITY_COLUMN] == identity_of({"title": "T", "views": "3"})  # type: ignore[index]
+    # a css part is resolved on the RECORD (not a field name)
+    by_el = (
+        wq.doc.select_all("li.r")
+        .extract(title=wq.doc.select("span.t").attr("text"))
+        .identity("span.n")
+        .collect(listing)
+    )
+    expect = identity_of({"title": "T"}, listing.select("li.r"), ["span.n"])
+    assert by_el[0][IDENTITY_COLUMN] == expect  # type: ignore[index]
+    # the column form on a document
     page = Document(
         content=b"<article><p>Body one.</p></article><p class='clock'>10:00</p>", kind="html"
     )
-    assert wq.doc.key("article").collect(page) == wq.doc.key("article").collect(
-        Document(
-            content=b"<article><p>Body one.</p></article><p class='clock'>11:00</p>", kind="html"
-        )
+    same = Document(
+        content=b"<article><p>Body one.</p></article><p class='clock'>11:00</p>", kind="html"
     )
-    # no key fields declared -> every scalar column counts
-    rows = (
-        wq.doc.select_all("li.r")
-        .extract(title=wq.doc.select("span.t").attr("text"))
-        .key()
-        .collect(listing)
-    )
-    assert rows[0][KEY_COLUMN] == row_key({"title": "T"})  # type: ignore[index]
-    # the blob round-trips the key step
-    assert key_fields(Plan.from_blob(q.to_blob())) == ["title"]
+    assert wq.doc.identity("article").collect(page) == wq.doc.identity("article").collect(same)
+    assert wq.doc.identity().collect(page) == wq.doc.identity().collect(same)  # main content
 
 
 def test_from_source_accepts_a_chain_written_over_several_lines() -> None:
@@ -648,7 +673,7 @@ def test_a_reference_reads_as_a_field_for_the_leaf_verbs() -> None:
         .extract(url=wq.doc.select("a").attr("href"))
         .collect(doc)
     )
-    assert rows == [{"url": "http://x/articles/c1"}]
+    assert plain(rows) == [{"url": "http://x/articles/c1"}]
     assert wq.doc.select("a").attr("href").link().collect(doc) == "http://x/articles/c1"
     assert (
         wq.doc.select("a").attr("href").regex(r"/(articles|videos)/", group=1).collect(doc)

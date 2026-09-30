@@ -43,9 +43,9 @@ _RESOLVE_POLICY = frozenset(
     }
 )
 
-from .identity import DOC_COLUMN, KEY_COLUMN, doc_key, row_key
+from .identity import IDENTITY_COLUMN, URL_COLUMN, identity_of
 from .plan import Arg, Plan, Step
-from .values import Collection, Field, Ref, raw
+from .values import Collection, Field, Ref, RowOf, raw
 
 #: attributes that read as a resolvable reference (a URL), not a plain string value.
 _LINK_ATTRS = frozenset({"href", "src"})
@@ -181,13 +181,19 @@ async def _invoke(
         rows = await _row_op(Collection([cur]), name, call, rs)
         if name == "filter":
             return cur if len(rows) else None
-        row = (rows._rows or [{}])[0]
-        if isinstance(cur, Document):  # the document's IDENTITY rides on the row it produced
-            row[DOC_COLUMN] = {"url": cur.url, "hash": doc_key(cur)}
-        return row
-    if name == "key" and isinstance(cur, Collection):  # the rows' identity (see identity.py)
-        args, kwargs = await _eager_args(call, root, rs, row)
-        return _key_rows(cur, [str(a) for a in args], kwargs.get("document"))
+        built = (rows._rows or [{}])[0]
+        if isinstance(cur, Document):
+            # a row read from a DOCUMENT: its implicit identity (the fields read from it, else the
+            # page's content) + the url it came from; it remembers the page so an explicit
+            # `.identity(css)` can resolve a selector there
+            page = RowOf(built, source=cur)
+            page[IDENTITY_COLUMN] = identity_of(page, cur, ())
+            page[URL_COLUMN] = cur.url
+            return page
+        return built
+    if name == "identity":  # what makes a record unique (see identity.py)
+        args, _kwargs = await _eager_args(call, root, rs, row)
+        return _identify(cur, [str(a) for a in args], row)
     args, kwargs = await _eager_args(call, root, rs, row)
     if isinstance(cur, Collection):
         return _fan(cur, name, args, kwargs)
@@ -292,9 +298,6 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
         # a reference READS as the Field of its URL for every leaf verb (regex / link / split /
         # is_ok ...) -- only `.resolve()` follows it
         obj = Field(obj.url, base=obj.base)
-    if name == "key" and isinstance(obj, (Document, Element)):  # a stable content hash
-        selector = kwargs.get("selector", args[0] if args else None)
-        return Field(doc_key(obj, str(selector) if selector else None), base=_base_of(obj))
     if name == "select":
         if _markup(obj):
             el = obj.select(str(args[0])) if isinstance(obj, (Document, Element)) else None
@@ -425,6 +428,10 @@ async def _row_op(
             # through a plan wrapper that compared the element TO the literal, so a constant column
             # came back as False.)
             built[key] = raw(await _arg(arg, item, rs, built))
+        # identity is IMPLICIT: every extracted row carries the hash of its fields (see identity.py);
+        # an explicit `.identity(...)` later overrides it
+        scope = item if isinstance(item, (Document, Element)) else None
+        built[IDENTITY_COLUMN] = identity_of(built, scope, ())
         out_rows.append(built)
     return coll.derive(list(coll), out_rows)
 
@@ -432,38 +439,33 @@ async def _row_op(
 # -- operators / functions / branches ---------------------------------------
 
 
-def _key_rows(
-    coll: "Collection[object]", fields: "list[str]", document: object
-) -> "Collection[object]":
-    """The ``key`` verb: every extracted row gets its :data:`KEY_COLUMN` (the digest of ``fields``,
-    or of every scalar column when none are given); with ``document=<css>`` each nested document
-    identity (:data:`DOC_COLUMN`) is re-hashed over that STABLE selector, using the run's resolve
-    memo (the page is already fetched -- no refetch)."""
-    rows = coll._rows
-    if rows is None:  # nothing extracted yet: nothing to key
-        return coll
-    memo = _RESOLVE_CACHE.get() or {}
-    selector = str(document) if isinstance(document, str) and document else None
-    keyed: list[dict[str, object]] = []
-    for row in rows:
-        out = dict(row)
-        out[KEY_COLUMN] = row_key(out, fields)
-        if selector:
-            _rehash(out, selector, memo)
-        keyed.append(out)
-    return coll.derive(list(coll), keyed)
-
-
-def _rehash(row: "dict[str, object]", selector: str, memo: "dict[str, object]") -> None:
-    """Re-hash every nested document identity in ``row`` over ``selector`` (memoised pages)."""
-    for value in row.values():
-        if isinstance(value, dict):
-            ident = value.get(DOC_COLUMN)
-            if isinstance(ident, dict):
-                page = memo.get(str(ident.get("url")))
-                if isinstance(page, Document):
-                    ident["hash"] = doc_key(page, selector)
-            _rehash(value, selector, memo)
+def _identify(cur: object, parts: "list[str]", row: "dict[str, object] | None") -> object:
+    """The ``identity`` verb on each shape: a collection's rows each get their identity (read
+    against their own element); a row read from a document gets its identity + the url it came
+    from; a plain nested row hashes its fields; a bare document/element yields the identity as a
+    Field (the column form -- ``identity=wq.doc.identity("article")`` inside an extract, read
+    against the columns extracted so far)."""
+    if isinstance(cur, Collection):
+        rows = cur._rows or [{} for _ in cur]
+        out: list[dict[str, object]] = []
+        for item, r in zip(cur, rows):
+            scope = item if isinstance(item, (Document, Element)) else None
+            new = dict(r)
+            new[IDENTITY_COLUMN] = identity_of(new, scope, parts)
+            out.append(new)
+        return cur.derive(list(cur), out)
+    if isinstance(cur, RowOf):
+        source = cur.source if isinstance(cur.source, Document) else None
+        cur[IDENTITY_COLUMN] = identity_of(cur, source, parts)
+        if source is not None:
+            cur[URL_COLUMN] = source.url
+        return cur
+    if isinstance(cur, dict):
+        cur[IDENTITY_COLUMN] = identity_of(cur, None, parts)
+        return cur
+    if isinstance(cur, (Document, Element)):
+        return Field(identity_of(row, cur, parts), base=_base_of(cur))
+    return None
 
 
 def _apply_op(cur: object, name: str, other: object) -> bool:

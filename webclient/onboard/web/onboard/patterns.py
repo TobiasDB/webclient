@@ -136,6 +136,12 @@ def _notes(
         )
     if brief.review_hint:  # the review criterion is a REQUIREMENT -- the author must know it
         notes.append(f"REQUIREMENT (the extracted data must satisfy this): {brief.review_hint}")
+    if brief.identity_hint:  # a SPECIFIC identity is asked for -> the author declares it
+        notes.append(
+            f"IDENTITY (from the brief): {brief.identity_hint} -- declare it explicitly with "
+            '.identity(<field>, ...) on the records and/or .identity("<stable css>") on the '
+            "detail page (identity is otherwise implicit: the hash of every extracted field)."
+        )
     notes.append(_flags_line(flags))
     return "\n\n" + "\n\n".join(notes)
 

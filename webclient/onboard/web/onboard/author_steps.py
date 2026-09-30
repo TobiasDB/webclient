@@ -12,6 +12,8 @@ first records -- and calls exactly one op:
   ``where(<predicate>)``               a ``filter`` on the records
   ``drop(name)``                       remove a column
   ``absent(name)``                     the field is NOT on this page (nor its detail) -- no guessing
+  ``identity(<field|css>, ...)``       what makes a RECORD unique (default: every field)
+  ``detail_identity(<field|css>, ...)`` the detail page's own identity (a stable element)
   ``section("<css>")``                 the dataset continues in ANOTHER section of the page with a
                                        different record shape (an Upcoming tab vs a Past list):
                                        start a new section; the pipeline concatenates the rows
@@ -62,7 +64,19 @@ from .prompts import clip
 
 #: the op vocabulary the model may call (see the module docstring).
 OPS = frozenset(
-    {"records", "field", "detail", "detail_field", "where", "drop", "absent", "section", "done"}
+    {
+        "records",
+        "field",
+        "detail",
+        "detail_field",
+        "where",
+        "drop",
+        "absent",
+        "section",
+        "identity",
+        "detail_identity",
+        "done",
+    }
 )
 #: how many records a probe runs the draft over (bounds a detail fan-out to this many fetches).
 _PROBE_ROWS = 3
@@ -118,10 +132,18 @@ class Draft:
     link: str = ""  # the css of the link followed ONCE per record
     detail_fields: "dict[str, str]" = field(default_factory=dict)  # name -> chain (detail page)
     where: str = ""
+    identity: "list[str] | None" = None  # the record's identity parts (None = not declared)
+    detail_identity: "list[str] | None" = None  # the detail page's identity parts
 
     def copy(self) -> "Draft":
         return Draft(
-            self.records, dict(self.fields), self.link, dict(self.detail_fields), self.where
+            self.records,
+            dict(self.fields),
+            self.link,
+            dict(self.detail_fields),
+            self.where,
+            list(self.identity) if self.identity is not None else None,
+            list(self.detail_identity) if self.detail_identity is not None else None,
         )
 
     def names(self) -> "list[str]":
@@ -134,6 +156,11 @@ class Draft:
             inner = ", ".join(f"{n}={c}" for n, c in self.detail_fields.items())
             cols[DETAIL_COLUMN] = (
                 f'wq.doc.select({self.link!r}).attr("href").resolve().extract({inner})'
+                + (
+                    ".identity(" + ", ".join(repr(p) for p in self.detail_identity) + ")"
+                    if self.detail_identity is not None
+                    else ""
+                )
             )
         return cols
 
@@ -150,6 +177,8 @@ class Draft:
         cols = self.columns()
         if cols:
             q += ".extract(" + ", ".join(f"{n}={c}" for n, c in cols.items()) + ")"
+            if self.identity is not None:
+                q += ".identity(" + ", ".join(repr(p) for p in self.identity) + ")"
         return q
 
 
@@ -223,6 +252,8 @@ _ARITY = {
     "drop": 1,
     "absent": 1,
     "section": 1,
+    "identity": -1,  # variadic: 0..n parts (field names / css selectors)
+    "detail_identity": -1,
     "done": 0,
 }
 
@@ -248,7 +279,7 @@ def parse_op(reply: str) -> Op:
         raise StepError('not an op call -- exactly one op, e.g. records("li.item")')
     args = [_arg_source(a) for a in node.args] + [_arg_source(kw.value) for kw in node.keywords]
     name = node.func.id
-    if len(args) != _ARITY[name]:
+    if _ARITY[name] >= 0 and len(args) != _ARITY[name]:
         raise StepError(f"{name}() takes {_ARITY[name]} argument(s), got {len(args)}")
     verbs: list[str] = []
     if name in ("field", "detail_field"):
@@ -577,8 +608,17 @@ def _turn(session: StepSession, result: str, brief: DatasetBrief) -> str:
         parts.append("declared absent: " + ", ".join(sorted(session.absent)))
     if not required and session.draft.records:
         parts.append(
-            "Every required field is in the query -- reply done() if the values above are right, "
-            "else fix a column (field(...) replaces it)."
+            "Every required field is in the query -- "
+            + (
+                "declare the identity the brief asks for with identity(<field>, ...) and/or "
+                "detail_identity(<stable css>), then "
+                if brief.identity_hint
+                and session.draft.identity is None
+                and session.draft.detail_identity is None
+                else ""
+            )
+            + "reply done() if the values above are right, else fix a column (field(...) "
+            "replaces it)."
         )
     if session.offer_sibling:
         parts.append(
@@ -704,6 +744,38 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
             f"{head}\n{op.args[0]} recorded as ABSENT from this source (it will be reported, "
             "not guessed).",
             f"{op.args[0]} declared absent",
+        )
+    if op.name in ("identity", "detail_identity"):
+        if not (new.records and new.columns()):
+            return False, f"{head}\nNOT APPLIED -- extract the fields first", "no fields yet"
+        if op.name == "detail_identity" and not new.link:
+            return (
+                False,
+                f'{head}\nNOT APPLIED -- call detail("<link css>") first',
+                "no detail link",
+            )
+        if op.name == "identity":
+            new.identity = list(op.args)
+        else:
+            new.detail_identity = list(op.args)
+        try:
+            probed = await _probe(new, doc, resolver)
+        except Exception as exc:  # a selector part that raises: this op failed
+            return False, f"{head}\nFAILED -- {exc}. The op was REVERTED.", f"reverted ({exc})"
+        session.draft = new
+        key = "_identity" if op.name == "identity" else f"{DETAIL_COLUMN}._identity"
+        ids = [_dig(r, key) for r in probed]
+        distinct = len({str(i) for i in ids})
+        return (
+            True,
+            f"{head}\nidentity declared over {op.args or ['every field']}: {distinct} distinct "
+            f"identit{'y' if distinct == 1 else 'ies'} across the {len(probed)} probed record(s)"
+            + (
+                " -- WARNING: not unique per record; add a distinguishing part."
+                if distinct < len(probed)
+                else ""
+            ),
+            f"{distinct}/{len(probed)} distinct",
         )
     if op.name == "section":
         if not (session.draft.records and session.draft.columns()):

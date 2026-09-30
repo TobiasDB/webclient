@@ -82,6 +82,15 @@ def _run(coro: object) -> object:
     return asyncio.run(cast("asyncio.Future[object]", coro))
 
 
+def plain(value: object) -> object:
+    """Rows without the implicit identity columns (`_identity` / `_url`) -- exact comparisons."""
+    if isinstance(value, dict):
+        return {k: plain(v) for k, v in value.items() if not str(k).startswith("_")}
+    if isinstance(value, list):
+        return [plain(v) for v in value]
+    return value
+
+
 @pytest.fixture(autouse=True)
 def _stub_locate_render(monkeypatch: "pytest.MonkeyPatch") -> None:
     """Locate renders the WINNING candidate in a real browser to detect JS-gating (static vs
@@ -430,7 +439,7 @@ def test_author_writes_a_working_query_for_a_record_list(
             return await q.acollect(resolver=r)
 
     rows = cast("list[dict[str, object]]", _run(go()))
-    assert rows == [
+    assert plain(rows) == [
         {"name": "Alice", "role": "CEO"},
         {"name": "Bob", "role": "CTO"},
         {"name": "Cara", "role": "COO"},
@@ -466,7 +475,7 @@ def test_author_writes_a_working_query_for_a_json_data_api(
             return await q.acollect(resolver=r)
 
     rows = cast("list[dict[str, object]]", _run(go()))
-    assert rows == [{"name": "Widget", "amount": 9}, {"name": "Gadget", "amount": 12}]
+    assert plain(rows) == [{"name": "Widget", "amount": 9}, {"name": "Gadget", "amount": 12}]
     assert "JSON document" in llm.prompt  # the kind steer reached the prompt
 
 
@@ -493,8 +502,8 @@ def test_author_writes_a_working_query_for_an_html_table(
             return await q.acollect(resolver=r)
 
     rows = cast("list[dict[str, object]]", _run(go()))
-    assert {"name": "Ada", "city": "London"} in rows
-    assert {"name": "Linus", "city": "Helsinki"} in rows
+    assert {"name": "Ada", "city": "London"} in plain(rows)
+    assert {"name": "Linus", "city": "Helsinki"} in plain(rows)
 
 
 def test_locate_and_author_compose_end_to_end(httpserver: HTTPServer) -> None:
@@ -517,7 +526,7 @@ def test_locate_and_author_compose_end_to_end(httpserver: HTTPServer) -> None:
             return await q.acollect(resolver=r)
 
     rows = cast("list[dict[str, object]]", _run(go()))
-    assert {"name": "Alice", "role": "CEO"} in rows
+    assert {"name": "Alice", "role": "CEO"} in plain(rows)
 
 
 # -- Brief loading + the CLI ----------------------------------------------------------------------
@@ -829,17 +838,14 @@ def test_run_to_sink_routes_rows_to_table_and_documents_to_store(httpserver: HTT
             return sink
 
     sink = cast("MemorySink", _run(go()))
-    # scalar rows -> the table (the document field is NOT a table column); each row carries its key
+    # rows -> the table, as extracted (the document field's URL included -- the sink decides)
     assert [r["title"] for r in sink.rows] == ["Report A", "Report B"]
-    assert all("file" not in row and isinstance(row["_key"], str) for row in sink.rows)
-    assert sink.schema == {"title": "string", "file": "document", "_key": "key"}
-    # documents -> the object store, each with its IDENTITY (the row's key fields + url + hash) and
-    # its row's scalars as metadata
+    assert sink.schema == {"title": "string", "file": "document", "_identity": "identity"}
+    # documents -> the object store, each with its row as metadata
     a_url = httpserver.url_for("/files/a.txt")
-    content, metadata, keys = next(v for v in sink.blobs.values() if v[2]["url"] == a_url)
-    assert content == b"BODY-A" and metadata == {"title": "Report A"}
-    assert keys["field"] == "file" and len(str(keys["hash"])) == 24
-    assert keys["row"] == sink.rows[0]["_key"]  # a document always names its row's key
+    content, metadata = next(v for k, v in sink.blobs.items() if k.startswith(a_url + "#"))
+    assert content == b"BODY-A" and metadata["field"] == "file"
+    assert cast("dict[str, object]", metadata["row"])["title"] == "Report A"
 
 
 def test_has_records_requires_schema_corroboration() -> None:
@@ -913,7 +919,8 @@ def test_run_returns_a_dataset_of_rows_and_documents(httpserver: HTTPServer) -> 
     assert isinstance(data, Dataset)
     assert [row["title"] for row in data.rows] == ["Report A", "Report B"]  # the scalar table
     assert sorted(a.content for a in data.documents) == [b"BODY-A", b"BODY-B"]  # fetched documents
-    assert data.documents[0].metadata.get("title") in ("Report A", "Report B")  # keyed to its row
+    row = cast("dict[str, object]", data.documents[0].metadata["row"])
+    assert row.get("title") in ("Report A", "Report B")  # keyed to its row
 
 
 def test_guide_for_selects_examples_by_kind_and_situation() -> None:
@@ -952,7 +959,7 @@ def test_review_revises_the_query_to_add_a_missing_field(httpserver: HTTPServer)
             return await q.acollect(resolver=r)
 
     rows = cast("list[dict[str, object]]", _run(go()))
-    assert {"name": "Alice", "role": "CEO"} in rows  # the revised query now extracts role
+    assert {"name": "Alice", "role": "CEO"} in plain(rows)  # the revised query now extracts role
 
 
 def test_review_keeps_the_query_when_the_model_says_done(httpserver: HTTPServer) -> None:
@@ -1486,7 +1493,10 @@ def test_steps_engine_builds_the_query_one_op_at_a_time(httpserver: HTTPServer) 
     assert "STILL TO ADD (required): url" in after_name
     assert "Every required field is in the query" in after_url
     assert "select_all('li.row')" in art.describe or 'select_all("li.row")' in art.describe
-    assert art.sample and art.sample[0] == {"name": "A", "url": httpserver.url_for("/detail/1")}
+    assert art.sample and plain(art.sample[0]) == {
+        "name": "A",
+        "url": httpserver.url_for("/detail/1"),
+    }
 
 
 def test_steps_engine_follows_a_detail_link_once_then_fans_out(httpserver: HTTPServer) -> None:
@@ -1514,11 +1524,7 @@ def test_steps_engine_follows_a_detail_link_once_then_fans_out(httpserver: HTTPS
     after_detail = llm.turns[3]
     assert "followed " in after_detail and "article.body" in after_detail
     assert 'detail.body: "Body One", "Body Two"' in llm.turns[4]
-    first = cast("dict[str, object]", art.sample[0])
-    detail = cast("dict[str, object]", first["detail"])
-    ident = cast("dict[str, str]", detail.pop("_doc"))  # the document's identity rides along
-    assert first == {"name": "A", "detail": {"body": "Body One"}}
-    assert ident["url"] == httpserver.url_for("/detail/1") and len(ident["hash"]) == 24
+    assert plain(art.sample[0]) == {"name": "A", "detail": {"body": "Body One"}}
 
 
 def test_steps_engine_reverts_a_failed_op_and_rejects_prose(httpserver: HTTPServer) -> None:
@@ -1767,9 +1773,7 @@ def test_steps_engine_precondition_failures_are_not_repeats_and_names_are_unique
     assert art.complete and art.absent == [], (art.reason, art.absent)
     assert "NOT APPLIED -- call detail" in llm.turns[3]
     assert "you already called" not in llm.turns[6]  # the retry after detail() went through
-    first = cast("dict[str, object]", art.sample[0])
-    cast("dict[str, object]", first["detail"]).pop("_doc")
-    assert first == {"detail": {"body": "Body One", "name": "Body One"}}
+    assert plain(art.sample[0]) == {"detail": {"body": "Body One", "name": "Body One"}}
 
 
 def test_steps_engine_hints_name_closest_selectors_and_available_attributes(
@@ -1797,16 +1801,11 @@ def test_steps_engine_hints_name_closest_selectors_and_available_attributes(
     assert "its text: 'A'" in llm.turns[3]
 
 
-def test_sink_receives_row_keys_and_fanned_out_documents_append_only(
-    httpserver: HTTPServer,
-) -> None:
-    # USER: rows are identified by KEY FIELDS (from the brief -- the pipeline appends `.key(...)`,
-    # never the model) and a fanned-out page is a document identified by those fields + a STABLE
-    # hash; a sync is append-only, so a second run adds nothing. The Brief parses `key:` /
-    # `document_key:`.
-    from web.dsl import key_fields
-    from web.onboard import Brief, MemorySink, run_to_sink
-    from web.onboard.compile import keyed
+def test_sink_stores_identified_pages_and_is_append_only(httpserver: HTTPServer) -> None:
+    # USER: identity is the QUERY's (the author declares `.identity(...)`); the sink worries about
+    # keys. A row carries `_identity`; a fanned-out page the query identified is stored as a
+    # document with the fields read from it; a second run adds nothing (append-only on identity).
+    from web.onboard import MemorySink, run_to_sink
 
     httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
     for n, body in ((1, "Body One"), (2, "Body Two")):
@@ -1814,53 +1813,65 @@ def test_sink_receives_row_keys_and_fanned_out_documents_append_only(
             f"<article class='body'>{body}</article><p class='clock'>now</p>".encode(),
             content_type="text/html",
         )
-    brief = Brief.from_markdown(
-        "---\nkey: [name]\ndocument_key: article.body\nschema:\n  - name: the name\n"
-        "  - body: the body\n---\nnames with bodies"
-    )
-    assert brief.key == ["name"] and brief.document_key == "article.body"
     chain = (
         'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"), '
         'detail=wq.doc.select("a.more").attr("href").resolve().extract('
-        'body=wq.doc.select("article.body").attr("text")))'
+        'body=wq.doc.select("article.body").attr("text")).identity("article.body")).identity("name")'
     )
-    q = keyed(cast("object", _rerooted(chain, httpserver.url_for("/list"))), brief.key, document=brief.document_key)  # type: ignore[arg-type]
-    assert (
-        key_fields(q._plan) == ["name"] and ".key('name', document='article.body')" in q.describe()
-    )
+    q = cast("object", _rerooted(chain, httpserver.url_for("/list")))
+    brief = DatasetBrief(fields=["name", "body"])
 
     async def go() -> MemorySink:
         async with Resolver() as r:
             sink = MemorySink()
-            assert await run_to_sink(q, brief, sink, resolver=r) == (2, 2)
-            assert await run_to_sink(q, brief, sink, resolver=r) == (2, 2)  # the runner counts...
+            assert await run_to_sink(cast("object", q), brief, sink, resolver=r) == (2, 2)  # type: ignore[arg-type]
+            assert await run_to_sink(cast("object", q), brief, sink, resolver=r) == (2, 2)  # type: ignore[arg-type]
             return sink
 
     sink = cast("MemorySink", _run(go()))
-    assert len(sink.rows) == 2 and len(sink.blobs) == 2 and sink.skipped == 4  # ...the sink skips
-    assert sink.rows[0]["name"] == "A" and "_doc" not in str(sink.rows[0])  # identity is separate
-    content, metadata, keys = next(iter(sink.blobs.values()))
-    assert content.startswith(b"<article") and keys["name"] == "A"
-    assert keys["url"] == httpserver.url_for("/detail/1") and len(str(keys["hash"])) == 24
-    assert metadata["fields"] == {"body": "Body One"}  # what the query read from that document
+    assert len(sink.rows) == 2 and len(sink.blobs) == 2 and sink.skipped == 4
+    row = sink.rows[0]
+    assert row["name"] == "A" and len(str(row["_identity"])) == 24
+    detail = cast("dict[str, object]", row["detail"])
+    assert detail["_url"] == httpserver.url_for("/detail/1") and len(str(detail["_identity"])) == 24
+    content, metadata = next(iter(sink.blobs.values()))
+    assert (
+        content.startswith(b"<article")
+        and cast("dict[str, object]", metadata["row"])["name"] == "A"
+    )
+    assert cast("dict[str, object]", metadata["fields"])["body"] == "Body One"
 
 
-def test_keyed_drops_a_trailing_project_before_the_identity_step(httpserver: HTTPServer) -> None:
-    # Live books run: the model ended its chain with .project(); keyed() appended .key(...) AFTER it
-    # and the run failed ("list has no verb 'key'"). The identity step now replaces the trailing
-    # project (the terminals project implicitly) and the keyed query runs, rows carrying `_key`.
-    from web.onboard.compile import keyed
+def test_steps_engine_identity_ops(httpserver: HTTPServer) -> None:
+    # identity(<field|css>, ...) declares the record's identity; detail_identity(...) the detail
+    # page's; the result reports how many DISTINCT identities the probe produced (a warning when
+    # not unique). The final query carries both.
+    from web.onboard import QueryArtifact
 
     httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
-    chain = (
-        'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text")).project()'
+    for n, body in ((1, "Body One"), (2, "Body Two")):
+        httpserver.expect_request(f"/detail/{n}").respond_with_data(
+            f"<article class='body'>{body}</article>".encode(), content_type="text/html"
+        )
+    llm = _StepConv(
+        [
+            'records("li.row")',
+            'field(name, wq.doc.select(".name").attr("text"))',
+            'detail("a.more")',
+            'detail_field(body, wq.doc.select("article.body").attr("text"))',
+            'detail_identity("article.body")',
+            "identity(name)",
+            "done()",
+        ]
     )
-    q = keyed(cast("object", _rerooted(chain, httpserver.url_for("/list"))), ["name"])  # type: ignore[arg-type]
-    assert ".project()" not in q.describe() and ".key('name')" in q.describe()
-
-    async def go() -> object:
-        async with Resolver() as r:
-            return await q.acollect(resolver=r)
-
-    rows = cast("list[dict[str, object]]", _run(go()))
-    assert [r["name"] for r in rows] == ["A", "B"] and all(len(str(r["_key"])) == 24 for r in rows)
+    art = _steps_art(httpserver, llm, ["name", "body"])
+    assert isinstance(art, QueryArtifact)
+    assert art.complete, art.reason
+    assert "2 distinct identities across the 2 probed record(s)" in llm.turns[5]
+    assert "declare the identity the brief asks for" not in llm.turns[4]  # no hint -> implicit
+    assert (
+        art.describe.endswith(".identity('name')") and ".identity('article.body')" in art.describe
+    )
+    first = cast("dict[str, object]", art.sample[0])
+    assert len(str(first["_identity"])) == 24
+    assert len(str(cast("dict[str, object]", first["detail"])["_identity"])) == 24

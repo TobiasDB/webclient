@@ -3,7 +3,6 @@ name: people
 title: Team / board members
 search: leadership team
 max_pages: 10
-key: [name, role]
 schema:
   - name: the person's full name
   - role: their title / role

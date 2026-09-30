@@ -20,6 +20,15 @@ def _run(coro: object) -> object:
     return asyncio.run(cast("asyncio.Future[object]", coro))
 
 
+def plain(value: object) -> object:
+    """Rows without the implicit identity columns (`_identity` / `_url`) -- exact comparisons."""
+    if isinstance(value, dict):
+        return {k: plain(v) for k, v in value.items() if not str(k).startswith("_")}
+    if isinstance(value, list):
+        return [plain(v) for v in value]
+    return value
+
+
 def test_parse_and_reroot_runs(httpserver: HTTPServer) -> None:
     httpserver.expect_request("/p").respond_with_data(
         b"<ul><li class='row'><span class='n'>Ada</span></li>"
@@ -30,7 +39,7 @@ def test_parse_and_reroot_runs(httpserver: HTTPServer) -> None:
     query = reroot(chain, httpserver.url_for("/p"))
     assert query.to_blob().count("reference") == 0  # source lives in the blob, not a literal call
     rows = cast("list[dict[str, object]]", _run(query.acollect()))
-    assert rows == [{"n": "Ada"}, {"n": "Bo"}]
+    assert plain(rows) == [{"n": "Ada"}, {"n": "Bo"}]
 
 
 def test_query_code_strips_fence_prose_and_smart_quotes() -> None:

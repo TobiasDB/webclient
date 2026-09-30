@@ -49,7 +49,7 @@ from web.resolve import profiles as _rp
 from .agent import BoundedLoop, Done, Verdict
 from .author import AuthorEvent
 from .author_steps import StepSession, run_steps, suggest_selectors
-from .compile import Query, QueryError, keyed, parse_query, reroot
+from .compile import Query, QueryError, parse_query, reroot
 from .evaluate import skeleton_for
 from .llm import Conversation, Conversational, Llm, ReasonEvent
 from .models import DatasetBrief, QueryArtifact, QuerySection, Reference
@@ -870,17 +870,11 @@ def _artifact(state: AuthorState, verdict: Verdict) -> QueryArtifact:
 
 def _parts(state: AuthorState) -> "list[tuple[Query, list[object]]]":
     """Every section query with its rows: the sibling pages' sections, then this page's earlier
-    sections, then the current query -- each with the brief's IDENTITY step appended
-    (``.key(*brief.key, document=brief.document_key)``): the pipeline declares what makes a row
-    unique; the model never writes it."""
-    brief = state.brief
+    sections, then the current query."""
     return [
-        (keyed(q, brief.key, document=brief.document_key), rows)  # identity: from the brief
-        for q, rows in (
-            *state.sections,
-            *state.page_sections,
-            *([(state.query, list(state.rows_full))] if state.query is not None else []),
-        )
+        *state.sections,
+        *state.page_sections,
+        *([(state.query, list(state.rows_full))] if state.query is not None else []),
     ]
 
 

@@ -77,6 +77,25 @@ stable container then a semantic leaf: `.card .price`. Read fields RELATIVE to e
 has chrome (nav / sidebar / footer) that reuses the same class names, so selecting a field at the
 top level would pick up the chrome; selecting it inside the record does not.
 
+## Identity — what makes a record unique
+
+A query runs every day and a sync keeps only what is NEW, so every record carries an IDENTITY.
+It is IMPLICIT — you write nothing: each extracted row gets `_identity`, the hash of its extracted
+fields (a detail page with nothing extracted from it hashes its content), and a row read from a
+page also gets `_url`. Nested as deep as the data goes.
+
+Declare it EXPLICITLY only when the brief asks for a specific identity, with `.identity(...)`
+right after the `.extract(...)`:
+
+- `.identity("published", "headline")` — just those fields identify the record, whatever else
+  changes (a view count, a "3 hours ago" label, a price).
+- a part that is not a field name is a CSS SELECTOR resolved on the record and hashed —
+  `.identity("h2.title")`.
+- on a DETAIL page (a per-record `.resolve().extract(...)`), pick the STABLE element that IS the
+  document — `.resolve().extract(body=wq.doc.readable()).identity("article")` hashes the
+  `<article>` text, so a clock, a sidebar or a related-links box changing does not make it a new
+  document. Choose the selector from the detail page's structure.
+
 ## Worked examples
 
 ### 1 — a flat HTML list
@@ -242,7 +261,7 @@ wq.doc.select_all("li.product").extract(
     detail=wq.doc.select("a.detail").attr("href").resolve().extract(  # follow ONCE, then fan out:
         sku=wq.doc.select("[class*=sku]").attr("text"),               #   inside this extract,
         price=wq.doc.select(".price").attr("text"),                   #   wq.doc is the DETAIL page
-    ),
+    ).identity("article"),                        # ONLY when the brief asks: the article text IS the document
 )
 ```
 If the detail page is JSON, read it the JSON way (§3): `…resolve().extract(stock=wq.doc.select("stock.count").attr("text"))`.

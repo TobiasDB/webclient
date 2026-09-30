@@ -16,7 +16,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from pydantic import JsonValue
-from web.dsl import KEY_COLUMN
 from web.resolve import Resolver
 
 from .author_loop import Engine, author_agent
@@ -38,11 +37,9 @@ class Attachment:
     url: str
     content: bytes
     content_type: str
+    #: the row it belongs to (``row``) and, for a fanned-out page, the fields read from it
+    #: (``fields`` -- with the ``_identity`` the query gave it).
     metadata: "dict[str, JsonValue]" = field(default_factory=dict)
-    #: the document's IDENTITY: its row's key fields + ``url`` + ``hash`` (see the sink module),
-    #: and ``key`` -- the one string a sync dedupes on.
-    keys: "dict[str, JsonValue]" = field(default_factory=dict)
-    key: str = ""
 
 
 @dataclass
@@ -50,9 +47,9 @@ class Dataset:
     """An executed query's result, split by kind: scalar ROWS (the table) and fetched DOCUMENTS (the
     files the schema's document-typed fields point at, each keyed to its row)."""
 
-    rows: "list[dict[str, JsonValue]]" = field(default_factory=list)  # each carries its `_key`
+    rows: "list[dict[str, JsonValue]]" = field(default_factory=list)  # as extracted (+ `_identity`)
     documents: "list[Attachment]" = field(default_factory=list)
-    schema: "dict[str, str]" = field(default_factory=dict)  # field -> type (+ `_key`)
+    schema: "dict[str, str]" = field(default_factory=dict)  # field -> type (+ `_identity`)
 
 
 class _Collector:
@@ -62,30 +59,15 @@ class _Collector:
     def __init__(self) -> None:
         self.data = Dataset()
 
-    async def record(
-        self, row: "dict[str, JsonValue]", *, key: str, schema: "dict[str, str]"
-    ) -> None:
+    async def record(self, row: "dict[str, JsonValue]", *, schema: "dict[str, str]") -> None:
         self.data.schema = dict(schema)
-        self.data.rows.append({**row, KEY_COLUMN: key})
+        self.data.rows.append(row)
 
     async def blob(
-        self,
-        content: bytes,
-        *,
-        key: str,
-        keys: "dict[str, JsonValue]",
-        content_type: str,
-        metadata: "dict[str, JsonValue]",
+        self, content: bytes, *, url: str, content_type: str, metadata: "dict[str, JsonValue]"
     ) -> None:
         self.data.documents.append(
-            Attachment(
-                url=str(keys.get("url") or ""),
-                content=content,
-                content_type=content_type,
-                metadata=metadata,
-                keys=keys,
-                key=key,
-            )
+            Attachment(url=url, content=content, content_type=content_type, metadata=metadata)
         )
 
 

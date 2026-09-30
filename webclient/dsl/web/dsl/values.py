@@ -353,6 +353,17 @@ class Ref:
         return f"Ref({self.url!r})"
 
 
+class RowOf(dict[str, object]):
+    """An extracted row that remembers the DOCUMENT it was read from (a per-record fan-out), so a
+    chained ``.identity(css)`` can resolve a selector on that page. A plain dict everywhere else."""
+
+    __slots__ = ("source",)
+
+    def __init__(self, row: "dict[str, object]", *, source: object) -> None:
+        super().__init__(row)
+        self.source = source
+
+
 def raw(value: object) -> JsonValue:
     """Unwrap a ``Field`` to its raw value (missing -> None); a ``Ref`` to its URL; pass anything
     else through, cleaned to plain JSON data (a list is cleaned item-wise) -- the shape a projected
