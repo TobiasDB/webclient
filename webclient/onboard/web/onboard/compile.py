@@ -18,17 +18,22 @@ the :mod:`patterns <web.onboard.patterns>` guide documents. This module turns th
 
 from __future__ import annotations
 
-import ast
-import operator
 from typing import cast
 
-from web.dsl import Expr, LazyCollection, LazyDocument, Plan, from_plan, wq
+from web.dsl import (
+    Expr,
+    LazyCollection,
+    LazyDocument,
+    Plan,
+    SourceError,
+    from_plan,
+    from_source,
+    wq,
+)
 
 #: any query Author can emit: rows / a scalar fan-out (a Collection) or a single document.
 Query = LazyCollection[object] | LazyDocument
 
-#: literal constant kinds a query may contain (selectors, nth indices, map values, flags).
-_CONST = (str, int, float, bool, type(None))
 #: typographic characters a model sometimes emits instead of the ASCII forms ``ast.parse`` needs.
 _SMART = {
     "“": '"',
@@ -39,15 +44,6 @@ _SMART = {
     "—": "-",
     "…": "...",
     " ": " ",
-}
-#: comparison operators allowed inside a ``filter`` predicate.
-_CMP: dict[type[ast.cmpop], object] = {
-    ast.Eq: operator.eq,
-    ast.NotEq: operator.ne,
-    ast.Lt: operator.lt,
-    ast.LtE: operator.le,
-    ast.Gt: operator.gt,
-    ast.GtE: operator.ge,
 }
 
 
@@ -74,64 +70,18 @@ def query_code(reply: str) -> str:
     return text.strip()
 
 
-def _eval(node: ast.AST) -> object:
-    """Interpret ONE query AST node against the real ``wq`` recorder. Only ``wq`` is a name;
-    ``_``-prefixed attributes, starred args and any other construct are refused."""
-    if isinstance(node, ast.Expression):
-        return _eval(node.body)
-    if isinstance(node, ast.Constant):
-        if isinstance(node.value, _CONST):
-            return node.value
-        raise QueryError(f"disallowed constant: {node.value!r}")
-    if isinstance(node, ast.Name):
-        if node.id == "wq":
-            return wq
-        raise QueryError(f"only 'wq' is available in a query, not {node.id!r}")
-    if isinstance(node, ast.Attribute):
-        if node.attr.startswith("_"):
-            raise QueryError(f"attribute {node.attr!r} is not allowed in a query")
-        return getattr(_eval(node.value), node.attr)
-    if isinstance(node, ast.Call):
-        if any(isinstance(a, ast.Starred) for a in node.args):
-            raise QueryError("*args are not allowed in a query")
-        func = _eval(node.func)
-        args = [_eval(a) for a in node.args]
-        kwargs: dict[str, object] = {}
-        for kw in node.keywords:
-            if kw.arg is None:
-                raise QueryError("**kwargs are not allowed in a query")
-            kwargs[kw.arg] = _eval(kw.value)
-        return cast("object", func(*args, **kwargs))  # type: ignore[operator]
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):  # ~cond
-        return ~_eval(node.operand)  # type: ignore[operator]
-    if isinstance(node, ast.BinOp) and isinstance(
-        node.op, (ast.BitAnd, ast.BitOr)
-    ):  # a & b / a | b
-        left, right = _eval(node.left), _eval(node.right)
-        return left & right if isinstance(node.op, ast.BitAnd) else left | right  # type: ignore[operator]
-    if isinstance(node, ast.Compare) and len(node.ops) == 1:  # a == b, a < b, ...
-        fn = _CMP.get(type(node.ops[0]))
-        if fn is None:
-            raise QueryError("that comparison is not allowed in a query")
-        return cast("object", fn(_eval(node.left), _eval(node.comparators[0])))  # type: ignore[operator]
-    raise QueryError(f"disallowed expression in a query: {type(node).__name__}")
-
-
 def parse_query(reply: str) -> Expr:
-    """Rebuild the model's ``wq`` chain from its reply through the real recorder (never ``eval``;
-    see the module docstring). Raises :class:`QueryError` on an empty / unparseable / disallowed
-    reply, or one that does not evaluate to a recorded chain."""
+    """Rebuild the model's ``wq`` chain from its reply. Cleans the reply (fences / smart quotes /
+    prose -- the model tier's concern) with :func:`query_code`, then hands the clean source to the
+    DSL's safe functional parser :func:`web.dsl.from_source` (never ``eval``; only ``wq`` is in
+    scope). Raises :class:`QueryError` on an empty / unparseable / disallowed reply."""
     code = query_code(reply)
     if not code:
         raise QueryError("no query in the reply")
     try:
-        tree = ast.parse(code, mode="eval")
-    except SyntaxError as exc:
-        raise QueryError(f"query did not parse: {exc}") from exc
-    result = _eval(tree)
-    if not isinstance(result, Expr):
-        raise QueryError(f"query is a {type(result).__name__}, not a wq chain")
-    return result
+        return from_source(code)
+    except SourceError as exc:  # the DSL's parse error -> the onboard tier's QueryError
+        raise QueryError(str(exc)) from exc
 
 
 def reroot(chain: Expr, url: str, *, profile: "str | None" = None) -> Query:

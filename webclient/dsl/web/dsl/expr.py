@@ -173,6 +173,11 @@ class Expr:
         """A readable one-line rendering of the recorded chain (round-trippable via the blob)."""
         return self._plan.describe()
 
+    def to_source(self) -> str:
+        """The chain as a runnable, re-parseable ``wq`` FUNCTIONAL expression (see
+        :meth:`~web.dsl.plan.Plan.to_source`); rebuild it with :func:`~web.dsl.from_source`."""
+        return self._plan.to_source()
+
     def __repr__(self) -> str:
         return f"lazy {self._plan.describe()}"
 

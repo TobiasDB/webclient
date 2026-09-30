@@ -133,11 +133,48 @@ class Plan(BaseModel):
                 out = f"when({args})"
         return out
 
+    def to_source(self) -> str:
+        """The chain as a runnable, re-parseable ``wq`` FUNCTIONAL expression -- the inverse of
+        :func:`~web.dsl.from_source`. Roots render as their ``wq`` entry (``wq.doc`` / ``wq.ref`` /
+        ``wq.reference("url")``), so ``from_source(plan.to_source())`` rebuilds the same plan. Unlike
+        :meth:`describe` (a friendly log form), this is valid ``wq`` source."""
+        out = (
+            f"wq.reference({self.source!r})"
+            if self.source is not None
+            else _ROOT_SRC.get(self.root, "wq.doc")
+        )
+        for s in self.steps:
+            args = ", ".join(
+                [*map(_show_src, s.args), *(f"{k}={_show_src(v)}" for k, v in s.kwargs.items())]
+            )
+            if s.kind == "get":
+                out = f"{out}.{s.name}"
+            elif s.kind == "call":
+                out = f"{out}({args})"
+            elif s.kind == "op":
+                out = f"~{out}" if s.name == "not" else f"({out} {_OP_SYM[s.name]} {args})"
+            elif s.kind == "fn":
+                out = f"wq.{s.name}({out}{', ' + args if args else ''})"
+            else:  # when
+                out = f"wq.when({args})"
+        return out
+
+
+#: a plan root rendered as its ``wq`` entry (so :meth:`Plan.to_source` round-trips through the
+#: recorder). ``Collection`` / ``Field`` are never a top-level root (they are results of ops); the
+#: context root ``""`` is the current element, which in a sub-expression is ``wq.doc``.
+_ROOT_SRC = {"Reference": "wq.ref", "Document": "wq.doc", "": "wq.doc"}
+
 
 def _show(arg: Arg) -> str:
     """Render one plan arg for :meth:`Plan.describe`: a sub-plan as its own describe form, a literal
     as its repr."""
     return arg.plan.describe() if arg.plan is not None else repr(arg.value)
+
+
+def _show_src(arg: Arg) -> str:
+    """Render one plan arg for :meth:`Plan.to_source`: a sub-plan as its own source, a literal repr."""
+    return arg.plan.to_source() if arg.plan is not None else repr(arg.value)
 
 
 Arg.model_rebuild()

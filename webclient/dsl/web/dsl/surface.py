@@ -12,6 +12,8 @@ lazy surfaces -- same DSL, hand-written compact for the packages layer.
 
 from __future__ import annotations
 
+import ast
+import operator
 from collections.abc import Sequence
 from typing import (
     TYPE_CHECKING,
@@ -77,6 +79,7 @@ class LazyField(Protocol):
     ) -> JsonValue: ...
     def to_blob(self) -> str: ...
     def describe(self) -> str: ...
+    def to_source(self) -> str: ...
     def __eq__(self, o: object) -> "LazyField": ...  # type: ignore[override]
     def __ne__(self, o: object) -> "LazyField": ...  # type: ignore[override]
     def __lt__(self, o: object) -> "LazyField": ...
@@ -147,6 +150,7 @@ class LazyCollection(Protocol[T]):
     ) -> "Sequence[T]": ...
     def to_blob(self) -> str: ...
     def describe(self) -> str: ...
+    def to_source(self) -> str: ...
 
 
 class LazyDocument(Protocol):
@@ -190,6 +194,7 @@ class LazyDocument(Protocol):
     ) -> "Document": ...
     def to_blob(self) -> str: ...
     def describe(self) -> str: ...
+    def to_source(self) -> str: ...
 
 
 class LazyReference(Protocol):
@@ -222,6 +227,7 @@ class LazyReference(Protocol):
     ) -> "Ref": ...
     def to_blob(self) -> str: ...
     def describe(self) -> str: ...
+    def to_source(self) -> str: ...
 
 
 class LazyThen(LazyField, Protocol):
@@ -303,8 +309,90 @@ class _Wq:
 wq = _Wq()
 
 
+#: literal constants a source may contain; comparison ops a ``filter`` predicate may use.
+_CONST = (str, int, float, bool, type(None))
+_CMP: "dict[type[ast.cmpop], object]" = {
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
+}
+
+
+class SourceError(ValueError):
+    """A string was not a rebuildable ``wq`` functional expression (unparseable / disallowed)."""
+
+
+def _eval_src(node: "ast.AST") -> object:
+    """Interpret ONE ``wq`` source AST node against the real recorder. Only ``wq`` is a name; a
+    ``_``-prefixed attribute, ``*``/``**`` args, or any other construct is refused -- so an untrusted
+    source cannot execute arbitrary code (``wq.reference.__globals__[...]`` is rejected at ``_``).
+    """
+    if isinstance(node, ast.Expression):
+        return _eval_src(node.body)
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, _CONST):
+            return node.value
+        raise SourceError(f"disallowed constant: {node.value!r}")
+    if isinstance(node, ast.Name):
+        if node.id == "wq":
+            return wq
+        raise SourceError(f"only 'wq' is available in a query, not {node.id!r}")
+    if isinstance(node, ast.Attribute):
+        if node.attr.startswith("_"):
+            raise SourceError(f"attribute {node.attr!r} is not allowed in a query")
+        return getattr(_eval_src(node.value), node.attr)
+    if isinstance(node, ast.Call):
+        if any(isinstance(a, ast.Starred) for a in node.args):
+            raise SourceError("*args are not allowed in a query")
+        func = _eval_src(node.func)
+        args = [_eval_src(a) for a in node.args]
+        kwargs: "dict[str, object]" = {}
+        for kw in node.keywords:
+            if kw.arg is None:
+                raise SourceError("**kwargs are not allowed in a query")
+            kwargs[kw.arg] = _eval_src(kw.value)
+        return func(*args, **kwargs)  # type: ignore[operator]
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):  # ~cond
+        return ~_eval_src(node.operand)  # type: ignore[operator]
+    if isinstance(node, ast.BinOp) and isinstance(
+        node.op, (ast.BitAnd, ast.BitOr)
+    ):  # a & b / a | b
+        left, right = _eval_src(node.left), _eval_src(node.right)
+        return left & right if isinstance(node.op, ast.BitAnd) else left | right  # type: ignore[operator]
+    if isinstance(node, ast.Compare) and len(node.ops) == 1:  # a == b, a < b, ...
+        fn = _CMP.get(type(node.ops[0]))
+        if fn is None:
+            raise SourceError("that comparison is not allowed in a query")
+        return fn(_eval_src(node.left), _eval_src(node.comparators[0]))  # type: ignore[operator]
+    raise SourceError(f"disallowed expression in a query: {type(node).__name__}")
+
+
+def from_source(src: str) -> Expr:
+    """Rebuild an :class:`Expr` from a ``wq`` FUNCTIONAL source string -- the inverse of
+    :meth:`Expr.to_source` (e.g. ``wq.reference('u').resolve(profile='basic').select_all('.row')``).
+    It drives the REAL recorder, never ``eval``: only ``wq`` is in scope and a private attribute,
+    ``*``/``**`` args or any other construct is refused, so an untrusted source is safe to rebuild.
+    Raises :class:`SourceError`."""
+    text = src.strip()
+    if not text:
+        raise SourceError("empty source")
+    try:
+        tree = ast.parse(text, mode="eval")
+    except SyntaxError as exc:
+        raise SourceError(f"source did not parse: {exc}") from exc
+    result = _eval_src(tree)
+    if not isinstance(result, Expr):
+        raise SourceError(f"source is a {type(result).__name__}, not a wq chain")
+    return result
+
+
 __all__ = [
     "wq",
+    "from_source",
+    "SourceError",
     "LazyReference",
     "LazyDocument",
     "LazyCollection",

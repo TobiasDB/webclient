@@ -65,6 +65,32 @@ def test_describe_round_trips_through_blob() -> None:
     assert from_blob(q.to_blob()).describe() == q.describe()
 
 
+def test_to_source_round_trips_through_from_source() -> None:
+    # the FUNCTIONAL representation: a query serialises to a runnable wq source string and back.
+    from web.dsl import SourceError, from_source
+
+    q = (
+        wq.reference("https://x/")
+        .resolve(profile="basic")
+        .select_all(".card")
+        .extract(
+            title=wq.doc.select(".title").attr("text"),
+            price=wq.doc.select(".price").attr("text").number(default=0),
+        )
+        .filter(wq.doc.field("price") != "")
+    )
+    src = q.to_source()
+    assert src.startswith("wq.reference('https://x/').resolve(profile='basic').select_all(")
+    assert from_source(src).to_blob() == q.to_blob()  # rebuilds the identical plan
+    # the safety boundary is preserved: no arbitrary code, no private attributes
+    import pytest
+
+    with pytest.raises(SourceError):
+        from_source("wq.reference.__globals__['os']")
+    with pytest.raises(SourceError):
+        from_source("wq.doc.extract(x={'a': 1})")  # a dict literal is disallowed
+
+
 def test_lazy_expr_refuses_python_coercion() -> None:
     import pytest
 
