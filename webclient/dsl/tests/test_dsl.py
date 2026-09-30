@@ -629,3 +629,28 @@ wq.doc.select_all("li.row")
         "Document.select_all('li.row').filter(Document.select('a').attr('href').is_ok())"
         ".extract(name=Document.select('.name').attr('text'))"
     )
+
+
+def test_a_reference_reads_as_a_field_for_the_leaf_verbs() -> None:
+    # `attr("href")` yields a Ref (resolvable) -- it must still READ as a value: regex / link /
+    # is_ok / split apply to its URL (a filter on the link's path, a link normalised), while
+    # `.resolve()` keeps following it.
+    from web.parse import Document
+
+    doc = Document(
+        content=b"<ul><li><a href='/articles/c1'>a</a></li><li><a href='/videos/v1'>v</a></li></ul>",
+        kind="html",
+        url="http://x/news",
+    )
+    rows = (
+        wq.doc.select_all("li")
+        .filter(wq.doc.select("a").attr("href").regex("/articles/").is_ok())
+        .extract(url=wq.doc.select("a").attr("href"))
+        .collect(doc)
+    )
+    assert rows == [{"url": "http://x/articles/c1"}]
+    assert wq.doc.select("a").attr("href").link().collect(doc) == "http://x/articles/c1"
+    assert (
+        wq.doc.select("a").attr("href").regex(r"/(articles|videos)/", group=1).collect(doc)
+        == "articles"
+    )

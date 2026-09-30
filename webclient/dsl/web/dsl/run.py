@@ -288,6 +288,10 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
     """
     if obj is None:
         return None
+    if isinstance(obj, Ref) and name != "resolve" and hasattr(Field, name):
+        # a reference READS as the Field of its URL for every leaf verb (regex / link / split /
+        # is_ok ...) -- only `.resolve()` follows it
+        obj = Field(obj.url, base=obj.base)
     if name == "key" and isinstance(obj, (Document, Element)):  # a stable content hash
         selector = kwargs.get("selector", args[0] if args else None)
         return Field(doc_key(obj, str(selector) if selector else None), base=_base_of(obj))
