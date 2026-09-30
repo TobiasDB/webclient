@@ -1,7 +1,7 @@
-"""The onboard eval harness: run Locate + Author against the webclient lab and grade each example.
+"""The onboard eval harness: run Locate + Author against the bundled lab and grade each example.
 
 Not part of the shipped ``web.onboard`` package -- a dev tool that imports both ``web.onboard`` and
-the OLD repo's ``webclient.lab`` (the fixtures + their published expected results). Run it with
+the bundled ``eval.lab`` (the fixtures + their published expected results). Run it with
 ``python -m eval`` from ``packages/onboard`` (both importable); see :mod:`eval.__main__`.
 """
 

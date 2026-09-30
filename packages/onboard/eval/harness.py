@@ -1,4 +1,4 @@
-"""The onboard eval: run Locate + Author against the webclient LAB and grade each example.
+"""The onboard eval: run Locate + Author against the bundled LAB and grade each example.
 
 For every case below we run the two phases against a live lab fixture:
 

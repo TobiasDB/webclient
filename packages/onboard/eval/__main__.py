@@ -1,9 +1,11 @@
 """Run the onboard eval against the lab and write ``RESULTS.md``.
 
-    python -m eval            # from packages/onboard, with web.onboard + webclient importable
+    python -m eval            # from packages/onboard, with web.onboard importable
 
-Serves the webclient lab (pure stdlib, a daemon thread), runs :func:`eval.harness.run_all`, prints
-the per-example Locate/Author table, and writes ``RESULTS.md`` next to this file.
+Serves the bundled lab (pure stdlib, a daemon thread; ``eval/lab/``), runs
+:func:`eval.harness.run_all`, prints the per-example Locate/Author table, and writes
+``RESULTS.md`` next to this file. The lab is vendored here so the eval has no dependency on the
+old monolith.
 """
 
 from __future__ import annotations
@@ -12,9 +14,8 @@ import asyncio
 from datetime import date
 from pathlib import Path
 
-from webclient.lab import LabServer
-
 from .harness import Result, run_all
+from .lab import LabServer
 
 _MARK = {"PASS": "PASS", "PARTIAL": "PART", "FAIL": "FAIL"}
 
@@ -41,7 +42,7 @@ def _tally(results: list[Result], attr: str) -> str:
 
 def _report(results: list[Result]) -> str:
     lines = [
-        "# Onboard eval -- Locate + Author against the webclient lab",
+        "# Onboard eval -- Locate + Author against the bundled lab",
         "",
         f"_Generated {date.today().isoformat()} · Author LLM: **ClaudeShim (real model via "
         "`claude -p`, no API key)**._",
