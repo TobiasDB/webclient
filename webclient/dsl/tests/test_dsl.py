@@ -648,7 +648,7 @@ wq.doc.select_all("li.row")
   .filter(wq.doc.select("a").attr("href").is_ok())
   .extract(
       name=wq.doc.select(".name").attr("text"),
-  )
+  )   # a trailing comment must not swallow the closing paren
 """
     assert from_source(src).describe() == (
         "Document.select_all('li.row').filter(Document.select('a').attr('href').is_ok())"

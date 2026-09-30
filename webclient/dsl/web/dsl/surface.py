@@ -385,7 +385,7 @@ def from_source(src: str) -> Expr:
     if not text:
         raise SourceError("empty source")
     if "\n" in text:  # a chain written over several lines (leading-dot continuations) -- join them
-        text = f"({text})"
+        text = f"({text}\n)"  # the paren on its own line: a trailing `# comment` must not eat it
     try:
         tree = ast.parse(text, mode="eval")
     except SyntaxError as exc:
