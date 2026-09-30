@@ -36,7 +36,7 @@ from typing import Protocol, runtime_checkable
 from web.crawl import CrawlEvent, FrontierMiddleware
 from web.fetch import Event, EventBus, FetchEvent
 from web.fetch import Profile as FetchProfile
-from web.fetch import WebException, using
+from web.fetch import WebException, aclose_default_pool, using
 from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
 
 from .author import AuthorEvent, build_query
@@ -649,7 +649,18 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: "Sequence[str] | None" = None) -> int:
     args = _parser().parse_args(argv)
     runner = {"locate": _locate, "author": _author}[args.cmd]
-    return asyncio.run(runner(args))
+
+    async def _run() -> int:
+        # Close the process-wide default pool on THIS run's loop before it ends: pooled backends
+        # (notably curl_cffi's session) are bound to the loop they were created on, so leaving them
+        # for a later asyncio.run() -- e.g. a second CLI call in one process -- crashes with a
+        # cross-loop future. Closing here also cleans up any browser the run launched.
+        try:
+            return await runner(args)
+        finally:
+            await aclose_default_pool()
+
+    return asyncio.run(_run())
 
 
 if __name__ == "__main__":

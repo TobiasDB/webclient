@@ -17,6 +17,7 @@ the escalation ladder like any other tier -- fetch stays flag-unaware.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Mapping, Sequence
 from typing import Protocol
@@ -86,10 +87,19 @@ class ImpersonateFetcher:
         self._proxy = as_proxy(proxy)
         self._verify = verify
         self._session: "_CurlSession | None" = None
+        self._loop: "asyncio.AbstractEventLoop | None" = None
 
     def _ready(self) -> _CurlSession:
-        if self._session is None:
+        # curl_cffi's AsyncSession binds to the event loop it was created on. This backend is POOLED
+        # (one per profile, process-wide), so it can be reused under a DIFFERENT loop -- e.g. a second
+        # ``asyncio.run`` in one process -- which would otherwise crash with a cross-loop future.
+        # Rebind to the current loop when it changes (httpx tolerates this natively; curl_cffi does
+        # not). The stale session's loop is gone, so we drop it without awaiting its close (that would
+        # need the old loop); curl_cffi frees the handle on GC.
+        loop = asyncio.get_running_loop()
+        if self._session is None or self._loop is not loop:
             self._session = _new_session(self._impersonate, self._verify, self._proxy)
+            self._loop = loop
         return self._session
 
     async def fetch(self, request: Request) -> Snapshot:
@@ -107,8 +117,15 @@ class ImpersonateFetcher:
 
     async def aclose(self) -> None:
         if self._session is not None:
-            await self._session.close()
+            # close only on the loop the session is bound to; on a mismatch (or no loop) drop it and
+            # let GC free the handle -- awaiting close on the wrong loop would itself raise.
+            try:
+                if self._loop is asyncio.get_running_loop():
+                    await self._session.close()
+            except RuntimeError:
+                pass
             self._session = None
+            self._loop = None
 
 
 class ImpersonateSession:

@@ -30,13 +30,14 @@ BASIC = Profile(
     retry=RetryPolicy(max_attempts=3),
     rate=RatePolicy(per_host=0.5),
 )
-#: the full lower ladder (ANTI-BOT.md §5 rungs 1-3): plain httpx first (cheapest), then IMPERSONATE
-#: the browser's TLS/HTTP2 fingerprint on a block (rung 2 -- closes the JA3/JA4 network tell at HTTP
-#: cost), then a real browser render for a JS/PoW challenge (rung 3). The reason-aware ladder climbs
-#: only when a stronger transport can help. (The impersonate rung needs the ``curl_cffi`` extra; if
-#: it can't be leased the ladder still climbs past it to the browser.)
+#: the lower ladder (ANTI-BOT.md §5): the cheap HTTP tier first -- a real Chrome TLS/HTTP2
+#: fingerprint (curl_cffi, closing the JA3/JA4 network tell at HTTP cost; httpx fallback if the extra
+#: is absent) -- then a real browser render on a JS/PoW challenge. There is no separate httpx-first
+#: rung: curl_cffi dominates stock httpx at the same cost, so leading with the weaker client would
+#: only burn a round-trip (see :data:`web.fetch.profiles.BASIC`). The reason-aware ladder climbs only
+#: when a stronger transport can help.
 BASIC_BROWSER = Profile(
-    escalation=EscalationPolicy(tiers=(_fp.BASIC, _fp.IMPERSONATE, _fp.BROWSER)),
+    escalation=EscalationPolicy(tiers=(_fp.BASIC, _fp.BROWSER)),
     retry=RetryPolicy(max_attempts=2),
     rate=RatePolicy(per_host=0.5),
 )
@@ -57,15 +58,9 @@ def proxy(server: "str | Proxy") -> Profile:
 
 
 def proxy_browser(server: "str | Proxy") -> Profile:
-    """:data:`BASIC_BROWSER` routed through ``server`` (httpx -> impersonate -> browser, all proxied)."""
+    """:data:`BASIC_BROWSER` routed through ``server`` (cheap HTTP tier -> browser, both proxied)."""
     return BASIC_BROWSER.with_(
-        escalation=EscalationPolicy(
-            tiers=(
-                _fp.proxy(server),
-                _fp.IMPERSONATE.with_(proxy=server),
-                _fp.proxy_browser(server),
-            )
-        )
+        escalation=EscalationPolicy(tiers=(_fp.proxy(server), _fp.proxy_browser(server)))
     )
 
 

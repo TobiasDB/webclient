@@ -11,12 +11,19 @@ impersonation) once, is inheritable via ``.with_(...)``, and knows the backend i
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from importlib.util import find_spec
 
 from .browser import BrowserFetcher, BrowserManager
 from .fingerprint import Fingerprint
 from .http import HttpFetcher
 from .impersonate import ImpersonateFetcher
 from .proxy import Proxy
+
+#: is the curl_cffi optional extra installed? The cheap HTTP tier PREFERS it (a real Chrome
+#: TLS/HTTP2 fingerprint at plain-HTTP cost, ANTI-BOT.md §2.1) and falls back to stock httpx only
+#: when it is absent -- so httpx is the availability floor, never a rung you deliberately climb
+#: through with an inferior fingerprint. Probed once at import (find_spec does not import it).
+_HAS_CURL_CFFI = find_spec("curl_cffi") is not None
 
 
 class _Keep:
@@ -102,7 +109,10 @@ class Profile:
                 driver="patchright" if self.stealth else "playwright",
                 manager=manager,
             )
-        if self.impersonate:  # rung 2: a real TLS/HTTP2 fingerprint at the HTTP layer (curl_cffi)
+        # A real TLS/HTTP2 fingerprint (curl_cffi) whenever it is installed -- it dominates stock
+        # httpx at the same cost (ANTI-BOT.md §2.1), so there is no reason to lead with the weaker
+        # client. httpx is the FALLBACK (with browserforge header fingerprint), not a separate rung.
+        if self.impersonate and _HAS_CURL_CFFI:
             return ImpersonateFetcher(impersonate=self.impersonate, proxy=self.proxy)
         return HttpFetcher(proxy=self.proxy, fingerprint=self.fingerprint)
 

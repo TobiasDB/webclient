@@ -20,12 +20,14 @@ from .proxy import Proxy
 #   HEADED_BROWSER  HEADED bundled Chromium     -- a real window; far fewer headless tells
 #   REAL_CHROME     HEADED real Chrome channel  -- the genuine installed Chrome; most authentic
 
-#: HTTP transport with a realistic (browserforge) identity -- the cheap default.
-BASIC = Profile(fingerprint=True)
-#: HTTP transport that IMPERSONATES a real Chrome's TLS/HTTP2 fingerprint (curl_cffi) -- rung 2 of
-#: the evasion ladder: it closes the JA3/JA4 + HTTP2 tell plain httpx leaks (ANTI-BOT.md §2.1) at
-#: no more cost than an HTTP fetch, but still runs no JS. Needs the ``curl_cffi`` extra installed.
-IMPERSONATE = Profile(impersonate="chrome")
+#: the cheap HTTP tier: a real Chrome TLS/HTTP2 fingerprint (curl_cffi) when the extra is installed,
+#: else plain httpx with a browserforge header identity. curl_cffi closes the JA3/JA4 + HTTP2 tell
+#: (ANTI-BOT.md §2.1) at NO more cost than an HTTP fetch and dominates stock httpx, so there is no
+#: reason for a separate httpx-first rung -- httpx is the availability FALLBACK, not a tier you climb
+#: through (see :func:`Profile.fetcher`). Still runs no JS, so a JS/PoW challenge needs the browser
+#: rungs. ``impersonate`` + ``fingerprint`` are BOTH set so whichever backend is chosen has coherent
+#: headers (curl_cffi carries its own matched Chrome headers; httpx uses the browserforge set).
+BASIC = Profile(fingerprint=True, impersonate="chrome")
 # Every browser rung runs through the leak-patched driver (``stealth=True`` -> patchright), which
 # suppresses the CDP ``Runtime.enable`` leak (ANTI-BOT.md §5). It reuses the installed Chromium and
 # falls back to stock Playwright when patchright isn't installed, so this is a safe default.
@@ -63,7 +65,6 @@ def real_chrome(server: "str | Proxy") -> Profile:
 
 __all__ = [
     "BASIC",
-    "IMPERSONATE",
     "BROWSER",
     "HEADED_BROWSER",
     "REAL_CHROME",
