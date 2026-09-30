@@ -21,7 +21,7 @@ reroot -> run) and how far a mechanical author gets, **not** a real model's sele
 
 ## Running
 
-Both `web.onboard` and `webclient` (for the lab) must be importable. From `packages/onboard`:
+Both `web.onboard` and `webclient` (for the lab) must be importable. From `webclient/onboard`:
 
 ```
 python -m eval

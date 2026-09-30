@@ -2,7 +2,7 @@
 
 Not part of the shipped ``web.onboard`` package -- a dev tool that imports both ``web.onboard`` and
 the bundled ``eval.lab`` (the fixtures + their published expected results). Run it with
-``python -m eval`` from ``packages/onboard`` (both importable); see :mod:`eval.__main__`.
+``python -m eval`` from ``webclient/onboard`` (both importable); see :mod:`eval.__main__`.
 """
 
 from __future__ import annotations

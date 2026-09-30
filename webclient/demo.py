@@ -8,7 +8,7 @@ hand-built fetcher, no ``try/finally``.
 
 Runs fully offline: it serves its own site on localhost. No browser needed (deterministic).
 
-    env/bin/python packages/demo.py
+    env/bin/python webclient/demo.py
 """
 
 from __future__ import annotations

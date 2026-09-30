@@ -1,6 +1,6 @@
 # Review checklist — architecture & code smells
 
-A practical checklist for reviewing changes to `packages/` (the `web.*` clean-room stack). It is
+A practical checklist for reviewing changes to `webclient/` (the `web.*` clean-room stack). It is
 grounded in what an extended hardening pass actually found — not textbook generalities. Run through
 it for any non-trivial change; skip what plainly doesn't apply. Companion to `ARCHITECTURE.md`
 (which describes the layers) — this is *how to keep them honest*.
@@ -15,7 +15,7 @@ bug classes are section 5 below.
 ## 1. Architecture invariants (the arrangement is load-bearing)
 - [ ] **Acyclic layer DAG** — each package imports only *lower* layers. Order:
       `fetch → parse → resolve → crawl → dsl` and `parse → … → onboard` (the agent tier lives inside onboard).
-      Verify with **runtime imports** (`grep -rn "^from web\." packages/<L>/web`), not a graph
+      Verify with **runtime imports** (`grep -rn "^from web\." webclient/<L>/web`), not a graph
       tool's name-matching (those give false positives, e.g. a `.doc` attr ≠ the DSL's `.doc()`).
 - [ ] **`fetch` is backends only** — no ladder/tiers/escalation there; that is `resolve` policy.
 - [ ] **DSL is a lazy engine on top** — base layers are plain async code; recording/dispatch is DSL.
@@ -38,7 +38,7 @@ bug classes are section 5 below.
       `isinstance` narrowing**, not `Any`. Optional-dep types (playwright) → **`TYPE_CHECKING`
       import** so the annotation exists without the runtime dep.
 - [ ] JSON-serialisable `**kwargs` passthrough to a stdlib fn is the one defensible `Any` — comment it.
-- [ ] Run **`mypy --strict` and `pyright` PER PACKAGE** (`packages/<L>/web`). Never multi-package —
+- [ ] Run **`mypy --strict` and `pyright` PER PACKAGE** (`webclient/<L>/web`). Never multi-package —
       the `web` namespace collides ("source file found twice"). Pyright catches nullability mypy
       misses (narrow instance attrs into locals before returning).
 
@@ -101,15 +101,15 @@ bug classes are section 5 below.
 - [ ] Tests are offline/deterministic (`pytest_httpserver`, canned bytes; inner `async def` +
       `asyncio.run`, no `pytest.mark.asyncio`).
 - [ ] **Formatted with `isort` then `black`** before commit — non-negotiable, the tree is kept
-      black-clean (`black --check packages/` must pass). Run from the repo root:
-      `env/bin/python -m isort packages/ && env/bin/black packages/` (add `--check --diff` in CI).
+      black-clean (`black --check webclient/` must pass). Run from the repo root:
+      `env/bin/python -m isort webclient/ && env/bin/black webclient/` (add `--check --diff` in CI).
       isort first (it reorders imports), then black (it owns line wrapping + spacing).
       **Config authority is the repo-root `pyproject.toml`** (`[tool.black] line-length = 100`;
       `[tool.isort] profile = "black" line_length = 100`) — black resolves ONE config per invocation
-      at the common root, so a root-invoked `black packages/` uses *that*, not a per-package one.
-      Each `packages/*/pyproject.toml` mirrors the same values so per-package invocation agrees; keep
+      at the common root, so a root-invoked `black webclient/` uses *that*, not a per-package one.
+      Each `webclient/*/pyproject.toml` mirrors the same values so per-package invocation agrees; keep
       them identical. `isort`/`black` are dev tools — the env is a uv venv with no pip, so install
       with `uv pip install isort black` (`VIRTUAL_ENV=$PWD/env uv pip install ...`).
 - [ ] Full gate green before commit: **`isort` + `black` + `mypy --strict` + `pyright` (per package)
-      + `pytest`**, and `packages/demo.py` still runs (it exercises the whole stack end-to-end).
+      + `pytest`**, and `webclient/demo.py` still runs (it exercises the whole stack end-to-end).
 - [ ] Never leave the tree broken; commit small green steps.

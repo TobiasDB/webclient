@@ -1,6 +1,6 @@
 """Run the onboard eval against the lab and write ``RESULTS.md``.
 
-    python -m eval            # from packages/onboard, with web.onboard importable
+    python -m eval            # from webclient/onboard, with web.onboard importable
 
 Serves the bundled lab (pure stdlib, a daemon thread; ``eval/lab/``), runs
 :func:`eval.harness.run_all`, prints the per-example Locate/Author table, and writes

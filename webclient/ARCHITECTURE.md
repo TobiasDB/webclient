@@ -218,15 +218,15 @@ Each package is a real distribution (`web-<layer>`, PEP 420 namespace `web.<laye
 editable into the venv with uv:
 
 ```bash
-VIRTUAL_ENV=env uv pip install -e packages/<layer>
+VIRTUAL_ENV=env uv pip install -e webclient/<layer>
 ```
 
 Gate (per package — the `web.` namespace spans dirs, so run mypy/pyright per package):
 
 ```bash
-env/bin/python -m pytest packages/<layer>/tests -q
-env/bin/mypy --strict packages/<layer>/web
-env/bin/pyright packages/<layer>/web
+env/bin/python -m pytest webclient/<layer>/tests -q
+env/bin/mypy --strict webclient/<layer>/web
+env/bin/pyright webclient/<layer>/web
 ```
 
 Every layer's tests run in isolation against a local `pytest-httpserver` (and a headless browser
