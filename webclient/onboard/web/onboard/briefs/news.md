@@ -4,6 +4,7 @@ title: Latest news articles
 search: latest news
 max_pages: 10
 prefer_api: true
+key: [published, headline]
 schema:
   - headline: {type: string, description: the article's headline / title}
   - url: {type: url, description: the link to the full article page}

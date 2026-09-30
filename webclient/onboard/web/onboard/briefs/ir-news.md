@@ -21,6 +21,7 @@ review_hint: >
   Be strict on recency: the rows must be the LATEST releases (the newest row within the last few
   months for an active company) — reject a sample from an archived year or a category subset only.
   Each row must be a press/news release by the company itself, not a third-party article.
+key: [published, headline]
 schema:
   - headline: {type: string, description: the release's headline / title}
   - published: {type: datetime, description: the release date (and time if shown; ISO 8601 if possible)}

@@ -68,6 +68,13 @@ class Brief(BaseModel):
     selectors: dict[str, str] = {}  # field -> css/JSON-path override
     optional: list[str] = []  # fields that may legitimately be absent (not required in the review)
     download: bool = False  # harvest the file(s) themselves, not parsed rows
+    # -- IDENTITY: what makes a row unique (the snapshot / append-only sync model) --
+    key: list[str] = []  # the fields that identify a row (e.g. [published, headline]); the
+    #                      pipeline appends `.key(*key)` to the authored query -- the model never
+    #                      writes it. Empty => every scalar column identifies the row.
+    document_key: str = ""  # a STABLE css selector to hash a fanned-out document over (e.g.
+    #                         "article"), so a clock / sidebar changing elsewhere on the page
+    #                         does not change its hash. Empty => the page's main content.
     # -- REVIEW: how strict on the extracted sample --
     review_hint: str = ""  # NL brief-SPECIFIC strictness for the per-sample review (e.g. ir-events:
     #                        "require UPCOMING events, not only archived; upcoming dates must be

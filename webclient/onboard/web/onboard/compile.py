@@ -22,11 +22,13 @@ from collections.abc import Sequence
 from typing import cast
 
 from web.dsl import (
+    Arg,
     Expr,
     LazyCollection,
     LazyDocument,
     Plan,
     SourceError,
+    Step,
     UnknownVerb,
     from_plan,
     from_source,
@@ -121,4 +123,18 @@ def reroot(chain: Expr, url: str, *, profile: "str | None" = None) -> Query:
     return cast(Query, from_plan(merged))
 
 
-__all__ = ["Query", "QueryError", "clean_reply", "parse_query", "query_code", "reroot"]
+def keyed(query: Query, fields: "Sequence[str]", *, document: str = "") -> Query:
+    """``query`` with the IDENTITY step appended -- ``.key(*fields, document=css)`` -- the way the
+    pipeline declares what makes a row unique (from the brief), never the model. A query that
+    already ends in a ``key`` step is left as it is."""
+    plan = Plan.from_blob(query.to_blob())
+    if any(s.kind == "get" and s.name == "key" for s in plan.steps):
+        return query
+    args = [Arg(value=f) for f in fields]
+    kwargs = {"document": Arg(value=document)} if document else {}
+    step_get = Step(kind="get", name="key")
+    step_call = Step(kind="call", args=args, kwargs=kwargs)
+    return cast(Query, from_plan(plan.extend(step_get).extend(step_call)))
+
+
+__all__ = ["Query", "QueryError", "clean_reply", "keyed", "parse_query", "query_code", "reroot"]

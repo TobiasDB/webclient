@@ -62,7 +62,7 @@ from .review import review
 from .search import DdgSearch, search_web
 from .select import select_candidates
 from .shim import ClaudeShim
-from .sink import DOCUMENT_TYPES, MemorySink, Sink, document_fields, run_to_sink
+from .sink import DOCUMENT_TYPES, MemorySink, Sink, document_fields, row_schema, run_to_sink
 
 
 async def locate_and_author(
@@ -150,6 +150,7 @@ __all__ = [
     "review",
     # -- sinks --
     "run_to_sink",
+    "row_schema",
     "Sink",
     "MemorySink",
     "document_fields",

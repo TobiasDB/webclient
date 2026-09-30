@@ -829,11 +829,17 @@ def test_run_to_sink_routes_rows_to_table_and_documents_to_store(httpserver: HTT
             return sink
 
     sink = cast("MemorySink", _run(go()))
-    # scalar rows -> the table (the document field is NOT a table column)
-    assert {"title": "Report A"} in sink.rows and all("file" not in row for row in sink.rows)
-    # documents -> the object store, each keyed by its URL + carrying its row's metadata
+    # scalar rows -> the table (the document field is NOT a table column); each row carries its key
+    assert [r["title"] for r in sink.rows] == ["Report A", "Report B"]
+    assert all("file" not in row and isinstance(row["_key"], str) for row in sink.rows)
+    assert sink.schema == {"title": "string", "file": "document", "_key": "key"}
+    # documents -> the object store, each with its IDENTITY (the row's key fields + url + hash) and
+    # its row's scalars as metadata
     a_url = httpserver.url_for("/files/a.txt")
-    assert sink.blobs[a_url][0] == b"BODY-A" and sink.blobs[a_url][1] == {"title": "Report A"}
+    content, metadata, keys = next(v for v in sink.blobs.values() if v[2]["url"] == a_url)
+    assert content == b"BODY-A" and metadata == {"title": "Report A"}
+    assert keys["field"] == "file" and len(str(keys["hash"])) == 24
+    assert keys["row"] == sink.rows[0]["_key"]  # a document always names its row's key
 
 
 def test_has_records_requires_schema_corroboration() -> None:
@@ -1789,3 +1795,51 @@ def test_steps_engine_hints_name_closest_selectors_and_available_attributes(
     assert "Closest selectors in the record: span.name" in llm.turns[2]
     assert "matched a <span> whose attributes are: class='name'" in llm.turns[3]
     assert "its text: 'A'" in llm.turns[3]
+
+
+def test_sink_receives_row_keys_and_fanned_out_documents_append_only(
+    httpserver: HTTPServer,
+) -> None:
+    # USER: rows are identified by KEY FIELDS (from the brief -- the pipeline appends `.key(...)`,
+    # never the model) and a fanned-out page is a document identified by those fields + a STABLE
+    # hash; a sync is append-only, so a second run adds nothing. The Brief parses `key:` /
+    # `document_key:`.
+    from web.dsl import key_fields
+    from web.onboard import Brief, MemorySink, run_to_sink
+    from web.onboard.compile import keyed
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    for n, body in ((1, "Body One"), (2, "Body Two")):
+        httpserver.expect_request(f"/detail/{n}").respond_with_data(
+            f"<article class='body'>{body}</article><p class='clock'>now</p>".encode(),
+            content_type="text/html",
+        )
+    brief = Brief.from_markdown(
+        "---\nkey: [name]\ndocument_key: article.body\nschema:\n  - name: the name\n"
+        "  - body: the body\n---\nnames with bodies"
+    )
+    assert brief.key == ["name"] and brief.document_key == "article.body"
+    chain = (
+        'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"), '
+        'detail=wq.doc.select("a.more").attr("href").resolve().extract('
+        'body=wq.doc.select("article.body").attr("text")))'
+    )
+    q = keyed(cast("object", _rerooted(chain, httpserver.url_for("/list"))), brief.key, document=brief.document_key)  # type: ignore[arg-type]
+    assert (
+        key_fields(q._plan) == ["name"] and ".key('name', document='article.body')" in q.describe()
+    )
+
+    async def go() -> MemorySink:
+        async with Resolver() as r:
+            sink = MemorySink()
+            assert await run_to_sink(q, brief, sink, resolver=r) == (2, 2)
+            assert await run_to_sink(q, brief, sink, resolver=r) == (2, 2)  # the runner counts...
+            return sink
+
+    sink = cast("MemorySink", _run(go()))
+    assert len(sink.rows) == 2 and len(sink.blobs) == 2 and sink.skipped == 4  # ...the sink skips
+    assert sink.rows[0]["name"] == "A" and "_doc" not in str(sink.rows[0])  # identity is separate
+    content, metadata, keys = next(iter(sink.blobs.values()))
+    assert content.startswith(b"<article") and keys["name"] == "A"
+    assert keys["url"] == httpserver.url_for("/detail/1") and len(str(keys["hash"])) == 24
+    assert metadata["fields"] == {"body": "Body One"}  # what the query read from that document

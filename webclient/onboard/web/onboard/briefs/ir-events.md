@@ -18,6 +18,7 @@ review_hint: >
   Be strict on completeness and timeliness: the dataset must include the UPCOMING events, not only
   the archived/past ones — reject a sample that is archived-only or whose "upcoming" rows have dates
   in the past. Each row's status (upcoming vs archived) must be correct.
+key: [datetime, title]
 schema:
   - title: {type: string, description: the event name (e.g. Q3 2025 Earnings Call, Annual Shareholder Meeting)}
   - status: {type: string, description: whether the event is UPCOMING or ARCHIVED/past (infer from the section it is listed under)}

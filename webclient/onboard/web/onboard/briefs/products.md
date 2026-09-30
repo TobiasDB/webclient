@@ -3,6 +3,7 @@ name: products
 title: Product catalogue
 search: products
 prefer_api: true
+key: [url]
 schema:
   - name: the product name / title
   - price: the listed price (with currency if shown)

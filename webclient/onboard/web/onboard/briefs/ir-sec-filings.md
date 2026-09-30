@@ -24,6 +24,7 @@ review_hint: >
   current 8-K, proxy, ownership forms) not one type's filter view, and the newest row must be a
   recent filing (weeks to a few months old for a listed company) — reject a single-form or an
   archived-year sample. Every row must carry its form type and filing date.
+key: [filed, form, description]
 schema:
   - form: {type: string, description: the SEC form type (10-K, 10-Q, 8-K, DEF 14A, S-8, 4, 13F-HR, ...)}
   - filed: {type: datetime, description: the filing date (ISO 8601 if possible)}
