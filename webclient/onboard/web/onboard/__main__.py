@@ -33,19 +33,20 @@ import time
 from collections.abc import Sequence
 from importlib.resources import files
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
+from pydantic import JsonValue
 from web.crawl import CrawlEvent, FrontierMiddleware
+from web.dsl import from_blob
 from web.fetch import Event, EventBus, FetchEvent, Profile, WebException, aclose_default_pool
 from web.fetch import fetch as _fetch_one
 from web.fetch import profiles as _fp
 from web.fetch import using
 from web.resolve import ResolveEvent, Resolver
 
-from .agent import Verdict
 from .author import AuthorEvent, build_query
-from .author_loop import author_agent
-from .compile import QueryError
+from .author_loop import write_query
+from .compile import Query, QueryError
 from .config import build_resolver
 from .config import env as _env
 from .config import env_flag as _env_flag
@@ -53,7 +54,7 @@ from .config import env_float as _env_float
 from .frontier import llm_frontier
 from .llm import AnthropicLlm, Llm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage
 from .locate import locate
-from .models import Brief, Reference
+from .models import Brief, QueryArtifact, Reference
 from .review import review
 from .search import DdgSearch
 from .shim import ClaudeShim
@@ -336,6 +337,21 @@ def _explain_reference(ref: Reference) -> None:
     score = ref.detail.get("score")
     if score is not None:
         _err(f"  score:     {score}   (dataset-likeness × scrapability)")
+    _explain_evaluation(ref)
+
+
+def _explain_evaluation(ref: Reference) -> None:
+    """The EVALUATE stage's verdict on the chosen source (it rides on ``Reference.detail``): the
+    select tier, scrapability, whether it is a queryable data source, the model's one-line reason,
+    and where the most recent records are."""
+    d = ref.detail
+    if d.get("verdict"):
+        _err(
+            f"  evaluate:  [{d.get('tier', '')}] scrapability {d.get('scrapability', '?')}/10, "
+            f"queryable={d.get('queryable', False)} — {d.get('verdict')}"
+        )
+    if d.get("recency_hint"):
+        _err(f"  recency:   {d['recency_hint']}")
 
 
 def _entity_arg(entity: "str | None") -> str:
@@ -421,34 +437,126 @@ async def _locate(args: argparse.Namespace) -> int:
 # -- web author -----------------------------------------------------------------------------------
 
 
-def _explain_query(
-    reference: Reference, brief: Brief, engine: str, describe: str, notes: "list[str]"
-) -> None:
-    """The reasoning behind the authored query: how it was written, the dataset it targets, the
-    schema requested, and the advisory notes -- all to stderr (the blob itself is the stdout artifact).
-    """
-    _err(
-        "",
-        f"  source:    {reference.url}  ({reference.kind})",
-        f"  engine:    {engine}   (llm = the model wrote it; file_links/file_download = deterministic)",
+def _cell(value: object) -> str:
+    """One table cell -- JSON for a nested value, whitespace COLLAPSED for a string (a newline in a
+    value would break the alignment), truncated so the table stays legible."""
+    text = (
+        json.dumps(value, ensure_ascii=False, default=str)
+        if isinstance(value, (dict, list))
+        else " ".join(str(value).split())
     )
+    return text if len(text) <= 40 else text[:39] + "…"
+
+
+def _render_table(rows: "Sequence[JsonValue]", max_rows: int = 5) -> "list[str]":
+    """The sample rows as an aligned text table -- the columns are the row keys (a non-dict row
+    falls back to a single ``value`` column)."""
+    shown = list(rows[:max_rows])
+    if not shown:
+        return ["    (no rows)"]
+    dicts = [r if isinstance(r, dict) else {"value": r} for r in shown]
+    cols: list[str] = []
+    for d in dicts:
+        cols += [k for k in d if k not in cols]
+    width = {c: max([len(c)] + [len(_cell(d.get(c, ""))) for d in dicts]) for c in cols}
+
+    def row(vals: "list[str]") -> str:
+        return "    " + "  ".join(f"{v:<{width[c]}}" for c, v in zip(cols, vals))
+
+    return [
+        row(cols),
+        row(["-" * width[c] for c in cols]),
+        *[row([_cell(d.get(c, "")) for c in cols]) for d in dicts],
+    ]
+
+
+def _summarize_author(
+    reference: Reference, brief: Brief, art: QueryArtifact, *, spent: "tuple[float, int] | None"
+) -> None:
+    """The always-printed end-of-run summary: the outcome, the chosen source with its evaluation
+    + flags (with the evidence behind them), the transport to reproduce the fetch, the query with
+    its test verdict (rows / timeliness / absent fields), a SAMPLE TABLE, the rejection trail that
+    led to it, the portable blob(s), and the spend. Enough to judge it -- or re-run it by hand."""
+    ok = art.complete and art.row_count > 0
+    if ok:
+        outcome = "ready"
+    elif art.reason.startswith("one-shot"):
+        outcome = "authored, not tested (one-shot; run with --run to test it)"
+    else:
+        outcome = f"not ready — {art.reason}" + (
+            f"; required field(s) absent from the source: {', '.join(art.absent)}"
+            if art.absent
+            else ""
+        )
+    d = reference.detail
+    lines = [
+        "",
+        "── author " + "─" * 46,
+        f"  result:    {outcome}",
+        f"  source:    {reference.url}",
+    ]
+    if reference.api_endpoint:
+        lines.append(
+            f"  data-API:  {reference.api_endpoint}  ← the JSON behind the page (query this, not the DOM)"
+        )
+    if d.get("verdict"):
+        lines.append(
+            f"  evaluate:  [{d.get('tier', '')}] scrapability {d.get('scrapability', '?')}/10, "
+            f"queryable={d.get('queryable', False)} — {d.get('verdict')}"
+        )
+    if d.get("recency_hint"):
+        lines.append(f"  recency:   {d['recency_hint']}")
+    lines.append(
+        f"  transport: {reference.profile or 'basic'}"
+        + ("   (needs a browser to render)" if reference.needs_browser else "")
+    )
+    if reference.record_selector:
+        lines.append(f"  records:   {reference.record_selector}")
+    if reference.pagination:
+        lines.append(f"  pager:     {reference.pagination}   (the pipeline follows it)")
+    if reference.assessment:  # each conclusion + the evidence that fired it
+        lines.append("  flags:")
+        for f in reference.assessment:
+            lines.append(f"    {f.name} ({f.confidence:.2f}) — {f.description}")
+            lines += [f"      · {sg.name} ({sg.confidence:.2f})" for sg in f.signals]
     if brief.fields:
-        _err(
+        lines.append(
             "  schema:    "
-            + ", ".join(
-                f
-                + (f":{brief.types[f]}" if f in brief.types else "")
-                + ("*" if f in brief.optional else "")
-                + (f" [{brief.descriptions[f]}]" if f in brief.descriptions else "")
-                for f in brief.fields
-            )
+            + ", ".join(f + ("*" if f in brief.optional else "") for f in brief.fields)
             + "   (* = optional)"
         )
-    if reference.flags:
-        _err("  dataset:   " + ", ".join(reference.flags) + "   (flags carried from Locate)")
-    _err(f"  query:     {describe}   ← the wq chain")
-    for note in notes:
-        _err(f"  note:      {note}   (advisory: the static query cannot express this)")
+    split = len(art.sections) > 1
+    lines.append(
+        f"  query:     {art.describe}"
+        + (f"   (split: {len(art.sections)} sections, rows concatenated)" if split else "")
+    )
+    lines.append(
+        f"  tested:    {'✓' if art.tested else '✗'}  {art.row_count} row(s)"
+        + (" combined" if split else "")
+    )
+    if art.timeliness:  # a FLAG for the human: is the newest extracted row recent?
+        lines.append(f"  timeliness:{' ⚠️ STALE —' if art.stale else ' ✓'} {art.timeliness}")
+    if art.absent:
+        lines.append(
+            f"  absent:    {', '.join(art.absent)}   (required field(s) the source does not carry)"
+        )
+    lines.append("  sample:")
+    lines += _render_table(art.sample)
+    if art.attempts:  # the rejection trail: why each earlier attempt was rejected
+        lines.append(f"  authoring: {len(art.attempts) + 1} attempt(s); earlier rejections:")
+        lines += [f"    ✗ {a}" for a in art.attempts]
+    if split:
+        lines.append(f"  section blobs ({len(art.sections)}; run each + concatenate the rows):")
+        for i, sec in enumerate(art.sections):
+            lines += [
+                f"    section {i + 1}: {sec.describe}   ({sec.row_count} row[s])",
+                f"    {sec.blob}",
+            ]
+    else:
+        lines += ["  query blob (stdout; runnable with `run_blob(blob)`):", f"    {art.blob}"]
+    if spent is not None:
+        lines.append(f"  spent:     ${spent[0]:.4f} over {spent[1]} call(s)")
+    _err(*lines)
 
 
 async def _reference_for_author(
@@ -501,30 +609,22 @@ async def _author(args: argparse.Namespace) -> int:
         if reference is None:
             _err("no source located to author over (nothing scored above zero).")
             return 1
-        if not args.simple:  # DEFAULT: the agent loop (check -> base -> repair/review -> split)
-            _err(f"authoring (agent loop): {reference.url}…")
-            with _Progress(args.verbose) as prog:
-                queries, verdict = await author_agent(
-                    reference, brief, resolver=resolver, llm=llm, review=llm, entity=args.entity
+        if not args.simple:  # DEFAULT: the conversation-driven authoring loop
+            _err(f"authoring (loop): {reference.url}…")
+            with _Progress(args.verbose):
+                art = await write_query(
+                    reference,
+                    brief,
+                    resolver=resolver,
+                    llm=llm,
+                    review=llm,
+                    entity=args.entity or "",
                 )
-            if not queries:
-                _report_author_failure(verdict, args.verbose)
+            if not art.blob:
+                _report_author_failure(art, args.verbose)
                 return 1
-            query, engine = queries[0], "agent"  # queries[0] is the primary section
-            notes = [
-                f"agent loop: {verdict.rounds} round(s) → {verdict.reason}, "
-                f"sampled {prog.author_rows} row(s)"
-            ]
-            if prog.author_rows == 0:  # a query was produced but it extracted nothing -- SAY SO
-                _err(
-                    "warning: the authored query sampled 0 rows — it likely does not match this "
-                    f"page (last issue: {prog.author_error or 'the record selector matched nothing'}).",
-                    "  the query below is the best attempt; confirm with --run, or re-locate the source.",
-                )
-            if len(queries) > 1:
-                notes.append(f"{len(queries)} sections (run + concatenated)")
         else:
-            _err(f"authoring: resolving {reference.url} then asking the model…")
+            _err(f"authoring (one-shot): resolving {reference.url} then asking the model…")
             try:
                 with _Progress(args.verbose):
                     query, engine, notes = await build_query(
@@ -540,26 +640,25 @@ async def _author(args: argparse.Namespace) -> int:
                         query, reference, brief, resolver=resolver, llm=llm, rounds=args.review
                     )
                 notes += rnotes
-            queries = [query]  # the one-shot path is a single section
-        _explain_query(reference, brief, engine, query.describe(), notes)  # reasoning -> stderr
-        for q in queries:  # each section's serialised query -> stdout (newline-separated)
-            print(q.to_blob())
-        if isinstance(
-            llm, _Metered
-        ):  # AnthropicLlm (priced) OR the shim (claude -p's API-equiv cost)
-            u = llm.usage
-            _err(
-                f"  spend:     ${llm.spent_usd:.4f} over {llm.calls} call(s)"
-                f"  (tokens in {u.input}, out {u.output}, cache r/w {u.cache_read}/{u.cache_write})"
+            art = QueryArtifact(
+                blob=query.to_blob(),
+                describe=query.describe(),
+                reason=f"one-shot ({engine})",
+                attempts=notes,
             )
+        spent = (llm.spent_usd, llm.calls) if isinstance(llm, _Metered) else None
+        _summarize_author(reference, brief, art, spent=spent)  # the summary -> stderr
+        blobs = [sec.blob for sec in art.sections] or [art.blob]
+        for blob in blobs:  # each section's serialised query -> stdout (newline-separated)
+            print(blob)
         if not args.run:
-            return 0
-        _err(f"running the quer{'ies' if len(queries) > 1 else 'y'}…")
+            return 0 if (art.complete or args.simple) else 1
+        _err(f"running the quer{'ies' if len(blobs) > 1 else 'y'}…")
         listed: "list[object]" = []
         try:
             with _Progress(args.verbose):
-                for q in queries:  # run every section and CONCATENATE the rows
-                    rows = await q.acollect(resolver=resolver)
+                for blob in blobs:  # run every section and CONCATENATE the rows
+                    rows = await cast(Query, from_blob(blob)).acollect(resolver=resolver)
                     listed.extend(rows if isinstance(rows, list) else [rows])
         except WebException as exc:  # a runtime extraction failure (e.g. a loud select miss)
             _err(f"running failed: {exc}")
@@ -591,26 +690,27 @@ def _build_llm(args: argparse.Namespace) -> "AnthropicLlm | ClaudeShim":
     return AnthropicLlm(rate=rate, pricing=pricing)
 
 
-def _report_author_failure(verdict: "Verdict", verbose: bool) -> None:
-    """Explain WHY the agent loop produced no query -- the terse ``verdict.reason`` alone (``error`` /
-    ``stalled`` / ``budget``) is not actionable, so surface ``verdict.error`` (the real exception,
-    e.g. ``llm.api: HTTP 401``) and point at the likely cause per reason."""
-    rounds = f"{verdict.rounds} round(s)"
-    if verdict.reason == "error":  # apply() raised -- an LLM / transport / config failure, usually
+def _report_author_failure(art: QueryArtifact, verbose: bool) -> None:
+    """Explain WHY authoring produced no query -- the bare stop reason is not actionable, so name
+    the real cause: an LLM / transport failure (a config problem, usually) vs a model that never
+    wrote a valid query (its rejections are listed), each with the likely fix."""
+    reason = art.reason
+    if reason.startswith("error"):  # a turn raised -- an LLM / transport / config failure
         _err(
-            f"authoring failed after {rounds}: {verdict.error or 'an internal error'}",
+            f"authoring failed: {reason.partition(':')[2].strip() or 'an internal error'}",
             "  this is an LLM/transport failure, not a bad page — check WEB_LLM_API_KEY / "
             "WEB_LLM_BASE_URL / WEB_LLM_MODEL (or pass --shim to use the local `claude -p` model).",
         )
-    elif verdict.reason in ("stalled", "budget"):  # the model tried but never wrote a valid query
+        return
+    if reason in ("stalled", "budget"):  # the model tried but never wrote a valid query
         _err(
-            f"authoring failed ({verdict.reason}) after {rounds}: the model could not write a valid "
-            "wq query for this page (every attempt was rejected or matched no records).",
-            "  the reasons are in the log above (each rejected reply)."
-            + ("" if verbose else " Re-run with -v to see the model's replies in full."),
+            f"authoring failed ({reason}): the model could not write a valid wq query for this "
+            "page (every attempt was rejected or matched no records):",
+            *[f"    ✗ {a}" for a in art.attempts],
+            *([] if verbose else ["  re-run with -v to see the model's replies in full."]),
         )
-    else:
-        _err(f"authoring failed ({verdict.reason}) after {rounds}: no query was produced.")
+        return
+    _err(f"authoring failed ({reason}): no query was produced.")
 
 
 def _locate_llm(args: argparse.Namespace) -> "AnthropicLlm | ClaudeShim | None":
