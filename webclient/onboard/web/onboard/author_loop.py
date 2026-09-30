@@ -140,14 +140,24 @@ def _populated(rows: "list[object]") -> "list[object]":
     return out
 
 
+def _present_keys(value: object, out: "set[str]") -> None:
+    """Every key carrying a non-empty value, at ANY depth -- a field extracted inside a nested
+    branch (a detail-page fan-out: ``detail={body: ...}``) counts as present."""
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if v not in (None, "", [], {}):
+                out.add(str(k))
+            _present_keys(v, out)
+    elif isinstance(value, list):
+        for v in value:
+            _present_keys(v, out)
+
+
 def _missing(brief: DatasetBrief, rows: "list[object]") -> "list[str]":
-    """The brief's REQUIRED fields empty (or absent) in every sampled row."""
+    """The brief's REQUIRED fields empty (or absent) in every sampled row (nested branches count)."""
     present: set[str] = set()
     for row in rows:
-        if isinstance(row, dict):
-            for k, v in row.items():
-                if v not in (None, "", [], {}):
-                    present.add(k)
+        _present_keys(row, present)
     return [f for f in brief.fields if f not in present and f not in brief.optional]
 
 
@@ -262,9 +272,10 @@ def _follow_up(state: AuthorState) -> str:
             "Some required fields are NOT on the listing -- they are on each record's DETAIL page. "
             "A sample detail page (linked from one record) skeleton:\n"
             f"{state.detail_skeleton}\n\n"
-            "Re-write the query so those fields FOLLOW each record's link: ONE column per detail "
-            "field, each `wq.doc.select('<link>').attr('href').resolve().select(...).attr('text')` "
-            "(that page is fetched once per record and reused for every column)."
+            "Re-write the query so those fields FOLLOW each record's link ONCE and fan out: "
+            "detail=wq.doc.select('<link>').attr('href').resolve().extract(<field>=wq.doc.select("
+            "'...').attr('text'), ...) -- inside that extract, wq.doc IS the detail page. Never "
+            "repeat the select/resolve per field."
         )
     if state.last_error:
         prior = state.query.describe() if state.query is not None else "(no parseable query yet)"

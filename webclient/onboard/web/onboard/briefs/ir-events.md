@@ -2,7 +2,7 @@
 name: ir-events
 title: Investor-relations events (upcoming + archived)
 search: investor relations events calendar
-max_pages: 15
+max_pages: 10
 prefer_api: true
 look:
   - the company's OWN investor-relations events/calendar page (e.g. investors.<entity>.com,

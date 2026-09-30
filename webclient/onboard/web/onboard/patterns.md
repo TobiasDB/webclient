@@ -217,25 +217,25 @@ wq.doc.select_all(".product").filter(
 )
 ```
 
-### 8 — fields on the DETAIL page (follow a link, then read)
+### 8 — fields on the DETAIL page (follow the link ONCE, then fan out)
 
-When a field is not on the listing — only on each item's own page — follow the record's link with
-`.attr("href").resolve()`, then select on that page. Never `.resolve()` a text value; only a
+When fields are not on the listing — only on each record's own page — follow the record's link
+with `.attr("href").resolve()` ONCE and fan out with `.extract(...)` on the resolved page: every
+detail field is a column of that nested extract, and inside it `wq.doc` IS the detail page. Never
+repeat the select/resolve per field. The detail fields nest under the column name (`detail` below);
+a required field inside a nested branch counts as present. Never `.resolve()` a text value; only a
 reference (an `href` / `src`) resolves.
-
-For SEVERAL detail-page fields, write ONE column per field, each following the SAME link. Repeating
-`select("a.detail").attr("href").resolve()` is correct and cheap: within a run the executor fetches
-each record's page **once** and reuses it for every column (resolves are memoised by URL), so you do
-NOT need — and cannot — bind one resolved page to many fields.
 
 ```python
 wq.doc.select_all("li.product").extract(
-    name=wq.doc.select("a.detail").attr("text"),                                           # on the listing
-    sku=wq.doc.select("a.detail").attr("href").resolve().select("[class*=sku]").attr("text"),   # detail page
-    price=wq.doc.select("a.detail").attr("href").resolve().select(".price").attr("text"),       # same page, one fetch
+    name=wq.doc.select("a.detail").attr("text"),                      # on the listing
+    detail=wq.doc.select("a.detail").attr("href").resolve().extract(  # follow ONCE, then fan out:
+        sku=wq.doc.select("[class*=sku]").attr("text"),               #   inside this extract,
+        price=wq.doc.select(".price").attr("text"),                   #   wq.doc is the DETAIL page
+    ),
 )
 ```
-If the detail page is JSON, read it the JSON way (§3): `…resolve().select("stock.count").attr("text")`.
+If the detail page is JSON, read it the JSON way (§3): `…resolve().extract(stock=wq.doc.select("stock.count").attr("text"))`.
 
 ### 9 — two sections, one dataset (a grouped selector)
 

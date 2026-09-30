@@ -414,3 +414,36 @@ def test_field_and_collection_helpers() -> None:
     coll: Collection[Field[str]] = Field("a, b, c").split(",")
     assert [f.get() for f in coll] == ["a", "b", "c"]
     assert len(coll) == 3
+
+
+def test_extract_after_a_per_record_resolve_fans_out_on_the_detail_page(
+    httpserver: HTTPServer,
+) -> None:
+    # THE nested pattern: follow a record's link ONCE (`.attr('href').resolve()`) and fan out with
+    # `.extract(...)` on the resolved page -- inside it wq.doc is the DETAIL page. It yields one
+    # nested row per record, and each detail page is fetched exactly once.
+    url = _shop(httpserver)
+    rows = _run(
+        wq.reference(url)
+        .resolve()
+        .select_all(".card")
+        .extract(
+            title=wq.doc.select(".title").attr("text"),
+            detail=wq.doc.select("a.link")
+            .attr("href")
+            .resolve()
+            .extract(
+                sku=wq.doc.select(".sku").attr("text"),
+                again=wq.doc.select(".sku").attr("text"),
+            ),
+        )
+        .acollect()
+    )
+    assert rows[0]["title"] == "Aeropress"
+    assert rows[0]["detail"] == {
+        "sku": "SKU-1",
+        "again": "SKU-1",
+    }  # selected INSIDE the detail page
+    assert [r["detail"]["sku"] for r in rows] == ["SKU-1", "SKU-2", "SKU-3"]
+    for n in (1, 2, 3):
+        assert sum(1 for req, _ in httpserver.log if req.path == f"/i/{n}") == 1  # one fetch each

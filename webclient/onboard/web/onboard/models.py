@@ -59,7 +59,7 @@ class Brief(BaseModel):
     start_url: str = ""  # one known source to seed the crawl from
     look: list[str] = []  # NL "prefer pages like…" guide for the crawl frontier
     ignore: list[str] = []  # NL "avoid pages like…" guide for the crawl frontier
-    max_pages: int = 15  # crawl page bound
+    max_pages: int = 10  # crawl page bound (an LLM-driven crawl finds the source within ~10)
     prefer_api: bool = True  # prefer a live XHR/data-API over the HTML page
     # -- AUTHOR: how to extract --
     author_hint: str = (

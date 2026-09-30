@@ -2,7 +2,7 @@
 name: news
 title: Latest news articles
 search: latest news
-max_pages: 15
+max_pages: 10
 prefer_api: true
 schema:
   - headline: {type: string, description: the article's headline / title}

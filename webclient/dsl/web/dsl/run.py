@@ -155,6 +155,15 @@ async def _invoke(
         return Field((row or {}).get(str(_literal(call))))
     if name in _ROW_OPS and isinstance(cur, Collection):
         return await _row_op(cur, name, call, rs)
+    if name in _ROW_OPS and isinstance(cur, (Document, Element)):
+        # a row-op on ONE document/element -- the fan-out after a per-record `.resolve()`:
+        # `select('a').attr('href').resolve().extract(body=..., author=...)` selects INSIDE the
+        # resolved page (it is the root of every column), yielding one nested row. Without this
+        # the columns were evaluated eagerly against the OUTER row and missed.
+        rows = await _row_op(Collection([cur]), name, call, rs)
+        if name == "filter":
+            return cur if len(rows) else None
+        return (rows._rows or [{}])[0]
     args, kwargs = await _eager_args(call, root, rs, row)
     if isinstance(cur, Collection):
         return _fan(cur, name, args, kwargs)
