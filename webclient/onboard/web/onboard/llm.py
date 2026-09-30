@@ -67,10 +67,39 @@ class Pricing(BaseModel):
 
 
 class RateLimit(BaseModel):
-    """A minimum interval (seconds) between calls -- politeness for a shared/corporate key. 0.0 is
-    no limit. The client serialises calls so the interval holds under concurrency."""
+    """A minimum interval (seconds) between calls -- politeness for a shared/corporate key or an LLM
+    PROXY. 0.0 is no limit. Every :class:`Llm` client serialises calls through a :class:`_Gate`, so
+    the interval holds under concurrency and caps the request rate regardless of backend."""
 
     min_interval: float = 0.0
+
+    @classmethod
+    def from_env(cls) -> "RateLimit":
+        """The rate from ``WEB_LLM_RATE`` (minimum seconds between LLM calls); 0 / unset -> no limit."""
+        try:
+            return cls(min_interval=float(os.environ.get("WEB_LLM_RATE", "0") or "0"))
+        except ValueError:
+            return cls()
+
+
+class _Gate:
+    """A shared min-interval throttle: hold ``rate.min_interval`` between calls, serialised so it
+    holds under concurrency. Used by every LLM client so ``WEB_LLM_RATE`` caps the request rate to
+    the LLM (proxy) whichever backend (API or ``claude -p`` shim) is driving it."""
+
+    def __init__(self, rate: "RateLimit | None") -> None:
+        self._rate = rate or RateLimit.from_env()
+        self._lock = asyncio.Lock()
+        self._last = 0.0
+
+    async def hold(self) -> None:
+        if self._rate.min_interval <= 0.0:
+            return
+        async with self._lock:
+            wait = self._rate.min_interval - (time.monotonic() - self._last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last = time.monotonic()
 
 
 class LlmEvent(BaseModel):
@@ -130,25 +159,14 @@ class AnthropicLlm:
         base = base_url or env("WEB_LLM_BASE_URL") or env("ANTHROPIC_BASE_URL")
         self._max_tokens = max_tokens
         self._system = system
-        self._rate = rate or RateLimit()
+        #: WEB_LLM_RATE (min seconds between calls) applies even to a directly-built AnthropicLlm().
+        self._gate = _Gate(rate)
         self._pricing = pricing or Pricing()
         self._client = httpx.AsyncClient(base_url=base or "https://api.anthropic.com", timeout=60.0)
         #: cumulative metering across this client's calls.
         self.usage = Usage()
         self.spent_usd = 0.0
         self.calls = 0
-        self._lock = asyncio.Lock()
-        self._last = 0.0
-
-    async def _throttle(self) -> None:
-        """Hold at least ``rate.min_interval`` between calls (serialised, so it holds concurrently)."""
-        if self._rate.min_interval <= 0.0:
-            return
-        async with self._lock:
-            wait = self._rate.min_interval - (time.monotonic() - self._last)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._last = time.monotonic()
 
     def _meter(self, data: object) -> None:
         """Fold one response's ``usage`` into the running totals + spend."""
@@ -174,7 +192,7 @@ class AnthropicLlm:
         )  # report this call live
 
     async def complete(self, prompt: str) -> str:
-        await self._throttle()
+        await self._gate.hold()
         body: dict[str, object] = {
             "model": self._model,
             "max_tokens": self._max_tokens,

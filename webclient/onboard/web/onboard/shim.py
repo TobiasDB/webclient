@@ -15,7 +15,7 @@ from asyncio.subprocess import PIPE
 
 from web.fetch import WebException, emit, err
 
-from .llm import LlmEvent, Usage
+from .llm import LlmEvent, RateLimit, Usage, _Gate
 
 
 def _int(value: object) -> int:
@@ -42,13 +42,21 @@ class ClaudeShim:
     alias (``"haiku"`` -- the cheapest -- by default; ``None`` uses the CLI default). Records the
     last prompt/reply. Raises :class:`~web.fetch.WebException` on failure."""
 
-    def __init__(self, *, model: "str | None" = None, timeout: "float | None" = None) -> None:
+    def __init__(
+        self,
+        *,
+        model: "str | None" = None,
+        timeout: "float | None" = None,
+        rate: "RateLimit | None" = None,
+    ) -> None:
         env = os.environ.get
         self._model = model or env("WEB_LLM_MODEL") or "haiku"  # WEB_LLM_MODEL / --model / "haiku"
         try:
             self._timeout = timeout if timeout is not None else float(env("WEB_LLM_TIMEOUT", "90"))
         except ValueError:
             self._timeout = 90.0
+        #: WEB_LLM_RATE throttles the claude -p spawns too (a shared plan / an LLM proxy in front).
+        self._gate = _Gate(rate)
         self.prompt = ""
         self.reply = ""
         #: real metering from claude -p's own accounting (``total_cost_usd`` + ``usage``).
@@ -57,6 +65,7 @@ class ClaudeShim:
         self.calls = 0
 
     async def complete(self, prompt: str) -> str:
+        await self._gate.hold()  # WEB_LLM_RATE: cap the request rate to the model / proxy
         self.prompt = prompt
         argv = [
             "claude",
