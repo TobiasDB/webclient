@@ -34,14 +34,8 @@ from .browser import (
     supply_for,
 )
 from .bus import Event, EventBus, Subscription, Trace, emit, topic_matches, using
-from .entry import Profile  # functional entry + pool
-from .entry import (
-    ClientPool,
-    Entry,
-    aclose_default_pool,
-    default_pool,
-    fetch,
-)
+from .base import ClientPool, Profile, aclose_default_pool, default_pool  # transport identity + pool
+from .entry import Entry, fetch  # the functional fetch() face
 from .errors import WebError, WebException, err
 from .fingerprint import CHROME, Fingerprint, fleet, generate
 from .http import HttpFetcher, HttpSession

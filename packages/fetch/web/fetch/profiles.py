@@ -8,7 +8,7 @@ across requests is a resolve middleware, not an identity, so it is not here."""
 
 from __future__ import annotations
 
-from .entry import Profile
+from .base import Profile
 from .proxy import Proxy
 
 # The BROWSER-REALNESS ladder: each rung is a more authentic (and heavier) browser identity, so a
