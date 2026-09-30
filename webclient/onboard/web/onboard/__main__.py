@@ -91,6 +91,11 @@ class _Progress:
         self.pages = 0
         self.llm_calls = 0
         self.llm_spent = 0.0
+        #: the author loop's OUTCOME (from its ``done`` AuthorEvent): the row count its final query
+        #: sampled, a one-row preview, and the last unresolved error -- so the CLI reports clearly.
+        self.author_rows = 0
+        self.author_sample = ""
+        self.author_error = ""
         self._start = 0.0
 
     def _on(self, event: Event) -> None:
@@ -120,6 +125,15 @@ class _Progress:
                 _err(f"  · model wrote: {_short(' '.join(event.reply.split()), 100)}")
             elif event.phase == "parsed":
                 _err("  · query parsed + rerooted at the source")
+            elif event.phase == "done":  # the loop's outcome -- rows sampled + a preview
+                self.author_rows = event.rows
+                self.author_sample = event.sample
+                self.author_error = event.reply
+                mark = "✓" if event.rows else "✗"
+                _err(
+                    f"  {mark} sampled {event.rows} row(s)"
+                    + (f": {event.sample}" if event.sample else "")
+                )
         elif isinstance(
             event, ResolveEvent
         ):  # transport fallbacks: which tier a fetch escalated to
@@ -493,7 +507,7 @@ async def _author(args: argparse.Namespace) -> int:
             return 1
         if not args.simple:  # DEFAULT: the agent loop (check -> base -> repair/review -> split)
             _err(f"authoring (agent loop): {_short(reference.url)}…")
-            with _Progress(args.verbose):
+            with _Progress(args.verbose) as prog:
                 queries, verdict = await author_agent(
                     reference, brief, resolver=resolver, llm=llm, review=llm, entity=args.entity
                 )
@@ -501,7 +515,16 @@ async def _author(args: argparse.Namespace) -> int:
                 _report_author_failure(verdict, args.verbose)
                 return 1
             query, engine = queries[0], "agent"  # queries[0] is the primary section
-            notes = [f"agent loop: {verdict.rounds} round(s) → {verdict.reason}"]
+            notes = [
+                f"agent loop: {verdict.rounds} round(s) → {verdict.reason}, "
+                f"sampled {prog.author_rows} row(s)"
+            ]
+            if prog.author_rows == 0:  # a query was produced but it extracted nothing -- SAY SO
+                _err(
+                    "warning: the authored query sampled 0 rows — it likely does not match this "
+                    f"page (last issue: {prog.author_error or 'the record selector matched nothing'}).",
+                    "  the query below is the best attempt; confirm with --run, or re-locate the source.",
+                )
             if len(queries) > 1:
                 notes.append(f"{len(queries)} sections (run + concatenated)")
         else:

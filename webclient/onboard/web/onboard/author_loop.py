@@ -210,8 +210,12 @@ async def _author(state: AuthorState) -> None:
             "A sample DETAIL page (linked from one record) skeleton:\n" + state.detail_skeleton
         )
         parts.append(
-            "For a field that is on the DETAIL page, resolve each record's link and select on it, "
-            "e.g. body=wq.doc.select('a.headline').attr('href').resolve().select('article').attr('text')."
+            "For fields that are on the DETAIL page, write ONE column per field, each following the "
+            "SAME record link, e.g. body=wq.doc.select('a.headline').attr('href').resolve()"
+            ".select('article').attr('text') and author=...resolve().select('.byline').attr('text'). "
+            "Repeating the .attr('href').resolve() per field is correct and cheap -- that page is "
+            "fetched ONCE per record and reused for every column (resolves are memoised); do NOT try "
+            "to bind one resolved page to many fields."
         )
     if state.last_error:  # a repair turn: show the model its prior query + why it failed
         prior = state.query.describe() if state.query is not None else "(no parseable query yet)"
@@ -425,6 +429,10 @@ async def author_agent(
         # a turn raised (an LLM/transport failure, usually a bad key/base_url) -- broadcast WHY so it
         # is not swallowed into a bare "error" reason for a programmatic caller or the -v log.
         emit(ReasonEvent(stage="author", text=f"authoring aborted — {verdict.error}"))
+    # broadcast the OUTCOME: the last sample's row count (+ a preview row) so a caller can see whether
+    # authoring actually EXTRACTED data -- 0 rows after repairs is a likely miss, not a clean success.
+    preview = json.dumps(state.rows[0], ensure_ascii=False, default=str)[:400] if state.rows else ""
+    emit(AuthorEvent(phase="done", rows=len(state.rows), sample=preview, reply=state.last_error))
     return queries, verdict
 
 

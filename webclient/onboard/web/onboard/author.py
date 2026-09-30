@@ -37,7 +37,8 @@ _STRUCTURED = frozenset({"html", "xml", "json"})
 class AuthorEvent(BaseModel):
     """One Author stage, published on the event bus so a caller can log authoring AS IT GOES:
     ``sample`` (the resolved sample -- kind, skeleton size, flags), ``reply`` (the model's raw ``wq``
-    chain, visible even when it fails to parse), ``parsed`` (parsed + rerooted at the source)."""
+    chain, visible even when it fails to parse), ``parsed`` (parsed + rerooted at the source), and
+    ``done`` (the loop's OUTCOME -- how many rows the final query sampled + a preview row)."""
 
     topic: str = "author"
     phase: str = ""
@@ -46,6 +47,10 @@ class AuthorEvent(BaseModel):
     lines: int = 0
     flags: list[str] = []
     reply: str = ""
+    #: ``phase="done"``: the row count the final query SAMPLED and a one-row preview, so a caller can
+    #: report whether authoring actually extracted data (0 rows = a likely miss, not a clean success).
+    rows: int = 0
+    sample: str = ""
 
 
 class Authored(BaseModel):
