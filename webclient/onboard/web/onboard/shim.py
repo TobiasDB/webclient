@@ -28,12 +28,20 @@ _SYSTEM = (
 )
 
 
+async def _reap(proc: "asyncio.subprocess.Process") -> None:
+    """Reap a killed child so it does not linger as a zombie -- bounded, and never raises."""
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5.0)
+    except (asyncio.TimeoutError, ProcessLookupError, OSError):
+        pass
+
+
 class ClaudeShim:
     """An :class:`Llm` (``complete(prompt) -> str``) over ``claude -p``. ``model`` picks a CLI model
     alias (``"haiku"`` -- the cheapest -- by default; ``None`` uses the CLI default). Records the
     last prompt/reply. Raises :class:`~web.fetch.WebException` on failure."""
 
-    def __init__(self, *, model: "str | None" = "haiku", timeout: float = 180.0) -> None:
+    def __init__(self, *, model: "str | None" = "haiku", timeout: float = 90.0) -> None:
         self._model = model
         self._timeout = timeout
         self.prompt = ""
@@ -61,13 +69,16 @@ class ClaudeShim:
         # which `claude` would else parse as an option.
         try:
             proc = await asyncio.create_subprocess_exec(*argv, stdin=PIPE, stdout=PIPE, stderr=PIPE)
-            out, errb = await asyncio.wait_for(
-                proc.communicate(prompt.encode("utf-8")), timeout=self._timeout
-            )
-        except asyncio.TimeoutError as exc:
-            raise WebException(
-                err("llm.shim", f"claude -p timed out after {self._timeout}s")
-            ) from exc
+            try:
+                out, errb = await asyncio.wait_for(
+                    proc.communicate(prompt.encode("utf-8")), timeout=self._timeout
+                )
+            except asyncio.TimeoutError as exc:
+                proc.kill()  # KILL the child -- wait_for only cancels the await, leaving it running
+                await _reap(proc)
+                raise WebException(
+                    err("llm.shim", f"claude -p timed out after {self._timeout}s")
+                ) from exc
         except OSError as exc:
             raise WebException(err("llm.shim", f"could not run claude -p: {exc}")) from exc
         if proc.returncode != 0:

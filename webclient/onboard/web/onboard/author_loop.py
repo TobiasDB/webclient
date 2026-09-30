@@ -20,6 +20,7 @@ bounded, resumable.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 
@@ -66,7 +67,7 @@ class AuthorState:
     #: repair turns taken so far, and the cap (a repair edge re-authors with the failure fed back;
     #: bounded so a persistently-broken query cannot loop forever).
     repairs: int = 0
-    max_repairs: int = 3
+    max_repairs: int = 2
 
 
 @dataclass
@@ -314,6 +315,7 @@ async def author_agent(
     review: "Llm | None" = None,
     entity: str = "",
     max_rounds: int = 8,
+    budget_s: float = 240.0,
 ) -> "tuple[Query | None, Verdict]":
     """Drive the authoring loop to a query that satisfies the brief, returning the final query + the
     loop :class:`~web.onboard.agent.Verdict`. Turns: ``check`` (an ADVISORY note on whether the data
@@ -321,7 +323,9 @@ async def author_agent(
     (nest a linked-page extraction). ``review`` (usually the same model) enables the entry check +
     per-sample review; ``None`` skips them. The check never vetoes -- a skeleton read is unreliable,
     so absence is concluded EMPIRICALLY (0 rows after repair). The query is ``None`` only if the base
-    + repairs never parsed one."""
+    + repairs never parsed one. ``budget_s`` is a hard wall-clock cap: the loop chains several model
+    calls, so a slow model or a stuck page must not run forever -- on the cap we return the best query
+    so far with a ``budget`` verdict rather than hang."""
     state = AuthorState(
         reference=reference, brief=brief, resolver=resolver, llm=llm, review=review, entity=entity
     )
@@ -333,7 +337,15 @@ async def author_agent(
         progress=lambda s: s.query.to_blob() if s.query is not None else "",
         max_rounds=max_rounds,
     )
-    verdict = await loop.arun(state)
+    try:
+        verdict = await asyncio.wait_for(loop.arun(state), timeout=budget_s)
+    except (
+        asyncio.TimeoutError
+    ):  # a slow model / stuck page -- take the best query so far, don't hang
+        emit(
+            ReasonEvent(stage="author", text=f"authoring hit the {budget_s:.0f}s budget — stopping")
+        )
+        verdict = Verdict(reason="budget", rounds=state.repairs)
     return state.query, verdict
 
 

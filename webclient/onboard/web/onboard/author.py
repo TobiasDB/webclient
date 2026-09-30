@@ -69,10 +69,12 @@ def _file_links_query(url: str) -> Query:
 def sample_skeleton(sample: Document) -> str:
     """A token-lean outline of the sample for the prompt: the JSON shape for a JSON document, else
     the record-marked DOM skeleton with page chrome dropped. Shared with the authoring agent loop.
-    """
+    Capped at 500 lines: chrome is already dropped and the records sit near the top, so this is
+    ample for writing a selector -- and it keeps each (repeated) model call FAST (a 1500-line
+    skeleton made every author/repair turn a slow call, which is what timed real runs out)."""
     if sample.kind == "json":
-        return sample.json_skeleton(max_lines=1500)
-    return sample.skeleton(max_lines=1500, drop_chrome=True)
+        return sample.json_skeleton(max_lines=500)
+    return sample.skeleton(max_lines=500, drop_chrome=True)
 
 
 async def build_query(
