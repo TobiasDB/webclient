@@ -334,7 +334,7 @@ async def _row_op(
             for (
                 a
             ) in args:  # explicit loop: an `await` inside all(...) would build an async generator
-                if not _truthy(await _walk(_plan_of(a), item, rs, row)):
+                if not _truthy(await _arg(a, item, rs, row)):
                     keep = False
                     break
             if keep:
@@ -347,7 +347,11 @@ async def _row_op(
     for item, prior in zip(coll, base):
         built: dict[str, object] = dict(prior)
         for key, arg in kwargs.items():
-            built[key] = raw(await _walk(_plan_of(arg), item, rs, built))
+            # a column is either a recorded sub-expression (walk it against this element) or a bare
+            # CONSTANT (e.g. status="UPCOMING") -- _arg yields the literal as-is. (It used to route
+            # through a plan wrapper that compared the element TO the literal, so a constant column
+            # came back as False.)
+            built[key] = raw(await _arg(arg, item, rs, built))
         out_rows.append(built)
     return coll.derive(list(coll), out_rows)
 
@@ -426,14 +430,6 @@ async def _arg(arg: "Arg", root: object, rs: "Resolver", row: "dict[str, object]
     if arg.plan is not None:
         return await _walk(arg.plan, root, rs, row)
     return arg.value
-
-
-def _plan_of(arg: "Arg") -> "Plan":
-    """The sub-plan of a row-op argument (an ``extract`` column / ``filter`` predicate is always a
-    recorded expression); a bare literal wraps as an empty plan that yields it."""
-    return (
-        arg.plan if arg.plan is not None else Plan(steps=[Step(kind="op", name="eq", args=[arg])])
-    )
 
 
 def _literal(call: "Step | None") -> "JsonValue":

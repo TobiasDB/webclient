@@ -126,6 +126,21 @@ def test_extract_filter_number_and_smart_collect(httpserver: HTTPServer) -> None
     ]
 
 
+def test_extract_constant_column_yields_the_literal(httpserver: HTTPServer) -> None:
+    # a bare-literal column (e.g. status="LISTED") must yield the CONSTANT for every row -- it used
+    # to route through a plan wrapper that compared the element TO the literal, so it came back False.
+    url = _shop(httpserver)
+    rows = _run(
+        wq.reference(url)
+        .resolve()
+        .select_all(".card")
+        .extract(name=wq.doc.select(".title").attr("text"), status="LISTED")
+        .acollect()
+    )
+    assert [r["status"] for r in rows] == ["LISTED", "LISTED", "LISTED"]
+    assert rows[0]["name"] == "Aeropress"  # the sibling expression column still works
+
+
 def test_when_then_without_otherwise_defaults_to_none(httpserver: HTTPServer) -> None:
     url = _shop(httpserver)
     rows = _run(
