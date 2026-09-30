@@ -62,7 +62,7 @@ Engine = Literal["chain", "steps"]
 ENGINES: "tuple[Engine, ...]" = ("chain", "steps")
 #: the default wall clock per engine (``budget_s=0``): the step engine makes one model call per op,
 #: so it needs several times the room of a whole-chain turn.
-_DEFAULT_BUDGET_S: "dict[str, float]" = {"chain": 240.0, "steps": 720.0}
+_DEFAULT_BUDGET_S: "dict[str, float]" = {"chain": 240.0, "steps": 900.0}
 
 #: hard wall-clock cap on running ONE authored query against the source: a pathological query (a
 #: per-record .resolve() fanning out to hundreds of fetches) must never hang the loop.
@@ -816,13 +816,17 @@ def _artifact(state: AuthorState, verdict: Verdict) -> QueryArtifact:
     tested = bool(parts) and all(len(rows) > 0 for _, rows in parts)
     missing = _missing(state.brief, all_rows) if all_rows else list(state.brief.fields)
     tnote, stale = timeliness(json_rows, state.brief)
+    present: set[str] = set()
+    for row in all_rows:
+        _present_keys(row, present)
+    absent = sorted(state.absent - present)  # a field that ended up populated is not absent
     primary = parts[0][0] if parts else None
     reason = state.abort or (verdict.reason + (f": {verdict.error}" if verdict.error else ""))
     return QueryArtifact(
         blob=primary.to_blob() if primary is not None else "",
         describe=primary.describe() if primary is not None else "",
         tested=tested,
-        complete=bool(tested and all_rows and not [m for m in missing if m not in state.absent]),
+        complete=bool(tested and all_rows and not [m for m in missing if m not in absent]),
         row_count=len(all_rows),
         sample=json_rows[:_SAMPLE],
         sections=(
@@ -836,7 +840,7 @@ def _artifact(state: AuthorState, verdict: Verdict) -> QueryArtifact:
             else []
         ),
         attempts=list(state.attempts),
-        absent=sorted(state.absent),
+        absent=absent,
         timeliness=tnote,
         stale=stale,
         reason=reason,
@@ -918,7 +922,7 @@ async def write_query(
     """Author the query for ``reference`` per ``brief`` and return the :class:`QueryArtifact`: the
     runnable query + its validation verdict (see the module docstring). ``review`` enables the
     entry check + per-sample review; ``budget_s`` is a hard wall clock for the whole loop (``0`` =
-    the engine's default, 240s for ``chain`` / 720s for ``steps``); ``engine`` picks how each
+    the engine's default, 240s for ``chain`` / 900s for ``steps``); ``engine`` picks how each
     author turn writes the query (see :data:`ENGINES`)."""
     state, verdict = await _run(
         reference,

@@ -76,6 +76,9 @@ _DETAIL_CHARS = 6_000  # the detail page's skeleton, shown after detail(...)
 _VALUE_CHARS = 80  # one column value in the feedback
 #: the column a detail fan-out nests under (``detail={...}``).
 DETAIL_COLUMN = "detail"
+#: results that say an op was NOT applied because something ELSE must happen first -- the same op
+#: is legitimate once that has happened, so these are never memorised as the op's result.
+_PRECONDITION = ("no records yet", "no detail link", "current section unfinished")
 
 
 class StepError(ValueError):
@@ -529,10 +532,16 @@ def _observe_with(llm: Llm) -> "Callable[[StepSession], Awaitable[_Obs]]":
         if op.name == "done" and not session.draft.records:
             return _Obs(error="done() before any records(...) -- nothing to finish")
         if op.name != "done" and op.line() in session.tried:
+            earlier = session.tried[op.line()]
+            if op.name in ("detail", "absent", "section"):  # already DONE -- move on
+                return _Obs(
+                    error=f"{op.line()} is already done ({earlier}) -- continue with the next op "
+                    "(detail_field(...) reads the detail page; done() finishes)."
+                )
             return _Obs(
-                error=f"you already called exactly {op.line()} -- its result was: "
-                f"{session.tried[op.line()]}. Do something DIFFERENT (another selector, an "
-                "attribute read, detail(...), or absent(<name>) if the field is not there)."
+                error=f"you already called exactly {op.line()} -- its result was: {earlier}. Do "
+                "something DIFFERENT (another selector, an attribute read, detail(...), or "
+                "absent(<name>) if the field is not there)."
             )
         if op.name == "done":
             session.done = True
@@ -562,7 +571,8 @@ def _apply_with(
             emit(ReasonEvent(stage="author", text=f"step rejected: {op.args[0]}"))
             return
         applied, result, summary = await _step(session, op, resolver)
-        session.tried[op.line()] = summary
+        if not summary.startswith(_PRECONDITION):  # a precondition can change -- do not memorise
+            session.tried[op.line()] = summary
         if applied:
             session.steps += 1
             session.history.append(f"{op.line()} -> {summary}")
@@ -676,10 +686,12 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
         )
     if op.name == "detail_field" and not new.link:
         return False, f'{head}\nNOT APPLIED -- call detail("<link css>") first', "no detail link"
-    if op.name == "field":
+    if op.name == "field":  # a column name is unique across the listing / detail scopes
         new.fields[op.args[0]] = op.args[1]
+        new.detail_fields.pop(op.args[0], None)
     elif op.name == "detail_field":
         new.detail_fields[op.args[0]] = op.args[1]
+        new.fields.pop(op.args[0], None)
     elif op.name == "where":
         new.where = op.args[0]
     elif op.name == "drop":
@@ -731,6 +743,8 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
                 "EMPTY on every record (reverted)",
             )
     session.draft = new
+    if op.name in ("field", "detail_field"):
+        session.absent.discard(col)  # a field now read is no longer "absent"
     values = _values(new, rows)
     summary = (
         f"{col} dropped"

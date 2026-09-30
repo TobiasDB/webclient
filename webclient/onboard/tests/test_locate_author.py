@@ -1724,3 +1724,37 @@ def test_artifact_carries_a_rejected_review_and_absent_fields_are_not_review_def
     assert art.tested and art.row_count == 2
     assert art.review.startswith("NO") and "placeholders" in art.review
     assert "CLIPPED for display" in llm.reviews[0]
+
+
+def test_steps_engine_precondition_failures_are_not_repeats_and_names_are_unique(
+    httpserver: HTTPServer,
+) -> None:
+    # BBC run 4: detail_field(...) before detail(...) was memorised as "no detail link", so the SAME
+    # call after detail(...) was refused as a repeat -> the model declared body absent and stalled.
+    # A precondition failure is not the op's result; a field later read clears its absent
+    # declaration; and a column name is unique across the listing / detail scopes.
+    from web.onboard import QueryArtifact
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    for n, body in ((1, "Body One"), (2, "Body Two")):
+        httpserver.expect_request(f"/detail/{n}").respond_with_data(
+            f"<article class='body'>{body}</article>".encode(), content_type="text/html"
+        )
+    llm = _StepConv(
+        [
+            'records("li.row")',
+            'field(name, wq.doc.select(".name").attr("text"))',
+            'detail_field(body, wq.doc.select("article.body").attr("text"))',  # before detail()
+            "absent(body)",
+            'detail("a.more")',
+            'detail_field(body, wq.doc.select("article.body").attr("text"))',  # now legitimate
+            'detail_field(name, wq.doc.select("article.body").attr("text"))',  # moves `name`
+            "done()",
+        ]
+    )
+    art = _steps_art(httpserver, llm, ["name", "body"])
+    assert isinstance(art, QueryArtifact)
+    assert art.complete and art.absent == [], (art.reason, art.absent)
+    assert "NOT APPLIED -- call detail" in llm.turns[3]
+    assert "you already called" not in llm.turns[6]  # the retry after detail() went through
+    assert art.sample[0] == {"detail": {"body": "Body One", "name": "Body One"}}
