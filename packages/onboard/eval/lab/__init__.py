@@ -64,9 +64,22 @@ def route(
     if path == "/lab" or path == "/lab/":
         return 200, {"Content-Type": "text/html; charset=utf-8"}, _index_html()
     if path == "/lab/index.json":
-        return 200, {"Content-Type": "application/json"}, json.dumps(
-            [{"name": f.name, "title": f.title, "path": f.path, "feature": f.feature,
-              "browser": f.browser} for f in FIXTURES.values()]).encode()
+        return (
+            200,
+            {"Content-Type": "application/json"},
+            json.dumps(
+                [
+                    {
+                        "name": f.name,
+                        "title": f.title,
+                        "path": f.path,
+                        "feature": f.feature,
+                        "browser": f.browser,
+                    }
+                    for f in FIXTURES.values()
+                ]
+            ).encode(),
+        )
     for fixture in FIXTURES.values():
         if path == f"/lab/{fixture.name}.json":
             return 200, {"Content-Type": "application/json"}, json.dumps(fixture.expected).encode()
@@ -124,38 +137,56 @@ def _index_html() -> bytes:
 
     def card(f: Fixture) -> str:
         badge = ' <span class="lab-badge">browser</span>' if f.browser else ""
-        return (f'<div class="lab-item" data-q="{f.name} {f.title} {f.feature}">'
-                f'<a class="nm" href="{f.path}">{f.name}</a>{badge}'
-                f'<div class="ds">{f.title}</div>'
-                f'<span class="ft">{f.feature}</span> '
-                f'<a class="exp" href="/lab/{f.name}.json">expected →</a></div>')
+        return (
+            f'<div class="lab-item" data-q="{f.name} {f.title} {f.feature}">'
+            f'<a class="nm" href="{f.path}">{f.name}</a>{badge}'
+            f'<div class="ds">{f.title}</div>'
+            f'<span class="ft">{f.feature}</span> '
+            f'<a class="exp" href="/lab/{f.name}.json">expected →</a></div>'
+        )
 
     sections = "".join(
         f'<section class="lab-cat" id="{label.split()[0].lower()}"><h2>{label} '
         f'<span class="lab-count">{len(groups[label])}</span></h2>'
         f'<div class="lab-grid">{"".join(card(f) for f in groups[label])}</div></section>'
-        for label in order if label in groups
+        for label in order
+        if label in groups
     )
 
-    notes = "".join(f'<div class="lab-note"><h3>{h}</h3><p>{p}</p></div>' for h, p in (
-        ("Everything is a plan",
-         "An op records a wire-safe, typed plan; <code>RUN(t)=fold(plan, events)</code>. "
-         "The same plan runs sync, async or remote — dispatch modes, not three code paths."),
-        ("Tiers escalate on evidence",
-         "A cheap static fetch first; the client goes to a real browser only when signals say it "
-         "must (a JS-gated SPA, a consent wall, shadow DOM)."),
-        ("Signals → flags",
-         "Tiered, confidence-scored signals (evidence) combine into flags (conclusions: spa, "
-         "login_required, pagination, cookie_banner …) that auto-remediation and the pipeline act on."),
-        ("One bounded loop",
-         "Pagination, crawl, extract and interaction all derive from one observe → decide → apply loop."),
-        ("Traceable by construction",
-         "Each step stamps events — rrweb DOM, network facts correlated to the DOM, pool leases — "
-         "so a run can be watched as it unfolds and replayed later."),
-        ("The lab is the contract",
-         "Every fixture publishes its expected result as JSON. Tests, demos and docs all assert "
-         "against one set of facts — the website can run the same suite (LAB_URL)."),
-    ))
+    notes = "".join(
+        f'<div class="lab-note"><h3>{h}</h3><p>{p}</p></div>'
+        for h, p in (
+            (
+                "Everything is a plan",
+                "An op records a wire-safe, typed plan; <code>RUN(t)=fold(plan, events)</code>. "
+                "The same plan runs sync, async or remote — dispatch modes, not three code paths.",
+            ),
+            (
+                "Tiers escalate on evidence",
+                "A cheap static fetch first; the client goes to a real browser only when signals say it "
+                "must (a JS-gated SPA, a consent wall, shadow DOM).",
+            ),
+            (
+                "Signals → flags",
+                "Tiered, confidence-scored signals (evidence) combine into flags (conclusions: spa, "
+                "login_required, pagination, cookie_banner …) that auto-remediation and the pipeline act on.",
+            ),
+            (
+                "One bounded loop",
+                "Pagination, crawl, extract and interaction all derive from one observe → decide → apply loop.",
+            ),
+            (
+                "Traceable by construction",
+                "Each step stamps events — rrweb DOM, network facts correlated to the DOM, pool leases — "
+                "so a run can be watched as it unfolds and replayed later.",
+            ),
+            (
+                "The lab is the contract",
+                "Every fixture publishes its expected result as JSON. Tests, demos and docs all assert "
+                "against one set of facts — the website can run the same suite (LAB_URL).",
+            ),
+        )
+    )
 
     body = f"""
 <nav>{brand("lab")}<a href="/">home</a><a href="/lab/index.json">index.json</a></nav>
@@ -181,9 +212,11 @@ function labFilter(q){{
   }});
 }}
 </script>"""
-    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>eval lab</title>{LAB_CSS}{_INDEX_CSS}</head><body>{body}</body></html>").encode()
+    return (
+        f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        f'<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>eval lab</title>{LAB_CSS}{_INDEX_CSS}</head><body>{body}</body></html>"
+    ).encode()
 
 
 class LabServer:
@@ -191,7 +224,9 @@ class LabServer:
 
     def __init__(self, host: str = "127.0.0.1", port: int = 0) -> None:
         self._server = http.server.ThreadingHTTPServer((host, port), _Handler)
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True, name="webclient-lab")
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, daemon=True, name="webclient-lab"
+        )
         self._thread.start()
         self.base = f"http://{host}:{self._server.server_port}"
 
