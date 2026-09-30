@@ -37,6 +37,26 @@ class Llm(Protocol):
     async def complete(self, prompt: str) -> str: ...
 
 
+@runtime_checkable
+class Conversation(Protocol):
+    """A running multi-turn exchange: ``send(text)`` adds a user turn and returns the reply, with
+    the whole history kept in context. The OPENING turn carries the big shared prefix (a page
+    skeleton + the query guide) and is sent ONCE; each later turn is a short follow-up."""
+
+    async def send(self, text: str) -> str: ...
+
+
+@runtime_checkable
+class Conversational(Protocol):
+    """An :class:`Llm` that can also open a :class:`Conversation` -- the seam the author uses to
+    send the page once and keep it in context across retries (see :class:`AnthropicLlm`). A plain
+    ``complete``-only model (the ``claude -p`` shim) has no memory, so the author re-sends the
+    opening each turn as its fallback."""
+
+    async def complete(self, prompt: str) -> str: ...
+    def conversation(self) -> Conversation: ...
+
+
 class Usage(BaseModel):
     """Token counts for one call or a run's cumulative total, split by the classes Anthropic bills
     separately: fresh ``input`` / ``output``, plus cache ``read`` (a prompt-cache hit) and ``write``
@@ -147,6 +167,55 @@ class _Gate:
             self._last = time.monotonic()
 
 
+class BudgetExceeded(RuntimeError):
+    """Raised BEFORE an LLM call that would run while the budget is already spent out -- so a run
+    stops cleanly (a defined stop reason) instead of racking up cost. Carries the running
+    ``spent_usd`` and the ``limit_usd`` that was crossed for the report."""
+
+    def __init__(self, spent_usd: float, limit_usd: float) -> None:
+        self.spent_usd = spent_usd
+        self.limit_usd = limit_usd
+        super().__init__(f"LLM budget exceeded: spent ${spent_usd:.4f} of ${limit_usd:.4f} cap")
+
+
+class Budget(BaseModel):
+    """Running LLM spend in USD with an optional HARD CAP. It always ACCUMULATES (spend, calls,
+    tokens) and, when ``max_usd`` is set, ENFORCES it: :meth:`ensure` -- called before every LLM
+    request -- raises :class:`BudgetExceeded` once the cap is reached. ``max_usd=None`` tracks
+    without capping. One Budget can be SHARED by several clients (a locate + an author model) so a
+    whole onboarding run has one cap. ``WEB_LLM_BUDGET`` sets the cap from the env."""
+
+    max_usd: "float | None" = None
+    spent_usd: float = 0.0
+    calls: int = 0
+    usage: Usage = Usage()
+
+    @classmethod
+    def from_env(cls) -> "Budget":
+        """A Budget capped at ``WEB_LLM_BUDGET`` (USD); unset / unparsable -> uncapped."""
+        raw = os.environ.get("WEB_LLM_BUDGET")
+        try:
+            return cls(max_usd=float(raw)) if raw else cls()
+        except ValueError:
+            return cls()
+
+    def ensure(self) -> None:
+        """Raise :class:`BudgetExceeded` if the cap has already been reached."""
+        if self.max_usd is not None and self.spent_usd >= self.max_usd:
+            raise BudgetExceeded(self.spent_usd, self.max_usd)
+
+    def charge(self, cost: float, usage: Usage) -> None:
+        """Record one call's ``cost`` + ``usage`` against the running totals."""
+        self.spent_usd += cost
+        self.calls += 1
+        self.usage = self.usage + usage
+
+    @property
+    def remaining_usd(self) -> "float | None":
+        """USD left before the cap (``None`` when uncapped); never below 0."""
+        return None if self.max_usd is None else max(0.0, self.max_usd - self.spent_usd)
+
+
 class LlmEvent(BaseModel):
     """One LLM call, published on the event bus so a caller can report cost AS IT GOES: this call's
     ``cost_usd`` + token :class:`Usage`, and the client's RUNNING ``spent_usd`` / ``calls``."""
@@ -199,6 +268,8 @@ class AnthropicLlm:
         system: "str | None" = None,
         rate: "RateLimit | None" = None,
         pricing: "Pricing | None" = None,
+        budget: "Budget | None" = None,
+        transport: "httpx.AsyncBaseTransport | None" = None,
     ) -> None:
         env = os.environ.get
         self._model = model or env("WEB_LLM_MODEL") or "claude-sonnet-5"
@@ -211,7 +282,13 @@ class AnthropicLlm:
         #: WEB_PRICE_* ($/M tokens) apply even to a directly-built AnthropicLlm(), so a spend report
         #: is configured from the env everywhere -- not only through the CLI's --price-* flags.
         self._pricing = pricing or Pricing.from_env()
-        self._client = httpx.AsyncClient(base_url=base or "https://api.anthropic.com", timeout=60.0)
+        #: the spend CAP + cross-client accounting (WEB_LLM_BUDGET); checked before every request.
+        #: Pass one Budget to several clients so a whole run shares a single cap.
+        self.budget = budget or Budget.from_env()
+        #: ``transport`` lets a test mount an ``httpx.MockTransport`` -- no network is touched.
+        self._client = httpx.AsyncClient(
+            base_url=base or "https://api.anthropic.com", timeout=60.0, transport=transport
+        )
         #: cumulative metering across this client's calls.
         self.usage = Usage()
         self.spent_usd = 0.0
@@ -230,6 +307,7 @@ class AnthropicLlm:
         self.usage = self.usage + one
         self.spent_usd += cost
         self.calls += 1
+        self.budget.charge(cost, one)  # the (possibly shared) cap sees every call
         emit(
             LlmEvent(
                 model=self._model,
@@ -241,13 +319,29 @@ class AnthropicLlm:
         )  # report this call live
 
     async def complete(self, prompt: str) -> str:
+        """One-shot: a single user turn -> the reply (the anti-cache marker keeps the request body
+        unique so a caching gateway can't replay a prior identical reply -- see the helper)."""
+        return await self._complete_messages(
+            [{"role": "user", "content": prompt + anticache_suffix()}]
+        )
+
+    def conversation(self) -> "_Conversation":
+        """Open a multi-turn :class:`Conversation`: the OPENING turn is prompt-cached
+        (``cache_control``), so a big shared prefix -- the page skeleton + the query guide -- is
+        SENT ONCE and every later turn re-reads it from cache (billed at the cache-read rate) instead
+        of re-submitting it. This is how the author keeps the page in context across repair turns
+        cheaply, and how an evaluate loop probes one candidate over several short turns."""
+        return _Conversation(self)
+
+    async def _complete_messages(self, messages: "list[dict[str, object]]") -> str:
+        """The single Messages-API call under every completion: budget-checked (raises
+        :class:`BudgetExceeded` before spending past the cap), rate-gated, metered."""
+        self.budget.ensure()
         await self._gate.hold()
         body: dict[str, object] = {
             "model": self._model,
             "max_tokens": self._max_tokens,
-            # the anti-cache marker makes each request body unique so a caching gateway can't replay
-            # a prior identical reply (which would stall the author loop's repairs -- see the helper).
-            "messages": [{"role": "user", "content": prompt + anticache_suffix()}],
+            "messages": messages,
         }
         if self._system is not None:
             body["system"] = self._system
@@ -288,4 +382,48 @@ class AnthropicLlm:
         await self._client.aclose()
 
 
-__all__ = ["Llm", "AnthropicLlm", "Usage", "Pricing", "RateLimit", "LlmEvent", "ReasonEvent"]
+class _Conversation:
+    """A running multi-turn conversation over an :class:`AnthropicLlm` (its :class:`Conversation`).
+    The opening user turn is marked ``cache_control: ephemeral`` so its (large) content is
+    prompt-cached; each later :meth:`send` appends only the short follow-up and the cached opening is
+    RE-READ rather than re-sent. The anti-cache marker is added per turn: the opening's marker is
+    stored in the history and re-sent byte-identical every turn, so it can never break the cached
+    prefix -- it only makes THIS conversation's requests distinct from another's."""
+
+    def __init__(self, client: AnthropicLlm) -> None:
+        self._client = client
+        self._messages: "list[dict[str, object]]" = []
+
+    async def send(self, text: str) -> str:
+        """Add ``text`` as the next user turn, complete it, and return the reply (budget-checked and
+        metered like a normal call). The first turn is cache-marked."""
+        turn = text + anticache_suffix()
+        if not self._messages:  # the opening: cache-mark it so follow-ups don't re-send it
+            self._messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": turn, "cache_control": {"type": "ephemeral"}}
+                    ],
+                }
+            )
+        else:
+            self._messages.append({"role": "user", "content": turn})
+        reply = await self._client._complete_messages(self._messages)
+        self._messages.append({"role": "assistant", "content": reply})
+        return reply
+
+
+__all__ = [
+    "Llm",
+    "Conversation",
+    "Conversational",
+    "AnthropicLlm",
+    "Usage",
+    "Pricing",
+    "RateLimit",
+    "Budget",
+    "BudgetExceeded",
+    "LlmEvent",
+    "ReasonEvent",
+]

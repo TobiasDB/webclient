@@ -15,7 +15,7 @@ from asyncio.subprocess import PIPE
 
 from web.fetch import WebException, emit, err
 
-from .llm import LlmEvent, RateLimit, Usage, _Gate, anticache_suffix
+from .llm import Budget, LlmEvent, RateLimit, Usage, _Gate, anticache_suffix
 
 
 def _int(value: object) -> int:
@@ -48,6 +48,7 @@ class ClaudeShim:
         model: "str | None" = None,
         timeout: "float | None" = None,
         rate: "RateLimit | None" = None,
+        budget: "Budget | None" = None,
     ) -> None:
         env = os.environ.get
         self._model = model or env("WEB_LLM_MODEL") or "haiku"  # WEB_LLM_MODEL / --model / "haiku"
@@ -57,6 +58,9 @@ class ClaudeShim:
             self._timeout = 90.0
         #: WEB_LLM_RATE throttles the claude -p spawns too (a shared plan / an LLM proxy in front).
         self._gate = _Gate(rate)
+        #: the spend CAP (WEB_LLM_BUDGET), charged with claude -p's OWN reported cost -- share one
+        #: Budget with an API client so a whole run has a single cap whichever backend drives it.
+        self.budget = budget or Budget.from_env()
         self.prompt = ""
         self.reply = ""
         #: real metering from claude -p's own accounting (``total_cost_usd`` + ``usage``).
@@ -65,6 +69,7 @@ class ClaudeShim:
         self.calls = 0
 
     async def complete(self, prompt: str) -> str:
+        self.budget.ensure()  # stop BEFORE spending past the cap (raises BudgetExceeded)
         await self._gate.hold()  # WEB_LLM_RATE: cap the request rate to the model / proxy
         self.prompt = prompt
         argv = [
@@ -128,6 +133,7 @@ class ClaudeShim:
         self.usage = self.usage + one
         self.spent_usd += cost
         self.calls += 1
+        self.budget.charge(cost, one)  # the (possibly shared) cap sees every call
         emit(
             LlmEvent(
                 model=self._model or "claude -p",
