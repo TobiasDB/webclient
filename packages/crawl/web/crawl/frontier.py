@@ -43,14 +43,4 @@ def stack(base: Select = fifo, middleware: "tuple[FrontierMiddleware, ...]" = ()
     return handler
 
 
-def by_score(score: "Callable[[FrontierItem], float]") -> FrontierMiddleware:
-    """A middleware that reorders the frontier highest-score-first, then defers to the next handler
-    (which picks from the front) -- a cheap, synchronous alternative to an LLM pick middleware."""
-
-    async def mw(pending: "Sequence[FrontierItem]", nxt: Select) -> "Sequence[FrontierItem]":
-        return await nxt(sorted(pending, key=lambda it: -score(it)))
-
-    return mw
-
-
-__all__ = ["Select", "FrontierMiddleware", "stack", "fifo", "by_score"]
+__all__ = ["Select", "FrontierMiddleware", "stack", "fifo"]

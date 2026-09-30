@@ -21,7 +21,7 @@ from web.resolve import Resolver
 
 from .author import Authored as AuthoredQuery
 from .author import AuthorEvent, author, authored, build_query
-from .authoring import author_agent
+from .author_loop import author_agent
 from .behaviours import Behaviour, apply_behaviours, behaviour, register_behaviour
 from .compile import Query, QueryError, parse_query, reroot
 from .frontier import llm_frontier

@@ -1,4 +1,6 @@
-"""Authoring as an AGENT LOOP -- ``observe -> decide -> apply`` on the agent tier's
+"""The authoring LOOP strategy -- the iterative counterpart to the one-shot functions in
+:mod:`web.onboard.author` (from which it reuses ``AuthorEvent`` / ``sample_skeleton``). It drives
+authoring as ``observe -> decide -> apply`` on the agent tier's
 :class:`~web.onboard.agent.BoundedLoop` (the same primitive the crawl uses). Each turn EXTENDS the
 query toward the brief:
 

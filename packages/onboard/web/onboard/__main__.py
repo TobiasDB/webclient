@@ -40,7 +40,7 @@ from web.fetch import WebException, using
 from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
 
 from .author import AuthorEvent, build_query
-from .authoring import author_agent
+from .author_loop import author_agent
 from .compile import QueryError
 from .frontier import llm_frontier
 from .llm import AnthropicLlm, Llm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage

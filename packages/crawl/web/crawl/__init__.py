@@ -20,7 +20,7 @@ from web.fetch import Request, emit
 from web.parse import Document
 from web.resolve import Resolver, document, flags
 
-from .frontier import FrontierMiddleware, Select, by_score, fifo
+from .frontier import FrontierMiddleware, Select, fifo
 from .frontier import stack as _frontier
 from .models import Collect, CrawlEvent, Follow, FrontierItem, Goal, same_origin
 from .robots import Robots, parse_robots, robots
@@ -152,7 +152,6 @@ __all__ = [
     "FrontierItem",
     "FrontierMiddleware",
     "Select",
-    "by_score",
     "fifo",
     "same_origin",
     "canonical",

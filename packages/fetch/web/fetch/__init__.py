@@ -18,6 +18,12 @@ from __future__ import annotations
 from . import (  # named default transport identities (web.fetch.profiles.BASIC / BROWSER / ...)
     profiles,
 )
+from .base import (  # transport identity + pool
+    ClientPool,
+    Profile,
+    aclose_default_pool,
+    default_pool,
+)
 from .browser import (
     DEEP_DOM,
     DOM_RECORDER,
@@ -34,7 +40,6 @@ from .browser import (
     supply_for,
 )
 from .bus import Event, EventBus, Subscription, Trace, emit, topic_matches, using
-from .base import ClientPool, Profile, aclose_default_pool, default_pool  # transport identity + pool
 from .entry import Entry, fetch  # the functional fetch() face
 from .errors import WebError, WebException, err
 from .fingerprint import CHROME, Fingerprint, fleet, generate
