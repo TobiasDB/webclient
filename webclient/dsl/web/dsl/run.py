@@ -292,6 +292,7 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
                         "dsl.select_miss",
                         f"selector {args[0]!r} matched nothing",
                         url=_base_of(obj),
+                        selector=str(args[0]),
                     )
                 )
             return el

@@ -23,6 +23,7 @@ from .jsonpath import JSON, dig, leaves
 from .jsonpath import skeleton as _json_skeleton
 from .metadata import Metadata, metadata
 from .nodes import Node, query
+from .nodes import tag as _tag
 from .nodes import text as _node_text
 from .records import RecordRegion, find_records
 from .sniff import Kind
@@ -63,6 +64,16 @@ class Element:
         if val is not None and name in ("href", "src") and self._base:
             return urljoin(self._base, val)
         return val
+
+    @property
+    def attrs(self) -> "dict[str, str]":
+        """Every attribute on the element (name -> value) -- what an ``attr(...)`` could read."""
+        return {str(k): str(v) for k, v in self._node.attrib.items()}
+
+    @property
+    def tag(self) -> str:
+        """The element's tag name (lower-case)."""
+        return _tag(self._node)
 
     def select(self, css: str) -> "Element | None":
         """The FIRST descendant matching a CSS selector, or ``None`` (nested selection)."""

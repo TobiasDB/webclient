@@ -520,3 +520,23 @@ def test_field_regex_is_a_leaf_transform() -> None:
     assert read.regex(r"at (\d\d:\d\d)", group=1).collect(doc) == "17:09"
     assert read.regex(r"never").collect(doc) is None
     assert read.regex(r"never", default="n/a").collect(doc) == "n/a"
+
+
+def test_parse_when_reads_a_bare_time_as_today_and_fuzzy_prose() -> None:
+    # USER: news timestamps come as "17:09 BST" -> TODAY at that time; a clock inside prose is
+    # found (dateutil, fuzzy); a timezone abbreviation becomes an offset; prose with no digit
+    # ("may lead to") is not a date. The exact forms (ISO / written / numeric / relative) still win.
+    import datetime as dt
+
+    from web.dsl.values import parse_when
+
+    now = dt.datetime(2026, 9, 30, 12, 0, 0)
+    got = parse_when("17:09 BST", now=now)
+    assert got is not None and got.isoformat(timespec="seconds") == "2026-09-30T17:09:00+01:00"
+    got = parse_when("Storm hits coast, published at 17:48 BST", now=now)
+    assert got is not None and (got.hour, got.minute, got.date()) == (17, 48, now.date())
+    got = parse_when("Published 30 September 2026, 10:12 BST", now=now)
+    assert got is not None and got.isoformat(timespec="seconds").startswith("2026-09-30T10:12:00")
+    assert parse_when("this may lead to more", now=now) is None
+    assert parse_when("2 hours ago", now=now) == dt.datetime(2026, 9, 30, 10, 0, 0)
+    assert parse_when("2026-09-30T16:26:51.555Z") is not None

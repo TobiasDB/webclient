@@ -17,6 +17,7 @@ import re
 from typing import Generic, Iterator, TypeVar, cast
 from urllib.parse import urljoin
 
+from dateutil import parser as _du_parser
 from pydantic import JsonValue
 
 # covariant: Field/Collection only ever *produce* T (iterate/index/get), never consume it.
@@ -131,7 +132,56 @@ def parse_when(
     if m:
         n = 1 if m.group(1) in ("a", "an", "one") else int(m.group(1))
         return (base - _dt.timedelta(seconds=n * _UNITS[m.group(2)])).replace(microsecond=0)
-    return None
+    return _fuzzy_when(text, base=base, dayfirst=dayfirst)
+
+
+#: timezone ABBREVIATIONS a page writes next to a clock (``17:09 BST``) -> UTC offset in seconds,
+#: for :mod:`dateutil` (which knows none by default). Ambiguous ones (IST, CST-China) are left out.
+_TZ_OFFSETS: "dict[str, int]" = {
+    "UTC": 0,
+    "GMT": 0,
+    "Z": 0,
+    "BST": 3600,
+    "WET": 0,
+    "WEST": 3600,
+    "CET": 3600,
+    "CEST": 7200,
+    "EET": 7200,
+    "EEST": 10800,
+    "EST": -18000,
+    "EDT": -14400,
+    "CST": -21600,
+    "CDT": -18000,
+    "MST": -25200,
+    "MDT": -21600,
+    "PST": -28800,
+    "PDT": -25200,
+    "AKST": -32400,
+    "AKDT": -28800,
+    "HST": -36000,
+    "AEST": 36000,
+    "AEDT": 39600,
+    "JST": 32400,
+    "SGT": 28800,
+    "HKT": 28800,
+}
+
+
+def _fuzzy_when(text: str, *, base: "_dt.datetime", dayfirst: bool) -> "_dt.datetime | None":
+    """The :mod:`dateutil` FUZZY read -- the fallback after the exact forms: a time on its own
+    (``17:09 BST``) is TODAY at that time (``base``'s date, midnight-defaulted); a clock inside
+    prose (``published at 17:48 BST``) is found among the words; a timezone abbreviation becomes an
+    offset. Text without a digit never parses (prose that merely mentions "May")."""
+    if not any(ch.isdigit() for ch in text):
+        return None
+    default = base.replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        when = _du_parser.parse(
+            text, fuzzy=True, dayfirst=dayfirst, default=default, tzinfos=_TZ_OFFSETS
+        )
+    except (ValueError, OverflowError):
+        return None
+    return when.replace(microsecond=0)
 
 
 class Field(Generic[T]):
