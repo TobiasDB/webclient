@@ -335,16 +335,18 @@ def _entity_arg(entity: "str | None") -> str:
 async def _locate(args: argparse.Namespace) -> int:
     brief = _apply_entity(_load_brief(args.brief), args.entity)
     resolver = _resolver(args.profile, args.proxy, args.browser_path)
-    # --shim drives the LLM stages with a real model (claude -p): the CRAWL FRONTIER (each round it
-    # picks which pending edges to expand toward the dataset) AND the FINAL REVIEW (it judges each
-    # candidate best-first and must confirm the page holds the requested dataset for the entity).
+    # The LLM drives the CRAWL FRONTIER (each round it picks which pending edges to expand toward the
+    # dataset) AND the FINAL REVIEW (it judges candidates best-first, confirming the page holds the
+    # dataset for the entity). It is used whenever one is available -- the Anthropic API by default
+    # (a key is set), `claude -p` under --shim -- and Locate falls back to a deterministic crawl +
+    # heuristic scoring only when NEITHER is configured. So a plain `web locate` with a key set DOES
+    # use the model; --shim just switches the backend.
+    llm = _locate_llm(args)
     frontier: "tuple[FrontierMiddleware, ...]" = ()
-    reviewer: "ClaudeShim | None" = None
-    if args.shim:
-        reviewer = ClaudeShim(model=args.model) if args.model else ClaudeShim()
+    if llm is not None:
         frontier = (
             llm_frontier(
-                reviewer,
+                llm,
                 brief.goal,
                 entity=args.entity or "",
                 fields=brief.fields,
@@ -361,7 +363,7 @@ async def _locate(args: argparse.Namespace) -> int:
             if seeded
             else f"searching {brief.search or brief.goal!r}"
         )
-        + (" · LLM frontier" if args.shim else "")
+        + (" · LLM frontier+review" if llm is not None else " · deterministic (no LLM configured)")
         + f" then evaluating candidates (max {brief.max_pages} pages)…"
     )
     try:
@@ -372,13 +374,15 @@ async def _locate(args: argparse.Namespace) -> int:
                 search=DdgSearch(k=args.search_k),
                 frontier=frontier,
                 entity=args.entity or "",
-                review=reviewer,
+                review=llm,
             )
     except WebException as exc:
         _err(f"locate failed: {exc}")
         return 1
     finally:
         await resolver.aclose()
+        if llm is not None:
+            await llm.aclose()
     cost = (
         f"LLM (frontier + review): ${prog.llm_spent:.4f} over {prog.llm_calls} call(s)"
         if prog.llm_calls
@@ -565,6 +569,20 @@ def _build_llm(args: argparse.Namespace) -> "AnthropicLlm | ClaudeShim":
     if args.model:
         return AnthropicLlm(model=args.model, rate=rate, pricing=pricing)
     return AnthropicLlm(rate=rate, pricing=pricing)
+
+
+def _locate_llm(args: argparse.Namespace) -> "AnthropicLlm | ClaudeShim | None":
+    """The LLM that drives Locate's crawl FRONTIER + candidate REVIEW. Backend, in order: ``--shim``
+    -> the local ``claude -p`` model (a real model, NO key); else the Anthropic API when a key is
+    configured (``WEB_LLM_API_KEY`` / ``ANTHROPIC_API_KEY``, the ambient default); else ``None`` ->
+    Locate runs DETERMINISTICALLY (breadth-first crawl + heuristic scoring, no key required). So the
+    LLM is used whenever one is actually available -- ``--shim`` is only a backend switch, not the
+    on/off for the LLM. (The rate limit comes from ``WEB_LLM_RATE`` via each client's gate.)"""
+    if args.shim:
+        return ClaudeShim(model=args.model) if args.model else ClaudeShim()
+    if _env("WEB_LLM_API_KEY") or _env("ANTHROPIC_API_KEY"):
+        return AnthropicLlm(model=args.model) if args.model else AnthropicLlm()
+    return None
 
 
 # -- web fetch / web resolve ----------------------------------------------------------------------
