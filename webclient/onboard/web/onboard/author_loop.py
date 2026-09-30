@@ -48,7 +48,7 @@ from web.resolve import profiles as _rp
 
 from .agent import BoundedLoop, Done, Verdict
 from .author import AuthorEvent
-from .author_steps import StepSession, run_steps
+from .author_steps import StepSession, run_steps, suggest_selectors
 from .compile import Query, QueryError, keyed, parse_query, reroot
 from .evaluate import skeleton_for
 from .llm import Conversation, Conversational, Llm, ReasonEvent
@@ -163,8 +163,8 @@ def _populated(rows: "list[object]") -> "list[object]":
     selector matched but every field selector missed, which is not extracted data."""
     out: list[object] = []
     for r in rows:
-        if isinstance(r, dict):
-            if any(v not in (None, "", [], {}) for v in r.values()):
+        if isinstance(r, dict):  # reserved identity columns (_key / _doc) do not populate a row
+            if any(v not in (None, "", [], {}) for k, v in r.items() if not str(k).startswith("_")):
                 out.append(r)
         elif r not in (None, "", [], {}):
             out.append(r)
@@ -627,6 +627,12 @@ async def _observe(state: AuthorState) -> _Obs:
         state.rows, state.rows_full = [], []
         state.last_error = f"running the query failed -- {exc.error.code}: {exc.error.message}"
         state.hint = "Fix the selector that missed (a required select() must match every record)."
+        missed = exc.error.detail.get("selector") if exc.error.code == "dsl.select_miss" else None
+        if isinstance(missed, str) and state.doc is not None:  # the closest selectors on the page
+            scope = state.doc.select(state.reference.record_selector or "") or state.doc
+            close = suggest_selectors(scope, missed)
+            if close:
+                state.hint += f" Closest selectors in the record: {', '.join(close)}."
     except asyncio.TimeoutError:
         state.rows, state.rows_full = [], []
         state.last_error = f"the query test exceeded {_QUERY_TEST_TIMEOUT:.0f}s and was cancelled"
