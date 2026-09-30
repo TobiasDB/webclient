@@ -541,18 +541,17 @@ def test_author_agent_repairs_a_failed_query(httpserver: HTTPServer) -> None:
     assert llm.i >= 3  # it took the two repair turns (base + repair + repair)
 
 
-def test_author_agent_check_fails_fast_when_the_data_is_absent(httpserver: HTTPServer) -> None:
-    # the entry check: the reviewer says the page does not hold the data -> the loop stops WITHOUT
-    # authoring (no query can fix an absent dataset).
+def test_author_agent_check_is_advisory_not_fatal(httpserver: HTTPServer) -> None:
+    # the entry check is ADVISORY: even when it says NO, the loop still AUTHORS (a skeleton read is
+    # unreliable -- it wrongly rejected pages that extract fine). Absence is concluded empirically.
     from web.onboard import author_agent
 
     httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
-    author = _SeqLlm(
-        ['wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))']
-    )
-    review = _SeqLlm(["NO — this page's events section is empty, the dataset is not here."])
+    good = 'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
+    author = _SeqLlm([good])
+    review = _SeqLlm(["NO — the data does not look present here", "YES the rows are correct"])
 
-    async def go() -> "tuple[object, object]":
+    async def go() -> object:
         async with Resolver() as r:
             q, verdict = await author_agent(
                 Reference(url=httpserver.url_for("/list"), kind="html"),
@@ -562,11 +561,12 @@ def test_author_agent_check_fails_fast_when_the_data_is_absent(httpserver: HTTPS
                 review=cast("object", review),
                 entity="Acme",
             )
-            return q, verdict
+            assert verdict.ok and q is not None  # authored despite the check's NO
+            return await q.acollect(resolver=r)
 
-    q, _verdict = _run(go())
-    assert q is None  # fatal: the check failed, so nothing was authored
-    assert author.i == 0  # the author model was never called
+    rows = cast("list[dict[str, object]]", _run(go()))
+    assert [row.get("name") for row in rows] == ["A", "B"]  # the advisory check did not veto it
+    assert author.i == 1  # the author ran (was not skipped)
 
 
 def test_author_agent_review_drives_a_repair(httpserver: HTTPServer) -> None:

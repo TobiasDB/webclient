@@ -54,10 +54,12 @@ class AuthorState:
     listing_skeleton: str = ""
     detail_skeleton: str = ""
     nested: bool = False
-    #: the entry check ran; and its verdict (a page that does not hold the entity's data is FATAL --
-    #: no query can fix an absent dataset, so the loop stops rather than repair-looping).
+    #: the entry check ran; and any concern it raised. ADVISORY, not fatal -- a skeleton read is
+    #: unreliable (haiku rejected pages that in fact extract fine), so the loop still ATTEMPTS and
+    #: concludes "no data" only EMPIRICALLY (0 rows after repair). The concern is fed to the author
+    #: (e.g. "the data may be JS-loaded" -> a future browser/API escalation).
     checked: bool = False
-    check_ok: bool = True
+    check_note: str = ""
     #: the last authoring/run FAILURE (a parse reject, a select-miss, an empty sample, a review
     #: mismatch) -- fed back to the model on a repair turn; cleared once repaired.
     last_error: str = ""
@@ -75,7 +77,6 @@ class _Obs:
     error: str = ""  # a query FAILURE this sample hit (parse/select-miss/empty) -> a repair turn
     rows_empty: bool = False
     can_repair: bool = True  # repair budget not yet spent
-    fatal: bool = False  # the data isn't there (check failed) -- stop, don't repair
 
 
 def _missing(brief: DatasetBrief, rows: "list[object]") -> "list[str]":
@@ -165,6 +166,8 @@ async def _author(state: AuthorState) -> None:
         "Requirements:\n" + "\n".join("  - " + i for i in state.instructions),
         f"LISTING page skeleton (the records are here):\n{state.listing_skeleton}",
     ]
+    if state.check_note:  # the entry review flagged a concern -- surface it, but still attempt
+        parts.append(f"NOTE from a reviewer of this page: {state.check_note}")
     if state.detail_skeleton:
         parts.append(
             "A sample DETAIL page (linked from one record) skeleton:\n" + state.detail_skeleton
@@ -195,10 +198,8 @@ async def _author(state: AuthorState) -> None:
 
 
 async def _observe(state: AuthorState) -> _Obs:
-    if not state.checked:  # entry guard first: is the data even here?
+    if not state.checked:  # entry guard first (advisory): note whether the data looks present
         return _Obs(phase="check")
-    if not state.check_ok:  # the located page does not hold the dataset -- no query can fix that
-        return _Obs(phase="extend", error=state.last_error, fatal=True)
     if state.query is None and not state.last_error:
         return _Obs(phase="base")
     if state.last_error:  # the base/repair author just REJECTED the reply -- no query to sample
@@ -238,8 +239,6 @@ async def _decide(obs: _Obs) -> "str | Done":
         return "check"
     if obs.phase == "base":
         return "base"
-    if obs.fatal:  # the dataset isn't on this page -- stop (Locate handed a page without the data)
-        return Done()
     if obs.error or obs.rows_empty:  # a failed/empty/mismatched query -> repair while budget lasts
         return "repair" if obs.can_repair else Done()
     if obs.missing and obs.detail_link is not None:  # fields on a linked detail page -> nest
@@ -253,9 +252,9 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
         state.listing_skeleton = sample_skeleton(sample)  # reused by the base turn (no re-resolve)
         ok, note = await _check_source(state)
         state.checked = True
-        if not ok:
-            state.check_ok = False
-            state.last_error = f"the located page does not hold the dataset: {note}"
+        if not ok:  # advisory only -- attempt anyway; a skeleton read is not a reliable veto
+            state.check_note = note
+            emit(ReasonEvent(stage="check", text=f"concern (advisory, attempting anyway): {note}"))
     elif turn == "base":
         state.instructions = ["extract every listed record with the fields above"]
         emit(ReasonEvent(stage="author", text="authoring the base query for the listed records"))
@@ -301,11 +300,12 @@ async def author_agent(
     max_rounds: int = 8,
 ) -> "tuple[Query | None, Verdict]":
     """Drive the authoring loop to a query that satisfies the brief, returning the final query + the
-    loop :class:`~web.onboard.agent.Verdict`. Turns: ``check`` (verify the data is present + on-entity
-    before authoring), ``base``, ``repair`` (re-author with a failure fed back), ``detail`` (nest a
-    linked-page extraction). ``review`` (usually the same model) enables the entry check + per-sample
-    review; ``None`` skips them. The query is ``None`` if the base never parsed or the check failed.
-    """
+    loop :class:`~web.onboard.agent.Verdict`. Turns: ``check`` (an ADVISORY note on whether the data
+    looks present + on-entity), ``base``, ``repair`` (re-author with a failure fed back), ``detail``
+    (nest a linked-page extraction). ``review`` (usually the same model) enables the entry check +
+    per-sample review; ``None`` skips them. The check never vetoes -- a skeleton read is unreliable,
+    so absence is concluded EMPIRICALLY (0 rows after repair). The query is ``None`` only if the base
+    + repairs never parsed one."""
     state = AuthorState(
         reference=reference, brief=brief, resolver=resolver, llm=llm, review=review, entity=entity
     )
