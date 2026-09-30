@@ -56,6 +56,13 @@ class Usage(BaseModel):
         )
 
 
+#: Anthropic prompt-cache pricing RELATIVE to the base input price: a cache WRITE (creating the
+#: cached prefix) costs ~1.25x input, a cache READ (a hit on it) ~0.10x. :meth:`Pricing.from_env`
+#: fills the two cache prices from these when they are not set explicitly, so cache hits are billed.
+_CACHE_WRITE_MULT = 1.25
+_CACHE_READ_MULT = 0.10
+
+
 class Pricing(BaseModel):
     """Per-token USD prices as **dollars per million tokens** for each usage class (so cost is the
     API's own usage counts × these). Defaults are 0.0 -- set them for the model in use; the totals
@@ -69,20 +76,29 @@ class Pricing(BaseModel):
     @classmethod
     def from_env(cls) -> "Pricing":
         """Prices from ``WEB_PRICE_INPUT`` / ``WEB_PRICE_OUTPUT`` / ``WEB_PRICE_CACHE_READ`` /
-        ``WEB_PRICE_CACHE_WRITE`` ($/million tokens; unset / unparsable -> 0.0). So a spend report
-        is configured purely from the env -- for ANY :class:`AnthropicLlm`, not only the CLI's."""
+        ``WEB_PRICE_CACHE_WRITE`` ($/million tokens). The two CACHE prices, when not set, are DERIVED
+        from the input price at Anthropic's prompt-cache ratios (a cache read ~0.10x input, a cache
+        write ~1.25x) -- so a cached prefix (the page skeleton re-read across authoring retries) is
+        never silently billed at $0 and under-reports spend. So a spend report is configured purely
+        from the env -- for ANY :class:`AnthropicLlm`, not only the CLI's."""
 
-        def _price(name: str) -> float:
+        def _price(name: str) -> "float | None":
+            raw = os.environ.get(name)
+            if not raw:
+                return None  # unset -> let the caller apply its default
             try:
-                return float(os.environ.get(name, "0") or "0")
+                return float(raw)
             except ValueError:
-                return 0.0
+                return None
 
+        inp = _price("WEB_PRICE_INPUT") or 0.0
+        read = _price("WEB_PRICE_CACHE_READ")
+        write = _price("WEB_PRICE_CACHE_WRITE")
         return cls(
-            input=_price("WEB_PRICE_INPUT"),
-            output=_price("WEB_PRICE_OUTPUT"),
-            cache_read=_price("WEB_PRICE_CACHE_READ"),
-            cache_write=_price("WEB_PRICE_CACHE_WRITE"),
+            input=inp,
+            output=_price("WEB_PRICE_OUTPUT") or 0.0,
+            cache_read=read if read is not None else inp * _CACHE_READ_MULT,
+            cache_write=write if write is not None else inp * _CACHE_WRITE_MULT,
         )
 
     def cost(self, usage: Usage) -> float:
