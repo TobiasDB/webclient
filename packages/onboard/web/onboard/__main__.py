@@ -492,11 +492,11 @@ async def _author(args: argparse.Namespace) -> int:
         if reference is None:
             _err("no source located to author over (nothing scored above zero).")
             return 1
-        if args.agent:  # the authoring AGENT LOOP: base -> nested-detail -> ... (extends per brief)
+        if not args.simple:  # DEFAULT: the agent loop (check -> base -> repair/review -> detail)
             _err(f"authoring (agent loop): {_short(reference.url)}…")
             with _Progress(args.verbose):
                 agent_query, verdict = await author_agent(
-                    reference, brief, resolver=resolver, llm=llm
+                    reference, brief, resolver=resolver, llm=llm, review=llm, entity=args.entity
                 )
             if agent_query is None:
                 _err(f"authoring failed: the agent loop produced no query ({verdict.reason})")
@@ -624,10 +624,10 @@ def _parser() -> argparse.ArgumentParser:
         help="cache-write price ($/M tokens)",
     )
     aut.add_argument(
-        "--agent",
+        "--simple",
         action="store_true",
-        help="author with the AGENT LOOP: base query, then extend per the brief (e.g. fetch a "
-        "sampled record's link and nest a detail extraction) until the schema is satisfied",
+        help="use the one-shot author instead of the default AGENT LOOP (the loop verifies the data "
+        "is present, authors, reviews each sample vs the brief/entity, and repairs a failed query)",
     )
     aut.add_argument(
         "--review",

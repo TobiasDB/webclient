@@ -507,6 +507,65 @@ def test_author_agent_repairs_a_failed_query(httpserver: HTTPServer) -> None:
     assert llm.i >= 3  # it took the two repair turns (base + repair + repair)
 
 
+def test_author_agent_check_fails_fast_when_the_data_is_absent(httpserver: HTTPServer) -> None:
+    # the entry check: the reviewer says the page does not hold the data -> the loop stops WITHOUT
+    # authoring (no query can fix an absent dataset).
+    from web.onboard import author_agent
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    author = _SeqLlm(
+        ['wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))']
+    )
+    review = _SeqLlm(["NO — this page's events section is empty, the dataset is not here."])
+
+    async def go() -> "tuple[object, object]":
+        async with Resolver() as r:
+            q, verdict = await author_agent(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                DatasetBrief(fields=["name"]),
+                resolver=r,
+                llm=cast("object", author),
+                review=cast("object", review),
+                entity="Acme",
+            )
+            return q, verdict
+
+    q, _verdict = _run(go())
+    assert q is None  # fatal: the check failed, so nothing was authored
+    assert author.i == 0  # the author model was never called
+
+
+def test_author_agent_review_drives_a_repair(httpserver: HTTPServer) -> None:
+    # per-stage review: the first sample is rejected (incomplete), so the loop repairs and re-authors
+    # until the reviewer accepts.
+    from web.onboard import author_agent
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    q1 = 'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
+    q2 = 'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"), status="X")'
+    author = _SeqLlm([q1, q2])
+    review = _SeqLlm(
+        ["YES the data is here", "NO — the archived events are missing", "YES complete"]
+    )
+
+    async def go() -> object:
+        async with Resolver() as r:
+            q, verdict = await author_agent(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                DatasetBrief(fields=["name"]),
+                resolver=r,
+                llm=cast("object", author),
+                review=cast("object", review),
+                entity="Acme",
+            )
+            assert verdict.ok and q is not None
+            return await q.acollect(resolver=r)
+
+    rows = cast("list[dict[str, object]]", _run(go()))
+    assert [row.get("name") for row in rows] == ["A", "B"]
+    assert author.i == 2 and review.i >= 3  # base + one review-driven repair
+
+
 def test_run_to_sink_routes_rows_to_table_and_documents_to_store(httpserver: HTTPServer) -> None:
     from web.onboard import MemorySink, run_to_sink
 

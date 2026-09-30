@@ -20,6 +20,7 @@ bounded, resumable.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 from web.fetch import WebException, emit
@@ -30,7 +31,7 @@ from .author import AuthorEvent, sample_skeleton
 from .compile import Query, QueryError, parse_query, reroot
 from .llm import Llm, ReasonEvent
 from .models import DatasetBrief, Reference
-from .patterns import fields_line, guide_for
+from .patterns import field_schema, fields_line, guide_for
 
 
 @dataclass
@@ -42,14 +43,23 @@ class AuthorState:
     brief: DatasetBrief
     resolver: Resolver
     llm: Llm
+    #: an optional reviewer LLM (usually the same model): when set, the loop VERIFIES the dataset is
+    #: present + on-entity before authoring (a ``check`` turn) and REVIEWS each sample's rows against
+    #: the brief + entity (a mismatch/incompleteness is fed into the repair path). ``None`` skips both.
+    review: "Llm | None" = None
+    entity: str = ""
     query: "Query | None" = None
     rows: "list[object]" = field(default_factory=list)
     instructions: "list[str]" = field(default_factory=list)
     listing_skeleton: str = ""
     detail_skeleton: str = ""
     nested: bool = False
-    #: the last authoring/run FAILURE (a parse reject, a select-miss, an empty sample) -- fed back to
-    #: the model on a repair turn; cleared once repaired.
+    #: the entry check ran; and its verdict (a page that does not hold the entity's data is FATAL --
+    #: no query can fix an absent dataset, so the loop stops rather than repair-looping).
+    checked: bool = False
+    check_ok: bool = True
+    #: the last authoring/run FAILURE (a parse reject, a select-miss, an empty sample, a review
+    #: mismatch) -- fed back to the model on a repair turn; cleared once repaired.
     last_error: str = ""
     #: repair turns taken so far, and the cap (a repair edge re-authors with the failure fed back;
     #: bounded so a persistently-broken query cannot loop forever).
@@ -59,12 +69,13 @@ class AuthorState:
 
 @dataclass
 class _Obs:
-    phase: str  # "base" | "extend"
+    phase: str  # "check" | "base" | "extend"
     missing: "list[str]" = field(default_factory=list)
     detail_link: "str | None" = None
     error: str = ""  # a query FAILURE this sample hit (parse/select-miss/empty) -> a repair turn
     rows_empty: bool = False
     can_repair: bool = True  # repair budget not yet spent
+    fatal: bool = False  # the data isn't there (check failed) -- stop, don't repair
 
 
 def _missing(brief: DatasetBrief, rows: "list[object]") -> "list[str]":
@@ -86,6 +97,58 @@ def _record_link(rows: "list[object]") -> "str | None":
                 if isinstance(v, str) and v.startswith(("http://", "https://")):
                     return v
     return None
+
+
+def _yes(reply: str) -> bool:
+    """A YES/NO verdict from the first non-empty line (default accept on an odd reply)."""
+    first = next((ln for ln in reply.strip().splitlines() if ln.strip()), "").strip().lower()
+    return first.startswith("yes") or (not first.startswith("no") and "yes" in first)
+
+
+def _scope(state: AuthorState) -> str:
+    return f" It must be {state.entity}'s OWN data." if state.entity else ""
+
+
+async def _check_source(state: AuthorState) -> "tuple[bool, str]":
+    """Entry guard: does the located page actually HOLD this dataset (records present, on-entity) --
+    the location can be right yet the data absent (an empty section, a login/iframe). ``review`` off
+    -> always OK (no model call)."""
+    if state.review is None:
+        return True, ""
+    want = state.brief.goal or "the target dataset"
+    prompt = (
+        f"You are verifying a page holds a dataset BEFORE extracting it. Dataset: {want}."
+        f"{_scope(state)}\n\nPage ({state.reference.url}):\n{state.listing_skeleton}\n\n"
+        "Is this dataset actually PRESENT on THIS page (its records visible in the skeleton, not an "
+        "empty section, a login wall, or an unfilled iframe)? Answer YES or NO on the first line, "
+        "then one short reason."
+    )
+    reply = await state.review.complete(prompt)
+    ok = _yes(reply)
+    emit(ReasonEvent(stage="check", subject=state.reference.url, text=reply.strip()[:200]))
+    return ok, reply.strip()[:200]
+
+
+async def _review_rows(state: AuthorState) -> "tuple[bool, str]":
+    """Per-stage review: do the sampled rows really match the brief + entity, with real values and
+    the WHOLE dataset (e.g. both upcoming AND archived if the brief asks)? ``review`` off -> OK."""
+    if state.review is None or not state.rows:
+        return True, ""
+    want = state.brief.goal or "the target dataset"
+    schema = "\n".join(field_schema(state.brief)) if state.brief.fields else "(the salient fields)"
+    sample = json.dumps(state.rows[:5], ensure_ascii=False, default=str)[:1500]
+    prompt = (
+        f"You are reviewing extracted sample rows against a brief. Dataset: {want}.{_scope(state)}\n"
+        f"Schema:\n{schema}\n\nSample rows (JSON):\n{sample}\n\n"
+        "Do these rows correctly match the brief -- the right entity, real values (not nulls or raw "
+        "markup), and the COMPLETE dataset (if the brief asks for multiple sections, e.g. upcoming "
+        "AND archived events, are BOTH represented)? Answer YES or NO on the first line, then one "
+        "short reason naming exactly what is wrong or missing."
+    )
+    reply = await state.review.complete(prompt)
+    ok = _yes(reply)
+    emit(ReasonEvent(stage="review", text=reply.strip()[:200]))
+    return ok, reply.strip()[:200]
 
 
 async def _author(state: AuthorState) -> None:
@@ -132,10 +195,19 @@ async def _author(state: AuthorState) -> None:
 
 
 async def _observe(state: AuthorState) -> _Obs:
+    if not state.checked:  # entry guard first: is the data even here?
+        return _Obs(phase="check")
+    if not state.check_ok:  # the located page does not hold the dataset -- no query can fix that
+        return _Obs(phase="extend", error=state.last_error, fatal=True)
     if state.query is None and not state.last_error:
         return _Obs(phase="base")
     if state.last_error:  # the base/repair author just REJECTED the reply -- no query to sample
-        return _Obs(phase="extend", error=state.last_error, rows_empty=True)
+        return _Obs(
+            phase="extend",
+            error=state.last_error,
+            rows_empty=True,
+            can_repair=state.repairs < state.max_repairs,
+        )
     try:  # SAMPLE: run the current query
         assert state.query is not None
         result = await state.query.acollect(resolver=state.resolver)
@@ -145,6 +217,10 @@ async def _observe(state: AuthorState) -> _Obs:
     ) as exc:  # a select-miss / transport failure -> feed it back on a repair turn
         state.rows = []
         state.last_error = f"running the query failed -- {exc.error.code}: {exc.error.detail}"
+    if state.rows and not state.last_error:  # a real sample -> REVIEW it against the brief + entity
+        ok, note = await _review_rows(state)
+        if not ok:
+            state.last_error = f"the sample does not satisfy the brief: {note}"
     missing = _missing(state.brief, state.rows)
     link = _record_link(state.rows) if (missing and not state.nested) else None
     return _Obs(
@@ -158,9 +234,13 @@ async def _observe(state: AuthorState) -> _Obs:
 
 
 async def _decide(obs: _Obs) -> "str | Done":
+    if obs.phase == "check":
+        return "check"
     if obs.phase == "base":
         return "base"
-    if obs.error or obs.rows_empty:  # a failed/empty query -> repair while the budget lasts
+    if obs.fatal:  # the dataset isn't on this page -- stop (Locate handed a page without the data)
+        return Done()
+    if obs.error or obs.rows_empty:  # a failed/empty/mismatched query -> repair while budget lasts
         return "repair" if obs.can_repair else Done()
     if obs.missing and obs.detail_link is not None:  # fields on a linked detail page -> nest
         return "detail"
@@ -168,9 +248,15 @@ async def _decide(obs: _Obs) -> "str | Done":
 
 
 async def _apply(state: AuthorState, turn: "str | Done") -> None:
-    if turn == "base":
+    if turn == "check":
         sample = await state.resolver.resolve(state.reference.url)
-        state.listing_skeleton = sample_skeleton(sample)
+        state.listing_skeleton = sample_skeleton(sample)  # reused by the base turn (no re-resolve)
+        ok, note = await _check_source(state)
+        state.checked = True
+        if not ok:
+            state.check_ok = False
+            state.last_error = f"the located page does not hold the dataset: {note}"
+    elif turn == "base":
         state.instructions = ["extract every listed record with the fields above"]
         emit(ReasonEvent(stage="author", text="authoring the base query for the listed records"))
         await _author(state)
@@ -210,12 +296,19 @@ async def author_agent(
     *,
     resolver: Resolver,
     llm: Llm,
-    max_rounds: int = 6,
+    review: "Llm | None" = None,
+    entity: str = "",
+    max_rounds: int = 8,
 ) -> "tuple[Query | None, Verdict]":
-    """Drive the authoring loop to a query that satisfies the brief (base + nested-detail turns),
-    returning the final query + the loop :class:`~web.onboard.agent.Verdict`. The query is ``None``
-    only if the base turn never produced one."""
-    state = AuthorState(reference=reference, brief=brief, resolver=resolver, llm=llm)
+    """Drive the authoring loop to a query that satisfies the brief, returning the final query + the
+    loop :class:`~web.onboard.agent.Verdict`. Turns: ``check`` (verify the data is present + on-entity
+    before authoring), ``base``, ``repair`` (re-author with a failure fed back), ``detail`` (nest a
+    linked-page extraction). ``review`` (usually the same model) enables the entry check + per-sample
+    review; ``None`` skips them. The query is ``None`` if the base never parsed or the check failed.
+    """
+    state = AuthorState(
+        reference=reference, brief=brief, resolver=resolver, llm=llm, review=review, entity=entity
+    )
     loop: "BoundedLoop[AuthorState, _Obs, str | Done]" = BoundedLoop(
         observe=_observe,
         decide=_decide,
