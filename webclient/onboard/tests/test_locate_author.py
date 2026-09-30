@@ -1843,3 +1843,24 @@ def test_sink_receives_row_keys_and_fanned_out_documents_append_only(
     assert content.startswith(b"<article") and keys["name"] == "A"
     assert keys["url"] == httpserver.url_for("/detail/1") and len(str(keys["hash"])) == 24
     assert metadata["fields"] == {"body": "Body One"}  # what the query read from that document
+
+
+def test_keyed_drops_a_trailing_project_before_the_identity_step(httpserver: HTTPServer) -> None:
+    # Live books run: the model ended its chain with .project(); keyed() appended .key(...) AFTER it
+    # and the run failed ("list has no verb 'key'"). The identity step now replaces the trailing
+    # project (the terminals project implicitly) and the keyed query runs, rows carrying `_key`.
+    from web.onboard.compile import keyed
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    chain = (
+        'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text")).project()'
+    )
+    q = keyed(cast("object", _rerooted(chain, httpserver.url_for("/list"))), ["name"])  # type: ignore[arg-type]
+    assert ".project()" not in q.describe() and ".key('name')" in q.describe()
+
+    async def go() -> object:
+        async with Resolver() as r:
+            return await q.acollect(resolver=r)
+
+    rows = cast("list[dict[str, object]]", _run(go()))
+    assert [r["name"] for r in rows] == ["A", "B"] and all(len(str(r["_key"])) == 24 for r in rows)

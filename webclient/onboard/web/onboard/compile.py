@@ -130,6 +130,12 @@ def keyed(query: Query, fields: "Sequence[str]", *, document: str = "") -> Query
     plan = Plan.from_blob(query.to_blob())
     if any(s.kind == "get" and s.name == "key" for s in plan.steps):
         return query
+    steps = list(plan.steps)
+    # a trailing `.project()` (the guide lets the model write it) materialises a plain list -- the
+    # identity step must come BEFORE it; the terminals project implicitly, so it is simply dropped.
+    while len(steps) >= 2 and steps[-2].kind == "get" and steps[-2].name == "project":
+        steps = steps[:-2]
+    plan = plan.model_copy(update={"steps": steps})
     args = [Arg(value=f) for f in fields]
     kwargs = {"document": Arg(value=document)} if document else {}
     step_get = Step(kind="get", name="key")
