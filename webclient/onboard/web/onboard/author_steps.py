@@ -448,7 +448,10 @@ def suggest_selectors(scope: "Document | Element", css: str, *, limit: int = 6) 
             shared = len(want & _tokens(cand))
             if shared and scored.get(cand, 0) < shared:
                 scored[cand] = shared
-    return [c for c, _ in sorted(scored.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]]
+    # more shared tokens first; on a tie the more SPECIFIC selector (tag.class over tag)
+    return [c for c, _ in sorted(scored.items(), key=lambda kv: (-kv[1], -len(kv[0]), kv[0]))][
+        :limit
+    ]
 
 
 def leaf_selectors(scope: "Document | Element", *, limit: int = 8) -> "list[str]":
