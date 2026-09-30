@@ -20,7 +20,8 @@ def test_anthropic_llm_raises_structured_error_on_non_200(
     httpserver.expect_request("/v1/messages").respond_with_data(b"nope", status=500)
 
     async def go() -> str:
-        llm = AnthropicLlm(auth="k", base_url=httpserver.url_for(""))
+        # max_retries=0: this tests the STRUCTURED error, not the 5xx retry policy (tested elsewhere)
+        llm = AnthropicLlm(auth="k", base_url=httpserver.url_for(""), max_retries=0)
         try:
             await llm.complete("hi")
             return "no-raise"
@@ -163,3 +164,52 @@ def test_prompts_render_from_package_data_and_clip_to_budget() -> None:
     json_clip = clip(text, 60, kind="json")
     assert json_clip.startswith("HHHHH") and json_clip.endswith("TTTTT")  # both ends
     assert clip("short", 60) == "short" and MAX_SKELETON_CHARS == 16_000  # no-op below budget
+
+
+def test_anthropic_llm_retries_transient_errors_but_not_bad_requests(
+    monkeypatch: "pytest.MonkeyPatch",
+) -> None:
+    # A 5xx / 529 / 429 is retried with backoff (a transient overload is not a dead model); a 400 is
+    # not (it is our mistake -- surface it at once). Retries are metered ONCE, on the reply.
+    import asyncio
+
+    import httpx
+    import pytest  # noqa: F401 - the fixture type
+    from web.fetch import WebException
+    from web.onboard import llm as llm_mod
+    from web.onboard.llm import AnthropicLlm
+
+    monkeypatch.setattr(llm_mod, "_BACKOFF_BASE", 0.0)  # no real sleeping in the test
+    seen: "list[int]" = []
+
+    def flaky(_req: httpx.Request) -> httpx.Response:
+        seen.append(1)
+        if len(seen) == 1:
+            return httpx.Response(500, text="overloaded")
+        return httpx.Response(
+            200,
+            json={
+                "content": [{"type": "text", "text": "ok"}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    def bad(_req: httpx.Request) -> httpx.Response:
+        seen.append(1)
+        return httpx.Response(400, text="bad request")
+
+    async def go() -> None:
+        llm = AnthropicLlm(auth="k", transport=httpx.MockTransport(flaky), max_retries=2)
+        assert await llm.complete("x") == "ok" and llm.calls == 1 and len(seen) == 2  # one retry
+        await llm.aclose()
+        seen.clear()
+        llm2 = AnthropicLlm(auth="k", transport=httpx.MockTransport(bad), max_retries=2)
+        try:
+            await llm2.complete("x")
+        except WebException as exc:
+            assert "HTTP 400" in str(exc) and len(seen) == 1  # no retry on a 400
+        else:
+            raise AssertionError("a 400 must raise, not be retried into success")
+        await llm2.aclose()
+
+    asyncio.run(go())

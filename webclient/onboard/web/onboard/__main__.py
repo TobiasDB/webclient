@@ -702,6 +702,13 @@ def _report_author_failure(art: QueryArtifact, verbose: bool) -> None:
             "WEB_LLM_BASE_URL / WEB_LLM_MODEL (or pass --shim to use the local `claude -p` model).",
         )
         return
+    if reason.startswith("js_gated"):  # ground truth: a JS app fetched at the HTTP tier, no records
+        _err(
+            f"authoring stopped: {reason.partition(':')[2].strip()}",
+            "  this is a LOCATE mis-tiering, not an authoring problem — the source needs a browser "
+            "render: re-run `web locate` (it should bake full_browser) or pass --full-browser.",
+        )
+        return
     if reason in ("stalled", "budget"):  # the model tried but never wrote a valid query
         _err(
             f"authoring failed ({reason}): the model could not write a valid wq query for this "

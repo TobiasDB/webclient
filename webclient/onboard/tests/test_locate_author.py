@@ -1333,3 +1333,83 @@ def test_author_loop_sends_the_page_once_and_repairs_with_short_follow_ups(
     assert art.tested and art.complete and art.row_count == 2  # the repaired query extracts
     assert art.attempts and "0 populated rows" in art.attempts[0]  # the rejection trail
     assert art.blob and "li.row" in art.describe and not art.sections  # one section
+
+
+def test_loading_requirements_bakes_a_browser_for_a_signalled_spa(httpserver: HTTPServer) -> None:
+    # Flags are GROUND TRUTH: a page whose own signals say JS-app / needs_browser must bake a browser
+    # profile even when the render-count comparison shows no gain -- the "lowest tier that worked"
+    # must never win over a detected SPA. A non-signalled page with the same content stays `basic`.
+    import importlib
+
+    from web.onboard.evaluate import reference as build_ref
+    from web.parse import parse
+    from web.resolve import flags
+
+    shell = (  # fires the `spa` SIGNAL (a script bundle + an empty root); no records
+        b"<html><head><script src='/static/js/main.3f2a1c.js'></script></head>"
+        b"<body><div id='root'></div><noscript>You need to enable JavaScript.</noscript></body></html>"
+    )
+    httpserver.expect_request("/app").respond_with_data(shell, content_type="text/html")
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    loc = importlib.import_module("web.onboard.locate")  # the package re-exports the function
+    brief = LocateBrief(goal="people", fields=["name"])
+
+    async def go(html: bytes, path: str) -> Reference:
+        page = parse(html, content_type="text/html", url=httpserver.url_for(path))
+        ref = build_ref(page, {f.name: f for f in flags(page)})  # carries the page's detections
+        async with Resolver() as r:
+            return cast(Reference, await loc._loading_requirements(page, ref, r, brief))
+
+    spa = _run(go(shell, "/app"))
+    assert (
+        spa.profile == "full_browser" and spa.needs_browser
+    )  # a detected SPA -> a browser, always
+    # a small static list fires only `empty` (the over-firing needs_browser conclusion): with no gain
+    # on render it stays HTTP -- the rule keys on the `spa` SIGNAL, not the conclusion.
+    assert _run(go(_LISTING, "/list")).profile == "basic"
+
+
+def test_author_stops_on_a_js_gated_page_without_guessing_selectors(httpserver: HTTPServer) -> None:
+    # GROUND TRUTH before any model turn: the fetched page's own signals say JS-app and it holds no
+    # record region at the HTTP tier -> a defined `js_gated` stop, ZERO authoring turns (no selector
+    # guessing at a shell), and a reason that names the Locate mis-tiering.
+    from web.onboard import author_agent, write_query
+
+    shell = (
+        b"<html><head><script src='/static/js/main.3f2a1c.js'></script></head>"
+        b"<body><div id='root'></div><noscript>You need to enable JavaScript.</noscript></body></html>"
+    )
+    httpserver.expect_request("/app").respond_with_data(shell, content_type="text/html")
+    good = 'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
+    llm = _SeqLlm([good])
+    ref = Reference(url=httpserver.url_for("/app"), kind="html", profile="basic")
+
+    async def go() -> "tuple[object, object]":
+        async with Resolver() as r:
+            art = await write_query(ref, DatasetBrief(fields=["name"]), resolver=r, llm=cast("object", llm))  # type: ignore[arg-type]
+            queries, _v = await author_agent(ref, DatasetBrief(fields=["name"]), resolver=r, llm=cast("object", llm))  # type: ignore[arg-type]
+            return art, queries
+
+    art, queries = _run(go())
+    assert art.reason.startswith("js_gated") and "needs_browser" in art.reason  # type: ignore[attr-defined]
+    assert not art.blob and not art.tested and art.row_count == 0  # type: ignore[attr-defined]
+    assert queries == [] and llm.i == 0  # the model was never asked to write a query
+
+
+def test_parse_diagnosis_names_the_cause_and_shows_the_reply() -> None:
+    # An invalid reply is diagnosed, not just "invalid syntax": WHAT the model replied (a snippet),
+    # WHY it failed (the likely mistake), and a hint targeted at that mistake.
+    from web.onboard.author_loop import _parse_diagnosis
+    from web.onboard.compile import QueryError
+
+    exc = QueryError("source did not parse: invalid syntax")
+    cases = {
+        "I cannot see any records on this page, sorry.": "prose",
+        'wq.doc.select_all("li").extract(name={"x": 1})': "dict literal",
+        'wq.doc.select_all("li").extract(name=wq.doc.select(".n").attr("text")': "unbalanced",
+        '```python\nwq.doc.select_all("li").extract(name=wq.doc.select(".n").attr("text")).project()\n```': "code fence",
+        'wq.reference("http://x").resolve().select_all("li")': "rooted at a reference",
+    }
+    for reply, expect in cases.items():
+        reason, hint = _parse_diagnosis(reply, exc)
+        assert expect in reason and "reply began:" in reason and hint, (reply, reason)

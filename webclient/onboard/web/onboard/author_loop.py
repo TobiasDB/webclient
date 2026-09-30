@@ -110,6 +110,10 @@ class AuthorState:
     #: again means they are genuinely ABSENT from the source: stop re-authoring, keep the partial.
     prev_missing: "set[str]" = field(default_factory=set)
     absent: "set[str]" = field(default_factory=set)
+    #: a DEFINED stop decided from ground truth before any authoring turn (``js_gated: ...`` when
+    #: the fetched page's own signals say JS-app and it carries no records at the HTTP tier):
+    #: the loop ends without guessing selectors, and the artifact carries this as its reason.
+    abort: str = ""
 
 
 @dataclass
@@ -318,11 +322,56 @@ async def _author(state: AuthorState) -> None:
         )
         state.last_error = state.hint = ""
     except QueryError as exc:  # unparseable / disallowed -> a repair turn re-authors with this
-        state.last_error = f"the reply was not a valid wq query ({exc})"
-        state.hint = (
-            "Reply with ONLY query code -- one wq.doc... chain (or, for a split dataset, one chain "
-            "per section separated by a line containing only ---). Nothing else."
+        state.last_error, state.hint = _parse_diagnosis(reply, exc)
+        emit(ReasonEvent(stage="author", text=f"query rejected: {state.last_error}"))
+
+
+def _parse_diagnosis(reply: str, exc: QueryError) -> "tuple[str, str]":
+    """``(one-line reason, hint)`` for a reply that was NOT a valid wq query: the parser's error plus
+    WHAT the model actually replied (a snippet) -- so the log shows the cause, not just "invalid
+    syntax" -- and a hint targeted at the most likely mistake."""
+    text = reply.strip()
+    snippet = " ".join(text.split())[:160]
+    code = text[text.find("wq.") :] if "wq." in text else ""
+    if not code:
+        why, hint = (
+            "no wq chain in the reply (prose instead of code)",
+            "You replied with prose. Reply with ONLY the query code -- one wq.doc... chain, nothing "
+            "else (no explanation, no code fence). If the data is genuinely not on this page, say "
+            "exactly: SIBLING: <url> only when offered, else still write the best chain you can.",
         )
+    elif "{" in code or "}" in code:
+        why, hint = (
+            "a Python dict literal in the query (not allowed)",
+            "Do NOT use a dict literal ({...}). Each extract column is a wq.doc chain: "
+            "extract(name=wq.doc.select('.x').attr('text'), ...). For a nested branch, use a nested "
+            "extract(...) call, not a dict.",
+        )
+    elif code.count("(") != code.count(")") or code.count("[") != code.count("]"):
+        why, hint = (
+            "unbalanced parentheses/brackets -- the chain was cut off or mis-nested",
+            "Check every select(...) / extract(...) / attr(...) is closed and the chain ends with "
+            ".project(). Write the complete chain on one logical expression.",
+        )
+    elif "```" in text:
+        why, hint = (
+            "a code fence around the query",
+            "Reply with the bare chain -- no ``` fences, no language tag, no prose.",
+        )
+    elif code.lstrip().startswith(("wq.reference", "wq.fetch", "wq.resolve")):
+        why, hint = (
+            "the chain is rooted at a reference/fetch, not at wq.doc",
+            "Root the query at wq.doc -- the pipeline supplies the source; do NOT wrap it in "
+            "wq.reference(...)/.resolve() (a per-record .attr('href').resolve() INSIDE extract() is "
+            "fine).",
+        )
+    else:
+        why, hint = (
+            f"{exc}",
+            "Reply with ONLY query code -- one wq.doc... chain (or, for a split dataset, one chain "
+            "per section separated by a line containing only ---). Use only the syntax in the guide.",
+        )
+    return f"the reply was not a valid wq query: {why} — reply began: {snippet!r}", hint
 
 
 def _fail_reason(state: AuthorState, rows: "list[object]") -> "tuple[str, str]":
@@ -350,6 +399,8 @@ def _fail_reason(state: AuthorState, rows: "list[object]") -> "tuple[str, str]":
 
 
 async def _observe(state: AuthorState) -> _Obs:
+    if state.abort:
+        return _Obs(phase="abort")
     if state.sibling:
         return _Obs(phase="split")
     if not state.checked:
@@ -405,6 +456,8 @@ async def _observe(state: AuthorState) -> _Obs:
 
 
 async def _decide(obs: _Obs) -> "str | Done":
+    if obs.phase == "abort":
+        return Done()  # a defined stop -- nothing to author
     if obs.phase == "split":
         return "split"
     if obs.phase == "check":
@@ -448,9 +501,38 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
     elif turn == "check":
         sample = await state.resolver.resolve(state.reference.url)
         state.listing_skeleton = skeleton_for(sample)  # ONE clipped skeleton, reused by every turn
+        fired = list(flags(sample))
         state.reference = state.reference.model_copy(
-            update={"kind": sample.kind, "assessment": list(flags(sample))}
+            update={"kind": sample.kind, "assessment": fired}
         )
+        by = {f.name for f in fired if f.present}
+        # GROUND TRUTH before any model turn: the page we actually fetched (at Locate's tier) says
+        # it is a JS app AND carries no record region -> a static query cannot reach the data, so
+        # authoring would only guess selectors at a shell. That is a Locate mis-tiering, not an
+        # authoring problem: stop with a defined reason instead of burning turns.
+        js_app = (
+            any(  # the JS-app SIGNAL, not the `needs_browser` conclusion (fires on `empty` too)
+                f.name in ("spa", "iframe") or any(s.name == "spa" for s in f.signals)
+                for f in fired
+                if f.present
+            )
+        )
+        on_http = (state.reference.profile or "basic") == "basic"
+        if js_app and on_http and not sample.records(top_k=1):
+            state.checked = True
+            state.abort = (
+                f"js_gated: the fetched page's signals say JS-app ({', '.join(sorted(by))}) and it "
+                "holds no record region at the HTTP tier -- a static query cannot reach the data"
+            )
+            emit(
+                ReasonEvent(
+                    stage="check",
+                    subject=state.reference.url,
+                    text="JS-gated at the HTTP tier (the page's own signals) — not authoring; "
+                    "re-run locate (it should bake a browser profile) or force --full-browser",
+                )
+            )
+            return
         ok, note = await _check_source(state)
         state.checked = True
         if not ok:  # advisory only -- attempt anyway; a skeleton read is not a reliable veto
@@ -530,7 +612,7 @@ def _artifact(state: AuthorState, verdict: Verdict) -> QueryArtifact:
     missing = _missing(state.brief, all_rows) if all_rows else list(state.brief.fields)
     tnote, stale = timeliness(json_rows, state.brief)
     primary = parts[0][0] if parts else None
-    reason = verdict.reason + (f": {verdict.error}" if verdict.error else "")
+    reason = state.abort or (verdict.reason + (f": {verdict.error}" if verdict.error else ""))
     return QueryArtifact(
         blob=primary.to_blob() if primary is not None else "",
         describe=primary.describe() if primary is not None else "",

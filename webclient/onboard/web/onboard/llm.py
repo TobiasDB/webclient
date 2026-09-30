@@ -249,6 +249,12 @@ def _int(obj: object, key: str) -> int:
     return 0
 
 
+#: statuses worth a retry with backoff: a rate limit, an overloaded/transient server error.
+_RETRIABLE = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
+_BACKOFF_BASE = 1.0  # seconds, doubled per attempt (capped)
+_BACKOFF_CAP = 30.0
+
+
 class AnthropicLlm:
     """An :class:`Llm` over the Anthropic Messages API. Fully env-configurable (an explicit argument
     always wins): ``model`` <- ``WEB_LLM_MODEL``; ``auth`` <- ``WEB_LLM_API_KEY`` / ``ANTHROPIC_API_KEY``;
@@ -271,8 +277,17 @@ class AnthropicLlm:
         pricing: "Pricing | None" = None,
         budget: "Budget | None" = None,
         transport: "httpx.AsyncBaseTransport | None" = None,
+        max_retries: "int | None" = None,
     ) -> None:
         env = os.environ.get
+        #: retry a rate-limited (429) / transient server (5xx / 529) / dropped-connection call this
+        #: many times with exponential backoff (honouring Retry-After) -- WEB_LLM_RETRIES, default 4.
+        try:
+            self._max_retries = (
+                max_retries if max_retries is not None else int(env("WEB_LLM_RETRIES", "4") or 4)
+            )
+        except ValueError:
+            self._max_retries = 4
         self._model = model or env("WEB_LLM_MODEL") or "claude-sonnet-5"
         self._auth = auth or env("WEB_LLM_API_KEY") or env("ANTHROPIC_API_KEY", "") or ""
         base = base_url or env("WEB_LLM_BASE_URL") or env("ANTHROPIC_BASE_URL")
@@ -346,27 +361,44 @@ class AnthropicLlm:
         }
         if self._system is not None:
             body["system"] = self._system
-        try:
-            resp = await self._client.post(
-                "/v1/messages",
-                headers={
-                    "x-api-key": self._auth,
-                    "anthropic-version": "2023-06-01",
-                    "cache-control": "no-store",  # ask an intermediary proxy not to cache the reply
-                },
-                json=body,
-            )
-        except httpx.HTTPError as exc:
-            raise WebException(err("llm.request", str(exc))) from exc
-        if resp.status_code != 200:
+        headers = {
+            "x-api-key": self._auth,
+            "anthropic-version": "2023-06-01",
+            "cache-control": "no-store",  # ask an intermediary proxy not to cache the reply
+        }
+        last = ""
+        for attempt in range(self._max_retries + 1):
+            await self._gate.hold()  # the rate limit applies to every attempt
+            try:
+                resp = await self._client.post("/v1/messages", headers=headers, json=body)
+            except httpx.HTTPError as exc:  # a dropped / refused connection -- retry
+                last = f"transport error: {exc}"
+                if attempt < self._max_retries:
+                    await asyncio.sleep(self._backoff(attempt))
+                    continue
+                raise WebException(err("llm.request", last)) from exc
+            if resp.status_code == 200:
+                break
             # fold the API's own error text into the MESSAGE (not only the body) so a caller that
-            # logs str(exc) -- e.g. the author loop's verdict.error -- sees WHY (an invalid key, an
-            # unknown model, a rate limit), not a bare "HTTP 401".
+            # logs str(exc) sees WHY (an invalid key, an unknown model, an overload), not a bare code.
             snippet = " ".join(resp.text.split())[:200]
             detail = (
                 f"HTTP {resp.status_code}: {snippet}" if snippet else f"HTTP {resp.status_code}"
             )
-            raise WebException(err("llm.api", detail, body=resp.text[:500]))
+            if resp.status_code in _RETRIABLE and attempt < self._max_retries:
+                delay = self._retry_after(resp) or self._backoff(attempt)
+                emit(
+                    ReasonEvent(
+                        stage="llm",
+                        text=f"{detail} — retrying in {delay:.0f}s "
+                        f"({attempt + 1}/{self._max_retries})",
+                    )
+                )
+                await asyncio.sleep(delay)
+                continue
+            raise WebException(err("llm.api", detail, body=resp.text[:500]))  # not retriable
+        else:  # pragma: no cover - every path above returns / raises / breaks
+            raise WebException(err("llm.request", last or "exhausted retries"))
         data: object = resp.json()
         self._meter(data)
         content = data.get("content", []) if isinstance(data, dict) else []
@@ -378,6 +410,21 @@ class AnthropicLlm:
             and isinstance(block.get("text"), str)
         ]
         return "".join(parts)
+
+    @staticmethod
+    def _backoff(attempt: int) -> float:
+        """The exponential backoff delay (seconds) for a retry attempt, capped."""
+        return min(_BACKOFF_CAP, _BACKOFF_BASE * (2.0**attempt))
+
+    @staticmethod
+    def _retry_after(resp: httpx.Response) -> "float | None":
+        """The server's ``Retry-After`` (seconds, capped at 60), or ``None`` when absent/unparseable
+        so the caller falls back to plain backoff."""
+        value = resp.headers.get("retry-after")
+        try:
+            return min(float(value), 60.0) if value else None
+        except ValueError:
+            return None
 
     async def aclose(self) -> None:
         await self._client.aclose()

@@ -137,6 +137,16 @@ async def locate(
 # -- the load stage -------------------------------------------------------------------------------
 
 
+def _spa_signalled(ref: Reference) -> bool:
+    """Whether the page's detections carry the JS-app SIGNAL (``spa``, or an ``iframe`` that hides
+    the content) -- the ground truth that it needs a browser to build its DOM."""
+    return any(
+        f.name in ("spa", "iframe") or any(s.name == "spa" for s in f.signals)
+        for f in ref.assessment
+        if f.present
+    )
+
+
 def _consistent(page: Document, api: Document) -> bool:
     """Whether ``api`` (a JSON response) BACKS ``page``: enough of its distinctive scalar leaves
     appear in the page's text. Guards against preferring an unrelated feed / a stale endpoint."""
@@ -240,29 +250,44 @@ async def _loading_requirements(
     bake ``full_browser`` and mine the XHR/fetch stream for the JSON data-API that feeds it
     (fetchable at ``basic``, cheaper). Rendering the single winner is cheap (the pool reuses the
     browser); best-effort -- no browser -> trust the static verdict."""
+    # the page's OWN detections say JS-app: the `spa` / `iframe` SIGNAL (ground truth -- the same
+    # rule the resolve ladder climbs a browser on), NOT the `needs_browser` conclusion alone, which
+    # also fires on `empty` (any small page) and would over-bake browsers.
+    signalled = _spa_signalled(ref)
     static_ct = _record_count(page)
     static_ok = _has_records(page, brief)
     try:
         snap = await _render_page(page.url, resolver.pool)
-    except Exception:  # no browser can launch here -> trust the static verdict (never sink Locate)
+    except Exception:  # no browser can launch here -> never sink Locate, but never a WRONG profile
+        if signalled:  # a signalled SPA still needs a browser -- say so rather than bake HTTP
+            emit(
+                ReasonEvent(
+                    stage="load",
+                    subject=page.url,
+                    text="the page's signals say JS-app (SPA) — baking a browser profile (no browser "
+                    "could render here to confirm)",
+                )
+            )
+            return ref.model_copy(update={"profile": "full_browser", "needs_browser": True})
         ref = ref.model_copy(update={"profile": "basic"})
         return await _prefer_api(page, ref, resolver) if (brief.prefer_api and static_ok) else ref
     rendered = document(snap)
     rendered_ct = _record_count(rendered)
-    # JS-gated iff the render revealed MORE of the dataset than the static HTML: the record count grew
-    # materially, OR the rendered page passes the schema check while the static page did not.
+    # JS-gated iff the page's signals SAY it is a JS app (flags are ground truth -- a "lowest tier
+    # that worked" must never win over a detected SPA), OR the render revealed MORE of the dataset
+    # than the static HTML (a server-rendered shell: the record count grew materially, or the
+    # rendered page passes the schema check while the static page did not).
     gained = rendered_ct >= 2 and rendered_ct > static_ct + 1
-    js_gated = gained or (_has_records(rendered, brief) and not static_ok)
+    js_gated = signalled or gained or (_has_records(rendered, brief) and not static_ok)
     if not js_gated:
         ref = ref.model_copy(update={"profile": "basic"})
         return await _prefer_api(page, ref, resolver) if brief.prefer_api else ref
-    emit(
-        ReasonEvent(
-            stage="load",
-            subject=page.url,
-            text=f"JS-gated ({static_ct}→{rendered_ct} records on render) — needs a browser",
-        )
+    why = (
+        "the page's signals say JS-app (SPA)"
+        if signalled
+        else f"the render revealed the dataset ({static_ct}→{rendered_ct} records)"
     )
+    emit(ReasonEvent(stage="load", subject=page.url, text=f"JS-gated — {why} — needs a browser"))
     ref = ref.model_copy(update={"profile": "full_browser", "needs_browser": True})
     for url, api in _json_xhr(snap):  # the JSON API the render actually called (reuse the render)
         if _consistent(rendered, api):
