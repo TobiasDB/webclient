@@ -55,6 +55,15 @@ class AuthorState:
     listing_skeleton: str = ""
     detail_skeleton: str = ""
     nested: bool = False
+    #: SPLIT-SOURCE: a dataset can span separate pages (e.g. an UPCOMING events page and a separate
+    #: PAST/archived page). ``sections`` holds the FINISHED per-section queries; when the review says
+    #: the sample is incomplete and the missing records live on a sibling page, the model replies
+    #: ``SIBLING: <url>`` and the loop finalises the current section, then authors that page as a new
+    #: one. The pipeline runs every section and concatenates. ``tried`` guards against re-visiting.
+    sections: "list[Query]" = field(default_factory=list)
+    sibling: str = ""
+    tried: "set[str]" = field(default_factory=set)
+    offer_sibling: bool = False  # the current failure is an incompleteness a sibling page might fix
     #: the entry check ran; and any concern it raised. ADVISORY, not fatal -- a skeleton read is
     #: unreliable (haiku rejected pages that in fact extract fine), so the loop still ATTEMPTS and
     #: concludes "no data" only EMPIRICALLY (0 rows after repair). The concern is fed to the author
@@ -201,9 +210,25 @@ async def _author(state: AuthorState) -> None:
             "syntax; a field that may be absent on some records must be optional "
             "(select(css, optional=True)); do NOT use a Python dict literal."
         )
-    parts.append("Reply with ONLY the wq.doc... chain -- no prose, no code fence.")
+    if state.offer_sibling:  # the sample is incomplete -- the rest may live on a SEPARATE page
+        parts.append(
+            "If the MISSING records are not on THIS page but on a SEPARATE sibling page (e.g. this is "
+            "the PAST/archived events page and the UPCOMING events are at a different URL, or vice "
+            "versa), reply with EXACTLY `SIBLING: <that full url>` (nothing else) and it will be "
+            "extracted separately and combined. Only do this when the records are genuinely on "
+            "another page, not merely a section lower on THIS one."
+        )
+    parts.append("Reply with ONLY the wq.doc... chain (or a single SIBLING: line) -- no prose.")
     reply = await state.llm.complete("\n\n".join(parts))
     emit(AuthorEvent(phase="reply", reply=reply))
+    stripped = reply.strip()
+    if state.offer_sibling and stripped.upper().startswith("SIBLING:"):
+        url = stripped.split(":", 1)[1].strip().split()[0] if ":" in stripped else ""
+        if url.startswith(("http://", "https://")) and url not in state.tried:
+            state.sibling = url  # the loop will finalise this section and author the sibling page
+            state.last_error = ""
+            emit(ReasonEvent(stage="author", subject=url, text="a sibling page holds the rest"))
+            return
     try:
         state.query = reroot(
             parse_query(reply), state.reference.url, profile=state.reference.profile or None
@@ -215,6 +240,8 @@ async def _author(state: AuthorState) -> None:
 
 
 async def _observe(state: AuthorState) -> _Obs:
+    if state.sibling:  # the model named a SEPARATE page for the missing records -> author it too
+        return _Obs(phase="split")
     if not state.checked:  # entry guard first (advisory): note whether the data looks present
         return _Obs(phase="check")
     if state.query is None and not state.last_error:
@@ -239,6 +266,7 @@ async def _observe(state: AuthorState) -> _Obs:
         ok, note = await _review_rows(state)
         if not ok:
             state.last_error = f"the sample does not satisfy the brief: {note}"
+            state.offer_sibling = True  # incompleteness -> the repair may point to a sibling page
     missing = _missing(state.brief, state.rows)
     link = _record_link(state.rows) if (missing and not state.nested) else None
     return _Obs(
@@ -252,6 +280,8 @@ async def _observe(state: AuthorState) -> _Obs:
 
 
 async def _decide(obs: _Obs) -> "str | Done":
+    if obs.phase == "split":
+        return "split"
     if obs.phase == "check":
         return "check"
     if obs.phase == "base":
@@ -264,7 +294,30 @@ async def _decide(obs: _Obs) -> "str | Done":
 
 
 async def _apply(state: AuthorState, turn: "str | Done") -> None:
-    if turn == "check":
+    if turn == "split":
+        # finalise the current section, then re-target the loop at the sibling page as a NEW section
+        # (a fresh check -> base there); the pipeline runs every section query and concatenates.
+        if state.query is not None:
+            state.sections.append(state.query)
+        state.tried.add(state.reference.url)
+        state.tried.add(state.sibling)
+        state.reference = state.reference.model_copy(
+            update={"url": state.sibling, "page_url": state.sibling}
+        )
+        emit(
+            ReasonEvent(
+                stage="author", subject=state.sibling, text="authoring the sibling section next"
+            )
+        )
+        state.sibling = ""
+        state.query = None
+        state.checked = False
+        state.last_error = ""
+        state.offer_sibling = False
+        state.nested = False
+        state.detail_skeleton = ""
+        state.repairs = 0  # a fresh repair budget for the new section
+    elif turn == "check":
         sample = await state.resolver.resolve(state.reference.url)
         state.listing_skeleton = sample_skeleton(sample)  # reused by the base turn (no re-resolve)
         ok, note = await _check_source(state)
@@ -314,18 +367,20 @@ async def author_agent(
     llm: Llm,
     review: "Llm | None" = None,
     entity: str = "",
-    max_rounds: int = 8,
+    max_rounds: int = 12,
     budget_s: float = 240.0,
-) -> "tuple[Query | None, Verdict]":
-    """Drive the authoring loop to a query that satisfies the brief, returning the final query + the
-    loop :class:`~web.onboard.agent.Verdict`. Turns: ``check`` (an ADVISORY note on whether the data
-    looks present + on-entity), ``base``, ``repair`` (re-author with a failure fed back), ``detail``
-    (nest a linked-page extraction). ``review`` (usually the same model) enables the entry check +
-    per-sample review; ``None`` skips them. The check never vetoes -- a skeleton read is unreliable,
-    so absence is concluded EMPIRICALLY (0 rows after repair). The query is ``None`` only if the base
-    + repairs never parsed one. ``budget_s`` is a hard wall-clock cap: the loop chains several model
-    calls, so a slow model or a stuck page must not run forever -- on the cap we return the best query
-    so far with a ``budget`` verdict rather than hang."""
+) -> "tuple[list[Query], Verdict]":
+    """Drive the authoring loop to the SECTION QUERIES that satisfy the brief (usually one; more when
+    the dataset spans separate pages), plus the loop :class:`~web.onboard.agent.Verdict`. Turns:
+    ``check`` (an ADVISORY note on whether the data looks present + on-entity), ``base``, ``repair``
+    (re-author with a failure fed back), ``detail`` (nest a linked-page extraction), ``split`` (the
+    sample is incomplete and the rest live on a sibling page -> finalise this section and author that
+    page as a new one; the pipeline runs every returned query and concatenates). ``review`` enables
+    the entry check + per-sample review; ``None`` skips them. The check never vetoes -- absence is
+    concluded EMPIRICALLY (0 rows after repair). Returns ``[]`` only if nothing ever parsed.
+    ``budget_s`` is a hard wall-clock cap: the loop chains several model calls, so a slow model or a
+    stuck page must not run forever -- on the cap we return the sections so far with a ``budget``
+    verdict rather than hang."""
     state = AuthorState(
         reference=reference, brief=brief, resolver=resolver, llm=llm, review=review, entity=entity
     )
@@ -334,19 +389,21 @@ async def author_agent(
         decide=_decide,
         apply=_apply,
         done=lambda d: isinstance(d, Done),
-        progress=lambda s: s.query.to_blob() if s.query is not None else "",
+        # progress = (#finished sections, current query) so finalising a section counts as progress
+        progress=lambda s: (len(s.sections), s.query.to_blob() if s.query is not None else ""),
         max_rounds=max_rounds,
     )
     try:
         verdict = await asyncio.wait_for(loop.arun(state), timeout=budget_s)
     except (
         asyncio.TimeoutError
-    ):  # a slow model / stuck page -- take the best query so far, don't hang
+    ):  # a slow model / stuck page -- take the sections so far, don't hang
         emit(
             ReasonEvent(stage="author", text=f"authoring hit the {budget_s:.0f}s budget — stopping")
         )
         verdict = Verdict(reason="budget", rounds=state.repairs)
-    return state.query, verdict
+    queries = [q for q in [*state.sections, state.query] if q is not None]
+    return queries, verdict
 
 
 __all__ = ["author_agent", "AuthorState"]

@@ -492,17 +492,19 @@ async def _author(args: argparse.Namespace) -> int:
         if reference is None:
             _err("no source located to author over (nothing scored above zero).")
             return 1
-        if not args.simple:  # DEFAULT: the agent loop (check -> base -> repair/review -> detail)
+        if not args.simple:  # DEFAULT: the agent loop (check -> base -> repair/review -> split)
             _err(f"authoring (agent loop): {_short(reference.url)}…")
             with _Progress(args.verbose):
-                agent_query, verdict = await author_agent(
+                queries, verdict = await author_agent(
                     reference, brief, resolver=resolver, llm=llm, review=llm, entity=args.entity
                 )
-            if agent_query is None:
+            if not queries:
                 _err(f"authoring failed: the agent loop produced no query ({verdict.reason})")
                 return 1
-            query, engine = agent_query, "agent"
+            query, engine = queries[0], "agent"  # queries[0] is the primary section
             notes = [f"agent loop: {verdict.rounds} round(s) → {verdict.reason}"]
+            if len(queries) > 1:
+                notes.append(f"{len(queries)} sections (run + concatenated)")
         else:
             _err(f"authoring: resolving {_short(reference.url)} then asking the model…")
             try:
@@ -520,8 +522,10 @@ async def _author(args: argparse.Namespace) -> int:
                         query, reference, brief, resolver=resolver, llm=llm, rounds=args.review
                     )
                 notes += rnotes
+            queries = [query]  # the one-shot path is a single section
         _explain_query(reference, brief, engine, query.describe(), notes)  # reasoning -> stderr
-        print(query.to_blob())  # the serialised query -> stdout
+        for q in queries:  # each section's serialised query -> stdout (newline-separated)
+            print(q.to_blob())
         if isinstance(
             llm, _Metered
         ):  # AnthropicLlm (priced) OR the shim (claude -p's API-equiv cost)
@@ -532,14 +536,16 @@ async def _author(args: argparse.Namespace) -> int:
             )
         if not args.run:
             return 0
-        _err("running the query…")
+        _err(f"running the quer{'ies' if len(queries) > 1 else 'y'}…")
+        listed: "list[object]" = []
         try:
             with _Progress(args.verbose):
-                rows = await query.acollect(resolver=resolver)
+                for q in queries:  # run every section and CONCATENATE the rows
+                    rows = await q.acollect(resolver=resolver)
+                    listed.extend(rows if isinstance(rows, list) else [rows])
         except WebException as exc:  # a runtime extraction failure (e.g. a loud select miss)
             _err(f"running failed: {exc}")
             return 1
-        listed = rows if isinstance(rows, list) else [rows]
         _err(f"\n  rows:      {len(listed)}")
         for row in listed[: args.sample]:
             _err(f"    {json.dumps(row, ensure_ascii=False, default=str)}")

@@ -499,14 +499,15 @@ def test_author_agent_nests_a_detail_extraction(httpserver: HTTPServer) -> None:
 
     async def go() -> object:
         async with Resolver() as r:
-            q, verdict = await author_agent(
+            queries, verdict = await author_agent(
                 Reference(url=httpserver.url_for("/list"), kind="html"),
                 DatasetBrief(fields=["name", "url", "body"]),
                 resolver=r,
                 llm=cast("object", llm),
             )
             assert verdict.ok  # the loop reached done
-            assert q is not None
+            assert queries
+            q = queries[0]
             return await q.acollect(resolver=r)
 
     rows = cast("list[dict[str, object]]", _run(go()))
@@ -526,19 +527,67 @@ def test_author_agent_repairs_a_failed_query(httpserver: HTTPServer) -> None:
 
     async def go() -> object:
         async with Resolver() as r:
-            q, verdict = await author_agent(
+            queries, verdict = await author_agent(
                 Reference(url=httpserver.url_for("/list"), kind="html"),
                 DatasetBrief(fields=["name"]),
                 resolver=r,
                 llm=cast("object", llm),
             )
             assert verdict.ok  # the loop repaired its way to done
-            assert q is not None
+            assert queries
+            q = queries[0]
             return await q.acollect(resolver=r)
 
     rows = cast("list[dict[str, object]]", _run(go()))
     assert [row.get("name") for row in rows] == ["A", "B"]  # repaired past parse-reject + 0 rows
     assert llm.i >= 3  # it took the two repair turns (base + repair + repair)
+
+
+def test_author_agent_splits_across_a_sibling_page(httpserver: HTTPServer) -> None:
+    # SPLIT-SOURCE: the dataset spans two pages. Base authors /past; the review flags it incomplete;
+    # the model replies SIBLING: /upcoming; the loop authors that as a 2nd section; the CLI/run
+    # concatenates. author_agent returns BOTH section queries.
+    from web.onboard import author_agent
+
+    past = (
+        b"<html><body><ul>"
+        b"<li class='row'><span class='name'>Q1 Call (past)</span></li>"
+        b"<li class='row'><span class='name'>Q2 Call (past)</span></li>"
+        b"</ul></body></html>"
+    )
+    upcoming = (
+        b"<html><body><ul>"
+        b"<li class='row'><span class='name'>Q3 Call (upcoming)</span></li>"
+        b"</ul></body></html>"
+    )
+    httpserver.expect_request("/past").respond_with_data(past, content_type="text/html")
+    httpserver.expect_request("/upcoming").respond_with_data(upcoming, content_type="text/html")
+    up_url = httpserver.url_for("/upcoming")
+    extract = 'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
+    author = _SeqLlm([extract, f"SIBLING: {up_url}", extract])
+    # check(past)=YES, review(past)=NO(missing upcoming), check(upcoming)=YES, review(upcoming)=YES
+    review = _SeqLlm(["YES", "NO — the upcoming events are missing (separate page)", "YES", "YES"])
+
+    async def go() -> "tuple[list[object], int]":
+        async with Resolver() as r:
+            queries, verdict = await author_agent(
+                Reference(url=httpserver.url_for("/past"), kind="html"),
+                DatasetBrief(fields=["name"], review_hint="require upcoming AND past"),
+                resolver=r,
+                llm=cast("object", author),
+                review=cast("object", review),
+                entity="Acme",
+            )
+            assert verdict.ok and len(queries) == 2  # two section queries (past + upcoming)
+            rows: "list[object]" = []
+            for q in queries:
+                rows.extend(await q.acollect(resolver=r))
+            return rows, len(queries)
+
+    rows, n = cast("tuple[list[dict[str, object]], int]", _run(go()))
+    names = [row.get("name") for row in rows]
+    assert n == 2
+    assert "Q1 Call (past)" in names and "Q3 Call (upcoming)" in names  # both sections concatenated
 
 
 def test_author_agent_check_is_advisory_not_fatal(httpserver: HTTPServer) -> None:
@@ -553,7 +602,7 @@ def test_author_agent_check_is_advisory_not_fatal(httpserver: HTTPServer) -> Non
 
     async def go() -> object:
         async with Resolver() as r:
-            q, verdict = await author_agent(
+            queries, verdict = await author_agent(
                 Reference(url=httpserver.url_for("/list"), kind="html"),
                 DatasetBrief(fields=["name"]),
                 resolver=r,
@@ -561,7 +610,8 @@ def test_author_agent_check_is_advisory_not_fatal(httpserver: HTTPServer) -> Non
                 review=cast("object", review),
                 entity="Acme",
             )
-            assert verdict.ok and q is not None  # authored despite the check's NO
+            assert verdict.ok and queries  # authored despite the check's NO
+            q = queries[0]
             return await q.acollect(resolver=r)
 
     rows = cast("list[dict[str, object]]", _run(go()))
@@ -625,7 +675,7 @@ def test_author_agent_review_drives_a_repair(httpserver: HTTPServer) -> None:
 
     async def go() -> object:
         async with Resolver() as r:
-            q, verdict = await author_agent(
+            queries, verdict = await author_agent(
                 Reference(url=httpserver.url_for("/list"), kind="html"),
                 DatasetBrief(fields=["name"]),
                 resolver=r,
@@ -633,7 +683,8 @@ def test_author_agent_review_drives_a_repair(httpserver: HTTPServer) -> None:
                 review=cast("object", review),
                 entity="Acme",
             )
-            assert verdict.ok and q is not None
+            assert verdict.ok and queries
+            q = queries[0]
             return await q.acollect(resolver=r)
 
     rows = cast("list[dict[str, object]]", _run(go()))
