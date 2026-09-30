@@ -569,6 +569,45 @@ def test_author_agent_check_is_advisory_not_fatal(httpserver: HTTPServer) -> Non
     assert author.i == 1  # the author ran (was not skipped)
 
 
+def test_author_agent_threads_brief_hints_and_review_guidance(httpserver: HTTPServer) -> None:
+    # per-stage NL guidance from the brief reaches the right stage: `hints` -> the author prompt,
+    # `review` -> the sample-review prompt (brief-specific strictness, not hardcoded in the pipeline).
+    from web.onboard import author_agent
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    good = 'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
+
+    class _Rec:  # records every prompt it sees
+        def __init__(self, replies: "list[str]") -> None:
+            self.replies, self.i, self.prompts = replies, 0, []  # type: ignore[var-annotated]
+
+        async def complete(self, prompt: str) -> str:
+            self.prompts.append(prompt)
+            r = self.replies[min(self.i, len(self.replies) - 1)]
+            self.i += 1
+            return r
+
+    author, review = _Rec([good]), _Rec(["YES present", "YES the rows are good"])
+    brief = DatasetBrief(
+        fields=["name"], hints="EVENTS-HINT-TOKEN", review="TIMELINESS-REVIEW-TOKEN"
+    )
+
+    async def go() -> None:
+        async with Resolver() as r:
+            await author_agent(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                brief,
+                resolver=r,
+                llm=cast("object", author),
+                review=cast("object", review),
+                entity="Acme",
+            )
+
+    _run(go())
+    assert any("EVENTS-HINT-TOKEN" in p for p in author.prompts)  # hints -> author
+    assert any("TIMELINESS-REVIEW-TOKEN" in p for p in review.prompts)  # review guidance -> review
+
+
 def test_author_agent_review_drives_a_repair(httpserver: HTTPServer) -> None:
     # per-stage review: the first sample is rejected (incomplete), so the loop repairs and re-authors
     # until the reviewer accepts.

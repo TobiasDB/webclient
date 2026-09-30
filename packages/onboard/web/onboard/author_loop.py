@@ -138,13 +138,20 @@ async def _review_rows(state: AuthorState) -> "tuple[bool, str]":
     want = state.brief.goal or "the target dataset"
     schema = "\n".join(field_schema(state.brief)) if state.brief.fields else "(the salient fields)"
     sample = json.dumps(state.rows[:5], ensure_ascii=False, default=str)[:1500]
+    # brief-SPECIFIC strictness comes from the brief, not the generic prompt -- so an ir-events
+    # timeliness rule ("require upcoming, not only archived") never taints, say, a products brief.
+    extra = (
+        f"\nBrief-specific check (be strict on this): {state.brief.review}"
+        if state.brief.review
+        else ""
+    )
     prompt = (
         f"You are reviewing extracted sample rows against a brief. Dataset: {want}.{_scope(state)}\n"
-        f"Schema:\n{schema}\n\nSample rows (JSON):\n{sample}\n\n"
+        f"Schema:\n{schema}{extra}\n\nSample rows (JSON):\n{sample}\n\n"
         "Do these rows correctly match the brief -- the right entity, real values (not nulls or raw "
-        "markup), and the COMPLETE dataset (if the brief asks for multiple sections, e.g. upcoming "
-        "AND archived events, are BOTH represented)? Answer YES or NO on the first line, then one "
-        "short reason naming exactly what is wrong or missing."
+        "markup), every non-optional field populated, and any brief-specific check above satisfied? "
+        "Answer YES or NO on the first line, then one short reason naming exactly what is wrong or "
+        "missing."
     )
     reply = await state.review.complete(prompt)
     ok = _yes(reply)
@@ -166,6 +173,10 @@ async def _author(state: AuthorState) -> None:
         "Requirements:\n" + "\n".join("  - " + i for i in state.instructions),
         f"LISTING page skeleton (the records are here):\n{state.listing_skeleton}",
     ]
+    if (
+        state.brief.hints
+    ):  # brief-supplied author guidance (e.g. suggested patterns for this dataset)
+        parts.append(f"Author guidance from the brief: {state.brief.hints}")
     if state.check_note:  # the entry review flagged a concern -- surface it, but still attempt
         parts.append(f"NOTE from a reviewer of this page: {state.check_note}")
     if state.detail_skeleton:

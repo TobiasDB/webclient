@@ -35,8 +35,10 @@ class Brief(BaseModel):
     """The onboarding spec, in three sections (see the module docstring). SHARED: ``goal`` +
     ``fields``/``descriptions``/``types`` (the schema). LOCATE: ``seeds``/``candidates``/``start_url``/
     ``search``/``look``/``ignore``/``max_pages``/``prefer_api``. AUTHOR: ``selectors``/``optional``/
-    ``hints``/``download`` (and ``types``, which the Author + Review prompts render). ``name``/
-    ``title`` identify it; ``exit_when`` is an advisory exit hint.
+    ``hints``/``download`` (and ``types``, which the Author + Review prompts render). REVIEW:
+    ``review`` (brief-specific strictness for the sample review). ``name``/``title`` identify it;
+    ``exit_when`` is an advisory exit hint. Each stage takes NL guidance from the brief so a
+    brief-specific rule (e.g. ir-events timeliness) never has to be hardcoded in the pipeline.
     """
 
     # ── SHARED (both Locate and Author read these) ──────────────────────────────────────────────
@@ -60,8 +62,14 @@ class Brief(BaseModel):
     # ── AUTHOR (how to EXTRACT it) ──────────────────────────────────────────────────────────────
     selectors: dict[str, str] = {}  # field -> css/JSON-path override
     optional: list[str] = []  # fields that may legitimately be absent
-    hints: str = ""  # structural guidance for the query author
+    hints: str = ""  # NL structural guidance for the query author (e.g. suggested patterns)
     download: bool = False  # harvest the file(s) themselves, not parsed rows
+
+    # ── REVIEW (how strict to be about the extracted sample) ────────────────────────────────────
+    #: NL guidance for the per-sample dataset review -- brief-SPECIFIC strictness the generic
+    #: pipeline must not hardcode (e.g. "require UPCOMING events, not only archived; dates must be
+    #: current"). Empty = the default (fields present, real values, on-entity).
+    review: str = ""
 
     # ── identity / advisory ─────────────────────────────────────────────────────────────────────
     name: str = ""
