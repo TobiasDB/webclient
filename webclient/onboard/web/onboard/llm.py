@@ -106,30 +106,33 @@ def _int(obj: object, key: str) -> int:
 
 
 class AnthropicLlm:
-    """An :class:`Llm` over the Anthropic Messages API. ``auth`` defaults to ``ANTHROPIC_API_KEY``;
-    ``model`` is the API model string. ``rate`` throttles calls (a shared key); ``pricing`` turns
-    the API's usage counts into a running spend (:attr:`spent_usd`, :attr:`usage`, :attr:`calls`).
-    Never leaks httpx errors -- an API/transport failure raises a structured
-    :class:`~web.fetch.WebException` (``llm.request`` / ``llm.api``)."""
+    """An :class:`Llm` over the Anthropic Messages API. Fully env-configurable (an explicit argument
+    always wins): ``model`` <- ``WEB_LLM_MODEL``; ``auth`` <- ``WEB_LLM_API_KEY`` / ``ANTHROPIC_API_KEY``;
+    ``base_url`` <- ``WEB_LLM_BASE_URL`` / ``ANTHROPIC_BASE_URL``. ``rate`` throttles calls (a shared
+    key); ``pricing`` turns the API's usage counts into a running spend (:attr:`spent_usd`,
+    :attr:`usage`, :attr:`calls`). Never leaks httpx errors -- an API/transport failure raises a
+    structured :class:`~web.fetch.WebException` (``llm.request`` / ``llm.api``)."""
 
     def __init__(
         self,
         *,
-        model: str = "claude-sonnet-5",
-        auth: str | None = None,
+        model: "str | None" = None,
+        auth: "str | None" = None,
         max_tokens: int = 1024,
-        base_url: str = "https://api.anthropic.com",
-        system: str | None = None,
+        base_url: "str | None" = None,
+        system: "str | None" = None,
         rate: "RateLimit | None" = None,
         pricing: "Pricing | None" = None,
     ) -> None:
-        self._model = model
-        self._auth = auth if auth is not None else os.environ.get("ANTHROPIC_API_KEY", "")
+        env = os.environ.get
+        self._model = model or env("WEB_LLM_MODEL") or "claude-sonnet-5"
+        self._auth = auth or env("WEB_LLM_API_KEY") or env("ANTHROPIC_API_KEY", "") or ""
+        base = base_url or env("WEB_LLM_BASE_URL") or env("ANTHROPIC_BASE_URL")
         self._max_tokens = max_tokens
         self._system = system
         self._rate = rate or RateLimit()
         self._pricing = pricing or Pricing()
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=60.0)
+        self._client = httpx.AsyncClient(base_url=base or "https://api.anthropic.com", timeout=60.0)
         #: cumulative metering across this client's calls.
         self.usage = Usage()
         self.spent_usd = 0.0

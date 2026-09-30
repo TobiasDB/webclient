@@ -115,6 +115,10 @@ class LaunchSupply:
     def _executable(self) -> "str | None":
         if self.executable_path is not None:
             return self.executable_path
+        if env := os.environ.get(
+            "WEB_BROWSER_PATH"
+        ):  # a pinned browser binary for every browser tier
+            return env
         if self.channel != "chromium":
             # a real channel (chrome/msedge) -> resolve the GENUINE installed binary (ANTI-BOT.md §5);
             # None falls back to Playwright's own channel resolution below.

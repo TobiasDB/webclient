@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from asyncio.subprocess import PIPE
 
 from web.fetch import WebException, emit, err
@@ -41,9 +42,13 @@ class ClaudeShim:
     alias (``"haiku"`` -- the cheapest -- by default; ``None`` uses the CLI default). Records the
     last prompt/reply. Raises :class:`~web.fetch.WebException` on failure."""
 
-    def __init__(self, *, model: "str | None" = "haiku", timeout: float = 90.0) -> None:
-        self._model = model
-        self._timeout = timeout
+    def __init__(self, *, model: "str | None" = None, timeout: "float | None" = None) -> None:
+        env = os.environ.get
+        self._model = model or env("WEB_LLM_MODEL") or "haiku"  # WEB_LLM_MODEL / --model / "haiku"
+        try:
+            self._timeout = timeout if timeout is not None else float(env("WEB_LLM_TIMEOUT", "90"))
+        except ValueError:
+            self._timeout = 90.0
         self.prompt = ""
         self.reply = ""
         #: real metering from claude -p's own accounting (``total_cost_usd`` + ``usage``).

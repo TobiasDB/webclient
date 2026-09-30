@@ -34,14 +34,16 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from web.crawl import CrawlEvent, FrontierMiddleware
-from web.fetch import Event, EventBus, FetchEvent
-from web.fetch import Profile as FetchProfile
-from web.fetch import WebException, aclose_default_pool, using
-from web.resolve import EscalationPolicy, ResolveEvent, Resolver, profiles
+from web.fetch import Event, EventBus, FetchEvent, WebException, aclose_default_pool, using
+from web.resolve import ResolveEvent, Resolver
 
 from .author import AuthorEvent, build_query
 from .author_loop import author_agent
 from .compile import QueryError
+from .config import build_resolver
+from .config import env as _env
+from .config import env_flag as _env_flag
+from .config import env_float as _env_float
 from .frontier import llm_frontier
 from .llm import AnthropicLlm, Llm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage
 from .locate import locate
@@ -214,36 +216,16 @@ def _reference_from_ref(ref: str) -> Reference:
 def _resolver(
     profile_name: str, proxy: "str | None", browser_path: "str | None" = None
 ) -> Resolver:
-    """The resolver for the run from a named profile (+ optional proxy). ``basic`` is HTTP;
-    ``basic_browser`` escalates to a browser on a block; ``full_browser`` always renders.
-    ``browser_path`` pins the browser BINARY that any browser tier launches."""
-    if proxy:
-        factory = {
-            "basic": profiles.proxy,
-            "basic_browser": profiles.proxy_browser,
-            "full_browser": profiles.proxy_full_browser,
-        }[profile_name]
-        profile = factory(proxy)
-    else:
-        got = profiles.get(profile_name)
-        if got is None:
-            return Resolver()
-        profile = got
-    if browser_path and profile.escalation:  # pin the binary on every browser tier
-        tiers = tuple(
-            (
-                t.with_(executable_path=browser_path)
-                if isinstance(t, FetchProfile) and t.browser
-                else t
-            )
-            for t in profile.escalation.tiers
-        )
-        profile = profile.with_(escalation=EscalationPolicy(tiers=tiers, on=profile.escalation.on))
-    return Resolver(profile=profile)
+    """The resolver for the run -- delegates to :func:`web.onboard.config.build_resolver` (which also
+    reads WEB_PROFILE / WEB_PROXY / WEB_BROWSER_PATH; the CLI already resolved those into its args).
+    """
+    return build_resolver(profile=profile_name, proxy=proxy, browser_path=browser_path)
 
 
 def _transport_args(sub: argparse.ArgumentParser) -> None:
-    """Operational options shared by both subcommands (transport + progress) -- NOT brief content."""
+    """Operational options shared by both subcommands (transport + progress) -- NOT brief content.
+    Every option here defaults from an env var (WEB_PROFILE / WEB_PROXY / WEB_BROWSER_PATH /
+    WEB_SHIM / WEB_LLM_MODEL), so the CLI is fully env-configurable; a flag overrides the env."""
     sub.add_argument(
         "brief", help="a packaged brief name (news/products/people) or a markdown file"
     )
@@ -255,10 +237,10 @@ def _transport_args(sub: argparse.ArgumentParser) -> None:
     )
     sub.add_argument(
         "--profile",
-        default="basic_browser",
+        default=_env("WEB_PROFILE", "basic_browser"),
         choices=("basic", "basic_browser", "full_browser"),
         help="resolve profile (default basic_browser: HTTP first, escalate to a browser on a block "
-        "/403 -- robust; `basic` is HTTP-only, `full_browser` always renders)",
+        "/403 -- robust; `basic` is HTTP-only, `full_browser` always renders) [env WEB_PROFILE]",
     )
     sub.add_argument(
         "--full-browser",
@@ -268,13 +250,15 @@ def _transport_args(sub: argparse.ArgumentParser) -> None:
         help="shorthand for --profile full_browser",
     )
     sub.add_argument(
-        "--proxy", default=None, help="proxy URL for all traffic (http://[user:pass@]host:port)"
+        "--proxy",
+        default=_env("WEB_PROXY"),
+        help="proxy URL for all traffic (http://[user:pass@]host:port) [env WEB_PROXY]",
     )
     sub.add_argument(
         "--browser-path",
-        default=None,
+        default=_env("WEB_BROWSER_PATH"),
         metavar="EXE",
-        help="an explicit browser binary (driver/executable) for any browser tier to launch",
+        help="an explicit browser binary for any browser tier to launch [env WEB_BROWSER_PATH]",
     )
     sub.add_argument(
         "--no-cache", action="store_true", help="do not read/write the located-reference cache"
@@ -282,10 +266,15 @@ def _transport_args(sub: argparse.ArgumentParser) -> None:
     sub.add_argument(
         "--shim",
         action="store_true",
+        default=_env_flag("WEB_LLM_SHIM"),
         help="use a REAL model via the local `claude -p` CLI (no API key): drives the LLM crawl "
-        "frontier in `locate`, and writes the query in `author` (--model is a CLI alias, e.g. haiku)",
+        "frontier in `locate` + the query in `author` (--model is a CLI alias) [env WEB_LLM_SHIM]",
     )
-    sub.add_argument("--model", default=None, help="LLM model id / CLI alias (else the default)")
+    sub.add_argument(
+        "--model",
+        default=_env("WEB_LLM_MODEL"),
+        help="LLM model id / CLI alias (else the default) [env WEB_LLM_MODEL]",
+    )
     sub.add_argument(
         "-v",
         "--verbose",
@@ -601,33 +590,37 @@ def _parser() -> argparse.ArgumentParser:
     aut.add_argument(
         "--rate",
         type=float,
-        default=0.0,
+        default=_env_float("WEB_LLM_RATE", 0.0),
         metavar="SECS",
-        help="min seconds between LLM calls (a shared/corporate key)",
+        help="min seconds between LLM calls (a shared/corporate key) [env WEB_LLM_RATE]",
     )
     aut.add_argument(
         "--price-input",
         type=float,
-        default=0.0,
+        default=_env_float("WEB_PRICE_INPUT", 0.0),
         metavar="USD",
-        help="input price ($/million tokens) -- for the spend report",
+        help="input price ($/million tokens) -- for the spend report [env WEB_PRICE_INPUT]",
     )
     aut.add_argument(
-        "--price-output", type=float, default=0.0, metavar="USD", help="output price ($/M tokens)"
+        "--price-output",
+        type=float,
+        default=_env_float("WEB_PRICE_OUTPUT", 0.0),
+        metavar="USD",
+        help="output price ($/M tokens) [env WEB_PRICE_OUTPUT]",
     )
     aut.add_argument(
         "--price-cache-read",
         type=float,
-        default=0.0,
+        default=_env_float("WEB_PRICE_CACHE_READ", 0.0),
         metavar="USD",
-        help="cache-read price ($/M tokens)",
+        help="cache-read price ($/M tokens) [env WEB_PRICE_CACHE_READ]",
     )
     aut.add_argument(
         "--price-cache-write",
         type=float,
-        default=0.0,
+        default=_env_float("WEB_PRICE_CACHE_WRITE", 0.0),
         metavar="USD",
-        help="cache-write price ($/M tokens)",
+        help="cache-write price ($/M tokens) [env WEB_PRICE_CACHE_WRITE]",
     )
     aut.add_argument(
         "--simple",
