@@ -115,3 +115,51 @@ def test_budget_from_env_reads_the_cap(monkeypatch: "pytest.MonkeyPatch") -> Non
     assert Budget.from_env().max_usd is None  # unparsable -> uncapped, never a crash
     monkeypatch.delenv("WEB_LLM_BUDGET")
     assert Budget.from_env().max_usd is None
+
+
+def test_prompts_render_from_package_data_and_clip_to_budget() -> None:
+    # The LLM steps' prompts are DATA (`prompts/*.md` string.Templates): each renders with its
+    # placeholder set, a MISSING placeholder fails loudly (never a half-filled prompt), and every
+    # page-derived input is clipped to a hard char budget, trimming where the content type is least
+    # useful (head / centre / both ends) and noting the trim.
+    from web.onboard.prompts import MAX_SKELETON_CHARS, clip, render_prompt
+
+    sets = {
+        "pick_edges": dict(entity="Acme", description="d", fields_line="", listing="0. http://a"),
+        "verify_seeds": dict(entity="Acme", description="d", fields_line="", seeds="0. http://a"),
+        "select_candidates": dict(description="d", fields_line="", pages_json="[]"),
+        "evaluate_candidate": dict(
+            description="d",
+            fields_line="",
+            candidate_url="http://a",
+            flag_map_json="{}",
+            endpoints_json="[]",
+            skeleton="<ul>",
+            exit_condition="",
+        ),
+        "write_query": dict(
+            guide="G",
+            description="d",
+            fields_line="",
+            pager="",
+            skeleton="<ul>",
+            hints="",
+            recency="",
+        ),
+    }
+    for name, variables in sets.items():
+        out = render_prompt(name, **variables)
+        assert out and "$" not in out, name  # fully rendered, no unresolved placeholder
+    assert "Acme's own website" in render_prompt("pick_edges", **sets["pick_edges"])
+    try:
+        render_prompt("pick_edges", entity="Acme")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("a missing placeholder must raise, not ship a half-filled prompt")
+    text = "H" * 100 + "M" * 100 + "T" * 100
+    assert clip(text, 60).startswith("HHHHH") and "trimmed" in clip(text, 60)  # head
+    assert clip(text, 60, kind="html").splitlines()[1].startswith("MMMMM")  # the centre
+    json_clip = clip(text, 60, kind="json")
+    assert json_clip.startswith("HHHHH") and json_clip.endswith("TTTTT")  # both ends
+    assert clip("short", 60) == "short" and MAX_SKELETON_CHARS == 16_000  # no-op below budget
