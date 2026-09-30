@@ -75,10 +75,6 @@ def _err(*lines: str) -> None:
         print(line, file=sys.stderr, flush=True)
 
 
-def _short(url: str, n: int = 78) -> str:
-    return url if len(url) <= n else url[: n - 1] + "…"
-
-
 class _Progress:
     """A live bus subscriber that streams what the run is doing to stderr, so a long search/crawl/
     author is visibly working (not hung). Installs itself as the ambient event bus for the scope;
@@ -109,9 +105,11 @@ class _Progress:
         elif isinstance(event, LlmEvent):  # cost AS IT GOES -- one line per model call
             self.llm_calls = event.calls
             self.llm_spent = event.spent_usd
+            u = event.usage  # show the token breakdown so the cost (usage x price) is verifiable
             _err(
-                f"  · llm [{event.model}] call {event.calls}: ${event.cost_usd:.4f}"
-                f"  (running ${event.spent_usd:.4f})"
+                f"  · llm [{event.model}] call {event.calls}: "
+                f"in={u.input} out={u.output} cache_r={u.cache_read} cache_w={u.cache_write} tok "
+                f"→ ${event.cost_usd:.4f}  (running ${event.spent_usd:.4f})"
             )
         elif isinstance(event, ReasonEvent):  # WHY a choice was made
             subj = f"{event.subject} — " if event.subject else ""  # full URL/subject, not truncated
@@ -121,7 +119,9 @@ class _Progress:
                 fl = ", ".join(event.flags) or "—"
                 _err(f"  · sample: {event.kind}, {event.lines} skeleton line(s), flags: {fl}")
             elif event.phase == "reply":
-                _err(f"  · model wrote: {_short(' '.join(event.reply.split()), 100)}")
+                _err(
+                    f"  · model wrote: {' '.join(event.reply.split())}"
+                )  # the FULL query, untruncated
             elif event.phase == "parsed":
                 _err("  · query parsed + rerooted at the source")
             elif event.phase == "done":  # the loop's outcome -- rows sampled + a preview

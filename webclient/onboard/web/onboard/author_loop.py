@@ -152,8 +152,8 @@ async def _check_source(state: AuthorState) -> "tuple[bool, str]":
     )
     reply = await state.review.complete(prompt)
     ok = _yes(reply)
-    emit(ReasonEvent(stage="check", subject=state.reference.url, text=reply.strip()[:200]))
-    return ok, reply.strip()[:200]
+    emit(ReasonEvent(stage="check", subject=state.reference.url, text=reply.strip()))
+    return ok, reply.strip()
 
 
 async def _review_rows(state: AuthorState) -> "tuple[bool, str]":
@@ -181,8 +181,8 @@ async def _review_rows(state: AuthorState) -> "tuple[bool, str]":
     )
     reply = await state.review.complete(prompt)
     ok = _yes(reply)
-    emit(ReasonEvent(stage="review", text=reply.strip()[:200]))
-    return ok, reply.strip()[:200]
+    emit(ReasonEvent(stage="review", text=reply.strip()))
+    return ok, reply.strip()
 
 
 async def _author(state: AuthorState) -> None:
@@ -365,7 +365,7 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
                 "the query ran but matched 0 records -- the record selector (select_all) is wrong; "
                 "pick a different repeating element from the skeleton"
             )
-        emit(ReasonEvent(stage="author", text=f"repair {state.repairs}: {state.last_error[:90]}"))
+        emit(ReasonEvent(stage="author", text=f"repair {state.repairs}: {state.last_error}"))
         await _author(state)  # re-authors with last_error shown, then clears it on success
     elif turn == "detail":
         link = _record_link(state.rows)

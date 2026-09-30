@@ -186,26 +186,22 @@ def test_locate_llm_review_can_veto_the_only_candidate(httpserver: HTTPServer) -
     assert ref_no is None  # model vetoed -> Locate fails (allowed)
 
 
-def test_locate_seeds_the_model_guessed_official_ir_url(httpserver: HTTPServer) -> None:
-    # search returns only a third-party aggregator; the reviewer LLM supplies the entity's OWN IR URL
-    # as a seed, so locate reaches + returns the official page instead of failing on aggregators.
+def test_locate_seeds_from_search_results_not_an_llm_guess(httpserver: HTTPServer) -> None:
+    # seeds come from SEARCH (real DdgSearch result URLs), NOT an LLM-guessed url (which hallucinates
+    # a 404). locate crawls the seed the search returned and returns it when it holds the dataset --
+    # and never prompts the model to GUESS a URL.
     httpserver.expect_request("/events").respond_with_data(_ACME_EVENTS, content_type="text/html")
-    httpserver.expect_request("/aggregator").respond_with_data(
-        b"<html><body>Benzinga quote page for ACME</body></html>", content_type="text/html"
-    )
     official = httpserver.url_for("/events")
+    prompts: "list[str]" = []
 
-    class _Stub:  # answers the official-URL guess, and the YES/NO candidate review
+    class _Stub:  # only the YES/NO candidate review now -- there is no URL-guessing step
         async def complete(self, prompt: str) -> str:
-            if "OFFICIAL investor-relations page" in prompt:
-                return f"The events page is {official}"
-            if "Answer YES or NO" in prompt:
-                return "YES" if "/events" in prompt else "NO — third-party aggregator"
-            return "[]"
+            prompts.append(prompt)
+            return "YES" if "Answer YES or NO" in prompt else "[]"
 
     async def go() -> "Reference | None":
         async def search(_q: str) -> "list[str]":
-            return [httpserver.url_for("/aggregator")]  # search finds only the aggregator
+            return [official]  # the search backend supplies the seed URL
 
         async with Resolver() as r:
             return await locate(
@@ -217,7 +213,10 @@ def test_locate_seeds_the_model_guessed_official_ir_url(httpserver: HTTPServer) 
             )
 
     ref = cast("Reference | None", _run(go()))
-    assert ref is not None and ref.url == official  # the seeded official page won
+    assert ref is not None and ref.url == official  # the searched seed won
+    assert not any(
+        "URL" in p and "guess" in p.lower() for p in prompts
+    )  # never asked to guess a URL
 
 
 def test_locate_reference_carries_flag_descriptions_and_signals(httpserver: HTTPServer) -> None:

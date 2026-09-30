@@ -295,16 +295,14 @@ async def locate(
     ):  # no explicit source -> search (the qualifier, else the goal)
         if search is None:
             raise ValueError("locate needs seeds, candidates, or a search callable")
-        seeds = await search(lb.search or lb.goal)
-    # Broad search often surfaces only third-party aggregators (Benzinga / MarketScreener / a stock
-    # exchange) and misses the entity's OWN IR page. When a reviewer LLM + entity are given, ask the
-    # model for the official IR URL and seed it FIRST -- prompt-driven (the model knows the domain),
-    # not a hardcoded host rule. A wrong guess is harmless: the crawl only yields pages that fetch OK.
-    if review is not None and entity and not lb.candidates:
-        guess = await _official_ir_url(review, entity, lb.goal)
-        if guess and guess not in seeds:
-            seeds.insert(0, guess)
-            emit(ReasonEvent(stage="seed", subject=guess, text=f"official IR page for {entity}"))
+        # SEEDS COME FROM SEARCH -- real result URLs from DdgSearch for the entity-qualified query
+        # (`_apply_entity` folded the entity into `lb.search`). We do NOT ask an LLM to GUESS a seed
+        # URL: a guessed URL hallucinates a path that 404s (looking like "the right page" then dying)
+        # and wastes a crawl slot. The entity's OWN page is preferred instead by the LLM frontier
+        # (prunes off-entity edges) + the `ignore` hard filter + `look`, all over REAL, fetched pages.
+        query = lb.search or lb.goal
+        seeds = await search(query)
+        emit(ReasonEvent(stage="search", text=f"{len(seeds)} seed url(s) from search: {query!r}"))
 
     if lb.candidates:  # status-aware: a blocked/errored candidate (403/5xx) is not a source
         docs = []
@@ -351,25 +349,6 @@ async def locate(
         # and bake it into the Reference, so Author uses the right transport instead of HTTP-by-default.
         return await _loading_requirements(page, ref, resolver, lb)
     return None  # no candidate survived review -- Locate is allowed to fail
-
-
-async def _official_ir_url(llm: Llm, entity: str, goal: str) -> "str | None":
-    """The model's best guess of ``entity``'s OWN investor-relations page URL -- a high-quality seed
-    when a broad search returns only aggregators. Prompt-driven (not a host rule): the model knows
-    the company's domain. ``None`` on an unusable reply; a wrong guess is harmless (the crawl only
-    keeps pages that fetch OK)."""
-    prompt = (
-        f"What is the exact URL of {entity}'s OFFICIAL investor-relations page for '{goal or 'events'}'"
-        f" -- on {entity}'s OWN corporate/IR domain, NOT a third-party aggregator (Benzinga, "
-        f"MarketScreener, Yahoo Finance, Quartr, Seeking Alpha) or a stock exchange. Reply with ONLY "
-        f"the URL (https://...), or the single word none if you are unsure."
-    )
-    try:
-        reply = await llm.complete(prompt)
-    except WebException:
-        return None
-    match = re.search(r"https?://\S+", reply)
-    return match.group(0).rstrip(".,)]\"'") if match else None
 
 
 async def _llm_review(llm: Llm, lb: "LocateBrief", page: Document, entity: str) -> bool:
@@ -421,7 +400,7 @@ async def _llm_review(llm: Llm, lb: "LocateBrief", page: Document, entity: str) 
         ReasonEvent(
             stage="review",
             subject=page.url,
-            text=("accepted: " if accept else "rejected: ") + reply.strip()[:200],
+            text=("accepted: " if accept else "rejected: ") + reply.strip(),
         )
     )
     return accept
