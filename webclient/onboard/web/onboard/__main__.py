@@ -1,5 +1,7 @@
-"""The ``web`` CLI -- Locate and Author, driven entirely by a BRIEF.
+"""The ``web`` CLI -- Locate and Author (driven by a BRIEF), plus raw Fetch and Resolve.
 
+    web fetch <url>                 ONE transport fetch -> the body (httpx/curl_cffi or a browser)
+    web resolve <url>               resolve through the escalation ladder -> a parsed document
     web locate <brief> [entity]     find WHERE the dataset is  -> a Reference
     web author <brief> [entity]     write the wq query that extracts it -> a query
 
@@ -34,7 +36,10 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from web.crawl import CrawlEvent, FrontierMiddleware
-from web.fetch import Event, EventBus, FetchEvent, WebException, aclose_default_pool, using
+from web.fetch import Event, EventBus, FetchEvent, Profile, WebException, aclose_default_pool
+from web.fetch import fetch as _fetch_one
+from web.fetch import profiles as _fp
+from web.fetch import using
 from web.resolve import ResolveEvent, Resolver
 
 from .author import AuthorEvent, build_query
@@ -562,6 +567,94 @@ def _build_llm(args: argparse.Namespace) -> "AnthropicLlm | ClaudeShim":
     return AnthropicLlm(rate=rate, pricing=pricing)
 
 
+# -- web fetch / web resolve ----------------------------------------------------------------------
+
+
+def _io_args(sub: argparse.ArgumentParser) -> None:
+    """The operational flags for ``web fetch`` / ``web resolve``: a URL + the transport knobs (no
+    brief, no LLM). Every option defaults from its ``WEB_*`` env var; a flag overrides it."""
+    sub.add_argument("url", help="the URL to fetch / resolve")
+    sub.add_argument(
+        "--profile",
+        default=_env("WEB_PROFILE", "basic_browser"),
+        choices=("basic", "basic_browser", "full_browser"),
+        help="transport profile (basic = HTTP-only; basic_browser escalates to a browser on a block; "
+        "full_browser always renders) [env WEB_PROFILE]",
+    )
+    sub.add_argument(
+        "--full-browser",
+        dest="profile",
+        action="store_const",
+        const="full_browser",
+        help="shorthand for --profile full_browser",
+    )
+    sub.add_argument(
+        "--proxy",
+        default=_env("WEB_PROXY"),
+        help="proxy URL for all traffic (http://[user:pass@]host:port) [env WEB_PROXY]",
+    )
+    sub.add_argument(
+        "--browser-path",
+        default=_env("WEB_BROWSER_PATH"),
+        metavar="EXE",
+        help="an explicit browser binary for any browser tier to launch [env WEB_BROWSER_PATH]",
+    )
+    sub.add_argument(
+        "-v", "--verbose", action="store_true", help="stream every transport step to stderr"
+    )
+
+
+def _fetch_profile(profile: str, proxy: "str | None", browser_path: "str | None") -> Profile:
+    """A SINGLE transport identity for ``web fetch`` (one attempt, no escalation ladder): the cheap
+    HTTP tier for ``basic``, else one browser render. ``--proxy`` / ``--browser-path`` pin on."""
+    base = _fp.BASIC if profile == "basic" else _fp.BROWSER
+    if proxy:
+        base = base.with_(proxy=proxy)
+    if browser_path and base.browser:
+        base = base.with_(executable_path=browser_path)
+    return base
+
+
+async def _fetch(args: argparse.Namespace) -> int:
+    """``web fetch <url>`` -- ONE transport fetch (httpx / curl_cffi, or a single browser render).
+    The response BODY goes to stdout (pipeable); status / size / timing go to stderr."""
+    prof = _fetch_profile(args.profile, args.proxy, args.browser_path)
+    _err(f"fetching {args.url} [{'browser render' if prof.browser else 'HTTP'}]…")
+    with _Progress(args.verbose):
+        try:
+            snap = await _fetch_one(args.url, profile=prof)
+        except WebException as exc:
+            _err(f"fetch failed: {exc}")
+            return 1
+    if (
+        snap.error is not None
+    ):  # a TRANSPORT failure (no response) -- a 4xx is still a valid snapshot
+        _err(f"  transport error: {snap.error.code}: {snap.error.message}")
+        return 1
+    _err(f"  {snap.status} · {len(snap.content)} bytes · {snap.elapsed:.2f}s · {_short(snap.url)}")
+    sys.stdout.buffer.write(snap.content)
+    return 0 if snap.status and snap.status < 400 else 1
+
+
+async def _resolve(args: argparse.Namespace) -> int:
+    """``web resolve <url>`` -- the RESOLVE ladder (escalate transport -- HTTP -> browser -> realer
+    browser -- until the page truly loads) -> a parsed Document. The body goes to stdout; the kind /
+    size and the tier trace (retries / escalations) go to stderr."""
+    resolver = _resolver(args.profile, args.proxy, args.browser_path)
+    _err(f"resolving {args.url} [{args.profile}]…")
+    try:
+        with _Progress(args.verbose):
+            doc = await resolver.resolve(args.url)
+    except WebException as exc:
+        _err(f"resolve failed: {exc}")
+        return 1
+    finally:
+        await resolver.aclose()
+    _err(f"  {doc.kind} · {len(doc.content)} bytes · {_short(doc.url or args.url)}")
+    sys.stdout.buffer.write(doc.content)
+    return 0
+
+
 # -- entry ----------------------------------------------------------------------------------------
 
 
@@ -572,6 +665,16 @@ def _parser() -> argparse.ArgumentParser:
         epilog="e.g. web locate news BBC   then   web author news BBC --run",
     )
     subs = parser.add_subparsers(dest="cmd", required=True)
+
+    fet = subs.add_parser(
+        "fetch", help="ONE transport fetch of a URL -> its body (httpx / curl_cffi or a browser)"
+    )
+    _io_args(fet)
+
+    res = subs.add_parser(
+        "resolve", help="RESOLVE a URL through the escalation ladder -> a parsed document"
+    )
+    _io_args(res)
 
     loc = subs.add_parser("locate", help="find WHERE the dataset is (-> a Reference)")
     _transport_args(loc)  # adds the `brief` + `entity` positionals too
@@ -647,7 +750,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: "Sequence[str] | None" = None) -> int:
     args = _parser().parse_args(argv)
-    runner = {"locate": _locate, "author": _author}[args.cmd]
+    runner = {"locate": _locate, "author": _author, "fetch": _fetch, "resolve": _resolve}[args.cmd]
 
     async def _run() -> int:
         # Close the process-wide default pool on THIS run's loop before it ends: pooled backends
