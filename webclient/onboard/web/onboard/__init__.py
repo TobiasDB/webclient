@@ -23,7 +23,7 @@ from .author import Authored as AuthoredQuery
 from .author import AuthorEvent
 from .author import author as author_query  # the reference-based one-shot primitive
 from .author import authored, build_query
-from .author_loop import author_agent
+from .author_loop import author_agent, write_query
 from .behaviours import Behaviour, apply_behaviours, behaviour, register_behaviour
 from .compile import Query, QueryError, parse_query, reroot
 from .config import build_resolver, default_llm, default_search
@@ -51,6 +51,8 @@ from .models import (
     CandidateEval,
     DatasetBrief,
     LocateBrief,
+    QueryArtifact,
+    QuerySection,
     Reference,
     SearchHit,
     packaged_briefs,
@@ -121,6 +123,9 @@ __all__ = [
     "authored",
     "build_query",
     "author_agent",
+    "write_query",
+    "QueryArtifact",
+    "QuerySection",
     "locate_and_author",
     "Reference",
     "Brief",

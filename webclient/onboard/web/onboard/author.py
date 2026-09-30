@@ -26,6 +26,7 @@ from web.resolve import Resolver, flags
 
 from .behaviours import apply_behaviours
 from .compile import Query, parse_query, reroot
+from .evaluate import skeleton_for
 from .llm import Llm
 from .models import DOWNLOAD_EXTENSIONS, DatasetBrief, Reference
 from .patterns import author_prompt
@@ -72,14 +73,12 @@ def _file_links_query(url: str) -> Query:
 
 
 def sample_skeleton(sample: Document) -> str:
-    """A token-lean outline of the sample for the prompt: the JSON shape for a JSON document, else
-    the record-marked DOM skeleton with page chrome dropped. Shared with the authoring agent loop.
-    Capped at 500 lines: chrome is already dropped and the records sit near the top, so this is
-    ample for writing a selector -- and it keeps each (repeated) model call FAST (a 1500-line
-    skeleton made every author/repair turn a slow call, which is what timed real runs out)."""
-    if sample.kind == "json":
-        return sample.json_skeleton(max_lines=500)
-    return sample.skeleton(max_lines=500, drop_chrome=True)
+    """The page skeleton the author reads -- the ONE budgeted skeleton every LLM step shares
+    (:func:`~web.onboard.evaluate.skeleton_for`: the JSON shape for a JSON document, else the
+    record-marked DOM outline, chrome dropped when big, clipped to a hard char budget). In the
+    authoring loop it is sent ONCE as the conversation's opening; every repair is a short follow-up.
+    """
+    return skeleton_for(sample)
 
 
 async def build_query(

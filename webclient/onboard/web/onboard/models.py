@@ -259,6 +259,40 @@ class CandidateEval(BaseModel):
         return self.dataset_present and self.scrapability >= 5
 
 
+class QuerySection(BaseModel):
+    """One SECTION of a split dataset's query (an UPCOMING callout + an ARCHIVED list on one page,
+    or a sibling page): its self-contained blob, a readable form, and the rows it produced."""
+
+    blob: str
+    describe: str
+    row_count: int = 0
+
+
+class QueryArtifact(BaseModel):
+    """What the AUTHOR produced: the runnable query plus its VALIDATION verdict -- enough to ship it,
+    or to say precisely why it isn't ready. ``blob`` is the primary (first) section, SELF-CONTAINED
+    (the reference + its transport profile are baked in, so ``run_blob(blob)`` re-fetches as
+    authored); ``sections`` lists every section of a split dataset (``[]`` for one query).
+    ``tested`` = the extraction ran against the fetched source; ``complete`` = tested AND real rows
+    AND every required field populated. ``attempts`` is the rejection trail (why each earlier
+    attempt was rejected -- the path to this query); ``absent`` names required fields the source
+    genuinely does not carry; ``timeliness`` / ``stale`` is a FLAG for the human (the newest row
+    vs the rows' cadence), never a ship blocker."""
+
+    blob: str
+    describe: str
+    tested: bool = False
+    complete: bool = False
+    row_count: int = 0
+    sample: list[JsonValue] = []
+    sections: list[QuerySection] = []
+    attempts: list[str] = []
+    absent: list[str] = []
+    timeliness: str = ""
+    stale: bool = False
+    reason: str = ""  # why authoring stopped: done / budget / stalled / error(...)
+
+
 class Reference(BaseModel):
     """WHERE the located dataset is, plus the hints Author needs. ``url`` is the source to query
     -- the **XHR/data-API endpoint when one backs the page** (JSON beats HTML), else the page
@@ -294,6 +328,11 @@ __all__ = [
     "LocateBrief",
     "DatasetBrief",
     "Reference",
+    "SearchHit",
+    "Candidate",
+    "CandidateEval",
+    "QuerySection",
+    "QueryArtifact",
     "DOWNLOAD_EXTENSIONS",
     "packaged_briefs",
 ]

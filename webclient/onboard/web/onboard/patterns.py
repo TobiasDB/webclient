@@ -20,6 +20,7 @@ from importlib.resources import files
 from web.resolve import Flag
 
 from .models import DatasetBrief
+from .prompts import render_prompt
 
 #: the query-writing guide (markdown + worked examples), rendered into every author prompt.
 PATTERNS_GUIDE: str = files("web.onboard").joinpath("patterns.md").read_text(encoding="utf-8")
@@ -101,33 +102,52 @@ def fields_line(brief: DatasetBrief) -> str:
     return header + "\n".join(field_schema(brief, selectors=True))
 
 
-def author_prompt(brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, kind: str) -> str:
-    """The prompt that asks the model to write the extraction query: the patterns guide, the ask
-    (goal + fields), the page's hardcoded signals/flags, and the page skeleton. ``kind`` is the
-    document kind (``json`` steers the model to the dotted-path form)."""
-    goal = brief.goal or "the repeating dataset on this page"
+def author_prompt(
+    brief: DatasetBrief,
+    skeleton: str,
+    flags: "list[Flag]",
+    *,
+    kind: str,
+    detail: bool = False,
+    recency: str = "",
+) -> str:
+    """The OPENING turn that asks the model to write the extraction query -- rendered from the
+    ``write_query`` prompt template (one prompt source, tunable as data): the signal-selected
+    patterns guide, the ask (goal + per-line schema), the page's hardcoded signals/flags (ground
+    truth the model must account for), the brief's structural guidance + requirement, and the page
+    skeleton. ``kind`` is the document kind (``json`` steers to the dotted-path form); ``detail``
+    adds the detail-page example; ``recency`` is the evaluator's read of the sort order + where the
+    most recent records are. In a conversation this is sent ONCE; every repair is a short follow-up.
+    """
+    present = [f.name for f in flags if f.present]
     pager = (
-        "\nThis page is PAGINATED -- write the query for ONE page exactly as normal; the "
-        "pipeline follows the pagination. Do NOT add a 'next' field."
-        if any(f.name in ("paginated", "infinite_scroll") and f.present for f in flags)
+        "\nThe dataset spans multiple pages -- write the query for ONE page exactly as normal; "
+        "the pipeline follows the pagination automatically. Do NOT add a 'next' field."
+        if any(n in ("paginated", "infinite_scroll") for n in present)
         else ""
     )
-    kind_note = (
-        "\nThis is a JSON document -- use dotted paths in select/select_all and read keys "
-        'with .attr("<key>").'
-        if kind == "json"
-        else ""
-    )
-    hints = f"\nAuthor guidance: {brief.author_hint}" if brief.author_hint else ""
-    return (
-        f"{guide_for(flags, kind)}\n\n"  # signal-selected examples -- lean context, not all nine
-        "----\n"
-        f"Using ONLY the query syntax above, write ONE wq query that extracts this dataset: {goal}.\n"
-        f"{fields_line(brief)}{kind_note}{pager}{hints}\n\n"
-        f"{_flags_line(flags)}\n\n"
-        "Base your selectors on this page skeleton (a token-lean DOM/JSON outline; a RECORD LIST "
-        f"mark shows a likely row selector):\n{skeleton}\n\n"
-        "Reply with ONLY the query expression -- the wq.doc... chain itself, no prose, no code fence."
+    notes: list[str] = []
+    if kind == "json":
+        notes.append(
+            "This is a JSON document -- use dotted paths in select/select_all and read keys with "
+            '.attr("<key>").'
+        )
+    if brief.author_hint:  # brief-specific STRUCTURAL guidance -- how this dataset is laid out
+        notes.append(
+            f"DATASET NOTES (from the brief -- how this dataset is laid out): {brief.author_hint}"
+        )
+    if brief.review_hint:  # the review criterion is a REQUIREMENT -- the author must know it
+        notes.append(f"REQUIREMENT (the extracted data must satisfy this): {brief.review_hint}")
+    notes.append(_flags_line(flags))
+    return render_prompt(
+        "write_query",
+        guide=guide_for(flags, kind, detail=detail),  # signal-selected examples, not all nine
+        description=brief.goal or "the repeating dataset on this page",
+        fields_line="\n" + fields_line(brief),
+        pager=pager,
+        skeleton=skeleton,
+        hints="\n\n" + "\n\n".join(notes),
+        recency=(f"\n\nRECENCY (from the page evaluation): {recency}" if recency else ""),
     )
 
 

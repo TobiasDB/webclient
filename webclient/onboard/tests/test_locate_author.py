@@ -1284,3 +1284,52 @@ def test_ddg_search_parses_result_urls(monkeypatch: "pytest.MonkeyPatch") -> Non
     hits = cast("list[SearchHit]", _run(DdgSearch()("latest news")))
     assert [h.url for h in hits] == ["https://a.com", "https://b.com"]
     assert hits[0].title == "A"  # the title/snippet ride along for the verify filter
+
+
+def test_author_loop_sends_the_page_once_and_repairs_with_short_follow_ups(
+    httpserver: HTTPServer,
+) -> None:
+    # The authoring loop's memory is a CONVERSATION: the opening (guide + ONE clipped skeleton) is
+    # sent exactly once, and a repair is a SHORT follow-up naming the failure -- never a re-send of
+    # the page. write_query returns the artifact: the validation verdict + the rejection trail.
+    from web.onboard import QueryArtifact, write_query
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    zero_rows = 'wq.doc.select_all(".nope").extract(name=wq.doc.select(".name").attr("text"))'
+    good = 'wq.doc.select_all("li.row").extract(name=wq.doc.select(".name").attr("text"))'
+
+    class _Conv:  # a Conversational model that records every turn it is sent
+        def __init__(self, replies: "list[str]") -> None:
+            self.replies, self.turns = replies, []  # type: ignore[var-annotated]
+
+        async def complete(self, prompt: str) -> str:
+            return _stage_reply(prompt) or "[]"
+
+        def conversation(self) -> "_Conv":
+            return self
+
+        async def send(self, text: str) -> str:
+            self.turns.append(text)
+            return self.replies[min(len(self.turns) - 1, len(self.replies) - 1)]
+
+    llm = _Conv([zero_rows, good])
+
+    async def go() -> QueryArtifact:
+        async with Resolver() as r:
+            return await write_query(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                DatasetBrief(fields=["name"]),
+                resolver=r,
+                llm=cast("object", llm),  # type: ignore[arg-type]
+            )
+
+    art = _run(go())
+    assert isinstance(art, QueryArtifact)
+    assert len(llm.turns) == 2  # the opening, then ONE repair follow-up
+    opening, repair = llm.turns
+    assert "Base your CSS selectors on this page skeleton" in opening and "li.row" in opening
+    assert "li.row" not in repair and len(repair) < len(opening) // 4  # short: no skeleton re-sent
+    assert "0 populated rows" in repair  # the ONE-LINE reason the model is told
+    assert art.tested and art.complete and art.row_count == 2  # the repaired query extracts
+    assert art.attempts and "0 populated rows" in art.attempts[0]  # the rejection trail
+    assert art.blob and "li.row" in art.describe and not art.sections  # one section
