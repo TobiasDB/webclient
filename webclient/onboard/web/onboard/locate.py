@@ -403,16 +403,34 @@ async def _llm_review(llm: Llm, lb: "LocateBrief", page: Document, entity: str) 
 
 
 def _has_records(doc: Document, brief: "LocateBrief") -> bool:
-    """Whether the target records are actually PRESENT in ``doc`` -- a JSON data document is itself
-    the data; a download brief is satisfied by download links; otherwise a repeating record region
-    with >= 2 items. This is the empirical test of "did the data load?" (vs a header/shell with the
-    rows injected later by script)."""
+    """Whether the TARGET records look present in ``doc`` -- a JSON data document is itself the data;
+    a download brief is satisfied by download links; otherwise a repeating record region that also
+    looks like the brief's dataset. A HINT, not a verdict: a repeating region ALONE is weak (nav
+    menus, news teasers and related-link lists match too), so when the brief names fields it must be
+    corroborated by a schema match (the page actually shows those fields) OR be a substantial list.
+    The author loop does not trust this -- it renders + re-samples empirically if a query comes back
+    empty -- so a false negative here just costs one extra browser check, never the dataset."""
     if doc.kind == "json":
         return True
     if brief.download:
         return len(_download_targets(doc)) > 0
     regions = doc.records(min_items=2)
-    return bool(regions and regions[0].count >= 2)
+    if not regions or regions[0].count < 2:
+        return False
+    if not brief.fields:  # nothing to corroborate against -> a repeating region is the best signal
+        return True
+    # a repeating region ALONE is not enough (a nav menu / news teaser / related-link list matches,
+    # however long) -- require the page to actually SHOW the brief's fields, so a JS-gated shell whose
+    # only static lists are chrome reads as "not present here" and Locate renders to check.
+    return _field_bonus(doc, brief.fields) > 0.0
+
+
+def _record_count(doc: Document) -> int:
+    """The item count of the page's dominant repeating region (0 if none) -- the SIZE of the list a
+    page carries. Comparing this static vs rendered is a schema-independent test of JS-gating: a
+    server-rendered shell has few/no rows, and the render makes them appear."""
+    regions = doc.records(min_items=1)
+    return regions[0].count if regions else 0
 
 
 async def _loading_requirements(
@@ -435,7 +453,11 @@ async def _loading_requirements(
     except Exception:  # a browser that cannot launch here must not sink Locate
         return ref.model_copy(update={"profile": "basic"})
     rendered = document(snap)
-    if not _has_records(rendered, brief):  # not JS-gated either -- static is all there is
+    # JS-gated iff the RENDER revealed the dataset: it now passes the schema check, OR the record
+    # count jumped (records appeared that the static HTML lacked). If neither, the static page was
+    # all there is -- ``basic`` (a wasted render, but never a wrong profile).
+    gained = _record_count(rendered) >= 2 and _record_count(rendered) > _record_count(page) + 1
+    if not (_has_records(rendered, brief) or gained):
         return ref.model_copy(update={"profile": "basic"})
     emit(ReasonEvent(stage="load", subject=page.url, text="JS-gated — needs a browser render"))
     ref = ref.model_copy(update={"profile": "full_browser", "needs_browser": True})

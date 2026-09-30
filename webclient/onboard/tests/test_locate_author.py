@@ -730,6 +730,33 @@ def test_run_to_sink_routes_rows_to_table_and_documents_to_store(httpserver: HTT
     assert sink.blobs[a_url][0] == b"BODY-A" and sink.blobs[a_url][1] == {"title": "Report A"}
 
 
+def test_has_records_requires_schema_corroboration() -> None:
+    # a repeating region ALONE is a weak "the data is here" signal (nav/news lists match too), so
+    # when the brief names fields it must be corroborated -- else Locate renders to check (a JS-gated
+    # shell whose only static lists are chrome must not read as "present").
+    from web.onboard.locate import _has_records
+    from web.parse import parse
+
+    events = parse(
+        b"<ul>"
+        b"<li class='row'><span>Q1 Earnings Call</span><span>webcast 2025-01-01</span></li>"
+        b"<li class='row'><span>Q2 Earnings Call</span><span>webcast 2025-04-01</span></li>"
+        b"</ul>",
+        content_type="text/html",
+    )
+    nav = parse(
+        b"<ul><li class='row'><a>Home</a></li><li class='row'><a>About</a></li>"
+        b"<li class='row'><a>Investors</a></li></ul>",
+        content_type="text/html",
+    )
+    brief = DatasetBrief(fields=["title", "webcast", "datetime"])
+    assert _has_records(events, brief)  # 'webcast' is shown -> corroborated
+    assert not _has_records(
+        nav, brief
+    )  # a chrome list that shows none of the fields -> not present
+    assert _has_records(nav, DatasetBrief())  # no fields to corroborate -> the region is the signal
+
+
 def test_run_returns_a_dataset_of_rows_and_documents(httpserver: HTTPServer) -> None:
     # the clean execute interface: run(query, brief=...) -> Dataset(rows=[...], documents=[...]).
     from web.onboard import Dataset, run
