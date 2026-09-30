@@ -1256,7 +1256,9 @@ def test_llm_pricing_meters_spend_from_usage() -> None:
 def test_packaged_briefs_are_available_and_loadable() -> None:
     from web.onboard.__main__ import _load_brief, _packaged_briefs
 
-    assert {"news", "products", "people"} <= set(_packaged_briefs())
+    assert {"news", "products", "people", "ir-events", "ir-news", "ir-sec-filings"} <= set(
+        _packaged_briefs()
+    )
     brief = _load_brief("news")  # by packaged name -> loads its frontmatter
     assert brief.name == "news" and "headline" in brief.fields and brief.search
 
