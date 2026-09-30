@@ -21,9 +21,10 @@ from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 from web.crawl import Crawler, FrontierMiddleware, Goal
-from web.fetch import FetchEvent, NetworkEvent, Request, Trace, WebException, emit
+from web.fetch import NetworkEvent, Request, Snapshot, WebException, emit
 from web.parse import Document, parse
 from web.resolve import Flag, Resolver, document, flags
+from web.resolve import profiles as _rp
 
 from .llm import Llm, ReasonEvent
 from .models import DOWNLOAD_EXTENSIONS, LocateBrief, Reference
@@ -145,15 +146,12 @@ def _consistent(page: Document, api: Document) -> bool:
     return hits >= max(2, len(leaves) // 4)
 
 
-async def _observed(page: Document, resolver: Resolver) -> "list[tuple[str, Document]]":
-    """The same-origin XHR/``fetch`` responses the page ACTUALLY made whose captured body is JSON --
-    the live data-API behind it, not a URL guessed from the DOM. It renders through the CALLER's
-    resolver (:meth:`Resolver.snapshot`), so it captures a network stream only when the caller chose
-    a browser profile; an HTTP-only resolver emits no network events and this returns ``[]`` (Locate
-    never launches a browser on its own). Bodies are already drained onto the Snapshot -- no re-fetch.
-    """
-    snap = await resolver.snapshot(Request(url=page.url))
-    host = urlparse(page.url).hostname
+def _json_xhr(snap: Snapshot) -> "list[tuple[str, Document]]":
+    """The same-origin XHR/``fetch`` responses in a captured Snapshot whose body is JSON -- the live
+    data-API behind the page, read from a render's network stream (not a URL guessed from the DOM).
+    Bodies are already drained onto the Snapshot, so there is no re-fetch. Empty unless the Snapshot
+    came from a browser profile (an HTTP-only fetch emits no network events)."""
+    host = urlparse(snap.request.url).hostname
     out: "list[tuple[str, Document]]" = []
     seen: set[str] = set()
     for ev in snap.events:
@@ -166,6 +164,13 @@ async def _observed(page: Document, resolver: Resolver) -> "list[tuple[str, Docu
         if doc.kind == "json":
             out.append((ev.url, doc))
     return out
+
+
+async def _observed(page: Document, resolver: Resolver) -> "list[tuple[str, Document]]":
+    """The page's JSON XHR/``fetch`` stream, captured by rendering through the CALLER's resolver
+    (a browser profile) -- see :func:`_json_xhr`. Locate never launches a browser on its own here.
+    """
+    return _json_xhr(await resolver.snapshot(Request(url=page.url)))
 
 
 async def _prefer_api(page: Document, ref: Reference, resolver: Resolver) -> Reference:
@@ -317,9 +322,9 @@ async def locate(
     for _s, ref, page in scored:
         if review is not None and not await _llm_review(review, lb, page, entity):
             continue  # the model rejected it as off-dataset / off-entity
-        if lb.prefer_api and page.kind == "html":
-            ref = await _prefer_api(page, ref, resolver)
-        return ref.model_copy(update={"profile": await _working_profile(ref.url, resolver)})
+        # the winner passed review -> work out how to actually LOAD its data (static / browser / API)
+        # and bake it into the Reference, so Author uses the right transport instead of HTTP-by-default.
+        return await _loading_requirements(page, ref, resolver, lb)
     return None  # no candidate survived review -- Locate is allowed to fail
 
 
@@ -397,15 +402,52 @@ async def _llm_review(llm: Llm, lb: "LocateBrief", page: Document, entity: str) 
     return accept
 
 
-async def _working_profile(url: str, resolver: Resolver) -> str:
-    """The transport that ACTUALLY fetched ``url``: ``full_browser`` if the resolve escalated to a
-    browser tier, else ``basic`` (HTTP). One probe fetch, so Author bakes the profile that worked
-    into the query root instead of re-running resolve's escalation discovery. (A static page never
-    escalates, so it stays ``basic`` -- no browser is launched.)"""
-    with Trace() as t:
-        await resolver.snapshot(Request(url=url))
-    browser = any(isinstance(e, FetchEvent) and e.source == "browser" for e in t.events)
-    return "full_browser" if browser else "basic"
+def _has_records(doc: Document, brief: "LocateBrief") -> bool:
+    """Whether the target records are actually PRESENT in ``doc`` -- a JSON data document is itself
+    the data; a download brief is satisfied by download links; otherwise a repeating record region
+    with >= 2 items. This is the empirical test of "did the data load?" (vs a header/shell with the
+    rows injected later by script)."""
+    if doc.kind == "json":
+        return True
+    if brief.download:
+        return len(_download_targets(doc)) > 0
+    regions = doc.records(min_items=2)
+    return bool(regions and regions[0].count >= 2)
+
+
+async def _loading_requirements(
+    page: Document, ref: Reference, resolver: Resolver, brief: "LocateBrief"
+) -> Reference:
+    """Determine HOW to actually LOAD the dataset and bake it into the Reference -- so Author is not
+    silently restricted to HTTP. If the records are already in the static page, ``basic`` loads it
+    (and a DOM-declared JSON API, if any, is preferred). If they are NOT (a server-rendered shell
+    whose rows are injected by script -- no ``spa`` signal need fire), RENDER the page in a browser:
+    when the records then appear it is JS-gated, so bake ``full_browser`` -- and mine the XHR/fetch
+    stream the render fired for the JSON data-API that feeds it (fetchable at ``basic``, cheaper than
+    the browser). Rendering is a best effort: if no browser can launch, fall back to ``basic``."""
+    if _has_records(page, brief):  # the data is in the static HTML -- HTTP loads it
+        ref = ref.model_copy(update={"profile": "basic"})
+        return await _prefer_api(page, ref, resolver) if brief.prefer_api else ref
+    emit(ReasonEvent(stage="load", subject=page.url, text="records not in static HTML — rendering"))
+    browser = Resolver(profile=_rp.FULL_BROWSER, pool=resolver.pool)
+    try:
+        snap = await browser.snapshot(Request(url=page.url))
+    except Exception:  # a browser that cannot launch here must not sink Locate
+        return ref.model_copy(update={"profile": "basic"})
+    rendered = document(snap)
+    if not _has_records(rendered, brief):  # not JS-gated either -- static is all there is
+        return ref.model_copy(update={"profile": "basic"})
+    emit(ReasonEvent(stage="load", subject=page.url, text="JS-gated — needs a browser render"))
+    ref = ref.model_copy(update={"profile": "full_browser", "needs_browser": True})
+    for url, api in _json_xhr(snap):  # the JSON API the render actually called (reuse the render)
+        if _consistent(rendered, api):
+            emit(
+                ReasonEvent(stage="load", subject=url, text="found the data-API — easier to scrape")
+            )
+            return ref.model_copy(
+                update={"url": url, "kind": api.kind, "api_endpoint": url, "profile": "basic"}
+            )
+    return ref
 
 
 __all__ = ["locate", "Search", "data_api_endpoints"]
