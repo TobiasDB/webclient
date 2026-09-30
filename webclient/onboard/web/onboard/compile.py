@@ -51,22 +51,30 @@ class QueryError(ValueError):
     """The model's reply was not a rebuildable ``wq`` chain (unparseable, empty, or disallowed)."""
 
 
-def query_code(reply: str) -> str:
-    """The query EXPRESSION from a model reply: drop any code fence / prose, start at the first
-    ``wq.`` (so a ``query =`` preamble goes), cut a trailing fence, and normalise smart quotes /
-    dashes to the ASCII forms the parser needs -- so a stray typographic character does not fail.
+def clean_reply(reply: str) -> str:
+    """A model reply as PARSEABLE code: drop a leading code fence (and its language tag), cut at a
+    trailing fence, and normalise smart quotes / dashes to the ASCII forms ``ast`` needs -- so a
+    stray typographic character never fails a parse. Shared by the whole-chain and the step parsers.
     """
     text = reply.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[-1]
+    if "```" in text:  # take the FENCED body (prose may precede the fence); else drop stray fences
+        rest = text[text.find("```") :].split("\n", 1)
+        body = rest[1] if len(rest) > 1 else ""
+        close = body.find("```")
+        inner = body[:close] if close != -1 else body
+        text = inner if inner.strip() else text.replace("```", "")
+    for bad, good in _SMART.items():
+        text = text.replace(bad, good)
+    return text.strip()
+
+
+def query_code(reply: str) -> str:
+    """The query EXPRESSION from a model reply: :func:`clean_reply`, then start at the first
+    ``wq.`` (so a ``query =`` preamble / prose goes)."""
+    text = clean_reply(reply)
     start = text.find("wq.")
     if start != -1:
         text = text[start:]
-    fence = text.find("```")
-    if fence != -1:
-        text = text[:fence]
-    for bad, good in _SMART.items():
-        text = text.replace(bad, good)
     return text.strip()
 
 
@@ -100,4 +108,4 @@ def reroot(chain: Expr, url: str, *, profile: "str | None" = None) -> Query:
     return cast(Query, from_plan(merged))
 
 
-__all__ = ["Query", "QueryError", "parse_query", "query_code", "reroot"]
+__all__ = ["Query", "QueryError", "clean_reply", "parse_query", "query_code", "reroot"]

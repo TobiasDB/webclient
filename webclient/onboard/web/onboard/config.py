@@ -16,6 +16,7 @@ variable always overrides the file.
   WEB_LLM_BASE_URL      Anthropic base URL                            (else ``ANTHROPIC_BASE_URL``)
   WEB_LLM_RATE          minimum seconds between LLM calls                                  [float]
   WEB_LLM_TIMEOUT       per-call timeout for the shim                                      [float]
+  WEB_AUTHOR_ENGINE     how the author writes the query: ``chain`` (default) / ``steps``
   WEB_PRICE_INPUT       spend report: input price ($/million tokens)                       [float]
   WEB_PRICE_OUTPUT      spend report: output price ($/M tokens)                            [float]
   WEB_PRICE_CACHE_READ  spend report: cache-read price ($/M tokens)                        [float]

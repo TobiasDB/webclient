@@ -1413,3 +1413,135 @@ def test_parse_diagnosis_names_the_cause_and_shows_the_reply() -> None:
     for reply, expect in cases.items():
         reason, hint = _parse_diagnosis(reply, exc)
         assert expect in reason and "reply began:" in reason and hint, (reply, reason)
+
+
+# -- the STEP-BY-STEP authoring engine -------------------------------------------------------------
+
+
+class _StepConv:
+    """A Conversational model scripted with one op reply per turn; records every turn it is sent."""
+
+    def __init__(self, replies: "list[str]") -> None:
+        self.replies, self.turns = replies, []  # type: ignore[var-annotated]
+
+    async def complete(self, prompt: str) -> str:
+        return _stage_reply(prompt) or "[]"
+
+    def conversation(self) -> "_StepConv":
+        return self
+
+    async def send(self, text: str) -> str:
+        self.turns.append(text)
+        return self.replies[min(len(self.turns) - 1, len(self.replies) - 1)]
+
+
+def _steps_art(httpserver: HTTPServer, llm: _StepConv, fields: "list[str]") -> object:
+    from web.onboard import write_query
+
+    async def go() -> object:
+        async with Resolver() as r:
+            return await write_query(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                DatasetBrief(fields=fields),
+                resolver=r,
+                llm=cast("object", llm),  # type: ignore[arg-type]
+                engine="steps",
+            )
+
+    return _run(go())
+
+
+def test_steps_engine_builds_the_query_one_op_at_a_time(httpserver: HTTPServer) -> None:
+    # Each turn the model calls ONE op; the draft is probed against the once-fetched page and the
+    # result (matches, the FIRST record's structure, each column's values) comes back with the query
+    # so far -- the page skeleton + op menu are sent ONCE in the opening.
+    from web.onboard import QueryArtifact
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    llm = _StepConv(
+        [
+            'records("li.row")',
+            'field(name, wq.doc.select(".name").attr("text"))',
+            'field(url, wq.doc.select("a.more").attr("href"))',
+            "done()",
+        ]
+    )
+    art = _steps_art(httpserver, llm, ["name", "url"])
+    assert isinstance(art, QueryArtifact)
+    assert art.complete and art.row_count == 2, art.reason
+    assert len(llm.turns) == 4
+    opening, after_records, after_name, after_url = llm.turns
+    assert "OPS" in opening and "li.row" in opening and 'records("<css>")' in opening
+    assert "matched 2 record(s)" in after_records and "span.name" in after_records
+    assert "STILL TO ADD (required): name, url" in after_records
+    assert 'name: "A", "B"' in after_name and "QUERY SO FAR" in after_name
+    assert "STILL TO ADD (required): url" in after_name
+    assert "Every required field is in the query" in after_url
+    assert "select_all('li.row')" in art.describe or 'select_all("li.row")' in art.describe
+    assert art.sample and art.sample[0] == {"name": "A", "url": httpserver.url_for("/detail/1")}
+
+
+def test_steps_engine_follows_a_detail_link_once_then_fans_out(httpserver: HTTPServer) -> None:
+    # detail(<link css>) fetches the FIRST record's page and shows its structure; detail_field(...)
+    # columns then nest under `detail` -- ONE resolve per record, the fan-out inside it.
+    from web.onboard import QueryArtifact
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    for n, body in ((1, "Body One"), (2, "Body Two")):
+        httpserver.expect_request(f"/detail/{n}").respond_with_data(
+            f"<article class='body'>{body}</article>".encode(), content_type="text/html"
+        )
+    llm = _StepConv(
+        [
+            'records("li.row")',
+            'field(name, wq.doc.select(".name").attr("text"))',
+            'detail("a.more")',
+            'detail_field(body, wq.doc.select("article.body").attr("text"))',
+            "done()",
+        ]
+    )
+    art = _steps_art(httpserver, llm, ["name", "body"])
+    assert isinstance(art, QueryArtifact)
+    assert art.complete, art.reason  # body is present -- inside the nested detail branch
+    after_detail = llm.turns[3]
+    assert "followed " in after_detail and "article.body" in after_detail
+    assert 'detail.body: "Body One", "Body Two"' in llm.turns[4]
+    assert art.sample[0] == {"name": "A", "detail": {"body": "Body One"}}
+
+
+def test_steps_engine_reverts_a_failed_op_and_rejects_prose(httpserver: HTTPServer) -> None:
+    # prose -> NOT APPLIED; a 0-match record selector -> not applied; a field whose selector misses
+    # -> the probe fails and the op is REVERTED (the draft stays runnable); the loop then completes.
+    from web.onboard import QueryArtifact
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    llm = _StepConv(
+        [
+            "I think the rows are li.row, let me select them.",
+            'records(".nope")',
+            'records("li.row")',
+            'field(name, wq.doc.select(".missing").attr("text"))',
+            'field(name, wq.doc.select(".name").attr("text"))',
+            "done()",
+        ]
+    )
+    art = _steps_art(httpserver, llm, ["name"])
+    assert isinstance(art, QueryArtifact)
+    assert art.complete and art.row_count == 2, art.reason
+    assert "NOT APPLIED: not an op call" in llm.turns[1]
+    assert "matched 0 elements" in llm.turns[2]
+    assert "REVERTED" in llm.turns[4] and "select_miss" in llm.turns[4]
+    assert "QUERY SO FAR:\nwq.doc.select_all('li.row')" in llm.turns[4]  # the draft kept
+
+
+def test_parse_op_rejects_bad_calls() -> None:
+    from web.onboard.author_steps import StepError, parse_op
+
+    assert parse_op('```\nrecords("li.x")\n```').line() == "records(li.x)"
+    assert parse_op("field(title, wq.doc.select('h2').attr('text')) — done").args[0] == "title"
+    for bad in ("hello", "records()", "field(1x, wq.doc)", "field(a, 'text')", "nope('x')"):
+        try:
+            parse_op(bad)
+        except StepError:
+            continue
+        raise AssertionError(f"{bad!r} must be rejected")

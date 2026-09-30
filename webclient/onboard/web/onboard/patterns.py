@@ -102,6 +102,36 @@ def fields_line(brief: DatasetBrief) -> str:
     return header + "\n".join(field_schema(brief, selectors=True))
 
 
+def _pager_note(flags: "list[Flag]") -> str:
+    """The pagination note for an opening: the query covers ONE page; the pipeline pages."""
+    present = [f.name for f in flags if f.present]
+    return (
+        "\nThe dataset spans multiple pages -- write the query for ONE page exactly as normal; "
+        "the pipeline follows the pagination automatically. Do NOT add a 'next' field."
+        if any(n in ("paginated", "infinite_scroll") for n in present)
+        else ""
+    )
+
+
+def _notes(brief: DatasetBrief, flags: "list[Flag]", kind: str) -> str:
+    """The advisory block every opening carries: the JSON-kind steer, the brief's structural
+    guidance + requirement, and the page's fired flags (ground truth)."""
+    notes: list[str] = []
+    if kind == "json":
+        notes.append(
+            "This is a JSON document -- use dotted paths in select/select_all and read keys with "
+            '.attr("<key>").'
+        )
+    if brief.author_hint:  # brief-specific STRUCTURAL guidance -- how this dataset is laid out
+        notes.append(
+            f"DATASET NOTES (from the brief -- how this dataset is laid out): {brief.author_hint}"
+        )
+    if brief.review_hint:  # the review criterion is a REQUIREMENT -- the author must know it
+        notes.append(f"REQUIREMENT (the extracted data must satisfy this): {brief.review_hint}")
+    notes.append(_flags_line(flags))
+    return "\n\n" + "\n\n".join(notes)
+
+
 def author_prompt(
     brief: DatasetBrief,
     skeleton: str,
@@ -119,34 +149,43 @@ def author_prompt(
     adds the detail-page example; ``recency`` is the evaluator's read of the sort order + where the
     most recent records are. In a conversation this is sent ONCE; every repair is a short follow-up.
     """
-    present = [f.name for f in flags if f.present]
-    pager = (
-        "\nThe dataset spans multiple pages -- write the query for ONE page exactly as normal; "
-        "the pipeline follows the pagination automatically. Do NOT add a 'next' field."
-        if any(n in ("paginated", "infinite_scroll") for n in present)
-        else ""
-    )
-    notes: list[str] = []
-    if kind == "json":
-        notes.append(
-            "This is a JSON document -- use dotted paths in select/select_all and read keys with "
-            '.attr("<key>").'
-        )
-    if brief.author_hint:  # brief-specific STRUCTURAL guidance -- how this dataset is laid out
-        notes.append(
-            f"DATASET NOTES (from the brief -- how this dataset is laid out): {brief.author_hint}"
-        )
-    if brief.review_hint:  # the review criterion is a REQUIREMENT -- the author must know it
-        notes.append(f"REQUIREMENT (the extracted data must satisfy this): {brief.review_hint}")
-    notes.append(_flags_line(flags))
     return render_prompt(
         "write_query",
         guide=guide_for(flags, kind, detail=detail),  # signal-selected examples, not all nine
         description=brief.goal or "the repeating dataset on this page",
         fields_line="\n" + fields_line(brief),
-        pager=pager,
+        pager=_pager_note(flags),
         skeleton=skeleton,
-        hints="\n\n" + "\n\n".join(notes),
+        hints=_notes(brief, flags, kind),
+        recency=(f"\n\nRECENCY (from the page evaluation): {recency}" if recency else ""),
+    )
+
+
+#: the LEAF-READING part of the guide (reading a leaf / transforms / optional selects / durable
+#: selectors) -- what the STEP engine needs from it: the whole-chain moves and the worked examples
+#: are replaced by the op menu in the ``build_steps`` template.
+LEAF_GUIDE: str = _PREAMBLE[_PREAMBLE.find("## Reading a leaf") :].rstrip()
+
+
+def steps_prompt(
+    brief: DatasetBrief,
+    skeleton: str,
+    flags: "list[Flag]",
+    *,
+    kind: str,
+    recency: str = "",
+) -> str:
+    """The OPENING turn of the STEP-BY-STEP engine (``build_steps`` template): the leaf-reading
+    guide, the ask, the op menu (records / field / detail / detail_field / where / drop / done),
+    the page's flags + notes, and the skeleton -- sent ONCE; every step is a short result turn."""
+    return render_prompt(
+        "build_steps",
+        guide=LEAF_GUIDE,
+        description=brief.goal or "the repeating dataset on this page",
+        fields_line="\n" + fields_line(brief),
+        pager=_pager_note(flags),
+        skeleton=skeleton,
+        hints=_notes(brief, flags, kind),
         recency=(f"\n\nRECENCY (from the page evaluation): {recency}" if recency else ""),
     )
 
@@ -166,4 +205,11 @@ def brief_hints(brief: DatasetBrief) -> str:
     return (" " + " ".join(parts)) if parts else ""
 
 
-__all__ = ["PATTERNS_GUIDE", "author_prompt", "brief_hints", "guide_for"]
+__all__ = [
+    "PATTERNS_GUIDE",
+    "LEAF_GUIDE",
+    "author_prompt",
+    "brief_hints",
+    "guide_for",
+    "steps_prompt",
+]

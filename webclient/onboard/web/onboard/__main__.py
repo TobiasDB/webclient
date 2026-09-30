@@ -45,7 +45,7 @@ from web.fetch import using
 from web.resolve import ResolveEvent, Resolver
 
 from .author import AuthorEvent, build_query
-from .author_loop import write_query
+from .author_loop import ENGINES, write_query
 from .compile import Query, QueryError
 from .config import build_resolver
 from .config import env as _env
@@ -619,6 +619,7 @@ async def _author(args: argparse.Namespace) -> int:
                     llm=llm,
                     review=llm,
                     entity=args.entity or "",
+                    engine=args.engine,
                 )
             if not art.blob:
                 _report_author_failure(art, args.verbose)
@@ -897,6 +898,14 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use the one-shot author instead of the default AGENT LOOP (the loop verifies the data "
         "is present, authors, reviews each sample vs the brief/entity, and repairs a failed query)",
+    )
+    aut.add_argument(
+        "--engine",
+        choices=ENGINES,
+        default=os.environ.get("WEB_AUTHOR_ENGINE") or "chain",
+        help="how the loop writes the query: 'chain' = the whole wq chain per turn; 'steps' = one "
+        "op per turn (records / field / detail / ...) with the result of each step fed back "
+        "[env WEB_AUTHOR_ENGINE]",
     )
     aut.add_argument(
         "--review",

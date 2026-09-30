@@ -34,20 +34,28 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
+from typing import Literal
 
 from pydantic import JsonValue
 from web.fetch import ClientPool, WebException, emit
+from web.parse import Document
 from web.resolve import EscalationPolicy, Resolver, flags
 from web.resolve import profiles as _rp
 
 from .agent import BoundedLoop, Done, Verdict
 from .author import AuthorEvent
+from .author_steps import StepSession, run_steps
 from .compile import Query, QueryError, parse_query, reroot
 from .evaluate import skeleton_for
 from .llm import Conversation, Conversational, Llm, ReasonEvent
 from .models import DatasetBrief, QueryArtifact, QuerySection, Reference
 from .patterns import author_prompt, field_schema
 from .timeliness import timeliness
+
+#: the authoring ENGINES: ``chain`` asks for the whole ``wq`` chain per turn (the default);
+#: ``steps`` builds it one op at a time with per-step feedback (:mod:`.author_steps`).
+Engine = Literal["chain", "steps"]
+ENGINES: "tuple[Engine, ...]" = ("chain", "steps")
 
 #: hard wall-clock cap on running ONE authored query against the source: a pathological query (a
 #: per-record .resolve() fanning out to hundreds of fetches) must never hang the loop.
@@ -80,10 +88,16 @@ class AuthorState:
     #: repair; an incompleteness may point to a sibling page). ``None`` skips both.
     review: "Llm | None" = None
     entity: str = ""
+    #: which authoring ENGINE writes the query (see :data:`ENGINES`).
+    engine: Engine = "chain"
     #: the conversation with the author model for the CURRENT section (``None`` = a stateless model,
     #: or not opened yet); ``opened`` = the opening (guide + skeleton) has been sent.
     conv: "Conversation | None" = None
     opened: bool = False
+    #: the fetched source (set by the check turn) and, for the ``steps`` engine, its session --
+    #: the draft + conversation that carry over every author turn of the current section.
+    doc: "Document | None" = None
+    steps: "StepSession | None" = None
     query: "Query | None" = None
     rows: "list[object]" = field(default_factory=list)  # the first few rows (review / preview)
     rows_full: "list[object]" = field(default_factory=list)  # every row (artifact / timeliness)
@@ -264,6 +278,7 @@ def _opening(state: AuthorState) -> str:
 def _follow_up(state: AuthorState) -> str:
     """The SHORT follow-up for a repair / deepen / split turn: what failed and what to change --
     never the page again (it is in the conversation's cached opening)."""
+    steps = state.engine == "steps"
     parts: list[str] = []
     if state.check_note and not state.opened:  # surfaced once, with the opening
         parts.append(f"NOTE from a reviewer of this page: {state.check_note}")
@@ -272,19 +287,29 @@ def _follow_up(state: AuthorState) -> str:
             "Some required fields are NOT on the listing -- they are on each record's DETAIL page. "
             "A sample detail page (linked from one record) skeleton:\n"
             f"{state.detail_skeleton}\n\n"
-            "Re-write the query so those fields FOLLOW each record's link ONCE and fan out: "
-            "detail=wq.doc.select('<link>').attr('href').resolve().extract(<field>=wq.doc.select("
-            "'...').attr('text'), ...) -- inside that extract, wq.doc IS the detail page. Never "
-            "repeat the select/resolve per field."
+            + (
+                'Follow the record\'s link with detail("<link css>") and add each of those fields '
+                "with detail_field(<name>, <chain>) -- there wq.doc IS the detail page."
+                if steps
+                else "Re-write the query so those fields FOLLOW each record's link ONCE and fan out: "
+                "detail=wq.doc.select('<link>').attr('href').resolve().extract(<field>=wq.doc.select("
+                "'...').attr('text'), ...) -- inside that extract, wq.doc IS the detail page. Never "
+                "repeat the select/resolve per field."
+            )
         )
     if state.last_error:
         prior = state.query.describe() if state.query is not None else "(no parseable query yet)"
         parts.append(
             f"Your PREVIOUS query FAILED and must be fixed:\n{prior}\nFAILURE: {state.last_error}"
             + (f"\n{state.hint}" if state.hint else "")
-            + "\nWrite a CORRECTED wq.doc... chain -- a MATERIALLY different one where the record "
-            "selector missed; a field that may be absent on some records must be optional "
-            "(select(css, optional=True)); do NOT use a Python dict literal."
+            + (
+                "\nFix it op by op: records(...) re-picks the record selector; field(...) replaces "
+                "a column; drop(...) removes one -- then done()."
+                if steps
+                else "\nWrite a CORRECTED wq.doc... chain -- a MATERIALLY different one where the "
+                "record selector missed; a field that may be absent on some records must be optional "
+                "(select(css, optional=True)); do NOT use a Python dict literal."
+            )
         )
     if state.offer_sibling:
         parts.append(
@@ -294,7 +319,8 @@ def _follow_up(state: AuthorState) -> str:
             "separately and combined. Only when the records are genuinely on another page, not merely "
             "a section lower on THIS one."
         )
-    parts.append("Reply with ONLY the wq.doc... chain (or a single SIBLING: line) -- no prose.")
+    if not steps:
+        parts.append("Reply with ONLY the wq.doc... chain (or a single SIBLING: line) -- no prose.")
     return "\n\n".join(parts)
 
 
@@ -314,9 +340,14 @@ async def _send(state: AuthorState, opening: str, follow_up: str) -> str:
 async def _author(state: AuthorState) -> None:
     """Author (or re-author) the current section's query -- one model turn. Sets ``state.query`` on
     a parseable reply; a parse REJECT records the reason for a repair turn. A ``SIBLING:`` reply
-    (only when offered) schedules a split. The raw reply is emitted before parse."""
-    opening = _opening(state)
+    (only when offered) schedules a split. The raw reply is emitted before parse. On the ``steps``
+    engine the turn is the step loop instead (:func:`~web.onboard.author_steps.run_steps`): the
+    follow-up becomes its next turn and the draft carries over."""
     follow = _follow_up(state) if (state.opened or state.check_note or state.last_error) else ""
+    if state.engine == "steps":
+        await _author_steps(state, follow)
+        return
+    opening = _opening(state)
     reply = await _send(state, opening, follow)
     emit(AuthorEvent(phase="reply", reply=reply))
     stripped = reply.strip()
@@ -335,6 +366,55 @@ async def _author(state: AuthorState) -> None:
     except QueryError as exc:  # unparseable / disallowed -> a repair turn re-authors with this
         state.last_error, state.hint = _parse_diagnosis(reply, exc)
         emit(ReasonEvent(stage="author", text=f"query rejected: {state.last_error}"))
+
+
+async def _author_steps(state: AuthorState, note: str) -> None:
+    """The ``steps`` engine's author turn: drive the step loop over the section's session (opened
+    on the first turn over the fetched document) with ``note`` as its next turn."""
+    if state.steps is None:
+        doc = state.doc or await state.resolver.resolve(state.reference.url)
+        state.doc = doc
+        state.steps = StepSession(doc=doc)
+    state.steps.offer_sibling = state.offer_sibling
+    state.opened = True
+    detail = state.reference.detail
+    recency = "; ".join(
+        b
+        for b in (
+            (
+                f"the records are {detail['sort_order']}"
+                if isinstance(detail.get("sort_order"), str) and detail.get("sort_order")
+                else ""
+            ),
+            str(detail.get("recency_hint") or ""),
+        )
+        if b
+    )
+    result = await run_steps(
+        state.steps,
+        reference=state.reference,
+        brief=state.brief,
+        resolver=state.resolver,
+        llm=state.llm,
+        flags=list(state.reference.assessment),
+        recency=recency,
+        note=note,
+    )
+    if result.sibling and state.offer_sibling and result.sibling not in state.tried:
+        state.sibling = result.sibling
+        state.last_error = state.hint = ""
+        emit(
+            ReasonEvent(
+                stage="author", subject=result.sibling, text="a sibling page holds the rest"
+            )
+        )
+        return
+    if result.note:
+        state.attempts.append(result.note)
+    state.query = result.query
+    state.last_error, state.hint = result.error, result.hint
+    if result.query is not None:
+        emit(AuthorEvent(phase="reply", reply=result.query.describe()))
 
 
 def _parse_diagnosis(reply: str, exc: QueryError) -> "tuple[str, str]":
@@ -503,6 +583,7 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
         state.sibling = ""
         state.query = None
         state.conv, state.opened = None, False
+        state.doc, state.steps = None, None
         state.checked = False
         state.check_note = state.last_error = state.hint = ""
         state.offer_sibling = state.nested = False
@@ -511,6 +592,7 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
         state.prev_missing = set()
     elif turn == "check":
         sample = await state.resolver.resolve(state.reference.url)
+        state.doc = sample  # the ONE fetched source (the steps engine probes every op against it)
         state.listing_skeleton = skeleton_for(sample)  # ONE clipped skeleton, reused by every turn
         fired = list(flags(sample))
         state.reference = state.reference.model_copy(
@@ -576,10 +658,21 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
         link = _record_link(_populated(state.rows))
         if link is None:
             return
-        detail = await state.resolver.resolve(link)
-        state.detail_skeleton = skeleton_for(detail)
         state.nested = True
-        state.last_error = state.hint = ""
+        if (
+            state.engine == "steps"
+        ):  # the step engine fetches + shows the detail page on detail(...)
+            lacking = ", ".join(_missing(state.brief, _populated(state.rows)))
+            state.detail_skeleton = ""
+            state.last_error = f"required field(s) {lacking} are not on the listing records"
+            state.hint = (
+                'They are on each record\'s own page: follow its link with detail("<link css>") '
+                "and add each with detail_field(<name>, <chain>)."
+            )
+        else:
+            detail = await state.resolver.resolve(link)
+            state.detail_skeleton = skeleton_for(detail)
+            state.last_error = state.hint = ""
         emit(
             ReasonEvent(
                 stage="author",
@@ -659,6 +752,7 @@ async def _run(
     entity: str,
     max_rounds: int,
     budget_s: float,
+    engine: Engine,
 ) -> "tuple[AuthorState, Verdict]":
     state = AuthorState(
         reference=reference,
@@ -667,6 +761,7 @@ async def _run(
         llm=llm,
         review=review,
         entity=entity,
+        engine=engine,
     )
     loop: "BoundedLoop[AuthorState, _Obs, str | Done]" = BoundedLoop(
         observe=_observe,
@@ -705,10 +800,12 @@ async def write_query(
     entity: str = "",
     max_rounds: int = 12,
     budget_s: float = 240.0,
+    engine: Engine = "chain",
 ) -> QueryArtifact:
     """Author the query for ``reference`` per ``brief`` and return the :class:`QueryArtifact`: the
     runnable query + its validation verdict (see the module docstring). ``review`` enables the
-    entry check + per-sample review; ``budget_s`` is a hard wall clock for the whole loop."""
+    entry check + per-sample review; ``budget_s`` is a hard wall clock for the whole loop;
+    ``engine`` picks how each author turn writes the query (see :data:`ENGINES`)."""
     state, verdict = await _run(
         reference,
         brief,
@@ -718,6 +815,7 @@ async def write_query(
         entity=entity,
         max_rounds=max_rounds,
         budget_s=budget_s,
+        engine=engine,
     )
     return _artifact(state, verdict)
 
@@ -732,6 +830,7 @@ async def author_agent(
     entity: str = "",
     max_rounds: int = 12,
     budget_s: float = 240.0,
+    engine: Engine = "chain",
 ) -> "tuple[list[Query], Verdict]":
     """The section QUERIES (usually one; more for a split dataset) + the loop's
     :class:`~web.onboard.agent.Verdict` -- the seam the CLI and the programmatic entries run on.
@@ -745,6 +844,7 @@ async def author_agent(
         entity=entity,
         max_rounds=max_rounds,
         budget_s=budget_s,
+        engine=engine,
     )
     queries = [q for q, _ in state.sections]
     if state.query is not None:
@@ -752,4 +852,4 @@ async def author_agent(
     return queries, verdict
 
 
-__all__ = ["author_agent", "write_query", "AuthorState"]
+__all__ = ["author_agent", "write_query", "AuthorState", "Engine", "ENGINES"]

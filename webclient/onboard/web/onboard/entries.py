@@ -18,9 +18,9 @@ from dataclasses import dataclass, field
 from pydantic import JsonValue
 from web.resolve import Resolver
 
-from .author_loop import author_agent
+from .author_loop import Engine, author_agent
 from .compile import Query
-from .config import build_resolver, default_llm, default_search
+from .config import build_resolver, default_llm, default_search, env
 from .frontier import llm_frontier
 from .llm import Llm
 from .locate import Search
@@ -148,11 +148,13 @@ async def author(
     profile: "str | None" = None,
     proxy: "str | None" = None,
     browser_path: "str | None" = None,
+    engine: "Engine | None" = None,
 ) -> Authored:
     """Author the extraction query for a dataset. ``source`` is a :class:`Reference` (author it) OR a
     brief spec (locate it first, then author) -- with an optional ``brief`` to describe a Reference's
-    schema. Env-defaulted like :func:`locate`. Returns an :class:`Authored` (the section queries);
-    call :meth:`Authored.run` to execute + sink."""
+    schema. Env-defaulted like :func:`locate`; ``engine`` (``WEB_AUTHOR_ENGINE``) picks how the
+    loop writes the query. Returns an :class:`Authored` (the section queries); call
+    :meth:`Authored.run` to execute + sink."""
     if isinstance(source, Reference):
         reference: "Reference | None" = source
         lb = (Brief.resolve(brief) if brief is not None else DatasetBrief()).with_entity(entity)
@@ -174,8 +176,15 @@ async def author(
             )
         if reference is None:
             return Authored(reference=None, queries=[], brief=lb)
+        picked = engine or env("WEB_AUTHOR_ENGINE") or "chain"
         queries, _verdict = await author_agent(
-            reference, lb, resolver=resolver, llm=llm, review=llm, entity=entity
+            reference,
+            lb,
+            resolver=resolver,
+            llm=llm,
+            review=llm,
+            entity=entity,
+            engine="steps" if picked == "steps" else "chain",
         )
         return Authored(reference=reference, queries=queries, brief=lb)
     finally:

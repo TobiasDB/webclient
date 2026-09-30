@@ -147,6 +147,15 @@ def test_prompts_render_from_package_data_and_clip_to_budget() -> None:
             hints="",
             recency="",
         ),
+        "build_steps": dict(
+            guide="G",
+            description="d",
+            fields_line="",
+            pager="",
+            skeleton="<ul>",
+            hints="",
+            recency="",
+        ),
     }
     for name, variables in sets.items():
         out = render_prompt(name, **variables)
