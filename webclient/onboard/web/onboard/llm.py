@@ -12,11 +12,21 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import uuid
 from typing import Protocol, runtime_checkable
 
 import httpx
 from pydantic import BaseModel
 from web.fetch import WebException, emit, err
+
+
+def anticache_suffix() -> str:
+    """A per-call ANTI-CACHE marker to append to every prompt. The author loop re-asks with the SAME
+    page skeleton on each repair; a caching LLM gateway (or the model's own determinism) would replay
+    the prior reply, so every repair comes back IDENTICAL and the loop stalls without progress. A
+    fresh id per call makes each request body unique -- a response cache can't hit -- and nudges a
+    deterministic model off its last answer. It carries no instruction and the model ignores it."""
+    return f"\n\n<!-- request-id: {uuid.uuid4().hex} (unique per call; ignore) -->"
 
 
 @runtime_checkable
@@ -219,14 +229,20 @@ class AnthropicLlm:
         body: dict[str, object] = {
             "model": self._model,
             "max_tokens": self._max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
+            # the anti-cache marker makes each request body unique so a caching gateway can't replay
+            # a prior identical reply (which would stall the author loop's repairs -- see the helper).
+            "messages": [{"role": "user", "content": prompt + anticache_suffix()}],
         }
         if self._system is not None:
             body["system"] = self._system
         try:
             resp = await self._client.post(
                 "/v1/messages",
-                headers={"x-api-key": self._auth, "anthropic-version": "2023-06-01"},
+                headers={
+                    "x-api-key": self._auth,
+                    "anthropic-version": "2023-06-01",
+                    "cache-control": "no-store",  # ask an intermediary proxy not to cache the reply
+                },
                 json=body,
             )
         except httpx.HTTPError as exc:

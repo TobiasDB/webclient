@@ -15,7 +15,7 @@ from asyncio.subprocess import PIPE
 
 from web.fetch import WebException, emit, err
 
-from .llm import LlmEvent, RateLimit, Usage, _Gate
+from .llm import LlmEvent, RateLimit, Usage, _Gate, anticache_suffix
 
 
 def _int(value: object) -> int:
@@ -80,12 +80,14 @@ class ClaudeShim:
             *(("--model", self._model) if self._model else ()),
         ]
         # the prompt is passed on STDIN, never argv: an author prompt can start with "---"/"-",
-        # which `claude` would else parse as an option.
+        # which `claude` would else parse as an option. The anti-cache marker keeps each call unique
+        # so a repair never replays a prior identical reply (a stalled loop -- see the helper).
+        sent = prompt + anticache_suffix()
         try:
             proc = await asyncio.create_subprocess_exec(*argv, stdin=PIPE, stdout=PIPE, stderr=PIPE)
             try:
                 out, errb = await asyncio.wait_for(
-                    proc.communicate(prompt.encode("utf-8")), timeout=self._timeout
+                    proc.communicate(sent.encode("utf-8")), timeout=self._timeout
                 )
             except asyncio.TimeoutError as exc:
                 proc.kill()  # KILL the child -- wait_for only cancels the await, leaving it running
