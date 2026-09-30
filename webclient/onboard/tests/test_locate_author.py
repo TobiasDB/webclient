@@ -22,12 +22,12 @@ from web.onboard import (
     Pricing,
     Reference,
     Usage,
-    author,
     build_query,
-    locate,
     locate_and_author,
 )
 from web.onboard.__main__ import main
+from web.onboard.author import author  # the reference-based one-shot primitive
+from web.onboard.locate import locate  # the core (explicit resolver/search/review)
 from web.resolve import Resolver
 
 
@@ -728,6 +728,41 @@ def test_run_to_sink_routes_rows_to_table_and_documents_to_store(httpserver: HTT
     # documents -> the object store, each keyed by its URL + carrying its row's metadata
     a_url = httpserver.url_for("/files/a.txt")
     assert sink.blobs[a_url][0] == b"BODY-A" and sink.blobs[a_url][1] == {"title": "Report A"}
+
+
+def test_run_returns_a_dataset_of_rows_and_documents(httpserver: HTTPServer) -> None:
+    # the clean execute interface: run(query, brief=...) -> Dataset(rows=[...], documents=[...]).
+    from web.onboard import Dataset, run
+
+    listing = (
+        b"<html><body><ul>"
+        b"<li class='row'><span class='title'>Report A</span><a class='file' href='/files/a.txt'>dl</a></li>"
+        b"<li class='row'><span class='title'>Report B</span><a class='file' href='/files/b.txt'>dl</a></li>"
+        b"</ul></body></html>"
+    )
+    httpserver.expect_request("/docs").respond_with_data(listing, content_type="text/html")
+    httpserver.expect_request("/files/a.txt").respond_with_data(
+        b"BODY-A", content_type="text/plain"
+    )
+    httpserver.expect_request("/files/b.txt").respond_with_data(
+        b"BODY-B", content_type="text/plain"
+    )
+    chain = (
+        'wq.doc.select_all("li.row").extract('
+        'title=wq.doc.select(".title").attr("text"), file=wq.doc.select("a.file").attr("href"))'
+    )
+    brief = DatasetBrief(fields=["title", "file"], types={"file": "document"})
+
+    async def go() -> "Dataset | None":
+        async with Resolver() as r:
+            q = _rerooted(chain, httpserver.url_for("/docs"))
+            return await run([cast("object", q)], resolver=r, brief=brief)
+
+    data = cast("Dataset", _run(go()))
+    assert isinstance(data, Dataset)
+    assert [row["title"] for row in data.rows] == ["Report A", "Report B"]  # the scalar table
+    assert sorted(a.content for a in data.documents) == [b"BODY-A", b"BODY-B"]  # fetched documents
+    assert data.documents[0].metadata.get("title") in ("Report A", "Report B")  # keyed to its row
 
 
 def test_guide_for_selects_examples_by_kind_and_situation() -> None:

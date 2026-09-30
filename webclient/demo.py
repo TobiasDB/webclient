@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlparse
 from web.dsl import WebClient, from_blob, run_blob, wq
 from web.fetch import Profile as FetchProfile
 from web.fetch import Request, fetch
-from web.onboard import Brief, locate_and_author
+from web.onboard import Brief, DatasetBrief, MemorySink, locate_and_author, run
 from web.resolve import EscalationPolicy, PaginatePolicy
 from web.resolve import Profile as ResolveProfile
 from web.resolve import Resolver, RetryPolicy, flags, resolve
@@ -311,6 +311,31 @@ async def onboard_story(base: str) -> None:
         print("dataset:", [(r.get("name"), r.get("price")) for r in rows])
 
 
+async def sinks_story(base: str) -> None:
+    """The clean execute interface: ``run`` a query to a Dataset -- scalar ROWS + fetched DOCUMENTS
+    (the schema's document-typed fields, each resolved to a blob and keyed to its row) -- or stream
+    to a custom sink (a DB table + object store)."""
+    _h("sinks -- run a query to rows + documents (the Dataset interface)")
+    query = (
+        wq.reference(base + "/")
+        .resolve()
+        .select_all("li.product")
+        .extract(
+            name=wq.doc.select(".name").attr("text"),
+            spec=wq.doc.select("a.link").attr("href"),  # a `document`-typed field -> a fetched blob
+        )
+    )
+    brief = DatasetBrief(fields=["name", "spec"], types={"spec": "document"})
+    async with Resolver() as rs:
+        data = await run([query], resolver=rs, brief=brief)  # -> Dataset(rows, documents)
+        assert data is not None
+        print("rows:     ", [r.get("name") for r in data.rows])
+        print("documents:", [(d.url.rsplit("/", 1)[-1], len(d.content)) for d in data.documents])
+        sink = MemorySink()  # ...or stream to your own sink instead of collecting a Dataset
+        await run([query], resolver=rs, brief=brief, sink=sink)
+        print("custom sink:", len(sink.rows), "rows,", len(sink.blobs), "blobs")
+
+
 async def main() -> None:
     server, base = _serve()
     try:
@@ -324,6 +349,7 @@ async def main() -> None:
             blob = lazy_plans(base)
             await evaluator(wc, base, blob)
         await onboard_story(base)
+        await sinks_story(base)
     finally:
         server.shutdown()
     print("\n\033[1mdemo ok\033[0m")

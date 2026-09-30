@@ -24,6 +24,7 @@ pydantic model (not an ad-hoc dict) is what lets Locate and Author stay independ
 
 from __future__ import annotations
 
+from importlib.resources import files
 from pathlib import Path
 
 import yaml
@@ -99,6 +100,45 @@ class Brief(BaseModel):
     def load(cls, path: str) -> "Brief":
         """Load a reusable Brief from a markdown file (see :meth:`from_markdown`)."""
         return cls.from_markdown(Path(path).read_text(encoding="utf-8"))
+
+    @classmethod
+    def resolve(cls, spec: "str | Brief") -> "Brief":
+        """A Brief from any spec: a :class:`Brief` (as-is), a markdown FILE path, a PACKAGED name
+        (``briefs/<name>.md`` -- ``-``/``_`` interchangeable), else a bare GOAL string. Shared by the
+        CLI and the programmatic entries so ``locate("ir-events", ...)`` and ``locate(my_brief, ...)``
+        both work."""
+        if isinstance(spec, Brief):
+            return spec
+        if Path(spec).is_file():
+            return cls.load(spec)
+        for name in {spec, spec.replace("-", "_"), spec.replace("_", "-")}:
+            res = files("web.onboard").joinpath(f"briefs/{name}.md")
+            if res.is_file():
+                return cls.from_markdown(res.read_text(encoding="utf-8"))
+        return cls(goal=spec)  # not a file or a packaged name -> treat it as the goal
+
+    def with_entity(self, entity: str) -> "Brief":
+        """Fold a target ENTITY (a company/site) into the search qualifier: a ``{entity}`` placeholder
+        is substituted, else the entity is prepended to ``search`` (or the goal). No-op without one.
+        (An explicit source still makes search irrelevant, so the entity only matters when searching.)
+        """
+        if not entity:
+            return self
+        search = (
+            self.search.replace("{entity}", entity)
+            if "{entity}" in self.search
+            else f"{entity} {self.search or self.goal}".strip()
+        )
+        return self.model_copy(update={"search": search})
+
+
+def packaged_briefs() -> "list[str]":
+    """The names of the briefs bundled with the package (``web/onboard/briefs/*.md``)."""
+    try:
+        root = files("web.onboard").joinpath("briefs")
+        return sorted(p.name[:-3] for p in root.iterdir() if p.name.endswith(".md"))
+    except (FileNotFoundError, ModuleNotFoundError):
+        return []
 
 
 #: back-compat aliases -- one spec, one file; Locate reads its find-slice, Author its shape-slice.
@@ -191,4 +231,11 @@ class Reference(BaseModel):
     detail: dict[str, JsonValue] = {}
 
 
-__all__ = ["Brief", "LocateBrief", "DatasetBrief", "Reference", "DOWNLOAD_EXTENSIONS"]
+__all__ = [
+    "Brief",
+    "LocateBrief",
+    "DatasetBrief",
+    "Reference",
+    "DOWNLOAD_EXTENSIONS",
+    "packaged_briefs",
+]
