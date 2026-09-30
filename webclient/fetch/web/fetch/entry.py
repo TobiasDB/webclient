@@ -91,10 +91,13 @@ def fetch(
     reused, so the browser is not relaunched per fetch. The pool owns the backend; only the session
     (its page / cookie jar) is closed on exit."""
     prof = profile or Profile()
-    eff = Profile(
+    # Override ONLY the per-call args, inheriting every other transport slot from the profile via
+    # `with_` -- a bare `Profile(...)` here silently dropped `executable_path` / `channel` /
+    # `headless` / `impersonate` / `stealth`, so a pinned browser binary (WEB_BROWSER_PATH, the
+    # `chrome` channel) was discarded and the fetch never launched the requested browser.
+    eff = prof.with_(
         proxy=proxy if proxy is not None else prof.proxy,
         fingerprint=fingerprint if fingerprint is not False else prof.fingerprint,
-        headers=prof.headers,
         browser=browser or prof.browser,
     )
     backend = (pool or default_pool()).lease(eff)

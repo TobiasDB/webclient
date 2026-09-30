@@ -35,6 +35,31 @@ def test_browser_profile_carries_an_executable_path() -> None:
     assert isinstance(fetcher, BrowserFetcher) and fetcher._executable == "/opt/chromium/chrome"
 
 
+def test_fetch_preserves_a_pinned_browser_path_and_realness() -> None:
+    # Regression: fetch()'s per-call profile reconstruction must inherit EVERY transport slot from
+    # the profile, not just proxy/fingerprint/headers/browser. A bare `Profile(...)` copy dropped
+    # executable_path / channel / headless / stealth, so a pinned browser binary (WEB_BROWSER_PATH,
+    # the `chrome` channel) was silently ignored and the fetch launched the default Chromium instead.
+    from web.fetch import profiles as fp
+
+    pinned = fp.REAL_CHROME.with_(executable_path="/opt/pinned/chrome")
+
+    async def go() -> BrowserFetcher:
+        async with ClientPool() as pool:
+            # lease happens synchronously inside fetch(); no await -> no real browser is launched.
+            fetch("http://pinned.invalid/", profile=pinned, pool=pool)
+            (backend,) = tuple(pool._backends.values())
+            assert isinstance(backend, BrowserFetcher)
+            return backend
+
+    backend = _run(go())
+    assert backend._executable == "/opt/pinned/chrome"  # the pinned binary survived
+    assert backend._channel == "chrome" and backend._headless is False  # and so did the realness
+    assert (
+        backend._supply.driver == "patchright"
+    )  # ...and the stealth driver  # type: ignore[union-attr]
+
+
 def test_profile_realness_fields_build_the_right_browser() -> None:
     # the browser-realness rungs: headless bundled -> headed bundled -> real Chrome channel.
     from web.fetch import profiles as fp
