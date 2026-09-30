@@ -421,6 +421,10 @@ async def author_agent(
         )
         verdict = Verdict(reason="budget", rounds=state.repairs)
     queries = [q for q in [*state.sections, state.query] if q is not None]
+    if not queries and verdict.reason == "error" and verdict.error:
+        # a turn raised (an LLM/transport failure, usually a bad key/base_url) -- broadcast WHY so it
+        # is not swallowed into a bare "error" reason for a programmatic caller or the -v log.
+        emit(ReasonEvent(stage="author", text=f"authoring aborted — {verdict.error}"))
     return queries, verdict
 
 

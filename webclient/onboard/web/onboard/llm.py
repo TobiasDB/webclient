@@ -232,7 +232,14 @@ class AnthropicLlm:
         except httpx.HTTPError as exc:
             raise WebException(err("llm.request", str(exc))) from exc
         if resp.status_code != 200:
-            raise WebException(err("llm.api", f"HTTP {resp.status_code}", body=resp.text[:500]))
+            # fold the API's own error text into the MESSAGE (not only the body) so a caller that
+            # logs str(exc) -- e.g. the author loop's verdict.error -- sees WHY (an invalid key, an
+            # unknown model, a rate limit), not a bare "HTTP 401".
+            snippet = " ".join(resp.text.split())[:200]
+            detail = (
+                f"HTTP {resp.status_code}: {snippet}" if snippet else f"HTTP {resp.status_code}"
+            )
+            raise WebException(err("llm.api", detail, body=resp.text[:500]))
         data: object = resp.json()
         self._meter(data)
         content = data.get("content", []) if isinstance(data, dict) else []

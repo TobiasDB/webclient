@@ -42,6 +42,7 @@ from web.fetch import profiles as _fp
 from web.fetch import using
 from web.resolve import ResolveEvent, Resolver
 
+from .agent import Verdict
 from .author import AuthorEvent, build_query
 from .author_loop import author_agent
 from .compile import QueryError
@@ -497,7 +498,7 @@ async def _author(args: argparse.Namespace) -> int:
                     reference, brief, resolver=resolver, llm=llm, review=llm, entity=args.entity
                 )
             if not queries:
-                _err(f"authoring failed: the agent loop produced no query ({verdict.reason})")
+                _report_author_failure(verdict, args.verbose)
                 return 1
             query, engine = queries[0], "agent"  # queries[0] is the primary section
             notes = [f"agent loop: {verdict.rounds} round(s) → {verdict.reason}"]
@@ -569,6 +570,28 @@ def _build_llm(args: argparse.Namespace) -> "AnthropicLlm | ClaudeShim":
     if args.model:
         return AnthropicLlm(model=args.model, rate=rate, pricing=pricing)
     return AnthropicLlm(rate=rate, pricing=pricing)
+
+
+def _report_author_failure(verdict: "Verdict", verbose: bool) -> None:
+    """Explain WHY the agent loop produced no query -- the terse ``verdict.reason`` alone (``error`` /
+    ``stalled`` / ``budget``) is not actionable, so surface ``verdict.error`` (the real exception,
+    e.g. ``llm.api: HTTP 401``) and point at the likely cause per reason."""
+    rounds = f"{verdict.rounds} round(s)"
+    if verdict.reason == "error":  # apply() raised -- an LLM / transport / config failure, usually
+        _err(
+            f"authoring failed after {rounds}: {verdict.error or 'an internal error'}",
+            "  this is an LLM/transport failure, not a bad page — check WEB_LLM_API_KEY / "
+            "WEB_LLM_BASE_URL / WEB_LLM_MODEL (or pass --shim to use the local `claude -p` model).",
+        )
+    elif verdict.reason in ("stalled", "budget"):  # the model tried but never wrote a valid query
+        _err(
+            f"authoring failed ({verdict.reason}) after {rounds}: the model could not write a valid "
+            "wq query for this page (every attempt was rejected or matched no records).",
+            "  the reasons are in the log above (each rejected reply)."
+            + ("" if verbose else " Re-run with -v to see the model's replies in full."),
+        )
+    else:
+        _err(f"authoring failed ({verdict.reason}) after {rounds}: no query was produced.")
 
 
 def _locate_llm(args: argparse.Namespace) -> "AnthropicLlm | ClaudeShim | None":
