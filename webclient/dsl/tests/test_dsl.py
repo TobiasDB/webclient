@@ -611,3 +611,21 @@ def test_identity_key_rows_and_stable_document_hashes(httpserver: HTTPServer) ->
     assert rows[0][KEY_COLUMN] == row_key({"title": "T"})  # type: ignore[index]
     # the blob round-trips the key step
     assert key_fields(Plan.from_blob(q.to_blob())) == ["title"]
+
+
+def test_from_source_accepts_a_chain_written_over_several_lines() -> None:
+    # A chain laid out with leading-dot continuation lines (how a human -- or a model -- writes a
+    # long query) is one expression; from_source joins the lines itself.
+    from web.dsl import from_source
+
+    src = """
+wq.doc.select_all("li.row")
+  .filter(wq.doc.select("a").attr("href").is_ok())
+  .extract(
+      name=wq.doc.select(".name").attr("text"),
+  )
+"""
+    assert from_source(src).describe() == (
+        "Document.select_all('li.row').filter(Document.select('a').attr('href').is_ok())"
+        ".extract(name=Document.select('.name').attr('text'))"
+    )

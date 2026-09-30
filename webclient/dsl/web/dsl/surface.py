@@ -386,6 +386,8 @@ def from_source(src: str) -> Expr:
     text = src.strip()
     if not text:
         raise SourceError("empty source")
+    if "\n" in text:  # a chain written over several lines (leading-dot continuations) -- join them
+        text = f"({text})"
     try:
         tree = ast.parse(text, mode="eval")
     except SyntaxError as exc:
