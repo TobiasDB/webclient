@@ -716,9 +716,11 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
                 return (
                     False,
                     f"{head}\nEMPTY on every probed record -- REVERTED. The selector matched, but "
-                    f"the transform produced nothing. The RAW text it read was: {raw}. Pull the "
-                    "value out of that text with .regex(pattern, group=1) before the transform, "
-                    "or pick the element that holds just the value.",
+                    f"the transform produced nothing. The RAW text it read was: {raw}. FIRST look "
+                    "in the record structure for the element or attribute that holds JUST this "
+                    "value (a <time datetime=...>, a data-* attribute, a smaller span) and select "
+                    "that; only if the value has no element of its own, pull it out of that text "
+                    "with .regex(pattern, group=1) before the transform.",
                     "EMPTY after the transform (reverted)",
                 )
             return (

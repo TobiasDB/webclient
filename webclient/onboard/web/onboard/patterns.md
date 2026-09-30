@@ -42,7 +42,10 @@ Chain these after a leaf read to shape the value: `.number()` (first number in t
 `.datetime()` (any readable date → ISO `YYYY-MM-DD`), `.split(sep)` (text → a list),
 `.map({...})` (look a value up in a table), `.link()` (a URL written as text → absolute),
 `.regex(pattern, group=1)` (pull a substring out of the text — `"Only $19.99!"` →
-`.regex(r"\$([\d.]+)", group=1)` → `"19.99"`).
+`.regex(r"\$([\d.]+)", group=1)` → `"19.99"`). Regex is a LAST resort: first select the element or
+attribute that holds just the value (a `<time datetime>`, a `data-*` attribute, the smaller span);
+reach for `.regex` only when the value is genuinely embedded in a text node that has no element of
+its own — never to avoid finding the element.
 
 For a LONG TEXT field — an article body, a press release, a description that spans many
 paragraphs — do not read a container's `.attr("text")` (it drags in captions, "share" chrome and

@@ -155,6 +155,7 @@ def test_prompts_render_from_package_data_and_clip_to_budget() -> None:
             skeleton="<ul>",
             hints="",
             recency="",
+            start='records("li")',
         ),
     }
     for name, variables in sets.items():
@@ -222,3 +223,41 @@ def test_anthropic_llm_retries_transient_errors_but_not_bad_requests(
         await llm2.aclose()
 
     asyncio.run(go())
+
+
+def test_claude_shim_retries_a_timed_out_call() -> None:
+    # A `claude -p` call that times out / crashes is retried with backoff (WEB_LLM_RETRIES) -- one
+    # transient stall no longer aborts a whole authoring run; a non-shim error is not retried.
+    import asyncio
+
+    from web.fetch import WebException, err
+    from web.onboard.shim import ClaudeShim
+
+    shim = ClaudeShim(max_retries=2)
+    calls = {"n": 0}
+
+    async def flaky(prompt: str) -> str:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise WebException(err("llm.shim", "claude -p timed out after 1.0s"))
+        return "the reply"
+
+    shim._once = flaky  # type: ignore[method-assign]
+    orig_sleep = asyncio.sleep
+
+    async def no_sleep(_s: float) -> None:
+        await orig_sleep(0)
+
+    asyncio.sleep = no_sleep  # type: ignore[assignment]
+    try:
+        assert asyncio.run(shim.complete("hi")) == "the reply" and calls["n"] == 3
+        strict, calls["n"] = ClaudeShim(max_retries=0), 0
+        strict._once = flaky  # type: ignore[method-assign]
+        try:
+            asyncio.run(strict.complete("hi"))
+        except WebException as exc:
+            assert exc.error.code == "llm.shim" and calls["n"] == 1  # no retries -> one call
+        else:
+            raise AssertionError("max_retries=0 must raise on the first failure")
+    finally:
+        asyncio.sleep = orig_sleep  # type: ignore[assignment]

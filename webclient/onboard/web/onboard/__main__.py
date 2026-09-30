@@ -731,11 +731,15 @@ def _report_author_failure(art: QueryArtifact, verbose: bool) -> None:
     wrote a valid query (its rejections are listed), each with the likely fix."""
     reason = art.reason
     if reason.startswith("error"):  # a turn raised -- an LLM / transport / config failure
-        _err(
-            f"authoring failed: {reason.partition(':')[2].strip() or 'an internal error'}",
-            "  this is an LLM/transport failure, not a bad page — check WEB_LLM_API_KEY / "
-            "WEB_LLM_BASE_URL / WEB_LLM_MODEL (or pass --shim to use the local `claude -p` model).",
+        detail = reason.partition(":")[2].strip() or "an internal error"
+        hint = (
+            "  the local `claude -p` call failed or timed out (retried) — raise WEB_LLM_TIMEOUT "
+            "(per call, seconds) / WEB_LLM_RETRIES, or re-run; the page itself is fine."
+            if "llm.shim" in detail
+            else "  this is an LLM/transport failure, not a bad page — check WEB_LLM_API_KEY / "
+            "WEB_LLM_BASE_URL / WEB_LLM_MODEL (or pass --shim to use the local `claude -p` model)."
         )
+        _err(f"authoring failed: {detail}", hint)
         return
     if reason.startswith("js_gated"):  # ground truth: a JS app fetched at the HTTP tier, no records
         _err(

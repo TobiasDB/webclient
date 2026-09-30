@@ -15,7 +15,17 @@ from asyncio.subprocess import PIPE
 
 from web.fetch import WebException, emit, err
 
-from .llm import Budget, LlmEvent, RateLimit, Usage, _Gate, anticache_suffix
+from .llm import (
+    _BACKOFF_BASE,
+    _BACKOFF_CAP,
+    Budget,
+    LlmEvent,
+    RateLimit,
+    ReasonEvent,
+    Usage,
+    _Gate,
+    anticache_suffix,
+)
 
 
 def _int(value: object) -> int:
@@ -49,8 +59,17 @@ class ClaudeShim:
         timeout: "float | None" = None,
         rate: "RateLimit | None" = None,
         budget: "Budget | None" = None,
+        max_retries: "int | None" = None,
     ) -> None:
         env = os.environ.get
+        #: a timed-out / crashed / non-JSON `claude -p` call is RETRIED with backoff (a transient
+        #: stall must not abort a whole authoring run) -- WEB_LLM_RETRIES, default 2 for the shim.
+        try:
+            self._max_retries = (
+                max_retries if max_retries is not None else int(env("WEB_LLM_RETRIES", "2"))
+            )
+        except ValueError:
+            self._max_retries = 2
         self._model = model or env("WEB_LLM_MODEL") or "haiku"  # WEB_LLM_MODEL / --model / "haiku"
         try:
             self._timeout = timeout if timeout is not None else float(env("WEB_LLM_TIMEOUT", "90"))
@@ -70,8 +89,27 @@ class ClaudeShim:
 
     async def complete(self, prompt: str) -> str:
         self.budget.ensure()  # stop BEFORE spending past the cap (raises BudgetExceeded)
-        await self._gate.hold()  # WEB_LLM_RATE: cap the request rate to the model / proxy
         self.prompt = prompt
+        for attempt in range(self._max_retries + 1):
+            await self._gate.hold()  # WEB_LLM_RATE: cap the request rate to the model / proxy
+            try:
+                return await self._once(prompt)
+            except WebException as exc:
+                if attempt >= self._max_retries or exc.error.code != "llm.shim":
+                    raise
+                delay = min(_BACKOFF_CAP, _BACKOFF_BASE * (2**attempt))
+                emit(
+                    ReasonEvent(
+                        stage="llm",
+                        text=f"{exc.error.message} — retrying in {delay:.0f}s "
+                        f"({attempt + 1}/{self._max_retries})",
+                    )
+                )
+                await asyncio.sleep(delay)
+        raise WebException(err("llm.shim", "exhausted retries"))  # pragma: no cover
+
+    async def _once(self, prompt: str) -> str:
+        """ONE ``claude -p`` call -> the reply (metered); any failure is an ``llm.shim`` error."""
         argv = [
             "claude",
             "-p",

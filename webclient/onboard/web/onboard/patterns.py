@@ -198,6 +198,11 @@ def steps_prompt(
         skeleton=skeleton,
         hints=_notes(brief, flags, kind, record_selector=record_selector),
         recency=(f"\n\nRECENCY (from the page evaluation): {recency}" if recency else ""),
+        start=(
+            f'records("{record_selector}") -- the record list the page analysis detected.'
+            if record_selector
+            else 'records("<css>") -- the element marked ← RECORD LIST is the likely row.'
+        ),
     )
 
 
