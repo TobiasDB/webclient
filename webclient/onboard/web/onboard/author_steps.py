@@ -611,7 +611,7 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
         probe = Draft(records=op.args[0])
         try:
             n = await _count(probe, doc, resolver)
-        except (WebException, asyncio.TimeoutError) as exc:
+        except Exception as exc:  # as for records(...)
             return False, f"{head}\nNOT APPLIED -- {exc}", f"not applied ({exc})"
         if n == 0:
             return (
@@ -633,7 +633,7 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
         new.records = op.args[0]
         try:
             n = await _count(new, doc, resolver)
-        except (WebException, asyncio.TimeoutError) as exc:
+        except Exception as exc:  # a bad selector can raise anything from the parser: not applied
             return False, f"{head}\nNOT APPLIED -- {exc}", f"not applied ({exc})"
         if n == 0:
             return (
@@ -646,7 +646,7 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
         if new.columns():
             try:
                 rows = await _probe(new, doc, resolver)
-            except (WebException, asyncio.TimeoutError) as exc:
+            except Exception as exc:  # the existing columns failed on the new records: not applied
                 return False, f"{head}\nNOT APPLIED -- with this record selector {exc}", "failed"
         session.draft = new
         text = f"{head}\nmatched {n} record(s). The FIRST record's structure (wq.doc for field(...)):\n"
@@ -714,6 +714,13 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
             False,
             f"{head}\nFAILED -- the probe exceeded {_PROBE_TIMEOUT:.0f}s and was REVERTED.",
             "reverted (timeout)",
+        )
+    except Exception as exc:  # a model-written predicate/chain crashed the DSL: THIS op failed
+        return (
+            False,
+            f"{head}\nFAILED -- running it raised {type(exc).__name__}: {exc}. The op was "
+            "REVERTED; write it differently (see the guide for the exact verb signatures).",
+            f"reverted ({type(exc).__name__}: {exc})",
         )
     col = op.args[0]
     key = f"{DETAIL_COLUMN}.{col}" if op.name == "detail_field" else col
@@ -840,7 +847,11 @@ async def run_steps(
             structural += ["select", "attr", "resolve", "extract"]
         _tally(session, structural, ())
     remark = (
-        "" if session.done else f"the step budget ran out ({verdict.reason}) — taking the draft"
+        ""
+        if session.done
+        else f"the step loop stopped ({verdict.reason}"
+        + (f": {verdict.error}" if verdict.error else "")
+        + ") — taking the draft so far"
     )
     if remark:
         emit(ReasonEvent(stage="author", text=remark))

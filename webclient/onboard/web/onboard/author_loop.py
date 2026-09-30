@@ -252,12 +252,20 @@ _PREVIEW_CHARS = 3_000
 
 def _clip_value(value: object) -> object:
     if isinstance(value, str):
-        return value if len(value) <= _PREVIEW_VALUE_CHARS else value[:_PREVIEW_VALUE_CHARS] + "…"
+        if len(value) <= _PREVIEW_VALUE_CHARS:
+            return value
+        # an explicit, unmistakable display cut -- a bare "…" was read as a truncated extraction
+        return (
+            value[:_PREVIEW_VALUE_CHARS]
+            + f" [+{len(value) - _PREVIEW_VALUE_CHARS} more chars, clipped for display]"
+        )
     if isinstance(value, dict):
         return {k: _clip_value(v) for k, v in value.items()}
     if isinstance(value, list):
         head = [_clip_value(v) for v in value[:3]]
-        return head + ([f"… +{len(value) - 3} more"] if len(value) > 3 else [])
+        return head + (
+            [f"[+{len(value) - 3} more items, clipped for display]"] if len(value) > 3 else []
+        )
     return value
 
 
@@ -288,10 +296,12 @@ async def _review_rows(state: AuthorState) -> "tuple[bool, str]":
         )
     prompt = (
         f"You are reviewing extracted sample rows against a brief. Dataset: {want}.{_scope(state)}\n"
-        f"Schema:\n{schema}{extra}\n\nSample rows (JSON; long values are CLIPPED for display -- a "
-        f"trailing … and '+N more' mark the preview cut, NOT a truncated extraction):\n{sample}\n\n"
+        f"Schema:\n{schema}{extra}\n\nSample rows (JSON; long values are CLIPPED for display -- "
+        f"'[+N more chars, clipped for display]' marks the preview cut, NOT a truncated "
+        f"extraction; the full value was extracted):\n{sample}\n\n"
         "Do these rows correctly match the brief -- the right entity, real values (not nulls or raw "
-        "markup), every non-optional field populated, and any brief-specific check above satisfied? "
+        "markup), every NON-optional field populated, and any brief-specific check above satisfied? "
+        "A field marked (optional) may be empty or missing -- that is never a reason to reject. "
         "Judge what a value IS, not its displayed length. Answer YES or NO on the first line, then "
         "one short reason naming exactly what is wrong or missing."
     )
