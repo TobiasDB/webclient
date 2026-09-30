@@ -201,6 +201,64 @@ def _schema(schema: JsonValue) -> "tuple[list[str], dict[str, str], dict[str, st
     return fields, descriptions, types
 
 
+class SearchHit(BaseModel):
+    """One web-search result: the URL plus the ``title`` / ``snippet`` the engine showed -- what the
+    search step's verify filter judges a seed by (domain + title + snippet), not the URL alone."""
+
+    url: str
+    title: str = ""
+    snippet: str = ""
+
+
+class Candidate(BaseModel):
+    """A crawled page in the running to hold the dataset, as the SELECT step ranked it: ``kind``
+    (``api`` = an endpoint that returns the records | ``page`` = a rendered listing | ``spa`` = a JS
+    app), a ``tier`` (``must`` / ``should`` / ``could`` -- evaluated best-tier-first), and the
+    model's one-line ``note`` why."""
+
+    url: str
+    kind: str = "page"
+    tier: str = "could"
+    note: str = ""
+
+
+class CandidateEval(BaseModel):
+    """The EVALUATE step's read of ONE candidate as the source to scrape -- the model's judgement
+    from a clipped skeleton + the page's flags, with the flags kept as ground truth for structure.
+    ``verdict`` is its one-line reason (logged); ``flags`` / ``flag_signals`` the detections + the
+    evidence behind them, so a choice can be justified in the summary."""
+
+    url: str
+    dataset_present: bool = False
+    is_queryable: bool = False  # an API / endpoint that serves the WHOLE dataset
+    api_endpoint: "str | None" = None  # a same-origin data endpoint the page is backed by
+    sort_order: "str | None" = None  # "newest-first" | "oldest-first" | "unsorted" (from the dates)
+    recency_hint: str = ""  # where the MOST RECENT records are (a tab/filter/first page) -> author
+    completeness: "str | None" = None  # "full" | "partial" | "unknown"
+    has_pagination: bool = False
+    pagination: "str | None" = None  # the detected pager remedy (paginate / paginate:scroll)
+    has_filters: bool = False
+    dataset_is_subset: bool = False
+    mostly_unstructured: bool = False
+    drilldown_links: bool = False
+    is_api_docs: bool = False  # DOCUMENTS an API rather than being the data -- never a source
+    interactive: bool = False  # reached only through forms / buttons -> a browser session
+    scrapability: int = 0  # 0-10; higher is easier / cleaner to scrape
+    verdict: str = ""
+    flags: dict[str, float] = {}  # present flag -> confidence
+    flag_signals: dict[str, list[str]] = {}  # present flag -> the signals (evidence) that fired
+    exit_when_met: bool = False  # the brief's EXIT CONDITION holds here -> a clean stop
+    exit_reason: str = ""
+    #: the page could NOT be assessed by the MODEL (an LLM error) -- judged deterministically instead,
+    #: so a transient outage never reads as "no data here".
+    llm_unavailable: bool = False
+
+    @property
+    def usable(self) -> bool:
+        """A source worth scraping: the dataset is here and it is not hopeless to extract."""
+        return self.dataset_present and self.scrapability >= 5
+
+
 class Reference(BaseModel):
     """WHERE the located dataset is, plus the hints Author needs. ``url`` is the source to query
     -- the **XHR/data-API endpoint when one backs the page** (JSON beats HTML), else the page

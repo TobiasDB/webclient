@@ -131,4 +131,19 @@ def author_prompt(brief: DatasetBrief, skeleton: str, flags: "list[Flag]", *, ki
     )
 
 
-__all__ = ["PATTERNS_GUIDE", "author_prompt", "guide_for"]
+def brief_hints(brief: DatasetBrief) -> str:
+    """The brief's hints as one appended block for ANY stage prompt (search-verify / crawl / select /
+    evaluate): the target schema (per line, typed + described -- the same :func:`field_schema` the
+    author reads) plus the natural-language ``look`` / ``ignore`` guides. Empty when the brief
+    carries none. ONE source, so every stage judges by the same schema and the same guides."""
+    parts: list[str] = []
+    if brief.fields:
+        parts.append("Target schema (each record should carry):\n" + "\n".join(field_schema(brief)))
+    if brief.look:
+        parts.append("Head for pages like: " + "; ".join(brief.look) + ".")
+    if brief.ignore:
+        parts.append("Skip pages like: " + "; ".join(brief.ignore) + ".")
+    return (" " + " ".join(parts)) if parts else ""
+
+
+__all__ = ["PATTERNS_GUIDE", "author_prompt", "brief_hints", "guide_for"]

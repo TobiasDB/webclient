@@ -10,6 +10,7 @@ below :class:`Llm` -- swap in any ``complete(prompt) -> str``.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 import uuid
@@ -380,6 +381,56 @@ class AnthropicLlm:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def json_blob(text: str) -> str:
+    """The first balanced JSON object/array in a model reply (models like to wrap it in prose or a
+    code fence). STRING-AWARE: a brace/bracket inside a JSON string value (``"the } brace"``, a
+    selector like ``[class*="price"]`` in a reason) does not miscount depth. Falls back to the whole
+    stripped text."""
+    t = text.strip()
+    if t.startswith("```"):  # drop a code fence
+        t = t.split("\n", 1)[-1]
+        if t.rstrip().endswith("```"):
+            t = t.rstrip()[:-3]
+        t = t.strip()
+    starts = [i for i in (t.find("{"), t.find("[")) if i != -1]
+    if not starts:
+        return t
+    start = min(starts)
+    depth = 0
+    in_str = False
+    escaped = False
+    for i in range(start, len(t)):
+        ch = t[i]
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+            if depth == 0:
+                return t[start : i + 1]
+    return t[start:]
+
+
+def parse_json(text: str) -> "object | None":
+    """Parse the JSON value a model was asked to reply with, defensively -- ``None`` when the reply
+    holds no valid JSON (the caller then retries with a short "reply with ONLY valid JSON" turn, or
+    falls back). The JSON tier's one parsing seam, so every step reads replies the same way."""
+    try:
+        value: object = json.loads(json_blob(text))
+    except ValueError:
+        return None
+    return value
 
 
 class _Conversation:

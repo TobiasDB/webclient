@@ -28,14 +28,37 @@ from .behaviours import Behaviour, apply_behaviours, behaviour, register_behavio
 from .compile import Query, QueryError, parse_query, reroot
 from .config import build_resolver, default_llm, default_search
 from .entries import Attachment, Authored, Dataset, author, locate, run
+from .evaluate import evaluate_candidate, evaluate_candidates
 from .frontier import llm_frontier
-from .llm import AnthropicLlm, Llm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage
+from .llm import (
+    AnthropicLlm,
+    Budget,
+    BudgetExceeded,
+    Conversation,
+    Conversational,
+    Llm,
+    LlmEvent,
+    Pricing,
+    RateLimit,
+    ReasonEvent,
+    Usage,
+)
 from .locate import Search, data_api_endpoints
 from .locate import locate as locate_source  # the core locate (explicit resolver/search/review)
-from .models import Brief, DatasetBrief, LocateBrief, Reference, packaged_briefs
+from .models import (
+    Brief,
+    Candidate,
+    CandidateEval,
+    DatasetBrief,
+    LocateBrief,
+    Reference,
+    SearchHit,
+    packaged_briefs,
+)
 from .patterns import PATTERNS_GUIDE, author_prompt
 from .review import review
-from .search import DdgSearch
+from .search import DdgSearch, search_web
+from .select import select_candidates
 from .shim import ClaudeShim
 from .sink import DOCUMENT_TYPES, MemorySink, Sink, document_fields, run_to_sink
 
@@ -80,6 +103,18 @@ __all__ = [
     "LlmEvent",
     "ReasonEvent",
     "llm_frontier",
+    "Conversation",
+    "Conversational",
+    "Budget",
+    "BudgetExceeded",
+    # -- the locate stages (search -> crawl -> select -> evaluate -> load) --
+    "search_web",
+    "select_candidates",
+    "evaluate_candidate",
+    "evaluate_candidates",
+    "SearchHit",
+    "Candidate",
+    "CandidateEval",
     # -- lower-level building blocks --
     "locate_source",
     "author_query",

@@ -10,6 +10,8 @@ composition end to end. The LLM is a scripted stub -- so these test the pipeline
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from typing import cast
 
 import pytest
@@ -31,6 +33,34 @@ from web.onboard.locate import locate  # the core (explicit resolver/search/revi
 from web.resolve import Resolver
 
 
+def _stage_reply(prompt: str) -> "str | None":
+    """The canned answer for a LOCATE stage prompt -- so a scripted model plays the pipeline's
+    stages offline: VERIFY keeps every search result, SELECT marks every listed page a ``must``,
+    EVALUATE says the dataset is present + scrapable, and the author loop's YES/NO checks accept.
+    ``None`` for any other prompt (the author's query request -> the scripted reply)."""
+    if "Which results clearly belong to" in prompt:  # search: verify_seeds
+        n = len(re.findall(r"^\d+\. ", prompt, flags=re.M))
+        return json.dumps({"belong": list(range(n)), "note": "all"})
+    if "Here are the crawled pages" in prompt:  # select_candidates (metadata only)
+        urls = re.findall(r'"url": "([^"]+)"', prompt)
+        return json.dumps(
+            [{"url": u, "kind": "page", "tier": "must", "reason": "the dataset"} for u in urls]
+        )
+    if "Assess this page as the source to scrape" in prompt:  # evaluate_candidate
+        return json.dumps(
+            {
+                "dataset_present": True,
+                "is_queryable": False,
+                "completeness": "full",
+                "scrapability": 9,
+                "verdict": "the dataset listing",
+            }
+        )
+    if "Answer YES or NO" in prompt:  # the author loop's check / review
+        return "YES — the page holds the requested dataset."
+    return None
+
+
 class ScriptedLlm:
     """An :class:`~web.onboard.Llm` that returns one canned ``wq`` reply, and records the prompt it
     was given -- a deterministic stand-in for a real model so Author is testable offline.
@@ -42,8 +72,9 @@ class ScriptedLlm:
 
     async def complete(self, prompt: str) -> str:
         self.prompt = prompt
-        if "Answer YES or NO" in prompt:  # Locate's final candidate review -- accept the source
-            return "YES — the page holds the requested dataset."
+        staged = _stage_reply(prompt)
+        if staged is not None:  # a locate stage (verify / select / evaluate) or a YES/NO check
+            return staged
         return self.reply
 
 
@@ -144,27 +175,38 @@ _ACME_EVENTS = (
 
 
 class _VerdictLlm:
-    """A reviewer stand-in that answers Locate's YES/NO candidate review with canned verdicts in
-    sequence (best-first), so a test can drive the model's SELECTION -- Locate leaves the entity /
-    dataset call to this LLM, not a hardcoded rule. Records each prompt it saw."""
+    """A model stand-in that answers the EVALUATE stage with canned verdicts in sequence
+    (best-first) -- so a test drives the model's SELECTION: the pipeline leaves the "does this page
+    hold the entity's dataset" call to the model, not a hardcoded rule. Plays the other stages
+    (select / verify) straight. Records each prompt it saw."""
 
-    def __init__(self, verdicts: "list[str]") -> None:
+    def __init__(self, verdicts: "list[bool]") -> None:
         self._verdicts = verdicts
         self.prompts: "list[str]" = []
+        self._evaluated = 0
 
     async def complete(self, prompt: str) -> str:
         self.prompts.append(prompt)
-        v = self._verdicts[min(len(self.prompts) - 1, len(self._verdicts) - 1)]
-        return f"{v} — reason."
+        if "Assess this page as the source to scrape" in prompt:
+            ok = self._verdicts[min(self._evaluated, len(self._verdicts) - 1)]
+            self._evaluated += 1
+            return json.dumps(
+                {
+                    "dataset_present": ok,
+                    "scrapability": 9 if ok else 0,
+                    "verdict": "holds the dataset" if ok else "a third party's page ABOUT it",
+                }
+            )
+        return _stage_reply(prompt) or "[]"
 
 
-def test_locate_llm_review_can_veto_the_only_candidate(httpserver: HTTPServer) -> None:
-    # the LLM final review runs on the winner; a NO verdict FAILS Locate even for a record-list page.
-    # The model -- not a rule -- decides whether the source belongs to the entity + holds the data.
+def test_locate_evaluate_can_veto_the_only_candidate(httpserver: HTTPServer) -> None:
+    # the EVALUATE stage judges the candidate; a "not present" verdict FAILS Locate even for a
+    # record-list page. The model -- not a rule -- decides whether the source holds the entity's data.
     httpserver.expect_request("/events").respond_with_data(_ACME_EVENTS, content_type="text/html")
 
-    async def go(verdict: str) -> "tuple[Reference | None, _VerdictLlm]":
-        llm = _VerdictLlm([verdict])
+    async def go(ok: bool) -> "tuple[Reference | None, _VerdictLlm]":
+        llm = _VerdictLlm([ok])
         async with Resolver() as r:
             ref = await locate(
                 LocateBrief(goal="investor events", candidates=[httpserver.url_for("/events")]),
@@ -174,15 +216,15 @@ def test_locate_llm_review_can_veto_the_only_candidate(httpserver: HTTPServer) -
             )
             return ref, llm
 
-    ref_yes, llm_yes = cast("tuple[Reference | None, _VerdictLlm]", _run(go("YES")))
+    ref_yes, llm_yes = cast("tuple[Reference | None, _VerdictLlm]", _run(go(True)))
     assert ref_yes is not None
-    assert "Acme Corp" in llm_yes.prompts[0]  # the entity is handed to the model as context
-    # the review judges SOURCE fit, not single-page field completeness: a listing/index of the
-    # records is a valid source even when per-record detail is a link away (regression: a correct
-    # events listing was being rejected for not showing every field / the archived section here).
-    p = llm_yes.prompts[0]
-    assert "RIGHT SOURCE" in p and "LISTS or indexes" in p and "do not reject for truncation" in p
-    ref_no, _ = cast("tuple[Reference | None, _VerdictLlm]", _run(go("NO")))
+    evaluate = [p for p in llm_yes.prompts if "Assess this page" in p]
+    assert evaluate and "Acme Corp" in evaluate[0]  # the entity is handed to the model as context
+    # what the model SEES per stage: evaluate gets the flags + ONE (clipped) skeleton ...
+    assert "Detected flags" in evaluate[0] and "Page skeleton" in evaluate[0]
+    select = [p for p in llm_yes.prompts if "Here are the crawled pages" in p]
+    assert select and "Page skeleton" not in select[0]  # ... select saw METADATA only
+    ref_no, _ = cast("tuple[Reference | None, _VerdictLlm]", _run(go(False)))
     assert ref_no is None  # model vetoed -> Locate fails (allowed)
 
 
@@ -197,7 +239,7 @@ def test_locate_seeds_from_search_results_not_an_llm_guess(httpserver: HTTPServe
     class _Stub:  # only the YES/NO candidate review now -- there is no URL-guessing step
         async def complete(self, prompt: str) -> str:
             prompts.append(prompt)
-            return "YES" if "Answer YES or NO" in prompt else "[]"
+            return _stage_reply(prompt) or "[]"
 
     async def go() -> "Reference | None":
         async def search(_q: str) -> "list[str]":
@@ -824,13 +866,13 @@ def test_has_records_requires_schema_corroboration() -> None:
 def test_ignored_hard_filters_brief_forbidden_hosts() -> None:
     # a brief's `ignore` entries HARD-exclude their hosts, so a forbidden aggregator never wins even
     # as the only survivor when the real source 404s (Locate then fails, which is correct).
-    from web.onboard.locate import _ignored
+    from web.onboard.evaluate import ignored
 
     ignore = ["third-party aggregators", "Benzinga", "MarketScreener", "Yahoo Finance"]
-    assert _ignored("https://www.benzinga.com/quote/AMD", ignore)
-    assert _ignored("https://finance.yahoo.com/quote/AMD", ignore)  # a two-word host token matches
-    assert not _ignored("https://investors.amd.com/events", ignore)  # the entity's OWN IR host kept
-    assert not _ignored("https://ir.example.com/calendar", ignore)  # no ignore token in the host
+    assert ignored("https://www.benzinga.com/quote/AMD", ignore)
+    assert ignored("https://finance.yahoo.com/quote/AMD", ignore)  # a two-word host token matches
+    assert not ignored("https://investors.amd.com/events", ignore)  # the entity's OWN IR host kept
+    assert not ignored("https://ir.example.com/calendar", ignore)  # no ignore token in the host
 
 
 def test_run_returns_a_dataset_of_rows_and_documents(httpserver: HTTPServer) -> None:
@@ -1221,7 +1263,7 @@ def test_packaged_briefs_are_available_and_loadable() -> None:
 
 def test_ddg_search_parses_result_urls(monkeypatch: "pytest.MonkeyPatch") -> None:
     import ddgs
-    from web.onboard import DdgSearch
+    from web.onboard import DdgSearch, SearchHit
 
     class _FakeDDGS:
         def __enter__(self) -> "_FakeDDGS":
@@ -1239,5 +1281,6 @@ def test_ddg_search_parses_result_urls(monkeypatch: "pytest.MonkeyPatch") -> Non
             ]
 
     monkeypatch.setattr(ddgs, "DDGS", _FakeDDGS)
-    urls = cast("list[str]", _run(DdgSearch()("latest news")))
-    assert urls == ["https://a.com", "https://b.com"]
+    hits = cast("list[SearchHit]", _run(DdgSearch()("latest news")))
+    assert [h.url for h in hits] == ["https://a.com", "https://b.com"]
+    assert hits[0].title == "A"  # the title/snippet ride along for the verify filter
