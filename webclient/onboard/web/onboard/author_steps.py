@@ -40,6 +40,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import re
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -47,7 +48,8 @@ from urllib.parse import urlsplit
 
 from web.dsl import SourceError, UnknownVerb, from_source, resolve_memo, verbs_of
 from web.fetch import WebException, emit
-from web.parse import Document
+from web.parse import Document, Element
+from web.parse.classes import is_noise_class
 from web.resolve import Flag, Resolver
 
 from .agent import BoundedLoop, Done
@@ -159,6 +161,7 @@ class StepSession:
     tally, and the text of the next turn."""
 
     doc: Document
+    detail_doc: "Document | None" = None  # the sampled detail page (once detail() is applied)
     draft: Draft = field(default_factory=Draft)  # the CURRENT section
     finished: "list[Draft]" = field(default_factory=list)  # earlier sections of this page
     conv: "Conversation | None" = None
@@ -410,6 +413,105 @@ async def _raw_values(draft: Draft, op: Op, doc: Document, resolver: Resolver) -
     return "" if all(_empty(v) for v in vals) else ", ".join(_short(v) for v in vals)
 
 
+# -- failure hints -------------------------------------------------------------------------------
+
+_SELECT_ARG = re.compile(r"""select(?:_all)?\(\s*(['"])(.*?)\1""")
+#: attributes that never identify a value (layout / event noise).
+_SKIP_ATTRS = frozenset({"class", "style", "onclick", "tabindex"})
+
+
+def _tokens(text: str) -> "set[str]":
+    return {t.lower() for t in re.findall(r"[A-Za-z][\w-]*", text)}
+
+
+def _candidates(el: Element) -> "list[str]":
+    """The selectors this element answers to: its tag, ``tag.class`` (semantic classes), ``#id``,
+    ``tag[attr]`` for its data / semantic attributes."""
+    attrs = el.attrs
+    tag = el.tag or "*"
+    out = [tag]
+    out += [f"{tag}.{c}" for c in attrs.get("class", "").split() if not is_noise_class(c)][:3]
+    if attrs.get("id"):
+        out.append(f"#{attrs['id']}")
+    out += [f"{tag}[{a}]" for a in attrs if a not in _SKIP_ATTRS][:4]
+    return out
+
+
+def suggest_selectors(scope: "Document | Element", css: str, *, limit: int = 6) -> "list[str]":
+    """The selectors in ``scope`` (the first record, the detail page, the whole page) CLOSEST to a
+    ``css`` that missed -- ranked by the tag / class / attribute tokens they share with it. Empty
+    when nothing in the scope shares a token (then :func:`leaf_selectors` shows what IS there)."""
+    want = _tokens(css)
+    scored: dict[str, int] = {}
+    for el in scope.select_all("*")[:600]:
+        for cand in _candidates(el):
+            shared = len(want & _tokens(cand))
+            if shared and scored.get(cand, 0) < shared:
+                scored[cand] = shared
+    return [c for c, _ in sorted(scored.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]]
+
+
+def leaf_selectors(scope: "Document | Element", *, limit: int = 8) -> "list[str]":
+    """The TEXT-bearing elements of ``scope`` as selectors with a text hint -- what a field could
+    read when the missed selector shares nothing with the structure."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for el in scope.select_all("*")[:600]:
+        text = " ".join(el.text.split())
+        if not text or el.select("*") is not None:  # leaves only (no element children)
+            continue
+        sel = _candidates(el)[1] if len(_candidates(el)) > 1 else el.tag
+        if sel in seen:
+            continue
+        seen.add(sel)
+        out.append(f"{sel} ({text[:40]!r})")
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _selector_hint(scope: "Document | Element | None", css: str, where: str) -> str:
+    """One line naming the closest selectors to ``css`` in ``scope`` (or what the scope holds)."""
+    if scope is None or not css:
+        return ""
+    close = suggest_selectors(scope, css)
+    if close:
+        return f" Closest selectors in {where}: " + ", ".join(close) + "."
+    leaves = leaf_selectors(scope)
+    return (
+        f" Nothing in {where} matches those tokens; its text-bearing elements are: "
+        + ", ".join(leaves)
+        + "."
+        if leaves
+        else ""
+    )
+
+
+def _attr_hint(scope: "Document | Element | None", chain: str) -> str:
+    """When a chain's selector MATCHED but its ``attr`` read nothing: the matched element's
+    attributes and text, so the model reads one that exists."""
+    m = _SELECT_ARG.search(chain)
+    if scope is None or m is None:
+        return ""
+    el = scope.select(m.group(2))
+    if el is None:
+        return ""
+    attrs = ", ".join(f"{k}={v[:40]!r}" for k, v in el.attrs.items() if k != "style")
+    text = " ".join(el.text.split())[:80]
+    return (
+        f" The selector matched a <{el.tag}> whose attributes are: {attrs or '(none)'}; its text: "
+        f"{text!r}. Read one of those with .attr('<name>') / .attr('text')."
+    )
+
+
+def _scope(session: StepSession, op: Op) -> "Document | Element | None":
+    """Where a column's selector is evaluated: the FIRST record (field), or the sampled detail
+    page (detail_field)."""
+    if op.name == "detail_field":
+        return session.detail_doc
+    return session.doc.select(session.draft.records) if session.draft.records else None
+
+
 def _dig(row: object, name: str) -> object:
     cur = row
     for part in name.split("."):
@@ -639,7 +741,13 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
             return (
                 False,
                 f"{head}\nNOT APPLIED -- {op.args[0]!r} matched 0 elements. Pick the repeating "
-                "element from the skeleton (the one marked ← RECORD LIST is the likely row).",
+                "element from the skeleton (the one marked ← RECORD LIST is the likely row)."
+                + (
+                    f" LOCATE detected the record list at {session.record_selector!r}."
+                    if session.record_selector
+                    else ""
+                )
+                + _selector_hint(doc, op.args[0], "the page"),
                 "matched 0 elements (not applied)",
             )
         rows: list[object] = []
@@ -677,6 +785,7 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
             return False, f"{head}\nNOT APPLIED -- fetching {href} failed: {exc}", "fetch failed"
         new.link = op.args[0]
         session.draft = new
+        session.detail_doc = page
         skel = clip(skeleton_for(page), _DETAIL_CHARS, "detail skeleton", kind="html")
         return (
             True,
@@ -702,11 +811,14 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
     try:
         rows = await _probe(new, doc, resolver)
     except WebException as exc:
+        missed = exc.error.detail.get("selector") if exc.error.code == "dsl.select_miss" else None
+        where = "the detail page" if op.name == "detail_field" else "the record"
+        hint = _selector_hint(_scope(session, op), str(missed or ""), where)
         return (
             False,
             f"{head}\nFAILED -- {exc.error.code}: {exc.error.message}. The op was REVERTED. A "
             "selector must match inside EVERY record; a field absent on some records is read with "
-            "select(css, optional=True).",
+            f"select(css, optional=True).{hint}",
             f"reverted ({exc.error.code}: {exc.error.message})",
         )
     except asyncio.TimeoutError:
@@ -742,11 +854,17 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
                     "with .regex(pattern, group=1) before the transform.",
                     "EMPTY after the transform (reverted)",
                 )
+            scope = _scope(session, op)
+            hint = _attr_hint(scope, op.args[1])
+            if not hint:
+                m = _SELECT_ARG.search(op.args[1])
+                where = "the detail page" if op.name == "detail_field" else "the record"
+                hint = _selector_hint(scope, m.group(2) if m else "", where)
             return (
                 False,
                 f"{head}\nEMPTY on every probed record -- REVERTED. The selector matched nothing "
-                "inside the record, or the value is in an ATTRIBUTE (read it with .attr('<name>')). "
-                "If the field is genuinely not there, say absent(<name>).",
+                "inside the record, or the value is in an ATTRIBUTE (read it with .attr('<name>'))."
+                f"{hint} If the field is genuinely not there, say absent(<name>).",
                 "EMPTY on every record (reverted)",
             )
     session.draft = new
@@ -865,7 +983,9 @@ __all__ = [
     "StepError",
     "StepResult",
     "StepSession",
+    "leaf_selectors",
     "max_steps",
     "parse_op",
     "run_steps",
+    "suggest_selectors",
 ]

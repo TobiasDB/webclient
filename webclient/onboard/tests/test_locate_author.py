@@ -1671,7 +1671,7 @@ def test_steps_engine_shows_the_raw_text_when_a_transform_empties_a_column(
     llm = _StepConv(
         [
             'records("li.row")',
-            'field(published, wq.doc.select("span.h").attr("text").datetime())',
+            'field(published, wq.doc.select("span.h").attr("text").date(format="%Y-%m-%d"))',
             'field(published, wq.doc.select("span.h").attr("text").regex(r"at (\\d\\d:\\d\\d)", group=1))',
             "done()",
         ]
@@ -1758,3 +1758,28 @@ def test_steps_engine_precondition_failures_are_not_repeats_and_names_are_unique
     assert "NOT APPLIED -- call detail" in llm.turns[3]
     assert "you already called" not in llm.turns[6]  # the retry after detail() went through
     assert art.sample[0] == {"detail": {"body": "Body One", "name": "Body One"}}
+
+
+def test_steps_engine_hints_name_closest_selectors_and_available_attributes(
+    httpserver: HTTPServer,
+) -> None:
+    # USER: "hints should be solid -- if a css selector fails, suggest alternatives (closest
+    # selectors, the surrounding structure); if an attr is None say which are available".
+    from web.onboard import QueryArtifact
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    llm = _StepConv(
+        [
+            'records("li.row")',
+            'field(name, wq.doc.select("span.title").attr("text"))',  # misses: closest = span.name
+            'field(name, wq.doc.select("span.name").attr("data-id"))',  # attr absent: list attrs
+            'field(name, wq.doc.select("span.name").attr("text"))',
+            "done()",
+        ]
+    )
+    art = _steps_art(httpserver, llm, ["name"])
+    assert isinstance(art, QueryArtifact)
+    assert art.complete, art.reason
+    assert "Closest selectors in the record: span.name" in llm.turns[2]
+    assert "matched a <span> whose attributes are: class='name'" in llm.turns[3]
+    assert "its text: 'A'" in llm.turns[3]
