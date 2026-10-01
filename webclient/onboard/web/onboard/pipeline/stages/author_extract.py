@@ -207,10 +207,18 @@ async def run(state: Onboarding, ctx: Context) -> "list[ExtractQuery]":
         one = await _one(state, ctx, guide, doc, outline, resolver)
         out.append(one)
         if not one.complete:
-            state.stopped = f"author_extract{' (' + guide.name + ')' if guide.name else ''}: " + (
-                one.attempts[-1] if one.attempts else "nothing extracted"
+            emit(
+                ReasonEvent(
+                    stage="author_extract",
+                    text=f"query {guide.name or '(the query)'} produced nothing: "
+                    + (one.attempts[-1] if one.attempts else "nothing extracted"),
+                )
             )
-            break
+    if not any(q.complete for q in out):  # every guide failed: the stage stops the run
+        last = out[-1] if out else None
+        state.stopped = "author_extract: " + (
+            last.attempts[-1] if last is not None and last.attempts else "nothing extracted"
+        )
     return out
 
 
@@ -237,6 +245,7 @@ async def _one(
         else ""
     )
     schema = brief.as_schema(guide)
+    where = ""
     guidance = (brief.hints.get("author_extract", "") + "\n" + guide.hint).strip()
     if guide.name:
         guidance = f"THIS QUERY: {guide.name} -- {guide.hint}".strip()
