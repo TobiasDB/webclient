@@ -3,12 +3,14 @@ worth following, each as ``must`` (the listing itself), ``could`` or ``lead``.""
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from pydantic import BaseModel
 from web.fetch import emit
 
 from ...llm import ReasonEvent
 from ..ask import PROMPT_INPUT_CHARS, Context, ask_json
-from ..state import Onboarding, Pick, SearchReview
+from ..state import Hit, Onboarding, Pick, SearchReview
 
 
 class _Pick(BaseModel):
@@ -36,6 +38,20 @@ def hit_lines(hits: "list[tuple[str, float, str, str]]", budget: int = PROMPT_IN
     return "\n".join(out)
 
 
+def own_hosts(hits: "list[Hit]") -> "list[Pick]":
+    """The site roots of the hosts that matched a DOMAIN hint (the entity's own sites: a PDF on
+    www.adobe.com still says adobe.com is the entity), as ``lead`` picks, most-hit first."""
+    counts: dict[str, int] = {}
+    for h in hits:
+        if h.domain:
+            root = f"{urlparse(h.url).scheme}://{urlparse(h.url).hostname}/"
+            counts[root] = counts.get(root, 0) + 1
+    return [
+        Pick(url=root, tier="lead", why="the entity's own site", score=float(n))
+        for root, n in sorted(counts.items(), key=lambda kv: -kv[1])[:3]
+    ]
+
+
 async def run(state: Onboarding, ctx: Context) -> SearchReview:
     assert state.search is not None
     hits = state.search.hits
@@ -59,6 +75,16 @@ async def run(state: Onboarding, ctx: Context) -> SearchReview:
             picks.append(Pick(url=hit.url, tier=tier, why=p.why, score=hit.score))  # type: ignore[arg-type]
     order = {"must": 0, "could": 1, "lead": 2}
     picks.sort(key=lambda p: (order[p.tier], -p.score))
+    if not picks:  # nothing listed IS the dataset: the entity's own hosts are leads to crawl from
+        picks = own_hosts(hits)
+        if picks:
+            emit(
+                ReasonEvent(
+                    stage="review_search",
+                    text="no result is the listing -- crawling from the entity's own site(s): "
+                    + ", ".join(p.url for p in picks),
+                )
+            )
     dropped = [h.url for h in hits if h.url not in {p.url for p in picks}]
     for pk in picks:
         emit(ReasonEvent(stage="review_search", subject=pk.url, text=f"{pk.tier} — {pk.why}"))

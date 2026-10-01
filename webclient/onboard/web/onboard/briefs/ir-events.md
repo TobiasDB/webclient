@@ -4,6 +4,7 @@ title: Investor-relations events (upcoming + archived)
 args: [company]
 search:
   term: "{company} investor relations events calendar"
+  terms: ["{company} investor relations", "{company} investors"]
   k: 10
   domain: ["{company}", "investors.{company}", "ir.{company}", "investor.{company}", "q4cdn", "gcs-web"]
   path: ["event", "calendar", "webcast", "presentation", "investor", "ir"]

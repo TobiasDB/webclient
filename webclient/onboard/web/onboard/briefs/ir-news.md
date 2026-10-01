@@ -4,6 +4,7 @@ title: Investor-relations news / press releases
 args: [company]
 search:
   term: "{company} investor relations press releases"
+  terms: ["{company} investor relations", "{company} investors"]
   k: 10
   domain: ["{company}", "investors.{company}", "ir.{company}", "investor.{company}", "q4cdn", "gcs-web"]
   path: ["news", "press", "release", "investor", "ir"]

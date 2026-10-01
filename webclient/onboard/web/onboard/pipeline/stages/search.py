@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from web.fetch import emit
+from web.fetch import WebException, emit
 
 from ...llm import ReasonEvent
 from ...search import as_hits
@@ -28,11 +28,22 @@ def score_url(
 async def run(state: Onboarding, ctx: Context) -> SearchResult:
     spec = state.brief.search
     term = spec.term or state.brief.goal
-    found = as_hits(await ctx.search(term))[: spec.k]
     hits: list[Hit] = []
-    for h in found:
-        score, d, p = score_url(h.url, spec.domain, spec.path)
-        hits.append(Hit(url=h.url, title=h.title, snippet=h.snippet, score=score, domain=d, path=p))
+    seen: set[str] = set()
+    for query in [term, *spec.terms]:  # every term: the IR site often surfaces on the plain one
+        try:
+            found = as_hits(await ctx.search(query))[: spec.k]
+        except WebException as exc:
+            emit(ReasonEvent(stage="search", text=f"{query!r} failed: {exc.error.message}"))
+            continue
+        for h in found:
+            if h.url in seen:
+                continue
+            seen.add(h.url)
+            score, d, p = score_url(h.url, spec.domain, spec.path)
+            hits.append(
+                Hit(url=h.url, title=h.title, snippet=h.snippet, score=score, domain=d, path=p)
+            )
     hits.sort(key=lambda h: -h.score)
     emit(ReasonEvent(stage="search", text=f"{term!r}: {len(hits)} result(s)"))
     for hit in hits[:8]:

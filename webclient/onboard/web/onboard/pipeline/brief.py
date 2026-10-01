@@ -30,6 +30,9 @@ class SearchSpec(BaseModel):
     score each by how many ``domain`` / ``path`` hint fragments its URL carries."""
 
     term: str = ""
+    terms: list[str] = (
+        []
+    )  # extra terms searched too (merged, deduped): "{company} investor relations"
     k: int = 10
     domain: list[str] = []  # host fragments: "{company}", "investors.{company}", "q4cdn"
     path: list[str] = []  # path fragments: "news", "press", "investor"
