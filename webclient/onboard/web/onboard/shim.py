@@ -52,6 +52,22 @@ async def _reap(proc: "asyncio.subprocess.Process") -> None:
         pass
 
 
+def _cli_reason(raw: bytes) -> str:
+    """A readable reason from what ``claude -p`` printed: its result payload's error / stop reason
+    when it is JSON, else the text itself (clipped) -- never a raw JSON dump."""
+    text = raw.decode("utf-8", "replace")
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return text.strip()[:300] or "claude -p printed nothing"
+    if isinstance(payload, dict):
+        result = payload.get("result")
+        if payload.get("is_error") and isinstance(result, str):
+            return f"claude -p error: {result[:300]}"
+        return f"claude -p returned no text (stop_reason={payload.get('stop_reason')!r})"
+    return text.strip()[:300]
+
+
 class ClaudeShim:
     """An :class:`Llm` (``complete(prompt) -> str``) over ``claude -p``. ``model`` picks a CLI model
     alias (``"haiku"`` -- the cheapest -- by default; ``None`` uses the CLI default). Records the
@@ -166,7 +182,7 @@ class ClaudeShim:
         except OSError as exc:
             raise WebException(err("llm.shim", f"could not run claude -p: {exc}")) from exc
         if proc.returncode != 0:
-            raise WebException(err("llm.shim", (errb or out).decode("utf-8", "replace")[:400]))
+            raise WebException(err("llm.shim", _cli_reason(errb or out)))
         try:
             payload: object = json.loads(out.decode("utf-8"))
         except ValueError as exc:
@@ -176,7 +192,9 @@ class ClaudeShim:
         if not isinstance(payload, dict):
             raise WebException(err("llm.shim", "claude -p JSON was not an object"))
         result = payload.get("result")
-        self.reply = result if isinstance(result, str) else ""
+        if payload.get("is_error") or not (isinstance(result, str) and result.strip()):
+            raise WebException(err("llm.shim", _cli_reason(out)))  # retried by complete()
+        self.reply = result
         self._meter(payload)  # report cost live from claude's own accounting
         return self.reply
 
