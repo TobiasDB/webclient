@@ -11,7 +11,7 @@ import asyncio
 from typing import cast
 
 from pydantic import BaseModel, JsonValue
-from web.dsl import resolve_memo
+from web.dsl import Arg, Plan, from_plan, from_source, resolve_memo
 from web.fetch import Request, WebException, emit
 from web.parse import Document, Element
 from web.resolve import Resolver, document
@@ -23,7 +23,6 @@ from ..ask import Context, ask_json
 from ..hints import attrs_of, closest, leaves, record_structure, typical
 from ..state import ExtractQuery, Onboarding
 
-_WINDOW = 10  # records a probe runs over
 _REPAIRS = 2
 _READS = ("text", "href", "src", "datetime", "number")
 
@@ -67,24 +66,38 @@ def compile_source(records: str, fields: "dict[str, str]", *, keep: "list[str]" 
     return f"wq.doc.select_all({records!r}){where}.extract({cols})"
 
 
+def _optional(chain: str) -> str:
+    """The column chain with its FIRST ``select`` made optional -- through the plan, never by
+    text surgery (a ``:nth-child(2)`` holds a parenthesis of its own)."""
+    plan = Plan.from_blob(from_source(chain).to_blob())
+    steps = list(plan.steps)
+    for i, step in enumerate(steps):
+        nxt = steps[i + 1] if i + 1 < len(steps) else None
+        if step.kind == "get" and step.name == "select" and nxt is not None and nxt.kind == "call":
+            if "optional" not in nxt.kwargs:
+                steps[i + 1] = nxt.model_copy(
+                    update={"kwargs": {**nxt.kwargs, "optional": Arg(value=True)}}
+                )
+            break
+    return from_plan(plan.model_copy(update={"steps": steps})).to_source()
+
+
 def _presence(chain: str) -> str:
     """A column chain as a presence test: its first call made optional, then ``.is_ok()``."""
-    head = chain.split(").", 1)[0] + ")"  # up to the first call: wq.doc.select('x') / attr('k')
-    if "select(" in head and "optional=True" not in head:
-        head = head[:-1] + ", optional=True)"
+    plan = Plan.from_blob(from_source(_optional(chain)).to_blob())
+    steps = list(plan.steps)
+    cut = next(
+        (i + 2 for i, st in enumerate(steps) if st.kind == "get" and st.name in ("select", "attr")),
+        len(steps),
+    )
+    head = from_plan(plan.model_copy(update={"steps": steps[:cut]})).to_source()
     return f"{head}.is_ok()"
 
 
 def lenient(fields: "dict[str, str]") -> "dict[str, str]":
     """Every column's ``select(css)`` made optional -- the PROBE never aborts on one bad field, so
     the fill rate of every field is measured in one run."""
-    out: dict[str, str] = {}
-    for n, c in fields.items():
-        if "select(" in c and "optional=True" not in c:
-            head, rest = c.split(")", 1)
-            c = head + ", optional=True)" + rest
-        out[n] = c
-    return out
+    return {n: _optional(c) for n, c in fields.items()}
 
 
 def fill_rates(rows: "list[JsonValue]", names: "list[str]") -> "dict[str, float]":
@@ -213,13 +226,15 @@ async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
                     plan.url,
                     profile=plan.profile,
                 )
-                rows = await _probe(probe, resolver, limit=_WINDOW)
+                rows = await _probe(probe, resolver, limit=0)  # the whole document: no fan-out
             except QueryError as exc:  # selector hygiene refused something: the reason goes back
                 failure = str(exc)
             except WebException as exc:
                 failure = f"{exc.error.code}: {exc.error.message}"
             except asyncio.TimeoutError:
                 failure = "the probe timed out"
+            except Exception as exc:  # noqa: BLE001 -- a model-written selector the engine rejects
+                failure = f"the query could not run ({type(exc).__name__}: {exc})"
             rates = fill_rates(rows, brief.required)
             # a required field read on NO record is a miss (repair); on SOME records it marks the
             # elements that are not records of the dataset (a promo in the list) -> filter them out
@@ -249,7 +264,7 @@ async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
             query = reroot(parse_query(out.source), plan.url, profile=plan.profile)
             try:
                 rows = await _probe(query, resolver, limit=0)
-            except (WebException, asyncio.TimeoutError) as exc:
+            except (WebException, asyncio.TimeoutError, Exception) as exc:  # noqa: BLE001
                 out.attempts.append(f"the full run did not finish ({exc})")
                 rows = []
             out.row_count, out.sample = len(rows), rows[:5]

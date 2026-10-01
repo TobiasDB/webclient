@@ -430,3 +430,20 @@ def test_expand_renders_once_when_the_http_page_is_thin_and_switches_to_the_brow
         and "reviewed through a browser" in src.spa.reason
         or src.spa is not None
     )
+
+
+def test_optional_rewrite_and_presence_go_through_the_plan() -> None:
+    from web.onboard.pipeline.stages.author_extract import _presence, lenient
+
+    chain = "wq.doc.select('td:nth-child(2) a, td:nth-child(2)').attr('text')"
+    assert (
+        lenient({"t": chain})["t"]
+        == "wq.doc.select('td:nth-child(2) a, td:nth-child(2)', optional=True).attr('text')"
+    )
+    assert (
+        _presence(chain)
+        == "wq.doc.select('td:nth-child(2) a, td:nth-child(2)', optional=True).is_ok()"
+    )
+    already = "wq.doc.select('.x', optional=True).attr('text')"
+    assert lenient({"t": already})["t"] == already
+    assert _presence("wq.doc.attr('k')") == "wq.doc.attr('k').is_ok()"
