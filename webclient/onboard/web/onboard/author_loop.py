@@ -341,6 +341,8 @@ async def _review_rows(state: AuthorState) -> "tuple[bool, str]":
         f"extraction; the full value was extracted):\n{sample}\n\n"
         "Do these rows correctly match the brief -- the right entity, real values (not nulls or raw "
         "markup), every NON-optional field populated, and any brief-specific check above satisfied? "
+        "A field read from the record's own page is NESTED under `detail` (e.g. detail.body) -- that "
+        "is the expected layout, not a defect. "
         "A field marked (optional) may be empty or missing -- that is never a reason to reject. "
         "Judge what a value IS, not its displayed length. Answer YES or NO on the first line, then "
         "one short reason naming exactly what is wrong or missing."
@@ -774,7 +776,17 @@ async def _observe(state: AuthorState) -> _Obs:
             close = suggest_selectors(scope, missed)
             if close:
                 state.hint += f" Closest selectors in the record: {', '.join(close)}."
-            if records:  # a miss on SOME records = non-records in the record selector
+            on_detail = state.steps is not None and any(
+                missed in chain for chain in state.steps.draft.detail_fields.values()
+            )
+            if on_detail:  # the selector lives on the DETAIL page: those pages differ
+                state.hint += (
+                    f" {missed!r} is read on the DETAIL pages and one of them lacks it -- detail "
+                    "pages differ (an article vs a video / a live page). Either keep only the "
+                    "records whose link is the right kind -- where(wq.doc.select('a').attr('href')"
+                    ".regex('/articles/').is_ok()) -- or read it with select(css, optional=True)."
+                )
+            elif records:  # a miss on SOME records = non-records in the record selector
                 state.hint += miss_pattern(state.doc, records, missed, 0)
     except asyncio.TimeoutError:
         state.rows, state.rows_full = [], []

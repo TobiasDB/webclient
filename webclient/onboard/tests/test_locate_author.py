@@ -2372,3 +2372,78 @@ def test_author_resolver_starts_at_the_located_tier_and_may_climb() -> None:
     assert basic.tiers[0] == fp.BASIC and fp.BROWSER in basic.tiers and basic.on == ("blocked",)
     full = _author_policy(Reference(url="http://x", profile="full_browser"))
     assert full.tiers[0] == fp.BROWSER and fp.BASIC not in full.tiers
+
+
+def test_detail_selector_miss_in_the_full_run_gets_a_detail_page_hint_and_drop_forgets(
+    httpserver: HTTPServer,
+) -> None:
+    # BBC sample: the article container exists on article pages but not on video pages; the full
+    # run's select_miss must say the DETAIL pages differ (filter with where(...) or optional=True),
+    # not "narrow your record selector". And a column that was dropped can be re-added.
+    from web.onboard import QueryArtifact
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    httpserver.expect_request("/detail/1").respond_with_data(
+        b"<article class='body'>Body One</article>", content_type="text/html"
+    )
+    httpserver.expect_request("/detail/2").respond_with_data(
+        b"<video>no article here</video>", content_type="text/html"
+    )
+    llm = _StepConv(
+        [
+            'records("li.row")',
+            'field(name, wq.doc.select(".name").attr("text"))',
+            'detail("a.more")',
+            'detail_field(body, wq.doc.select("article.body").attr("text"))',
+            "done()",  # the full run: /detail/2 lacks article.body -> select_miss -> repair
+            "drop(body)",
+            'detail_field(body, wq.doc.select("article.body", optional=True).attr("text"))',
+            "done()",
+        ]
+    )
+    art = _steps_art(httpserver, llm, ["name", "body"])
+    assert isinstance(art, QueryArtifact)
+    assert art.complete, (art.reason, art.attempts)
+    # with two records the PROBE itself hits the video page: the steps-side hint says the detail
+    # pages differ (where(...) on the url, or optional=True)
+    assert any("This read runs on EVERY record's detail page" in t for t in llm.turns)
+    assert "you already called" not in llm.turns[-2]  # the re-add after drop() went through
+
+
+def test_detail_selector_miss_beyond_the_probe_gets_the_outer_loop_hint(
+    httpserver: HTTPServer,
+) -> None:
+    # Five records, the video LAST: the probe (3 typical records) passes, the FULL run fails on
+    # record 5 -> the outer loop's repair hint names the detail-page reading of the miss.
+    from web.onboard import QueryArtifact
+
+    rows = b"".join(
+        f"<li class='row'><span class='name'>N{n}</span><a class='more' href='/d/{n}'>read</a></li>".encode()
+        for n in range(1, 6)
+    )
+    httpserver.expect_request("/list").respond_with_data(
+        b"<ul>" + rows + b"</ul>", content_type="text/html"
+    )
+    for n in range(1, 5):
+        httpserver.expect_request(f"/d/{n}").respond_with_data(
+            f"<article class='body'>Body {n}</article>".encode(), content_type="text/html"
+        )
+    httpserver.expect_request("/d/5").respond_with_data(
+        b"<video>no</video>", content_type="text/html"
+    )
+    llm = _StepConv(
+        [
+            'records("li.row")',
+            'field(name, wq.doc.select(".name").attr("text"))',
+            'detail("a.more")',
+            'detail_field(body, wq.doc.select("article.body").attr("text"))',
+            "done()",
+            'detail_field(body, wq.doc.select("article.body", optional=True).attr("text"))',
+            "done()",
+        ]
+    )
+    art = _steps_art(httpserver, llm, ["name", "body"])
+    assert isinstance(art, QueryArtifact)
+    assert art.complete, (art.reason, art.attempts)
+    repair_turn = next(t for t in llm.turns if "FAILED and must be fixed" in t)
+    assert "is read on the DETAIL pages and one of them lacks it" in repair_turn

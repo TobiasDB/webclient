@@ -1061,6 +1061,8 @@ async def _step(
     elif op.name == "drop":
         new.fields.pop(op.args[0], None)
         new.detail_fields.pop(op.args[0], None)
+        dropped = (f"field({op.args[0]},", f"detail_field({op.args[0]},")
+        session.tried = {k: v for k, v in session.tried.items() if not k.startswith(dropped)}
     if not new.records:
         return False, f"{head}\nNOT APPLIED -- pick records(...) first", "no records yet"
     try:
@@ -1071,6 +1073,13 @@ async def _step(
         hint = _selector_hint(_scope(session, op), str(missed or ""), where)
         if isinstance(missed, str) and op.name == "field":
             hint += miss_pattern(doc, new.records, missed, session.skip)
+        elif isinstance(missed, str) and op.name == "detail_field":
+            hint += (
+                " This read runs on EVERY record's detail page and those pages can differ (an "
+                "article vs a video / a live page): if some lack the element, keep only the records "
+                "whose link is the right kind with where(...) on the url, or read it with "
+                "select(css, optional=True)."
+            )
         return (
             False,
             f"{head}\nFAILED -- {exc.error.code}: {exc.error.message}. The op was REVERTED. A "

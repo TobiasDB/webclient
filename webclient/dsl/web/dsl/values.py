@@ -457,6 +457,14 @@ class Collection(Generic[T]):
             self._rows[:n] if self._rows is not None else None,
         )
 
+    def first(self, default: object = None) -> "Field[object]":
+        """The first item's value as a Field (``default`` when empty) -- ``split(",").first()``."""
+        return Field(raw(self._items[0]) if self._items else default, base=self.base)
+
+    def last(self, default: object = None) -> "Field[object]":
+        """The last item's value as a Field (``default`` when empty)."""
+        return Field(raw(self._items[-1]) if self._items else default, base=self.base)
+
     def skip(self, n: int) -> "Collection[T]":
         """Drop the first ``n`` items (and their rows) -- a table's header row, a featured item."""
         return self.derive(

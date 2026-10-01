@@ -40,7 +40,8 @@ value is almost always in an attribute — read the attribute whose name matches
 Chain these after a leaf read to shape the value: `.number()` (first number in the text — `"£51.77"`
 → `51.77`, `"22 in stock"` → `22`, and number words — `"Three"` → `3`), `.date()` /
 `.datetime()` (any readable date → ISO `YYYY-MM-DD`), `.split(sep)` (text → a list),
-`.map({...})` (look a value up in a table), `.link()` (a URL written as text → absolute),
+`.map({...})` (look a value up in a table), `.first()` / `.last()` (one item of a list — `.split(",").first()`),
+`.link()` (a URL written as text → absolute),
 `.regex(pattern, group=1)` (pull a substring out of the text — `"Only $19.99!"` →
 `.regex(r"\$([\d.]+)", group=1)` → `"19.99"`). Regex is a LAST resort: first select the element or
 attribute that holds just the value (a `<time datetime>`, a `data-*` attribute, the smaller span);

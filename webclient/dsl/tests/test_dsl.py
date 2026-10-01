@@ -724,3 +724,14 @@ def test_a_relative_url_read_from_a_record_resolves_against_its_page(
     rows = cast("list[dict[str, object]]", asyncio.run(go()))
     assert rows[0]["link"] == httpserver.url_for("/e/1")
     assert cast("dict[str, object]", rows[0]["detail"])["body"] == "Body One"
+
+
+def test_first_and_last_pick_one_item_of_a_list() -> None:
+    # the verb record caught `.split(",").first()` as a gap
+    from web.parse import Document
+
+    doc = Document(content=b"<p class='h'>Storm hits coast, published at 17:09</p>", kind="html")
+    read = wq.doc.select("p.h").attr("text").split(",")
+    assert read.first().collect(doc) == "Storm hits coast"
+    assert read.last().collect(doc) == "published at 17:09"
+    assert wq.doc.select_all("em").first(default="none").collect(doc) == "none"
