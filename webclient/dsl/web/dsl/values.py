@@ -376,7 +376,10 @@ def raw(value: object) -> JsonValue:
         return [raw(v) for v in value]
     if isinstance(value, (str, int, float, bool)) or value is None or isinstance(value, dict):
         return cast(JsonValue, value)
-    return str(value)  # a stray core value (e.g. an element) becomes its repr; rows stay pure data
+    text = getattr(value, "text", None)  # an element / document projects to its TEXT, not a repr
+    if isinstance(text, str):
+        return text
+    return str(value)  # any other stray core value becomes its repr; rows stay pure data
 
 
 def clean_row(row: "dict[str, object]") -> "dict[str, JsonValue]":
@@ -446,6 +449,13 @@ class Collection(Generic[T]):
         return self.derive(
             cast("list[object]", self._items[:n]),
             self._rows[:n] if self._rows is not None else None,
+        )
+
+    def skip(self, n: int) -> "Collection[T]":
+        """Drop the first ``n`` items (and their rows) -- a table's header row, a featured item."""
+        return self.derive(
+            cast("list[object]", self._items[n:]),
+            self._rows[n:] if self._rows is not None else None,
         )
 
     def merge(self) -> "dict[str, JsonValue]":

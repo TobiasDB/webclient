@@ -1877,3 +1877,154 @@ def test_steps_engine_identity_ops(httpserver: HTTPServer) -> None:
     first = cast("dict[str, object]", art.sample[0])
     assert len(str(first["_identity"])) == 24
     assert len(str(cast("dict[str, object]", first["detail"])["_identity"])) == 24
+
+
+_TABLE = (
+    b"<table><tr><th>Ex-Date</th><th>Amount</th></tr>"
+    b"<tr><td>2026-09-01</td><td>$0.43</td></tr>"
+    b"<tr><td>2026-06-01</td><td>$0.43</td></tr>"
+    b"<tr><td>2026-03-01</td><td>$0.42</td></tr></table>"
+)
+
+
+def test_steps_engine_probes_typical_records_and_names_the_miss_pattern(
+    httpserver: HTTPServer,
+) -> None:
+    # Eval B (a dividend table): records(tr) put a <th>-only header row first, every td field hit
+    # a select_miss on it, and the loop stalled. Now the records result shows a TYPICAL record
+    # (the common shape) and notes the odd first one; the probe skips the header; a miss on some
+    # probed records names which ones matched (a header row in the records); and the page's
+    # repeating regions are offered on a 0-match records().
+    from web.onboard import QueryArtifact
+
+    httpserver.expect_request("/list").respond_with_data(_TABLE, content_type="text/html")
+    llm = _StepConv(
+        [
+            'records(".nope")',
+            'records("tr")',
+            'field(ex_date, wq.doc.select("td:nth-child(1)").attr("text").date())',
+            'field(amount, wq.doc.select("td:nth-child(2)").attr("text").number())',
+            "done()",
+        ]
+    )
+    art = _steps_art(httpserver, llm, ["ex_date", "amount"])
+    assert isinstance(art, QueryArtifact)
+    assert "REPEATING REGIONS detected on this page: tr (" in llm.turns[1]
+    assert "record 2 shown -- the typical shape; records 1-1 differ" in llm.turns[2]
+    assert "ex_date: " in llm.turns[3] and '"2026-09-01"' in llm.turns[3]  # the header was skipped
+    # the final query runs over ALL rows (header included): the header row makes it fail LOUDLY
+    # and the repair hint names the miss pattern -- so the model narrows records(...) next
+    assert not art.complete
+    assert any("select_miss" in a for a in art.attempts)
+    assert any("matched on record(s) [2, 3] but not [1]" in t for t in llm.turns)
+
+
+def test_steps_engine_miss_pattern_and_optional_guard(httpserver: HTTPServer) -> None:
+    from web.onboard.author_steps import miss_pattern
+    from web.parse import Document
+
+    doc = Document(content=_TABLE, kind="html")
+    note = miss_pattern(doc, "tr", "td:nth-child(1)", skip=0)
+    assert "matched on record(s) [2, 3] but not [1]" in note and "header row" in note
+    # an optional read that is EMPTY on every one of 8 probed records is reverted, not applied
+    from web.onboard import QueryArtifact
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    llm = _StepConv(
+        [
+            'records("li.row")',
+            'field(name, wq.doc.select(".nothing", optional=True).attr("text"))',
+            'field(name, wq.doc.select(".name").attr("text"))',
+            "done()",
+        ]
+    )
+    art = _steps_art(httpserver, llm, ["name"])
+    assert isinstance(art, QueryArtifact) and art.complete
+    assert "although optional -- REVERTED" in llm.turns[2]
+
+
+def test_a_query_without_fields_is_never_ready_nor_absent(httpserver: HTTPServer) -> None:
+    # Eval B's outer loop: a bare select_all('tr') (rows of elements, no fields) was read as
+    # "records + other fields extract cleanly" -> every field declared ABSENT -> "ready" with 200
+    # rows of element reprs. Now such rows carry no field: the loop repairs, and the artifact is
+    # not complete.
+    from web.onboard import QueryArtifact, write_query
+
+    httpserver.expect_request("/list").respond_with_data(_TABLE, content_type="text/html")
+    bare = 'wq.doc.select_all("tr")'
+    llm = _SeqLlm([bare, bare, bare, bare])
+
+    async def go() -> QueryArtifact:
+        async with Resolver() as r:
+            return await write_query(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                DatasetBrief(fields=["ex_date", "amount"]),
+                resolver=r,
+                llm=cast("object", llm),  # type: ignore[arg-type]
+                max_rounds=8,
+            )
+
+    art = _run(go())
+    assert not art.complete and art.absent == [] and art.row_count == 0
+    assert any("0 populated rows" in a for a in art.attempts)
+
+
+def test_check_escalates_to_a_browser_render_when_the_page_looks_js_gated(
+    httpserver: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Eval C: Locate baked `basic` for a JS-loaded events page; the entry check said "no event
+    # records -- dynamically loaded" and the author guessed 15 selectors at a shell. Now a JS-looking
+    # NO on the HTTP tier RENDERS the page (Locate's seam) and, when the render shows more records,
+    # authors over the rendered page with full_browser baked into the reference.
+    import importlib
+
+    from web.onboard import QueryArtifact, write_query
+    from web.fetch import Request, Snapshot
+
+    shell = b"<html><body><div class='events'></div><p>loading</p></body></html>"
+    full = (
+        b"<html><body><ul>"
+        + b"".join(
+            f"<li class='ev'><a href='/e/{n}'><span class='t'>Event {n}</span></a>"
+            f"<span class='d'>2026-1{n}-01</span></li>".encode()
+            for n in range(1, 6)
+        )
+        + b"</ul></body></html>"
+    )
+    httpserver.expect_request("/events").respond_with_data(shell, content_type="text/html")
+    loc = importlib.import_module("web.onboard.locate")
+
+    async def fake_render(url: str, pool: object) -> Snapshot:
+        return Snapshot(
+            request=Request(url=url),
+            url=url,
+            status=200,
+            headers={"content-type": "text/html"},
+            content=full,
+        )
+
+    monkeypatch.setattr(loc, "_render_page", fake_render)
+
+    class _Llm(_StepConv):
+        async def complete(self, prompt: str) -> str:
+            if "verifying a page holds a dataset" in prompt:
+                return "NO\nThe event records are loaded dynamically by JavaScript after render."
+            return _stage_reply(prompt) or "YES"
+
+    llm = _Llm(['records("li.ev")', 'field(title, wq.doc.select("span.t").attr("text"))', "done()"])
+
+    async def go() -> QueryArtifact:
+        async with Resolver() as r:
+            return await write_query(
+                Reference(url=httpserver.url_for("/events"), kind="html", profile="basic"),
+                DatasetBrief(fields=["title"]),
+                resolver=r,
+                llm=cast("object", llm),  # type: ignore[arg-type]
+                review=cast("object", llm),  # type: ignore[arg-type]
+                engine="steps",
+            )
+
+    art = _run(go())
+    assert "li.ev" in llm.turns[0]  # the opening shows the RENDERED page
+    assert "matched 5 record(s)" in llm.turns[1]
+    assert "resolve(profile='full_browser')" in art.describe

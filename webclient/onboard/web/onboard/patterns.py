@@ -114,7 +114,12 @@ def _pager_note(flags: "list[Flag]") -> str:
 
 
 def _notes(
-    brief: DatasetBrief, flags: "list[Flag]", kind: str, *, record_selector: str = ""
+    brief: DatasetBrief,
+    flags: "list[Flag]",
+    kind: str,
+    *,
+    record_selector: str = "",
+    regions: str = "",
 ) -> str:
     """The advisory block every opening carries: the JSON-kind steer, the brief's structural
     guidance + requirement, the record selector LOCATE detected (a durable hook the model should
@@ -125,6 +130,8 @@ def _notes(
             f"DETECTED RECORD SELECTOR (from the page analysis): {record_selector} -- the repeating "
             "record region; prefer it (or a selector at least as durable) for the records."
         )
+    if regions:
+        notes.append(regions.strip())
     if kind == "json":
         notes.append(
             "This is a JSON document -- use dotted paths in select/select_all and read keys with "
@@ -190,6 +197,7 @@ def steps_prompt(
     kind: str,
     recency: str = "",
     record_selector: str = "",
+    regions: str = "",
 ) -> str:
     """The OPENING turn of the STEP-BY-STEP engine (``build_steps`` template): the leaf-reading
     guide, the ask, the op menu (records / field / detail / detail_field / where / drop / absent /
@@ -202,7 +210,7 @@ def steps_prompt(
         fields_line="\n" + fields_line(brief),
         pager=_pager_note(flags),
         skeleton=skeleton,
-        hints=_notes(brief, flags, kind, record_selector=record_selector),
+        hints=_notes(brief, flags, kind, record_selector=record_selector, regions=regions),
         recency=(f"\n\nRECENCY (from the page evaluation): {recency}" if recency else ""),
         start=(
             f'records("{record_selector}") -- the record list the page analysis detected.'

@@ -142,6 +142,7 @@ class LazyCollection(Protocol[T]):
     def merge(self) -> "LazyField": ...
     def documents(self, column: str) -> "LazyCollection[Document]": ...
     def limit(self, n: int) -> "LazyCollection[T]": ...
+    def skip(self, n: int) -> "LazyCollection[T]": ...
     def distinct(self) -> "LazyCollection[T]": ...
     def identity(self, *parts: str) -> "LazyCollection[dict[str, JsonValue]]": ...  # per row
     def reference(self, name: str) -> "LazyReference": ...
@@ -330,10 +331,11 @@ class SourceError(ValueError):
     """A string was not a rebuildable ``wq`` functional expression (unparseable / disallowed)."""
 
 
-def _eval_src(node: "ast.AST") -> object:
+def _eval_src(node: "ast.AST", *, table: bool = False) -> object:
     """Interpret ONE ``wq`` source AST node against the real recorder. Only ``wq`` is a name; a
     ``_``-prefixed attribute, ``*``/``**`` args, or any other construct is refused -- so an untrusted
     source cannot execute arbitrary code (``wq.reference.__globals__[...]`` is rejected at ``_``).
+    ``table`` allows a dict literal (the argument of ``.map({...})``).
     """
     if isinstance(node, ast.Expression):
         return _eval_src(node.body)
@@ -353,13 +355,25 @@ def _eval_src(node: "ast.AST") -> object:
         if any(isinstance(a, ast.Starred) for a in node.args):
             raise SourceError("*args are not allowed in a query")
         func = _eval_src(node.func)
-        args = [_eval_src(a) for a in node.args]
+        is_map = isinstance(node.func, ast.Attribute) and node.func.attr == "map"
+        args = [_eval_src(a, table=is_map) for a in node.args]
         kwargs: "dict[str, object]" = {}
         for kw in node.keywords:
             if kw.arg is None:
                 raise SourceError("**kwargs are not allowed in a query")
-            kwargs[kw.arg] = _eval_src(kw.value)
+            kwargs[kw.arg] = _eval_src(kw.value, table=is_map and kw.arg == "mapping")
         return func(*args, **kwargs)  # type: ignore[operator]
+    if isinstance(node, ast.Dict):  # a literal table -- ONLY as the argument of `.map({...})`
+        if not table:
+            raise SourceError(
+                "a dict literal is only allowed as the table of .map({...}); an extract column "
+                "is a wq.doc chain, a nested branch a nested extract(...)"
+            )
+        if any(k is None for k in node.keys):
+            raise SourceError("** unpacking is not allowed in a query")
+        return {_eval_src(k): _eval_src(v) for k, v in zip(node.keys, node.values) if k is not None}
+    if isinstance(node, (ast.List, ast.Tuple)):  # a literal list of values
+        return [_eval_src(e) for e in node.elts]
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):  # ~cond
         return ~_eval_src(node.operand)  # type: ignore[operator]
     if isinstance(node, ast.BinOp) and isinstance(

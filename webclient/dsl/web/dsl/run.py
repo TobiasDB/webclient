@@ -378,7 +378,7 @@ def _fan(
     uniform (``select``/``select_all`` flatten nested collections and drop misses; a scalar read
     like ``attr``/``text`` yields a Collection of Fields/Refs -- so ``.text().number()`` chains).
     """
-    if name in {"project", "merge", "limit", "distinct", "documents"}:
+    if name in {"project", "merge", "limit", "skip", "distinct", "documents"}:
         return getattr(coll, name)(*args, **kwargs)
     flat: list[object] = []
     for item in coll:

@@ -87,6 +87,7 @@ _PROBE_TIMEOUT = 30.0
 _MAX_STALLS = 5
 #: how many records' links are sampled to pick a TYPICAL detail page (not an odd first one).
 _LINK_SAMPLE = 12
+_PROBE_ROWS_OPTIONAL = 8  # how far an OPTIONAL read is probed before "empty everywhere" counts
 _RECORD_CHARS = 2_000  # the FIRST record's structure, shown after records(...)
 _DETAIL_CHARS = 6_000  # the detail page's skeleton, shown after detail(...)
 _VALUE_CHARS = 80  # one column value in the feedback
@@ -164,14 +165,17 @@ class Draft:
             )
         return cols
 
-    def source(self, *, limit: int = 0) -> str:
-        """The draft as a ``wq.doc...`` chain (``""`` before a record selector); ``limit`` bounds
-        the records for a probe."""
+    def source(self, *, limit: int = 0, skip: int = 0) -> str:
+        """The draft as a ``wq.doc...`` chain (``""`` before a record selector); ``skip`` /
+        ``limit`` bound the records for a probe (the skip comes BEFORE the columns, so a header
+        row never reaches a loud select)."""
         if not self.records:
             return ""
         q = f"wq.doc.select_all({self.records!r})"
         if self.where:
             q += f".filter({self.where})"
+        if skip:
+            q += f".skip({skip})"
         if limit:
             q += f".limit({limit})"
         cols = self.columns()
@@ -202,6 +206,9 @@ class StepSession:
     verbs: "Counter[str]" = field(default_factory=Counter)
     unknown: "list[str]" = field(default_factory=list)
     steps: int = 0
+    skip: int = (
+        0  # leading records that are NOT typical (a table header row) -- the probe skips them
+    )
     record_selector: str = ""  # the record selector LOCATE detected (a nudge on a different pick)
     pending: str = ""  # the next turn's text (a result / the outer loop's note)
     done: bool = False  # the last run reached done()
@@ -342,29 +349,71 @@ async def _count(draft: Draft, doc: Document, resolver: Resolver) -> int:
     return 0 if got is None else 1
 
 
-async def _probe(draft: Draft, doc: Document, resolver: Resolver) -> "list[object]":
-    """The draft run over the first :data:`_PROBE_ROWS` records of the fetched document."""
-    src = draft.source(limit=_PROBE_ROWS)
+async def _probe(
+    draft: Draft, doc: Document, resolver: Resolver, *, skip: int = 0, rows: int = _PROBE_ROWS
+) -> "list[object]":
+    """The draft run over ``rows`` TYPICAL records of the fetched document -- the first ``skip``
+    matches (a table's header row, a featured item) are left out."""
+    src = draft.source(limit=rows, skip=skip)
     got = await asyncio.wait_for(
         parse_query(src).acollect(doc, resolver=resolver), timeout=_PROBE_TIMEOUT
     )
     return list(got) if isinstance(got, list) else [got]
 
 
+def _leaf(el: Element) -> bool:
+    """No element children (``*`` matches the element itself too, so one match = a leaf)."""
+    return len(el.select_all("*")) <= 1
+
+
+def _shape(el: Element) -> "tuple[str, ...]":
+    """A record's structural signature: the tags of its text-bearing leaves (``th`` vs ``td`` tells
+    a header row from a data row; ``h2``/``a``/``time`` tells an item from an ad)."""
+    return tuple(sorted(e.tag for e in el.select_all("*") if _leaf(e) and e.text.strip()))
+
+
+def _typical(doc: Document, css: str) -> "tuple[int, int]":
+    """``(index of the first TYPICAL record, how many leading records are not typical)`` among the
+    first few matches: the typical shape is the most common one (a table's header row is the odd
+    one out; so is a featured first item)."""
+    els = doc.select_all(css)[:6]
+    if len(els) < 2:
+        return 0, 0
+    shapes = [_shape(e) for e in els]
+    common = max(set(shapes), key=shapes.count)
+    first = next(i for i, sh in enumerate(shapes) if sh == common)
+    return first, first
+
+
 def _first_record(doc: Document, css: str) -> str:
-    """The FIRST matched record's structure -- an HTML fragment's skeleton, or the first JSON item."""
+    """A TYPICAL matched record's structure (see :func:`_typical`) -- an HTML fragment's skeleton,
+    or the first JSON item -- with a note when the first match differs from it."""
     if doc.kind == "json":
         val = doc.at(css)
         first = val[0] if isinstance(val, list) and val else val
         return clip(
             json.dumps(first, ensure_ascii=False, indent=1, default=str), _RECORD_CHARS, "record"
         )
-    el = doc.select(css)
-    if el is None:
+    els = doc.select_all(css)
+    if not els:
         return ""
+    index, _skip = _typical(doc, css)
+    el = els[index]
     frag = Document(content=el.html.encode("utf-8"), kind="html", url=doc.url)
-    skel = frag.skeleton(max_lines=120, text_chars=60, mark_records=False, mark_interactive=False)
-    return clip(skel, _RECORD_CHARS, "record")
+    skel = clip(
+        frag.skeleton(max_lines=120, text_chars=60, mark_records=False, mark_interactive=False),
+        _RECORD_CHARS,
+        "record",
+    )
+    if index == 0:
+        return skel
+    odd = Document(content=els[0].html.encode("utf-8"), kind="html", url=doc.url)
+    odd_skel = clip(odd.skeleton(max_lines=20, text_chars=30, mark_records=False), 500, "record")
+    return (
+        f"(record {index + 1} shown -- the typical shape; records 1-{index} differ, e.g. a table "
+        f"header or a featured item, and are skipped by the probe:\n{odd_skel}\n-- typical record:)\n"
+        + skel
+    )
 
 
 def _record_links(doc: Document, records: str, css: str) -> "list[str]":
@@ -492,7 +541,7 @@ def leaf_selectors(scope: "Document | Element", *, limit: int = 8) -> "list[str]
     seen: set[str] = set()
     for el in scope.select_all("*")[:600]:
         text = " ".join(el.text.split())
-        if not text or el.select("*") is not None:  # leaves only (no element children)
+        if not text or not _leaf(el):  # leaves only (no element children)
             continue
         sel = _candidates(el)[1] if len(_candidates(el)) > 1 else el.tag
         if sel in seen:
@@ -535,6 +584,33 @@ def _attr_hint(scope: "Document | Element | None", chain: str) -> str:
     return (
         f" The selector matched a <{el.tag}> whose attributes are: {attrs or '(none)'}; its text: "
         f"{text!r}. Read one of those with .attr('<name>') / .attr('text')."
+    )
+
+
+def _regions_line(doc: Document) -> str:
+    """The page's detected REPEATING REGIONS (the parse layer's record detector) -- ground truth to
+    pick records(...) from, instead of a guessed class."""
+    regions = doc.records(top_k=4) if doc.kind != "json" else []
+    if not regions:
+        return ""
+    return " REPEATING REGIONS detected on this page: " + ", ".join(
+        f"{r.item_selector} ({r.count} items)" for r in regions
+    )
+
+
+def miss_pattern(doc: Document, records: str, missed: str, skip: int) -> str:
+    """Which of the probed records DO contain the missed selector -- a miss on some of them means the
+    record selector includes non-records (a table header row, an ad), not that the field is
+    gone."""
+    els = doc.select_all(records)[skip : skip + _PROBE_ROWS]
+    hits = [i + skip + 1 for i, el in enumerate(els) if el.select(missed) is not None]
+    if not els or not hits:
+        return ""
+    misses = [i + skip + 1 for i, el in enumerate(els) if el.select(missed) is None]
+    return (
+        f" It matched on record(s) {hits} but not {misses}: your records(...) selector includes "
+        "non-records (a table header row? a featured item?) -- narrow it to the data rows (a class "
+        "they share, 'tbody tr', ...) or keep only records with the field via where(...)."
     )
 
 
@@ -759,7 +835,7 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
         else:
             new.detail_identity = list(op.args)
         try:
-            probed = await _probe(new, doc, resolver)
+            probed = await _probe(new, doc, resolver, skip=session.skip)
         except Exception as exc:  # a selector part that raises: this op failed
             return False, f"{head}\nFAILED -- {exc}. The op was REVERTED.", f"reverted ({exc})"
         session.draft = new
@@ -822,16 +898,19 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
                     if session.record_selector
                     else ""
                 )
-                + _selector_hint(doc, op.args[0], "the page"),
+                + _selector_hint(doc, op.args[0], "the page")
+                + _regions_line(doc),
                 "matched 0 elements (not applied)",
             )
         rows: list[object] = []
+        _index, skip = _typical(doc, new.records)
         if new.columns():
             try:
-                rows = await _probe(new, doc, resolver)
+                rows = await _probe(new, doc, resolver, skip=skip)
             except Exception as exc:  # the existing columns failed on the new records: not applied
                 return False, f"{head}\nNOT APPLIED -- with this record selector {exc}", "failed"
         session.draft = new
+        session.skip = skip
         text = f"{head}\nmatched {n} record(s). The FIRST record's structure (wq.doc for field(...)):\n"
         text += _first_record(doc, new.records) or "(not a markup record)"
         if session.record_selector and new.records != session.record_selector:
@@ -884,11 +963,13 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
     if not new.records:
         return False, f"{head}\nNOT APPLIED -- pick records(...) first", "no records yet"
     try:
-        rows = await _probe(new, doc, resolver)
+        rows = await _probe(new, doc, resolver, skip=session.skip)
     except WebException as exc:
         missed = exc.error.detail.get("selector") if exc.error.code == "dsl.select_miss" else None
         where = "the detail page" if op.name == "detail_field" else "the record"
         hint = _selector_hint(_scope(session, op), str(missed or ""), where)
+        if isinstance(missed, str) and op.name == "field":
+            hint += miss_pattern(doc, new.records, missed, session.skip)
         return (
             False,
             f"{head}\nFAILED -- {exc.error.code}: {exc.error.message}. The op was REVERTED. A "
@@ -916,6 +997,18 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
         # a column that reads EMPTY on every probed record is not extracted data: revert it (an
         # optional select that legitimately misses is the one exception) so the draft never
         # degrades and the model must try a different read -- or declare the field absent.
+        if all(_empty(v) for v in vals) and "optional=True" in op.args[1]:
+            # an optional read may legitimately miss a few records -- look wider before deciding
+            wider = await _probe(new, doc, resolver, skip=session.skip, rows=_PROBE_ROWS_OPTIONAL)
+            if all(_empty(_dig(r, key)) for r in wider):
+                return (
+                    False,
+                    f"{head}\nEMPTY on every one of {len(wider)} probed records although optional "
+                    "-- REVERTED: optional=True is for a field SOME records lack, not for a selector "
+                    "that matches nothing. Pick the element from the record structure, or say "
+                    "absent(<name>).",
+                    f"EMPTY on all {len(wider)} probed records (reverted)",
+                )
         if all(_empty(v) for v in vals) and "optional=True" not in op.args[1]:
             raw = await _raw_values(new, op, doc, resolver)
             if raw:  # the selector DID match -- the transform threw the value away
@@ -989,6 +1082,7 @@ async def run_steps(
             kind=session.doc.kind,
             recency=recency,
             record_selector=reference.record_selector or "",
+            regions=_regions_line(session.doc),
         )
     session.done = False
     session.sibling = ""
@@ -1060,6 +1154,7 @@ __all__ = [
     "StepSession",
     "leaf_selectors",
     "max_steps",
+    "miss_pattern",
     "parse_op",
     "run_steps",
     "suggest_selectors",

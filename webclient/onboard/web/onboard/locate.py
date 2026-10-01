@@ -24,6 +24,8 @@ JUDGES over real fetched pages. Locate is ALLOWED to fail -- ``None`` when nothi
 
 from __future__ import annotations
 
+import re
+
 from urllib.parse import urlparse
 
 from web.crawl import Crawler, FrontierMiddleware, Goal
@@ -229,6 +231,10 @@ def _record_count(doc: Document) -> int:
     return regions[0].count if regions else 0
 
 
+#: words in an evaluate verdict that say the records are injected by script.
+_RENDER_WORDS = re.compile(r"render|javascript|\bjs\b|dynamic|ajax|client-side|xhr", re.I)
+
+
 async def _render_page(url: str, pool: ClientPool) -> Snapshot:
     """Render ``url`` in a real browser (the top realness tier) and return the snapshot -- how Locate
     sees a page as a BROWSER would, to detect JS-gating. A module-level seam so a test can stub the
@@ -258,17 +264,32 @@ async def _loading_requirements(
     static_ok = _has_records(page, brief)
     try:
         snap = await _render_page(page.url, resolver.pool)
-    except Exception:  # no browser can launch here -> never sink Locate, but never a WRONG profile
-        if signalled:  # a signalled SPA still needs a browser -- say so rather than bake HTTP
+    except Exception as exc:  # the render failed -> never sink Locate, but never a SILENT profile
+        verdict_says_render = bool(_RENDER_WORDS.search(str(ref.detail.get("reason") or "")))
+        if signalled or verdict_says_render:  # the page's signals / the evaluate verdict say JS
+            why = (
+                "the page's signals say JS-app (SPA)"
+                if signalled
+                else "the evaluate verdict says the records need rendering"
+            )
             emit(
                 ReasonEvent(
                     stage="load",
                     subject=page.url,
-                    text="the page's signals say JS-app (SPA) — baking a browser profile (no browser "
-                    "could render here to confirm)",
+                    text=f"{why} — baking a browser profile (the confirming render failed: "
+                    f"{type(exc).__name__}: {str(exc)[:120]})",
                 )
             )
             return ref.model_copy(update={"profile": "full_browser", "needs_browser": True})
+        emit(
+            ReasonEvent(
+                stage="load",
+                subject=page.url,
+                text=f"render failed ({type(exc).__name__}: {str(exc)[:120]}) — trusting the "
+                f"static page ({static_ct} records; schema {'found' if static_ok else 'not found'})"
+                " — profile basic",
+            )
+        )
         ref = ref.model_copy(update={"profile": "basic"})
         return await _prefer_api(page, ref, resolver) if (brief.prefer_api and static_ok) else ref
     rendered = document(snap)
@@ -280,6 +301,15 @@ async def _loading_requirements(
     gained = rendered_ct >= 2 and rendered_ct > static_ct + 1
     js_gated = signalled or gained or (_has_records(rendered, brief) and not static_ok)
     if not js_gated:
+        emit(
+            ReasonEvent(
+                stage="load",
+                subject=page.url,
+                text=f"rendered and compared: {static_ct} static vs {rendered_ct} rendered records, "
+                f"schema {'found' if static_ok else 'not found'} statically — not JS-gated, "
+                "profile basic",
+            )
+        )
         ref = ref.model_copy(update={"profile": "basic"})
         return await _prefer_api(page, ref, resolver) if brief.prefer_api else ref
     why = (

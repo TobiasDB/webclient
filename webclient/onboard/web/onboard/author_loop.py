@@ -32,6 +32,7 @@ timeliness FLAG) -- so a caller can ship it or say precisely why it isn't ready.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import re
 from collections import Counter
@@ -48,13 +49,18 @@ from web.resolve import profiles as _rp
 
 from .agent import BoundedLoop, Done, Verdict
 from .author import AuthorEvent
-from .author_steps import StepSession, run_steps, suggest_selectors
+from .author_steps import StepSession, miss_pattern, run_steps, suggest_selectors
 from .compile import Query, QueryError, parse_query, reroot
 from .evaluate import skeleton_for
 from .llm import Conversation, Conversational, Llm, ReasonEvent
 from .models import DatasetBrief, QueryArtifact, QuerySection, Reference
 from .patterns import author_prompt, field_schema
 from .timeliness import timeliness
+
+#: Locate's render seam + snapshot->document helper, resolved at call time through the MODULE (the
+#: package re-exports the ``locate`` FUNCTION under the same name, shadowing attribute access; tests
+#: stub ``_render_page`` on this module object).
+_locate_mod = importlib.import_module("web.onboard.locate")
 
 #: the authoring ENGINES: ``steps`` builds the query one op at a time with per-step feedback
 #: (:mod:`.author_steps`) -- the CLI / programmatic default; ``chain`` asks for the whole ``wq``
@@ -164,12 +170,22 @@ def _populated(rows: "list[object]") -> "list[object]":
     selector matched but every field selector missed, which is not extracted data."""
     out: list[object] = []
     for r in rows:
-        if isinstance(r, dict):  # reserved identity columns (_key / _doc) do not populate a row
+        if isinstance(
+            r, dict
+        ):  # reserved identity columns (_identity / _url) do not populate a row
             if any(v not in (None, "", [], {}) for k, v in r.items() if not str(k).startswith("_")):
                 out.append(r)
         elif r not in (None, "", [], {}):
             out.append(r)
     return out
+
+
+def _with_fields(rows: "list[object]", brief: DatasetBrief) -> "list[object]":
+    """The populated rows that can carry the brief's fields: with a schema, only dict rows count --
+    a bare ``select_all`` (elements / text) extracts no field and must never read as "records
+    extract cleanly" (it made every field look ABSENT and the query look ready)."""
+    good = _populated(rows)
+    return [r for r in good if isinstance(r, dict)] if brief.fields else good
 
 
 def _present_keys(value: object, out: "set[str]") -> None:
@@ -523,6 +539,70 @@ async def _author_steps(state: AuthorState, note: str) -> None:
         emit(AuthorEvent(phase="reply", reply=result.query.describe()))
 
 
+#: an entry-check verdict that blames script-injected records.
+_JS_WORDS = re.compile(r"javascript|\bjs\b|dynamic|ajax|render|client-side|xhr|loaded", re.I)
+
+
+async def _escalate_to_browser(state: AuthorState) -> bool:
+    """The entry check says the records are injected by script and the source is on the HTTP tier:
+    RENDER it (the top realness tier, via Locate's seam) and compare. More records rendered than
+    static -> author over the RENDERED page with a ``full_browser`` profile baked into the reference
+    (the author is not HTTP-restricted -- a Locate mis-tiering is corrected here, empirically).
+    ``False`` when no browser could render or the render shows nothing more."""
+    url = state.reference.url
+    static_ct = len(state.doc.records(top_k=1)) if state.doc is not None else 0
+    static_items = sum(r.count for r in state.doc.records(top_k=1)) if state.doc is not None else 0
+    try:
+        snap = await _locate_mod._render_page(url, state.resolver.pool)
+    except Exception as exc:
+        emit(
+            ReasonEvent(
+                stage="check",
+                subject=url,
+                text=f"looks JS-gated but no browser could render it ({type(exc).__name__}: "
+                f"{str(exc)[:120]}) — attempting the static page",
+            )
+        )
+        return False
+    rendered = _locate_mod.document(snap)
+    regions = rendered.records(top_k=1)
+    rendered_items = sum(r.count for r in regions)
+    if not regions or rendered_items <= static_items:
+        emit(
+            ReasonEvent(
+                stage="check",
+                subject=url,
+                text=f"rendered to check: {rendered_items} record items vs {static_items} static — "
+                "no more than the static page; attempting the static page",
+            )
+        )
+        return False
+    state.doc = rendered
+    state.listing_skeleton = skeleton_for(rendered)
+    fired = list(flags(rendered))
+    state.reference = state.reference.model_copy(
+        update={
+            "kind": rendered.kind,
+            "assessment": fired,
+            "profile": "full_browser",
+            "needs_browser": True,
+            "record_selector": regions[0].item_selector,
+        }
+    )
+    state.resolver = _fetch_resolver(state.reference, state.resolver.pool)
+    state.steps = None  # a steps session opens over the rendered document
+    emit(
+        ReasonEvent(
+            stage="check",
+            subject=url,
+            text=f"escalated to a browser render: {rendered_items} record items "
+            f"({regions[0].item_selector}) vs {static_items} static — authoring over the rendered "
+            "page; profile full_browser baked into the reference",
+        )
+    )
+    return True
+
+
 def _parse_diagnosis(reply: str, exc: QueryError) -> "tuple[str, str]":
     """``(one-line reason, hint)`` for a reply that was NOT a valid wq query: the parser's error plus
     WHAT the model actually replied (a snippet) -- so the log shows the cause, not just "invalid
@@ -582,7 +662,7 @@ def _parse_diagnosis(reply: str, exc: QueryError) -> "tuple[str, str]":
 def _fail_reason(state: AuthorState, rows: "list[object]") -> "tuple[str, str]":
     """``(one-line reason, hint)`` for a query that RAN but did not extract the dataset -- the
     reason for the log, the fuller hint for the model's follow-up."""
-    good = _populated(rows)
+    good = _with_fields(rows, state.brief)
     if not good:
         return (
             "0 populated rows -- the record selector (select_all) matched nothing or every field "
@@ -630,15 +710,22 @@ async def _observe(state: AuthorState) -> _Obs:
         state.hint = "Fix the selector that missed (a required select() must match every record)."
         missed = exc.error.detail.get("selector") if exc.error.code == "dsl.select_miss" else None
         if isinstance(missed, str) and state.doc is not None:  # the closest selectors on the page
-            scope = state.doc.select(state.reference.record_selector or "") or state.doc
+            records = (
+                state.steps.draft.records
+                if state.steps is not None and state.steps.draft.records
+                else state.reference.record_selector or ""
+            )
+            scope = (state.doc.select(records) if records else None) or state.doc
             close = suggest_selectors(scope, missed)
             if close:
                 state.hint += f" Closest selectors in the record: {', '.join(close)}."
+            if records:  # a miss on SOME records = non-records in the record selector
+                state.hint += miss_pattern(state.doc, records, missed, 0)
     except asyncio.TimeoutError:
         state.rows, state.rows_full = [], []
         state.last_error = f"the query test exceeded {_QUERY_TEST_TIMEOUT:.0f}s and was cancelled"
         state.hint = "Avoid a per-record .resolve() over many rows unless a field truly needs it."
-    good = _populated(state.rows)
+    good = _with_fields(state.rows, state.brief)
     missing = _missing(state.brief, good) if good else []
     link = _record_link(good) if (missing and not state.nested) else None
     if not state.last_error and good and not missing and state.review is not None:
@@ -751,9 +838,11 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
             return
         ok, note = await _check_source(state)
         state.checked = True
+        basic = (state.reference.profile or "basic") == "basic"
+        if not ok and basic and _JS_WORDS.search(note) and await _escalate_to_browser(state):
+            ok, note = True, ""  # the render revealed the records: author over the rendered page
         if not ok:  # advisory only -- attempt anyway; a skeleton read is not a reliable veto
             state.check_note = note
-            basic = (state.reference.profile or "basic") == "basic"
             hint = (
                 " — the page is on the HTTP tier but looks JS-gated; if extraction comes back empty, "
                 "re-run locate (it should bake a browser profile) or force --full-browser"
@@ -805,7 +894,7 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
         )
         await _author(state)
     elif turn == "absent":
-        missing = _missing(state.brief, _populated(state.rows))
+        missing = _missing(state.brief, _with_fields(state.rows, state.brief))
         state.absent |= set(missing)
         state.attempts.append(f"field(s) {', '.join(sorted(missing))} absent from the source")
         emit(
@@ -830,7 +919,7 @@ def _json_rows(rows: "list[object]") -> "list[JsonValue]":
 def _artifact(state: AuthorState, verdict: Verdict) -> QueryArtifact:
     """Fold the loop's outcome into the :class:`QueryArtifact` (see the module docstring)."""
     parts = _parts(state)
-    all_rows: list[object] = [r for _, rows in parts for r in _populated(rows)]
+    all_rows: list[object] = [r for _, rows in parts for r in _with_fields(rows, state.brief)]
     json_rows = _json_rows(all_rows)
     tested = bool(parts) and all(len(rows) > 0 for _, rows in parts)
     missing = _missing(state.brief, all_rows) if all_rows else list(state.brief.fields)
@@ -845,7 +934,12 @@ def _artifact(state: AuthorState, verdict: Verdict) -> QueryArtifact:
         blob=primary.to_blob() if primary is not None else "",
         describe=primary.describe() if primary is not None else "",
         tested=tested,
-        complete=bool(tested and all_rows and not [m for m in missing if m not in absent]),
+        complete=bool(
+            tested
+            and all_rows
+            and (present & set(state.brief.fields) or not state.brief.fields)  # at least one field
+            and not [m for m in missing if m not in absent]
+        ),
         row_count=len(all_rows),
         sample=json_rows[:_SAMPLE],
         sections=(

@@ -679,3 +679,15 @@ def test_a_reference_reads_as_a_field_for_the_leaf_verbs() -> None:
         wq.doc.select("a").attr("href").regex(r"/(articles|videos)/", group=1).collect(doc)
         == "articles"
     )
+
+
+def test_map_takes_a_dict_literal_and_elements_project_to_text() -> None:
+    # The guide teaches `.map({...})`; the parser now accepts a dict literal THERE (and nowhere
+    # else). A bare collection of elements projects to their text, not reprs.
+    from web.dsl import from_source
+    from web.parse import Document
+
+    doc = Document(content=b"<p class='r'>Three</p><p class='r'>One</p>", kind="html")
+    chain = 'wq.doc.select_all("p.r").attr("text").map({"Three": 3, "One": 1})'
+    assert from_source(chain).collect(doc) == [3, 1]
+    assert from_source('wq.doc.select_all("p.r").project()').collect(doc) == ["Three", "One"]
