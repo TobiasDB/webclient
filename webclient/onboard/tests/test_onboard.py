@@ -140,6 +140,7 @@ def test_prompts_render_from_package_data_and_clip_to_budget() -> None:
             kind="an HTML document",
             skeleton="<ul>",
             hint="",
+            today="2026-10-01",
             note="",
         ),
         "author_review": dict(

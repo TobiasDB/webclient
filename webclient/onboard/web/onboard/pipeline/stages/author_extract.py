@@ -8,6 +8,8 @@ selectors, what the record holds. No nested resolves: a record's own page is a l
 
 from __future__ import annotations
 
+import datetime as _dt
+
 from pydantic import BaseModel
 from web.dsl import Arg, Plan, Query, from_plan, from_source
 from web.fetch import Request, emit
@@ -36,6 +38,7 @@ class _Read(BaseModel):
 
 class _Reply(BaseModel):
     records: str = ""  # the repeating element (css) / the record array (json path)
+    where: str = ""  # optional: a wq.doc predicate keeping only THIS query's records
     fields: dict[str, _Read] = {}
 
 
@@ -60,12 +63,31 @@ def _chain(field: str, spec: _Read, *, json: bool, optional: bool) -> str:
     return chain
 
 
-def compile_source(records: str, fields: "dict[str, str]", *, keep: "list[str]" = []) -> str:
-    """The query: the records, a presence FILTER per field in ``keep`` (a required field that some
+def compile_source(
+    records: str, fields: "dict[str, str]", *, keep: "list[str]" = [], where: str = ""
+) -> str:
+    """The query: the records, the author's ``where`` predicate (this query's records only: the
+    upcoming events by date), a presence FILTER per field in ``keep`` (a required field that some
     matched elements lack -- those elements are not records of the dataset), the columns."""
     cols = ", ".join(f"{n}={c}" for n, c in fields.items())
-    where = "".join(f".filter({_presence(fields[n])})" for n in keep if n in fields)
-    return f"wq.doc.select_all({records!r}){where}.extract({cols})"
+    pred = f".filter({where})" if where else ""
+    presence = "".join(f".filter({_presence(fields[n])})" for n in keep if n in fields)
+    return f"wq.doc.select_all({records!r}){pred}{presence}.extract({cols})"
+
+
+def _check_where(where: str) -> str:
+    """``""`` when the predicate is a parseable ``wq.doc`` chain, else the reason."""
+    if not where:
+        return ""
+    try:
+        from_source(where)
+    except Exception as exc:  # noqa: BLE001 -- the DSL's own parse error is the reason
+        return f"'where' is not a valid wq.doc predicate ({exc})"
+    return (
+        ""
+        if where.lstrip().startswith(("wq.doc", "~wq.doc", "(wq.doc"))
+        else "'where' must start with wq.doc"
+    )
 
 
 def _optional(chain: str) -> str:
@@ -237,14 +259,16 @@ async def _one(
             ),
             skeleton=outline,
             hint=guidance,
+            today=_dt.date.today().isoformat(),
             note=note,
         )
         records = reply.records.strip() if not is_json else reply.records.strip()
         if is_json and not records:
             records = records_path(doc.json())
         specs = {n: r for n, r in reply.fields.items() if n in names}
-        failure = ""
-        if not is_json:
+        where = reply.where.strip()
+        failure = _check_where(where)
+        if not is_json and not failure:
             records = normalise(records)
             wrong = (
                 problems(records, "records") if records else ["no 'records' selector in the reply"]
@@ -281,7 +305,9 @@ async def _one(
         # elements that are not records of the dataset (a promo in the list) -> filter them out
         misses = [n for n in required if rates[n] == 0.0] if rows else list(required)
         keep = [n for n in required if 0.0 < rates[n] < 1.0]
-        source = compile_source(records, fields, keep=keep) if records and fields else ""
+        source = (
+            compile_source(records, fields, keep=keep, where=where) if records and fields else ""
+        )
         out.record_selector, out.fields, out.source, out.misses = records, fields, source, misses
         fill = ", ".join(f"{n} {rates[n]:.0%}" for n in required) if rows else "no rows"
         out.attempts.append(

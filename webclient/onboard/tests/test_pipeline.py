@@ -662,3 +662,21 @@ def test_an_invalid_css_selector_from_the_model_is_a_repair_not_a_crash(
     assert ex is not None and ex.complete and ex.row_count == 8, state.stopped
     assert "not a valid selector" in ex.attempts[0] and "not a valid selector" in llm.prompts[4]
     assert len(ex.attempts) == 3
+
+
+def test_the_author_may_narrow_a_query_with_a_where_predicate() -> None:
+    # 10x: both guides returned the same 74 feed rows -- a date predicate splits upcoming / past
+    from web.onboard.pipeline.stages.author_extract import _check_where, compile_source
+
+    src = compile_source(
+        "GetEventListResult",
+        {"t": "wq.doc.attr('Title')"},
+        where="wq.doc.attr('StartDate').datetime() >= '2026-10-01'",
+    )
+    assert (
+        src
+        == "wq.doc.select_all('GetEventListResult').filter(wq.doc.attr('StartDate').datetime() >= '2026-10-01').extract(t=wq.doc.attr('Title'))"
+    )
+    assert _check_where("") == "" and _check_where("wq.doc.attr('d') < '2026-10-01'") == ""
+    assert "not a valid" in _check_where("wq.doc.attr('d') >=")
+    assert "not a valid" in _check_where("1 == 1")  # a bool, not a wq chain
