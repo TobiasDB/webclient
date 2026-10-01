@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, model_validator
 
 from .brief import Brief
 
@@ -314,6 +314,16 @@ class Onboarding(BaseModel):
     @classmethod
     def load(cls, path: "str | Path") -> "Onboarding":
         return cls.model_validate(json.loads(Path(path).read_text(encoding="utf-8")))
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate(cls, data: object) -> object:
+        """An older state's single-query slots (a dict) read as one-item lists."""
+        if isinstance(data, dict):
+            for slot in ("author_extract", "author_review"):
+                if isinstance(data.get(slot), dict):
+                    data[slot] = [data[slot]]
+        return data
 
     def reset_from(self, stage: str) -> None:
         """Clear ``stage`` and every later stage's output (and the stop), so a run redoes them."""

@@ -16,10 +16,11 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from web.dsl import Query, Report, Run, Sink
+from web.fetch import emit
 from web.resolve import Resolver
 
 from .config import build_resolver, default_llm, default_search
-from .llm import Llm
+from .llm import Llm, ReasonEvent
 from .pipeline import Brief, Context, Onboarding
 from .pipeline import run as _run_stages
 from .search import Search
@@ -78,8 +79,12 @@ def related_onboardings(
         except Exception:  # noqa: BLE001 -- an unknown related brief is skipped
             continue
         path = state_path(other, {k: v for k, v in values.items() if k in other.args}, directory)
-        if path.is_file():
+        if not path.is_file():
+            continue
+        try:
             out.append(Onboarding.load(path))
+        except (ValueError, OSError) as exc:  # an unreadable / foreign state: skipped, said
+            emit(ReasonEvent(stage="related", text=f"could not read {path}: {str(exc)[:160]}"))
     return out
 
 

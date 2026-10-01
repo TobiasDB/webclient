@@ -988,3 +988,17 @@ def test_related_briefs_lend_their_source_host_section_and_tier(tmp_path: Path) 
 
     review = cast("SearchReview", _run(go()))
     assert [(p.url, p.tier) for p in review.picks] == [("https://investors.acme.com/news/", "lead")]
+
+
+def test_an_older_single_query_state_loads_as_lists(tmp_path: Path) -> None:
+    # a related ir-news state saved before the list contracts crashed the ir-events run at load
+    old = {
+        "brief": {"name": "ir-news", "goal": "g"},
+        "author_extract": {"source": "s", "row_count": 3, "complete": True},
+        "author_review": {"ok": True, "notes": "fine"},
+    }
+    path = tmp_path / "ir-news-acme.json"
+    path.write_text(json.dumps(old))
+    state = Onboarding.load(path)
+    assert state.author_extract is not None and state.author_extract[0].row_count == 3
+    assert state.author_review is not None and state.author_review[0].ok
