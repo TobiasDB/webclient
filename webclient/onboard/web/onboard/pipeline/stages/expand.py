@@ -6,6 +6,7 @@ a pager's parameters, an API's knobs -- are later refinements of this stage.)"""
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from urllib.parse import parse_qs, urlparse
 
 from pydantic import JsonValue
@@ -31,6 +32,7 @@ from ..state import (
     DatasetSource,
     Onboarding,
     PaginateDescription,
+    RelatedHint,
     SpaDescription,
 )
 from . import review_candidate as _rc
@@ -171,12 +173,16 @@ _APP_SIGNALS = ("spa", "needs_browser", "data_api", "iframe")
 _THIN_CHARS = 1_500
 
 
-def render_worth(doc: Document, by: "dict[str, Flag]", brief: Brief) -> str:
+def render_worth(
+    doc: Document, by: "dict[str, Flag]", brief: Brief, related: "Sequence[RelatedHint]" = ()
+) -> str:
     """Why the HTTP-tier page should be RENDERED once before trusting it: a script-app / data-API
     signal, or a thin page. ``""`` = trust it. (A description of the page, never a selector.)"""
     hot = [n for n in _APP_SIGNALS if n in by]
     if hot:
         return f"signals {', '.join(hot)}"
+    if any(h.profile == "full_browser" for h in related):
+        return "a related brief's source on this site needed a browser"
     if len(doc.readable()) < _THIN_CHARS:
         return "a thin page (the content may be injected by script)"
     return ""
@@ -192,7 +198,7 @@ async def run(state: Onboarding, ctx: Context) -> DatasetSource:
         # EMPIRICAL loading requirements (a lesson kept): the static page is not trusted on its own
         # -- a script app server-renders a thin shell that passes a skeleton read while the dataset
         # is injected later. Render once on a signal and compare; prefer the feed the render called.
-        why = render_worth(doc, by, state.brief)
+        why = render_worth(doc, by, state.brief, state.related)
         if why:
             emit(
                 ReasonEvent(

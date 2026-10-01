@@ -1,7 +1,8 @@
 ---
 name: ir-events
-title: Investor-relations events (upcoming + archived)
+title: Investor-relations events (the latest: upcoming and the current period)
 args: [company]
+related: [ir-news]
 search:
   term: "{company} investor relations events calendar"
   terms: ["{company} investor relations", "{company} investors"]
@@ -22,6 +23,6 @@ schema:
   - webcast_url: {type: url, description: the live / replay webcast or registration link}
 optional: [datetime, kind, event_url, webcast_url]
 hints:
-  author_extract: "Events sit in an UPCOMING and a PAST/ARCHIVED section with the same record shape -- one record selector covers both when the shape is the same; otherwise the current (latest) section. The date is often a SIBLING paragraph after the title (`+ p`); the latest entries may show no date yet. A webcast / registration link is a separate <a> in the record."
+  author_extract: "The LATEST events only: the UPCOMING section and the current year's / current period's list -- not the archive, not older years' tabs (a separate brief captures those). The date is often a SIBLING paragraph after the title (`+ p`); the latest entries may show no date yet. A webcast / registration link is a separate <a> in the record."
 ---
-Every investor-relations event {company} lists — upcoming and archived: the event name, its date and time, its type, the link to its own page and the webcast link.
+The LATEST investor-relations events {company} lists — the upcoming ones and the current period's — the event name, its date and time, its type, the link to its own page and the webcast link. Archived / older years are a separate dataset.

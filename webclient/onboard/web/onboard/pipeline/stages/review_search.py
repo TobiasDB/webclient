@@ -76,6 +76,9 @@ async def run(state: Onboarding, ctx: Context) -> SearchReview:
             picks.append(Pick(url=hit.url, tier=tier, why=p.why, score=hit.score))  # type: ignore[arg-type]
     order = {"must": 0, "could": 1, "lead": 2}
     picks.sort(key=lambda p: (order[p.tier], -p.score))
+    for h in state.related:  # a related brief's source section is a lead here (same IR site)
+        if h.url and h.url not in {p.url for p in picks}:
+            picks.append(Pick(url=h.url, tier="lead", why=f"the {h.brief} source", score=2.0))
     if not picks:  # nothing listed IS the dataset: the entity's own hosts are leads to crawl from
         picks = own_hosts(hits)
         if picks:

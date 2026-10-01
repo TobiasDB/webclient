@@ -12,6 +12,7 @@ documents and a report, streamed to your own :class:`~web.dsl.Sink` if you pass 
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from web.dsl import Query, Report, Run, Sink
@@ -32,6 +33,7 @@ async def onboard(
     search: "Search | None" = None,
     state: "str | Path | None" = None,
     until: "str | None" = None,
+    related: "Sequence[Onboarding] | None" = None,
     **values: str,
 ) -> Onboarding:
     """Onboard a dataset: run the staged pipeline for ``brief`` rendered with ``values`` (its
@@ -43,7 +45,8 @@ async def onboard(
     if path is not None and path.is_file():
         current = Onboarding.load(path)
     else:
-        current = Onboarding.start(spec, **values)
+        others = list(related) if related is not None else related_onboardings(spec, values, path)
+        current = Onboarding.start(spec, others, **values)
     own = resolver is None
     resolver = resolver or build_resolver()
     ctx = Context(resolver=resolver, llm=llm or default_llm(), search=search or default_search())
@@ -52,6 +55,32 @@ async def onboard(
     finally:
         if own:
             await resolver.aclose()
+
+
+def state_path(brief: Brief, values: "dict[str, str]", directory: "Path | None" = None) -> Path:
+    """Where an onboarding of ``brief`` with ``values`` is saved by convention:
+    ``<brief>-<arg values>.json`` in ``directory`` (the working directory by default)."""
+    tail = "-".join(v.lower().replace(" ", "_") for v in values.values())
+    name = f"{brief.name or 'brief'}{'-' + tail if tail else ''}.json"
+    return (directory or Path(".")) / name
+
+
+def related_onboardings(
+    brief: Brief, values: "dict[str, str]", state: "Path | None" = None
+) -> "list[Onboarding]":
+    """The finished onboardings of ``brief``'s related briefs for the same ``values``, found by
+    the state-file convention next to this onboarding's state file."""
+    directory = state.parent if state is not None else Path(".")
+    out: list[Onboarding] = []
+    for name in brief.related:
+        try:
+            other = Brief.load(name)
+        except Exception:  # noqa: BLE001 -- an unknown related brief is skipped
+            continue
+        path = state_path(other, {k: v for k, v in values.items() if k in other.args}, directory)
+        if path.is_file():
+            out.append(Onboarding.load(path))
+    return out
 
 
 def queries_of(state: Onboarding) -> "list[Query]":
@@ -119,4 +148,4 @@ def _merge(a: Report, b: Report) -> Report:
     )
 
 
-__all__ = ["onboard", "queries_of", "query_of", "run"]
+__all__ = ["onboard", "queries_of", "query_of", "related_onboardings", "run", "state_path"]

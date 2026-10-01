@@ -56,6 +56,7 @@ from .pipeline import (
     PaginateDescription,
     Pick,
     QueryGuide,
+    RelatedHint,
     ReplyError,
     ResolvePlan,
     SearchResult,
@@ -85,6 +86,7 @@ __all__ = [
     "BriefError",
     "FieldSpec",
     "QueryGuide",
+    "RelatedHint",
     "SearchSpec",
     "packaged_briefs",
     # -- the stages and their contracts --

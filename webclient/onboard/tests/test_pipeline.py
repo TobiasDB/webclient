@@ -16,6 +16,7 @@ from web.onboard.pipeline import (
     Context,
     Onboarding,
     SearchResult,
+    SearchReview,
     run,
 )
 from web.onboard.pipeline.stages.search import score_url
@@ -934,3 +935,56 @@ def test_the_author_may_read_a_sibling_with_a_plus_prefix() -> None:
     assert _chain("x", _Read(css="~ p.d", read="text"), json=False, optional=True) == (
         "wq.doc.next('p.d', optional=True).attr(\"text\")"
     )
+
+
+def test_related_briefs_lend_their_source_host_section_and_tier(tmp_path: Path) -> None:
+    # USER: "a way to relate briefs -- onboarding from one uses hints from another (seed URLs,
+    # patterns, browser tiers)". A finished onboarding of a related brief for the same arguments
+    # (found by the state-file convention) gives: a domain hint, a crawl lead, a render reason.
+    from web.onboard.entries import related_onboardings, state_path
+    from web.onboard.pipeline import DatasetSource, RelatedHint, SpaDescription
+    from web.onboard.pipeline.stages.expand import render_worth
+    from web.onboard.pipeline.stages.review_search import run as review_run
+    from web.onboard.pipeline.stages.search import score_url
+    from web.parse import parse
+
+    news = Brief.from_markdown(_BRIEF)  # name ir-news, args [company]
+    events = Brief.from_markdown(
+        _BRIEF.replace("name: ir-news", "name: ir-events\nrelated: [ir-news]")
+    )
+    done = Onboarding.start(news, company="acme")
+    done.expand = DatasetSource(
+        url="https://investors.acme.com/news/", profile="full_browser", spa=SpaDescription()
+    )
+    saved = done.save(state_path(news, {"company": "acme"}, tmp_path))
+    assert saved.name == "ir-news-acme.json"
+    others = related_onboardings(events, {"company": "acme"}, tmp_path / "ir-events-acme.json")
+    assert len(others) == 1 and others[0].brief.name == "ir-news"  # found by the convention
+    state = Onboarding.start(events, others, company="acme")
+    hint = state.related[0]
+    assert hint == RelatedHint(
+        brief="ir-news",
+        url="https://investors.acme.com/news/",
+        host="investors.acme.com",
+        profile="full_browser",
+        api=False,
+    )
+    # the host scores search hits; the section is a crawl lead; the tier is a render reason
+    assert (
+        score_url("https://investors.acme.com/events/", [*events.search.domain, hint.host], [])[0]
+        >= 2.0
+    )
+    doc = parse(
+        b"<html><body><main><p>" + b"x" * 2000 + b"</p></main></body></html>",
+        url="http://x/",
+        content_type="text/html",
+    )
+    assert "related brief" in render_worth(doc, {}, events, state.related)
+    state.search = SearchResult(term="t", hits=[])
+    llm = _Llm([json.dumps({"picks": []})])
+
+    async def go() -> object:
+        return await review_run(state, Context(resolver=cast("object", None), llm=cast("object", llm), search=_Search([])))  # type: ignore[arg-type]
+
+    review = cast("SearchReview", _run(go()))
+    assert [(p.url, p.tier) for p in review.picks] == [("https://investors.acme.com/news/", "lead")]

@@ -68,6 +68,10 @@ class Brief(BaseModel):
     fields: list[FieldSpec] = []
     expect_rows: str = ""
     hints: dict[str, str] = {}  # per-stage natural-language hints: {"author_extract": "..."}
+    #: briefs this one is RELATED to (ir-events -> ir-news): an onboarding of this brief reads
+    #: the related briefs' saved onboardings for the same arguments -- their source host, site
+    #: section and transport tier become hints (seeds, domain hints, a browser) here.
+    related: list[str] = []
     queries: list[QueryGuide] = []  # the authoring guides: one query each ([] = one query)
     values: dict[str, str] = {}  # the argument values once rendered
 

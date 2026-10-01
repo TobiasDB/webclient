@@ -49,7 +49,7 @@ from .config import PIPELINE_MODEL, build_resolver, default_search
 from .config import env as _env
 from .config import env_flag as _env_flag
 from .config import env_float as _env_float
-from .entries import queries_of
+from .entries import queries_of, related_onboardings
 from .entries import run as run_queries
 from .llm import AnthropicLlm, LlmEvent, Pricing, RateLimit, ReasonEvent, TraceEvent, Usage
 from .pipeline import STAGE_NAMES, Brief, BriefError, Context, Onboarding, packaged_briefs
@@ -387,7 +387,10 @@ async def _onboard(args: argparse.Namespace) -> int:
         _err(f"resuming {path} at {state.next_stage() or 'done'}")
     else:
         try:
-            state = Onboarding.start(brief, **values)
+            others = related_onboardings(brief, values, path)
+            state = Onboarding.start(brief, others, **values)
+            for h in state.related:
+                _err(f"related:    {h.brief} -> {h.url} ({h.profile}{', api' if h.api else ''})")
         except BriefError as exc:
             _err(f"{exc} (pass it with --arg name=value)")
             return 2

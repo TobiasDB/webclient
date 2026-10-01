@@ -9,9 +9,11 @@ continue from the first empty slot.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, JsonValue
 
@@ -194,6 +196,35 @@ class AuthorReview(BaseModel):
     pending: list[str] = []
 
 
+# -- related onboardings -------------------------------------------------------------------------
+
+
+class RelatedHint(BaseModel):
+    """What a RELATED brief's finished onboarding (same arguments) tells this one: where its
+    source was (``url``: a lead to crawl from; ``host``: a domain hint), the tier it needed
+    (``profile``), and whether it used a data API -- patterns that usually hold across a
+    company's IR site."""
+
+    brief: str
+    url: str = ""
+    host: str = ""
+    profile: str = ""
+    api: bool = False
+
+    @classmethod
+    def of(cls, other: "Onboarding") -> "RelatedHint | None":
+        src = other.expand
+        if src is None:
+            return None
+        return cls(
+            brief=other.brief.name,
+            url=src.url,
+            host=urlparse(src.url).hostname or "",
+            profile=src.profile,
+            api=src.api is not None,
+        )
+
+
 # -- the state --------------------------------------------------------------------------------------
 
 
@@ -247,6 +278,7 @@ class Onboarding(BaseModel):
 
     version: int = 1
     brief: Brief
+    related: list[RelatedHint] = []  # from the related briefs' onboardings (see Brief.related)
     search: "SearchResult | None" = None
     review_search: "SearchReview | None" = None
     crawl: "CrawlResult | None" = None
@@ -266,9 +298,13 @@ class Onboarding(BaseModel):
     review_note: str = ""
 
     @classmethod
-    def start(cls, brief: Brief, **values: str) -> "Onboarding":
-        """A fresh state for ``brief`` rendered with its argument ``values``."""
-        return cls(brief=brief.render(**values))
+    def start(
+        cls, brief: Brief, related: "Sequence[Onboarding]" = (), **values: str
+    ) -> "Onboarding":
+        """A fresh state for ``brief`` rendered with its argument ``values``; ``related`` are the
+        finished onboardings of its related briefs (their hints are taken)."""
+        hints = [h for h in (RelatedHint.of(o) for o in related) if h is not None]
+        return cls(brief=brief.render(**values), related=hints)
 
     def save(self, path: "str | Path") -> Path:
         p = Path(path)
@@ -334,6 +370,7 @@ __all__ = [
     "Onboarding",
     "PaginateDescription",
     "Pick",
+    "RelatedHint",
     "ResolvePlan",
     "SearchResult",
     "SearchReview",

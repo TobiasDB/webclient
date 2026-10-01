@@ -27,6 +27,7 @@ def score_url(
 
 async def run(state: Onboarding, ctx: Context) -> SearchResult:
     spec = state.brief.search
+    domain = [*spec.domain, *(h.host for h in state.related if h.host)]  # a related source's host
     term = spec.term or state.brief.goal
     hits: list[Hit] = []
     seen: set[str] = set()
@@ -40,7 +41,7 @@ async def run(state: Onboarding, ctx: Context) -> SearchResult:
             if h.url in seen:
                 continue
             seen.add(h.url)
-            score, d, p = score_url(h.url, spec.domain, spec.path)
+            score, d, p = score_url(h.url, domain, spec.path)
             hits.append(
                 Hit(url=h.url, title=h.title, snippet=h.snippet, score=score, domain=d, path=p)
             )

@@ -2,6 +2,7 @@
 name: ir-news
 title: Investor-relations news / press releases
 args: [company]
+related: [ir-events]
 search:
   term: "{company} investor relations press releases"
   terms: ["{company} investor relations", "{company} investors"]
