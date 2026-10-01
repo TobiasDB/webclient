@@ -382,9 +382,12 @@ class AnthropicLlm:
             # fold the API's own error text into the MESSAGE (not only the body) so a caller that
             # logs str(exc) sees WHY (an invalid key, an unknown model, an overload), not a bare code.
             snippet = " ".join(resp.text.split())[:300]
+            rid = resp.headers.get("request-id") or resp.headers.get("x-request-id") or ""
             detail = (
                 f"HTTP {resp.status_code} from the Messages API (model {self._model}, attempt "
-                f"{attempt + 1}/{self._max_retries + 1})"
+                f"{attempt + 1}/{self._max_retries + 1}"
+                + (f", request-id {rid}" if rid else "")
+                + ")"
                 + (f": {snippet}" if snippet else " (empty error body)")
             )
             if resp.status_code in _RETRIABLE and attempt < self._max_retries:

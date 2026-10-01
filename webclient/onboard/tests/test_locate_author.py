@@ -2449,47 +2449,58 @@ def test_detail_selector_miss_beyond_the_probe_gets_the_outer_loop_hint(
     assert "is read on the DETAIL pages and one of them lacks it" in repair_turn
 
 
-def test_frontier_picks_run_over_one_conversation_per_crawl() -> None:
-    # USER: £10 for 50 locates -- the crawl's frontier picks were one fresh process + prompt per
-    # round. On a Conversational model the standing instructions go ONCE and each round is a short
-    # turn (a cached prefix); a stateless model still gets the whole prompt.
+def test_frontier_picks_are_one_shot_rounds_with_a_short_opening() -> None:
+    # USER: "why is the frontier so expensive? it's just small URLs". Measured on the CLI shim: a
+    # conversation re-read every earlier round's listing per turn (cost climbed $0.04 -> $0.10 as
+    # the replies shrank), so a round is ONE-SHOT: the short standing opening + this round's
+    # window, even on a Conversational model; a model error is logged, never swallowed.
     from web.crawl import FrontierItem
+    from web.fetch import EventBus, WebException, err, using
     from web.onboard.frontier import llm_frontier
+    from web.onboard.llm import ReasonEvent
 
     class _Conv:
         def __init__(self) -> None:
-            self.turns: list[str] = []
-            self.completes = 0
+            self.prompts: list[str] = []
+            self.sends = 0
 
         async def complete(self, prompt: str) -> str:
-            self.completes += 1
-            return "[]"
+            self.prompts.append(prompt)
+            if len(self.prompts) == 2:
+                raise WebException(err("llm.api", "HTTP 500 from the Messages API: overloaded"))
+            return '[{"n": 1, "why": "the listing"}]'
 
         def conversation(self) -> "_Conv":
             return self
 
         async def send(self, text: str) -> str:
-            self.turns.append(text)
-            return '[{"n": 1, "why": "the listing"}]'
+            self.sends += 1
+            return "[]"
 
     llm = _Conv()
     mw = llm_frontier(llm, "find the data", fields=["title"])
     items = tuple(FrontierItem(url=f"http://x/{i}", text=f"link {i}") for i in range(4))
+    seen: list[str] = []
+    bus = EventBus()
+    bus.subscribe("", lambda ev: seen.append(ev.text) if isinstance(ev, ReasonEvent) else None)
 
     async def nxt(pending: object) -> object:
         return list(cast("tuple[FrontierItem, ...]", pending))[:1]
 
     async def go() -> None:
         first = await mw(items, nxt)  # type: ignore[arg-type]
-        second = await mw(items[1:], nxt)  # type: ignore[arg-type]
+        second = await mw(items[1:], nxt)  # type: ignore[arg-type]  # the model errors -> fallback
         assert [i.url for i in first] == ["http://x/1"] and [i.url for i in second] == [
-            "http://x/2"
+            "http://x/1"
         ]
 
-    _run(go())
-    assert llm.completes == 0 and len(llm.turns) == 2
-    assert "You are crawling a website" in llm.turns[0] and "FRONTIER this round" in llm.turns[0]
-    assert "You are crawling" not in llm.turns[1] and "FRONTIER this round" in llm.turns[1]
+    with using(bus):
+        _run(go())
+    assert llm.sends == 0 and len(llm.prompts) == 2  # one-shot, never a conversation
+    assert all(
+        "You are crawling a website" in p and "FRONTIER this round" in p for p in llm.prompts
+    )
+    assert any("model error (llm.api: HTTP 500" in t for t in seen)  # the 500 is visible
 
 
 def test_loading_requirements_lets_the_verdict_or_flag_win_over_the_count(
@@ -2583,3 +2594,50 @@ def test_select_skips_a_single_record_page_and_states_the_entity_scope(
         skeleton="<ul>",
         exit_condition="",
     )
+
+
+def test_select_skips_pages_off_the_entitys_verified_domains() -> None:
+    # USER: "that URL was not a seed; it had a very high candidate score". A crawled page whose
+    # registrable domain is not among the verified seeds' domains is skipped at select -- visibly
+    # -- whatever it scores.
+    from web.fetch import EventBus, using
+    from web.onboard.llm import ReasonEvent
+    from web.onboard.select import registrable, select_candidates
+    from web.parse import parse
+
+    assert registrable("https://investors.10xgenomics.com/events/") == "10xgenomics.com"
+    assert registrable("https://www.example.co.uk/x") == "example.co.uk"
+    listing = (
+        b"<ul>"
+        + b"".join(
+            f"<li class='ev'><a href='/e{n}'>Event {n}</a><span>2026-1{n%3}-01</span></li>".encode()
+            for n in range(1, 9)
+        )
+        + b"</ul>"
+    )
+    own = parse(listing, content_type="text/html", url="https://investors.10xgenomics.com/events/")
+    other = parse(
+        listing,
+        content_type="text/html",
+        url="https://biotechnews.example.com/10x-genomics/events/",
+    )
+    seen: list[str] = []
+
+    class _Spy:
+        async def complete(self, prompt: str) -> str:
+            return '[{"url": "https://investors.10xgenomics.com/events/", "tier": "must", "reason": "ok"}]'
+
+    bus = EventBus()
+    bus.subscribe("", lambda ev: seen.append(ev.text) if isinstance(ev, ReasonEvent) else None)
+    with using(bus):
+        out = _run(
+            select_candidates(
+                [other, own],
+                LocateBrief(goal="events", fields=["title"]),
+                llm=cast("object", _Spy()),  # type: ignore[arg-type]
+                entity="10x Genomics",
+                entity_domains=["10xgenomics.com"],
+            )
+        )
+    assert [c.url for c in cast("list[object]", out)] == ["https://investors.10xgenomics.com/events/"]  # type: ignore[attr-defined]
+    assert any("not 10x Genomics's host" in t for t in seen)

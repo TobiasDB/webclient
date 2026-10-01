@@ -95,6 +95,18 @@ def _single_record(doc: Document, by: "dict[str, Flag]") -> bool:
     return not regions or regions[0].count < 6
 
 
+def registrable(url: str) -> str:
+    """The registrable domain of a URL (``investors.10xgenomics.com`` -> ``10xgenomics.com``) --
+    good enough for same-company checks without a public-suffix list (a two-part public suffix
+    such as ``co.uk`` keeps three labels)."""
+    host = (urlparse(url).hostname or "").lower()
+    parts = host.split(".")
+    two_part = len(parts) >= 3 and parts[-2] in ("co", "com", "org", "net", "ac", "gov")
+    if two_part and len(parts[-1]) == 2:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
 def _page_row(doc: Document, by: "dict[str, Flag]") -> "dict[str, object]":
     """What the model sees for one page: url, title, kind, and the flag NAMES that fired."""
     meta = doc.metadata()
@@ -113,12 +125,25 @@ async def select_candidates(
     llm: "Llm | None",
     seed_urls: "Sequence[str]" = (),
     entity: str = "",
+    entity_domains: "Sequence[str]" = (),
 ) -> "list[Candidate]":
     """Rank the crawled pages into must / should / could candidates (see the module docstring).
     Deterministic gates first; then one metadata-only model call (or the score order without a
     model); a seeded data document forced in; fail-open on an unusable pick. Best tier first."""
     ranked: list[tuple[Document, float, dict[str, Flag]]] = []
+    allowed = {d.lower() for d in entity_domains if d}
     for doc in docs:
+        if allowed and registrable(doc.url) not in allowed:  # not the entity's own site
+            emit(
+                ReasonEvent(
+                    stage="select",
+                    subject=doc.url,
+                    text=f"skipped — not {entity or 'the entity'}'s host (its verified domains: "
+                    + ", ".join(sorted(allowed))
+                    + ")",
+                )
+            )
+            continue
         got = _rank(doc, brief)
         if got is not None:
             ranked.append((doc, got[0], got[1]))

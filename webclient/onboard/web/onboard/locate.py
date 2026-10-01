@@ -44,7 +44,7 @@ from .evaluate import (
 from .llm import Llm, ReasonEvent
 from .models import in_range, LocateBrief, Reference
 from .search import Search, search_web
-from .select import select_candidates
+from .select import registrable, select_candidates
 
 
 async def locate(
@@ -95,7 +95,12 @@ async def locate(
     by_url = {d.url: d for d in docs}
 
     # -- 3. select ----------------------------------------------------------------------------
-    candidates = await select_candidates(docs, lb, llm=llm, seed_urls=seeds, entity=entity)
+    # the entity's OWN domains = the verified seeds' domains (a model judgement, not a hardcoded
+    # host rule): a crawled page elsewhere can never be the source, however high it scores
+    domains = sorted({registrable(u) for u in seeds}) if entity and not lb.seeds else ()
+    candidates = await select_candidates(
+        docs, lb, llm=llm, seed_urls=seeds, entity=entity, entity_domains=domains
+    )
     if not candidates:
         emit(ReasonEvent(stage="select", text="no candidate pages (every page gated out)"))
         return None

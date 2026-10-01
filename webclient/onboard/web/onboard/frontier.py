@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from web.crawl import FrontierItem, FrontierMiddleware, Select
 from web.fetch import WebException, emit
 
-from .llm import Conversation, Conversational, Llm, ReasonEvent
+from .llm import Llm, ReasonEvent
 
 #: Cap how many frontier edges are shown to the model PER ROUND. The crawl frontier GROWS every round
 #: (each fetched page adds all its anchors; only the picked few are removed), so sending the whole
@@ -144,7 +144,7 @@ def _opening(goal: str, guides: str) -> str:
         "Each round you get the links on the frontier (not yet fetched); each shows its link text "
         "and the status / title / detection flags of the page it was found on. Reply with ONLY a "
         'JSON array of the links to fetch next, most-promising first, each as {"n": <index>, '
-        '"why": "<short reason>"} (e.g. [{"n": 3, "why": "the board listing"}]). Choose the links '
+        '"why": "<reason, at most 8 words>"} (e.g. [{"n": 3, "why": "the board listing"}]). Choose the links '
         "most likely to reach the dataset (a listing / records / a data API); omit nav, legal, "
         "login and unrelated sections. Do not re-pick a link you already chose in an earlier round."
     )
@@ -173,19 +173,12 @@ def llm_frontier(
     pages and reject third-party sources that merely mention it. Falls back to the next handler
     (FIFO) when the model errors, replies unparseably, or picks nothing."""
 
-    state: dict[str, "Conversation | None"] = {"conv": None}  # one conversation per crawl
-
     async def ask(window: "Sequence[FrontierItem]") -> str:
-        """The pick for this round: on a Conversational model the standing instructions go once
-        (cached) and each round is a short turn; a stateless model gets the whole prompt."""
-        if not isinstance(llm, Conversational):
-            return await llm.complete(_prompt(goal, fields, look, ignore, window, k, entity))
-        conv = state["conv"]
-        if conv is None:
-            conv = state["conv"] = llm.conversation()
-            guides = _guides(goal, fields, look, ignore, entity)
-            return await conv.send(_opening(goal, guides) + "\n\n" + _turn(window, k))
-        return await conv.send(_turn(window, k))
+        """The pick for this round -- ONE-SHOT on purpose: a conversation would re-read every
+        earlier round's listing on each turn (measured: the per-call cost climbed with the context
+        while the replies shrank), and a round needs only its own frontier. The standing opening
+        is short; the listing window is bounded."""
+        return await llm.complete(_prompt(goal, fields, look, ignore, window, k, entity))
 
     async def mw(pending: "Sequence[FrontierItem]", nxt: Select) -> "Sequence[FrontierItem]":
         if len(pending) <= 1:
@@ -195,8 +188,15 @@ def llm_frontier(
         window = _window(pending, goal, fields, look, ignore)
         try:
             reply = await ask(window)
-        except WebException:
-            return await nxt(pending)  # model unavailable -> plain breadth-first, don't break
+        except WebException as exc:  # model unavailable -> plain breadth-first, SAY WHY
+            emit(
+                ReasonEvent(
+                    stage="frontier",
+                    text=f"model error ({exc.error.code}: {exc.error.message}) — this round falls "
+                    "back to breadth-first",
+                )
+            )
+            return await nxt(pending)
         picks: list[FrontierItem] = []
         for idx, why in _picks(reply, len(window))[:k]:
             picks.append(window[idx])
