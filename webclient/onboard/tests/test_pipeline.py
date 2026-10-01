@@ -693,14 +693,16 @@ def test_expand_describes_year_tabs_and_the_author_hears_the_latest_data_rule() 
     from web.parse import parse
 
     html = (
-        "<html><body><ul class=tabs><li><a class=active href='#2026'>2026</a></li><li><a href='#2025'>2025</a></li>"
-        "<li><a href='#2024'>2024</a></li></ul><select><option selected>2026</option><option>2025</option></select>"
-        "<div id=y2026><article class=r>A</article></div><div id=y2025><table><tr><td>B</td></tr></table></div></body></html>"
+        "<html><body><ul class=tabs><li class=active>2026</li><li>2025</li><li>2024</li></ul>"
+        "<select><option selected>2026</option><option>2025</option></select>"
+        "<div id=y2026><h2>2026</h2><article class=r>A</article></div>"
+        "<div id=y2025><h2>2025</h2><table><tr><td>B</td></tr></table></div></body></html>"
     )
     doc = parse(html.encode(), url="http://x/", content_type="text/html")
     found = filters_of(doc)
     assert any("year selector: 2026 (selected), 2025" in f for f in found)
-    assert any("year tabs / links: 2026 (selected), 2025, 2024" in f for f in found)
+    assert any("year tabs: 2026 (selected), 2025, 2024 -- 2026 is selected" in f for f in found)
+    assert any("year SECTIONS (a heading per year): 2026, 2025" in f for f in found)
     src = DatasetSource(url="http://x/", filters=found, filtered=True)
     assert "filters: year tabs" in describe(src)
     prompt = render(

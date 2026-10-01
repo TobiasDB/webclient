@@ -117,6 +117,11 @@ class ClaudeShim:
             *(("--model", self._model) if self._model else ()),
         ]
 
+    def _budget(self, sent: str) -> float:
+        """The wall clock for one call: the configured timeout plus a second per thousand chars
+        sent -- a full page outline (100k chars) needs minutes, a tiny stage prompt does not."""
+        return self._timeout + len(sent) / 1000.0
+
     async def complete(self, prompt: str) -> str:
         self.budget.ensure()  # stop BEFORE spending past the cap (raises BudgetExceeded)
         self.prompt = prompt
@@ -149,13 +154,13 @@ class ClaudeShim:
             proc = await asyncio.create_subprocess_exec(*argv, stdin=PIPE, stdout=PIPE, stderr=PIPE)
             try:
                 out, errb = await asyncio.wait_for(
-                    proc.communicate(sent.encode("utf-8")), timeout=self._timeout
+                    proc.communicate(sent.encode("utf-8")), timeout=self._budget(sent)
                 )
             except asyncio.TimeoutError as exc:
                 proc.kill()  # KILL the child -- wait_for only cancels the await, leaving it running
                 await _reap(proc)
                 raise WebException(
-                    err("llm.shim", f"claude -p timed out after {self._timeout}s")
+                    err("llm.shim", f"claude -p timed out after {self._budget(sent):.0f}s")
                 ) from exc
         except OSError as exc:
             raise WebException(err("llm.shim", f"could not run claude -p: {exc}")) from exc

@@ -62,10 +62,11 @@ _YEAR = re.compile(r"^(?:FY\s*)?(19|20)\d{2}$")
 
 
 def filters_of(doc: Document) -> "list[str]":
-    """The year tabs / filters a page shows, DESCRIBED: which years are offered and which one is
-    selected -- so the author knows the latest data is the current tab and older years sit in
-    another container (often another format). A ``<select>`` of years, year tabs / links /
-    buttons. Empty when none."""
+    """The year tabs / filters / sections a page shows, DESCRIBED: which years are offered, which
+    one is selected, and whether the years are SECTIONS (a heading per year -- older years in a
+    different container, often another format) -- so the author knows the latest data is the
+    current tab. A ``<select>`` of years; year tabs (links / buttons / list items / spans); year
+    headings. Empty when none."""
     if doc.kind != "html":
         return []
     out: list[str] = []
@@ -80,23 +81,49 @@ def filters_of(doc: Document) -> "list[str]":
                 + ", ".join(f"{t}{' (selected)' if chosen else ''}" for t, chosen in years[:12])
             )
     tabs: list[tuple[str, bool]] = []
-    for el in doc.select_all("[role=tab], a, button"):
+    for el in doc.select_all("[role=tab], a, button, li, span"):
         text = el.text.strip()
-        if _YEAR.match(text):
-            attrs = el.attrs
-            chosen = attrs.get("aria-selected") == "true" or any(
-                c in ("active", "selected", "current", "is-active")
-                for c in attrs.get("class", "").split()
+        if not _YEAR.match(text) or text in [t for t, _ in tabs]:
+            continue
+        attrs = el.attrs
+        classes = attrs.get("class", "").split()
+        parent = el.parent
+        marked = (
+            attrs.get("aria-selected") == "true"
+            or any(c in _ACTIVE for c in classes)
+            or (
+                parent is not None
+                and any(c in _ACTIVE for c in parent.attrs.get("class", "").split())
             )
-            if text not in [t for t, _ in tabs]:
-                tabs.append((text, chosen))
+        )
+        tabs.append((text, marked))
     if len(tabs) >= 2:
+        chosen = [t for t, m in tabs if m]
         out.append(
-            "year tabs / links: "
-            + ", ".join(f"{t}{' (selected)' if chosen else ''}" for t, chosen in tabs[:12])
-            + " -- the other years' records are usually in a different container, often a different format"
+            "year tabs: "
+            + ", ".join(f"{t}{' (selected)' if m else ''}" for t, m in tabs[:12])
+            + (
+                f" -- {chosen[0]} is selected"
+                if chosen
+                else " -- none marked selected: the first is usually the current one"
+            )
+            + "; the other years' records are usually in a different container, often a different format"
+        )
+    heads = []
+    for el in doc.select_all("h1, h2, h3, h4"):
+        text = el.text.strip()
+        if _YEAR.match(text) and text not in heads:
+            heads.append(text)
+    if len(heads) >= 2:
+        out.append(
+            "year SECTIONS (a heading per year): "
+            + ", ".join(heads[:12])
+            + " -- each year's records sit under its own heading / container"
         )
     return out
+
+
+_ACTIVE = frozenset({"active", "selected", "current", "is-active", "is-selected", "on"})
 
 
 def knobs_of(url: str) -> "dict[str, str]":

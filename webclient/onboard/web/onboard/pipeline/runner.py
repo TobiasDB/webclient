@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from web.fetch import emit
+from web.fetch import WebException, emit
 
 from ..llm import ReasonEvent
 from .ask import Context
@@ -94,7 +94,18 @@ async def _pass(
             started, t0 = now(), time.monotonic()
             calls0, usd0 = state.spend.calls, state.spend.usd
             in0, out0 = state.spend.chars_in, state.spend.chars_out
-            out = await stage.run(state, ctx)
+            try:
+                out = await stage.run(state, ctx)
+            except WebException as exc:  # a model / transport failure ENDS the run with its reason
+                state.stopped = f"{stage.name}: {exc.error.code}: {exc.error.message}"
+                emit(
+                    ReasonEvent(
+                        stage=stage.name, text=f"stopped — {exc.error.code}: {exc.error.message}"
+                    )
+                )
+                if save is not None:
+                    state.save(save)
+                break
             setattr(state, stage.name, out)
             state.log.append(
                 StageLog(
