@@ -145,7 +145,14 @@ def test_prompts_render_from_package_data_and_clip_to_budget() -> None:
             note="",
         ),
         "author_review": dict(
-            goal="g", schema="- a", count="3", expected="1-5", optional="none", rows="[]", note=""
+            goal="g",
+            schema="- a",
+            count="3",
+            expected="1-5",
+            optional="none",
+            report="3 row(s)",
+            rows="[]",
+            note="",
         ),
     }
     for name, variables in sets.items():

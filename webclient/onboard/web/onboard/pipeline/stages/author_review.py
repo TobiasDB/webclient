@@ -1,5 +1,6 @@
-"""Stage 9 -- author review: one small call judging the sample rows against the brief. Final
-for now; ``next`` is the seam for onboarding a record's own page as a nested source later."""
+"""Stage 9 -- author review: the run's mechanical REPORT first (the model sees it too), then one
+small call judging the sample rows against the brief. Final for now; ``next`` is the seam for
+onboarding a record's own page as a nested source later."""
 
 from __future__ import annotations
 
@@ -38,6 +39,7 @@ async def run(state: Onboarding, ctx: Context) -> AuthorReview:
         expected=state.brief.expect_rows or "no expectation",
         optional=", ".join(f.name for f in state.brief.fields if f.optional) or "none",
         rows=clip(rows, PROMPT_INPUT_CHARS, "rows", kind="json"),
+        report=ex.report or "no report",
         note="",
     )
     review = AuthorReview(ok=reply.ok, notes=reply.notes)
