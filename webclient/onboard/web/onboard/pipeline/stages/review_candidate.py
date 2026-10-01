@@ -46,6 +46,22 @@ def skeleton(doc: Document) -> str:
     return clip(outline, SKELETON_CHARS, "skeleton")
 
 
+#: the author sees the FULL structure (USER 2026-10-01: a small outline made authoring fail);
+#: only a safety cap against a pathological page (~25k tokens).
+FULL_SKELETON_CHARS = 100_000
+
+
+def full_skeleton(doc: Document) -> str:
+    """The whole document structure for the AUTHOR: full depth and width, chrome dropped, no
+    detector marks, clipped only at the safety cap."""
+    if doc.kind == "json":
+        return clip(doc.json_skeleton(max_lines=4000), FULL_SKELETON_CHARS, "skeleton", kind="json")
+    outline = doc.skeleton(
+        max_lines=4000, text_chars=60, max_depth=60, mark_records=False, drop_chrome=True
+    )
+    return clip(outline, FULL_SKELETON_CHARS, "skeleton")
+
+
 async def _judge(state: Onboarding, ctx: Context, doc: Document, profile: str) -> _Reply:
     return await ask_json(
         ctx,

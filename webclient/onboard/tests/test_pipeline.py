@@ -525,3 +525,20 @@ def test_review_skeleton_outlines_the_whole_page_without_detector_marks() -> Non
     assert "select_all(" not in out and "RECORD LIST" not in out  # no detector pointer
     assert "deep toolbar" not in out  # beyond the depth cap
     assert "nav" not in out.split("main")[0]  # chrome dropped
+
+
+def test_the_author_sees_the_full_skeleton() -> None:
+    # USER: "authoring fails because the skeleton is too small -- include the full skeleton"
+    from web.onboard.pipeline.stages.review_candidate import full_skeleton, skeleton
+    from web.parse import parse
+
+    deep = "<div>" * 20 + "<span class=deep-leaf>leaf</span>" + "</div>" * 20
+    rows = "".join(f"<li class=ev><a href='/e{i}'>Event {i}</a>{deep}</li>" for i in range(40))
+    doc = parse(
+        f"<html><body><main><ul>{rows}</ul></main></body></html>".encode(),
+        url="http://x/",
+        content_type="text/html",
+    )
+    full, short = full_skeleton(doc), skeleton(doc)
+    assert len(full) > len(short) and "deep-leaf" in full and "Event 39" in full
+    assert "select_all(" not in full  # still no detector pointer
