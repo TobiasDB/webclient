@@ -20,7 +20,7 @@ from ..ask import Context, ask_json
 from ..hints import detail_shaped, registrable
 from ..state import CrawlResult, Onboarding, Pick, Visited
 from .review_candidate import review_one
-from .review_search import hit_lines
+from .review_search import hit_lines, own_hosts
 from .search import score_url
 
 #: how many pending links one review sees, and how many model-reviewed rounds a crawl may take.
@@ -54,6 +54,11 @@ async def run(state: Onboarding, ctx: Context) -> CrawlResult:
             result.note = "a must from the search review holds the dataset"
             return result
     seeds = [p.url for p in picks if p.tier in ("could", "lead")]
+    if not seeds and state.search is not None:  # every must rejected: the entity's own sites
+        fallback = own_hosts(state.search.hits)
+        for p in fallback:
+            tiers[p.url], scores[p.url] = p.tier, p.score
+        seeds = [p.url for p in fallback]
     emit(
         ReasonEvent(
             stage="crawl", text=f"crawling from {len(seeds)} seed(s): {', '.join(seeds[:4])}"
@@ -61,7 +66,9 @@ async def run(state: Onboarding, ctx: Context) -> CrawlResult:
     )
     if not seeds:
         result.candidates = []
-        state.stopped = "crawl: nothing to crawl (every must was rejected)"
+        state.stopped = (
+            "crawl: nothing to crawl (every must was rejected, no site of the entity's own)"
+        )
         return result
     domains = {registrable(u) for u in seeds}
     rounds = 0

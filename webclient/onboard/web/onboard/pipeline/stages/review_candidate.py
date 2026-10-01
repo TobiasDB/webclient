@@ -76,6 +76,18 @@ async def review_one(state: Onboarding, ctx: Context, url: str) -> CandidateRevi
     """Fetch ``url`` (the resolver's tier), judge it; on a no at the HTTP tier render it in a
     browser and judge again. The accepted page's document (and snapshot) stay in ``ctx.docs``."""
     snap = await ctx.resolver.snapshot(Request(url=url))
+    if not snap.ok:  # a 404 / a transport failure is not a candidate: no model call, no retry
+        why = (
+            f"HTTP {snap.status}"
+            if snap.status
+            else (snap.error.message if snap.error else "no response")
+        )
+        emit(
+            ReasonEvent(
+                stage="review_candidate", subject=url, text=f"rejected without review: {why}"
+            )
+        )
+        return CandidateReview(url=url, present=False, profile="basic", reason=why)
     doc = document(snap)
     profile = "basic"
     verdict = await _judge(state, ctx, doc, profile)

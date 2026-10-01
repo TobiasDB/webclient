@@ -812,3 +812,42 @@ def test_a_feed_without_a_record_array_is_never_the_api() -> None:
         and not has_records([])
         and not has_records({"n": 3})
     )
+
+
+def test_a_404_candidate_is_rejected_without_a_model_call_and_the_crawl_falls_back_to_the_entitys_hosts(
+    httpserver: HTTPServer,
+) -> None:
+    # Adobe: the search's "must" was a 404 page; after rejecting it the crawl stopped with nothing
+    # to crawl. A non-OK fetch is rejected mechanically; the entity's own hosts become the seeds.
+    _site(httpserver)
+    httpserver.expect_request("/gone").respond_with_data("nope", status=404)
+    brief = Brief.from_markdown(
+        _BRIEF.replace(
+            'domain: ["{company}", "investors.{company}", "ir.{company}", "q4cdn", "gcs-web"]',
+            'domain: ["localhost", "127.0.0.1"]',
+        )
+    )
+    replies = [
+        json.dumps(
+            {"picks": [{"n": 1, "tier": "must", "why": "looks like the listing"}]}
+        ),  # the 404
+        json.dumps(
+            {"picks": [{"n": 1, "tier": "must", "why": "the news listing"}]}
+        ),  # crawl round: /news/
+        json.dumps({"present": True, "reason": "a list of releases"}),
+    ]
+    llm = _Llm(replies)
+    gone, home = httpserver.url_for("/gone"), httpserver.url_for("/")
+
+    async def go() -> Onboarding:
+        async with Resolver() as r:
+            state = Onboarding.start(brief, company="acme")
+            ctx = Context(resolver=r, llm=cast("object", llm), search=_Search([gone, home]))  # type: ignore[arg-type]
+            return await run(state, ctx, until="review_candidate")
+
+    state = cast(Onboarding, _run(go()))
+    assert state.stopped == "", state.stopped
+    assert state.crawl is not None and state.crawl.reviews[0].reason == "HTTP 404"
+    assert "Does THIS page" not in llm.prompts[1]  # the 404 never reached the model
+    assert state.review_candidate is not None and state.review_candidate.present
+    assert state.review_candidate.url == httpserver.url_for("/news/")

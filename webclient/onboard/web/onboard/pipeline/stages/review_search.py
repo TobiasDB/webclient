@@ -44,7 +44,8 @@ def own_hosts(hits: "list[Hit]") -> "list[Pick]":
     counts: dict[str, int] = {}
     for h in hits:
         if h.domain:
-            root = f"{urlparse(h.url).scheme}://{urlparse(h.url).hostname}/"
+            parts = urlparse(h.url)
+            root = f"{parts.scheme}://{parts.netloc}/"  # the netloc keeps a port
             counts[root] = counts.get(root, 0) + 1
     return [
         Pick(url=root, tier="lead", why="the entity's own site", score=float(n))
