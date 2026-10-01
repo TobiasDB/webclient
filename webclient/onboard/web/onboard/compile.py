@@ -32,8 +32,10 @@ from web.dsl import (
     UnknownVerb,
     from_plan,
     from_source,
+    verbs_of,
     wq,
 )
+from web.parse.selectors import Role, normalise, problems
 
 #: any query Author can emit: rows / a scalar fan-out (a Collection) or a single document.
 Query = LazyCollection[object] | LazyDocument
@@ -100,11 +102,54 @@ def parse_query(reply: str) -> Expr:
     if not code:
         raise QueryError("no query in the reply")
     try:
-        return from_source(code)
+        expr = from_source(code)
     except UnknownVerb as exc:  # a verb the DSL lacks -> the reason names the gap
         raise QueryError(str(exc), verbs=exc.used, unknown=exc.verbs) from exc
     except SourceError as exc:  # the DSL's parse error -> the onboard tier's QueryError
         raise QueryError(str(exc)) from exc
+    return hygienic(expr)
+
+
+def hygienic(expr: Expr, role: Role = "anchor") -> Expr:
+    """``expr`` with every selector it reads NORMALISED (see :func:`web.parse.selectors.normalise`)
+    -- or a :class:`QueryError` naming each selector that is WRONG for its role (a record selector
+    by id / position, a listing field by id), so the model hears the reason and writes a durable
+    one. Roles follow the chain's shape: the first ``select_all`` is the records, selects inside
+    an ``extract`` / ``filter`` are listing fields until a ``resolve`` makes them detail-page reads;
+    ``role`` is the role of a bare chain (a steps-engine column chain: ``field`` / ``detail``)."""
+    plan = Plan.from_blob(expr.to_blob())
+    found: list[str] = []
+    _walk(plan, role, found)
+    if found:
+        raise QueryError("; ".join(found), verbs=verbs_of(expr))
+    return from_plan(plan)
+
+
+def _walk(plan: Plan, role: Role, found: "list[str]") -> None:
+    """Normalise each select arg of ``plan`` in place (recursing into sub-plans) and collect the
+    role problems. A top-level chain's records are its first ``select_all``; a ``resolve`` turns
+    every later select of that chain into a detail-page read."""
+    cur: Role = role
+    steps = plan.steps
+    for i, step in enumerate(steps):
+        if step.kind != "get":
+            continue
+        nxt = steps[i + 1] if i + 1 < len(steps) and steps[i + 1].kind == "call" else None
+        if step.name == "resolve":
+            cur = "detail"
+        if step.name in ("select", "select_all") and nxt is not None and nxt.args:
+            arg = nxt.args[0]
+            if isinstance(arg.value, str):
+                arg.value = normalise(arg.value)
+                this: Role = "records" if (step.name == "select_all" and cur == "anchor") else cur
+                found.extend(problems(arg.value, this))
+            if step.name == "select_all" and cur == "anchor":
+                cur = "field"  # what follows reads each record
+        if nxt is not None:  # sub-plans (extract columns, a filter predicate) read the record
+            inner: Role = "field" if cur == "anchor" else cur
+            for sub in [*nxt.args, *nxt.kwargs.values()]:
+                if sub.plan is not None:
+                    _walk(sub.plan, inner, found)
 
 
 def reroot(chain: Expr, url: str, *, profile: "str | None" = None) -> Query:
@@ -143,4 +188,13 @@ def limited(query: Query, n: int) -> Query:
     return cast(Query, from_plan(plan.model_copy(update={"steps": steps[:at] + lim + steps[at:]})))
 
 
-__all__ = ["Query", "QueryError", "clean_reply", "limited", "parse_query", "query_code", "reroot"]
+__all__ = [
+    "Query",
+    "QueryError",
+    "clean_reply",
+    "hygienic",
+    "limited",
+    "parse_query",
+    "query_code",
+    "reroot",
+]

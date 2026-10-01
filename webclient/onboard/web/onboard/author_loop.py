@@ -52,7 +52,14 @@ from web.resolve import profiles as _rp
 
 from .agent import BoundedLoop, Done, Verdict
 from .author import AuthorEvent
-from .author_steps import StepSession, miss_pattern, run_steps, suggest_selectors
+from .author_steps import (
+    StepSession,
+    _typical,
+    draft_of,
+    miss_pattern,
+    run_steps,
+    suggest_selectors,
+)
 from .compile import Query, QueryError, limited, parse_query, reroot
 from .evaluate import skeleton_for
 from .llm import Conversation, Conversational, Llm, ReasonEvent
@@ -65,14 +72,17 @@ from .timeliness import timeliness
 #: stub ``_render_page`` on this module object).
 _locate_mod = importlib.import_module("web.onboard.locate")
 
-#: the authoring ENGINES: ``steps`` builds the query one op at a time with per-step feedback
-#: (:mod:`.author_steps`) -- the CLI / programmatic default; ``chain`` asks for the whole ``wq``
-#: chain per turn (the library functions' parameter default, for callers that script replies).
-Engine = Literal["chain", "steps"]
-ENGINES: "tuple[Engine, ...]" = ("chain", "steps")
+#: the authoring ENGINES: ``auto`` (the CLI / programmatic default) asks for the whole ``wq`` chain
+#: ONCE from the prompt (cheap, and a model is good at a first draft), then REPAIRS / DEEPENS it op
+#: by op on the step engine, seeded with that draft (:func:`~web.onboard.author_steps.draft_of`);
+#: ``steps`` builds the query one op at a time from the start (:mod:`.author_steps`); ``chain``
+#: re-writes the whole chain on every turn (the library functions' parameter default, for callers
+#: that script replies).
+Engine = Literal["chain", "steps", "auto"]
+ENGINES: "tuple[Engine, ...]" = ("chain", "steps", "auto")
 #: the default wall clock per engine (``budget_s=0``): the step engine makes one model call per op,
 #: so it needs several times the room of a whole-chain turn.
-_DEFAULT_BUDGET_S: "dict[str, float]" = {"chain": 240.0, "steps": 900.0}
+_DEFAULT_BUDGET_S: "dict[str, float]" = {"chain": 240.0, "steps": 900.0, "auto": 900.0}
 
 #: hard wall-clock cap on running ONE authored query against the source: a pathological query (a
 #: per-record .resolve() fanning out to hundreds of fetches) must never hang the loop.
@@ -88,8 +98,8 @@ _LADDER: "tuple[FetchProfile, ...]" = (_fp.BASIC, _fp.BROWSER, _fp.HEADED_BROWSE
 def _author_policy(reference: Reference) -> EscalationPolicy:
     """The transport policy for the author's fetches: it STARTS at the tier LOCATE determined
     (``reference.profile`` -- the listing is fetched exactly there, so the query is written over
-    what that tier returns) and may CLIMB the realness ladder from there on a BLOCK (403 / 429 /
-    a failed fetch) -- a DETAIL page can be blocked where the listing was not, and the sticky
+    what that tier returns) and may CLIMB the realness ladder from there on a REAL BLOCK (401 / 403 /
+    429 or a challenge page -- never a 404 / 5xx / timeout) -- a DETAIL page can be blocked where the listing was not, and the sticky
     policy remembers the tier a host needed. Whether a page is JS-gated is Locate's call for the
     listing and the entry check's for the author -- never a per-fetch heuristic (that would
     launch a browser for every small page)."""
@@ -121,6 +131,9 @@ class AuthorState:
     entity: str = ""
     #: which authoring ENGINE writes the query (see :data:`ENGINES`).
     engine: Engine = "chain"
+    #: ``auto``: the one-shot base turn is done -- every later turn of this section runs on the
+    #: step engine, seeded with the one-shot's query.
+    based: bool = False
     #: the conversation with the author model for the CURRENT section (``None`` = a stateless model,
     #: or not opened yet); ``opened`` = the opening (guide + skeleton) has been sent.
     conv: "Conversation | None" = None
@@ -385,10 +398,16 @@ def _opening(state: AuthorState) -> str:
     )
 
 
+def _on_steps(state: AuthorState) -> bool:
+    """Whether THIS turn runs on the step engine: always for ``steps``; for ``auto`` once the
+    one-shot base turn has been taken (a repair / deepen is then op by op over its draft)."""
+    return state.engine == "steps" or (state.engine == "auto" and state.based)
+
+
 def _follow_up(state: AuthorState) -> str:
     """The SHORT follow-up for a repair / deepen / split turn: what failed and what to change --
     never the page again (it is in the conversation's cached opening)."""
-    steps = state.engine == "steps"
+    steps = _on_steps(state)
     parts: list[str] = []
     if state.check_note and not state.opened:  # surfaced once, with the opening
         parts.append(f"NOTE from a reviewer of this page: {state.check_note}")
@@ -454,11 +473,14 @@ async def _author(state: AuthorState) -> None:
     engine the turn is the step loop instead (:func:`~web.onboard.author_steps.run_steps`): the
     follow-up becomes its next turn and the draft carries over."""
     follow = _follow_up(state) if (state.opened or state.check_note or state.last_error) else ""
-    if state.engine == "steps":
+    if _on_steps(state):
         await _author_steps(state, follow)
         return
     opening = _opening(state)
     reply = await _send(state, opening, follow)
+    if state.engine == "auto":  # the one shot is taken: from here on, op by op over its draft
+        state.based = True
+        state.conv = None  # the chain conversation is over (the step engine opens its own)
     emit(AuthorEvent(phase="reply", reply=reply))
     stripped = reply.strip()
     if state.offer_sibling and stripped.upper().startswith("SIBLING:"):
@@ -523,6 +545,8 @@ async def _author_steps(state: AuthorState, note: str) -> None:
         doc = state.doc or await state.resolver.resolve(state.reference.url)
         state.doc = doc
         state.steps = StepSession(doc=doc)
+        if state.query is not None:  # auto: seed the step engine with the one-shot's query
+            _seed(state.steps, state.query, state.last_error)
     state.steps.offer_sibling = state.offer_sibling
     state.opened = True
     detail = state.reference.detail
@@ -578,6 +602,38 @@ async def _author_steps(state: AuthorState, note: str) -> None:
     state.last_error, state.hint = result.error, result.hint
     if result.query is not None:
         emit(AuthorEvent(phase="reply", reply=result.query.describe()))
+
+
+def _seed(session: StepSession, query: Query, failure: str) -> None:
+    """Start the step engine FROM the one-shot query: its draft (records / fields / detail), each
+    of its ops marked as tried (a repeat is refused with the failure), and a history line -- so a
+    repair changes what failed instead of rebuilding the chain."""
+    draft = draft_of(query)
+    if draft is None:
+        emit(
+            ReasonEvent(
+                stage="author",
+                text="the one-shot query has a shape the step engine cannot seed from -- "
+                "rebuilding op by op",
+            )
+        )
+        return
+    session.draft = draft
+    _index, session.skip = _typical(session.doc, draft.records)
+    why = f"applied by the one-shot query; the sample then FAILED ({failure}) -- change it"
+    session.tried[f"records({draft.records!r})"] = why
+    for name, chain in draft.fields.items():
+        session.tried[f"field({name}, {chain})"] = why
+    for name, chain in draft.detail_fields.items():
+        session.tried[f"detail_field({name}, {chain})"] = why
+    session.history.append(f"(seeded from the one-shot query) {draft.source()}")
+    emit(
+        ReasonEvent(
+            stage="author",
+            text=f"repairing the one-shot query op by op (seeded: records {draft.records!r}, "
+            f"{len(draft.fields)} field(s), {len(draft.detail_fields)} detail field(s))",
+        )
+    )
 
 
 #: an entry-check verdict that blames script-injected records.
@@ -870,7 +926,7 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
         state.sibling = ""
         state.query = None
         state.conv, state.opened = None, False
-        state.doc, state.steps = None, None
+        state.doc, state.steps, state.based = None, None, False
         state.checked = False
         state.check_note = state.last_error = state.hint = ""
         state.offer_sibling = state.nested = False
@@ -948,9 +1004,7 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
         if link is None:
             return
         state.nested = True
-        if (
-            state.engine == "steps"
-        ):  # the step engine fetches + shows the detail page on detail(...)
+        if _on_steps(state):  # the step engine fetches + shows the detail page on detail(...)
             lacking = ", ".join(_missing(state.brief, _populated(state.rows)))
             state.detail_skeleton = ""
             state.last_error = f"required field(s) {lacking} are not on the listing records"

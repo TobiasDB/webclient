@@ -14,11 +14,12 @@ dependency (resolver / LLM / web search) defaulted from the standardised env con
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import cast
 
 from pydantic import JsonValue
 from web.resolve import Resolver
 
-from .author_loop import Engine, author_agent
+from .author_loop import ENGINES, Engine, author_agent
 from .compile import Query
 from .config import build_resolver, default_llm, default_search, env
 from .frontier import llm_frontier
@@ -142,6 +143,10 @@ async def locate(
             await resolver.aclose()
 
 
+#: an engine by its name (the CLI / env spelling) -- unknown names fall back to ``auto``.
+_ENGINE_BY_NAME: "dict[str, Engine]" = {e: e for e in ENGINES}
+
+
 async def author(
     source: "str | Brief | Reference",
     brief: "str | Brief | None" = None,
@@ -180,7 +185,7 @@ async def author(
             )
         if reference is None:
             return Authored(reference=None, queries=[], brief=lb)
-        picked = engine or env("WEB_AUTHOR_ENGINE") or "steps"  # steps is the default engine
+        picked = engine or env("WEB_AUTHOR_ENGINE") or "auto"  # one shot, then steps
         queries, _verdict = await author_agent(
             reference,
             lb,
@@ -188,7 +193,7 @@ async def author(
             llm=llm,
             review=llm,
             entity=entity,
-            engine="steps" if picked == "steps" else "chain",
+            engine=_ENGINE_BY_NAME.get(picked, "auto"),
         )
         return Authored(reference=reference, queries=queries, brief=lb)
     finally:

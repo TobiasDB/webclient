@@ -34,6 +34,7 @@ from collections.abc import Sequence
 from importlib.resources import files
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
+from urllib.parse import urlparse
 
 from pydantic import JsonValue
 from web.crawl import CrawlEvent, FrontierMiddleware
@@ -89,6 +90,7 @@ class _Progress:
         self.llm_calls = 0
         self.llm_spent = 0.0
         self._stage = "search"  # the stage the next LLM call belongs to (from the trace lines)
+        self._sticky: set[str] = set()  # hosts whose sticky tier was already reported
         self.by_stage: "dict[str, list[float]]" = {}  # stage -> [spent, calls]
         #: the author loop's OUTCOME (from its ``done`` AuthorEvent): the row count its final query
         #: sampled, a one-row preview, and the last unresolved error -- so the CLI reports clearly.
@@ -148,8 +150,14 @@ class _Progress:
             if event.phase == "escalate":
                 remedy = f" ({d['remedy']})" if d.get("remedy") else ""
                 _err(f"  · escalate → tier {d.get('tier')}{remedy}: {event.url}")
-            elif event.phase == "sticky":
-                _err(f"  · sticky → tier {d.get('tier')} (domain already needed it): {event.url}")
+            elif event.phase == "sticky":  # once per host (every later same-host fetch uses it)
+                host = urlparse(event.url).hostname or event.url
+                if host not in self._sticky or self._verbose:
+                    self._sticky.add(host)
+                    _err(
+                        f"  · sticky → tier {d.get('tier')} for {host} (the domain needed it once; "
+                        "its later fetches start there)"
+                    )
             else:
                 _err(f"  · {event.phase}: {event.url}")
         elif isinstance(event, FetchEvent) and self._verbose:
@@ -956,10 +964,10 @@ def _parser() -> argparse.ArgumentParser:
     aut.add_argument(
         "--engine",
         choices=ENGINES,
-        default=os.environ.get("WEB_AUTHOR_ENGINE") or "steps",
-        help="how the loop writes the query: 'steps' (default) = one op per turn (records / field "
-        "/ detail / ...) with the result of each step fed back; 'chain' = the whole wq chain per "
-        "turn [env WEB_AUTHOR_ENGINE]",
+        default=os.environ.get("WEB_AUTHOR_ENGINE") or "auto",
+        help="how the loop writes the query: 'auto' (default) = ONE whole-chain shot from the "
+        "prompt, then repairs / deepens it op by op on the step engine; 'steps' = one op per turn "
+        "from the start; 'chain' = the whole wq chain re-written per turn [env WEB_AUTHOR_ENGINE]",
     )
     aut.add_argument(
         "--review",

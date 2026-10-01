@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from .classes import semantic_classes
+from .classes import class_hook
 from .nodes import Node
 from .nodes import classes as _all_classes
 from .nodes import tag as _tag
@@ -40,7 +40,10 @@ class RecordRegion(BaseModel):
 
 
 def _classes(el: Node) -> "list[str]":
-    return semantic_classes(_all_classes(el))
+    """The DURABLE class hooks of an element (``.item`` / ``[class*="StyledListItem"]``), in class
+    order -- a generated class contributes its stable stem, noise contributes nothing. These are
+    the record's class IDENTITY (its signature, its selector); a labelled build class counts."""
+    return [h for c in _all_classes(el) if (h := class_hook(c))]
 
 
 def _kids(el: Node) -> "list[Node]":
@@ -94,7 +97,8 @@ def _richness(members: "list[Node]") -> float:
 
 
 def _item_selector(members: "list[Node]") -> str:
-    """A selector for the records: the unwrapped tag, narrowed by a class common to ALL members."""
+    """A selector for the records: the unwrapped tag, narrowed by a durable class hook common to
+    ALL members (a semantic class, or the stem of a generated one -- never the hash itself)."""
     unwrapped = [_unwrap(m) for m in members]
     tag = _tag(unwrapped[0])
     common = set(_classes(unwrapped[0]))
@@ -102,7 +106,7 @@ def _item_selector(members: "list[Node]") -> str:
         common &= set(_classes(m))
     if common:
         order = _classes(unwrapped[0])
-        return f"{tag}.{sorted(common, key=lambda c: (order.index(c), -len(c)))[0]}"
+        return f"{tag}{sorted(common, key=lambda c: (order.index(c), -len(c)))[0]}"
     return tag
 
 

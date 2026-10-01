@@ -61,6 +61,33 @@ _UTILITY_PREFIX = re.compile(
 )
 
 
+#: a LABELLED generated class -- the emotion / styled-components / CSS-modules label form
+#: ``<prefix>-<hash>-<ComponentName>`` (``ssrcss-evdvfk-StyledListItem``, ``css-1a2b3c-Button``):
+#: the hash changes every build, the CapitalCase label is the stable part.
+_LABELLED = re.compile(r"^[a-z]{2,8}-[a-z0-9]{5,10}-([A-Z][A-Za-z0-9]{2,})$")
+#: the CSS-modules ``<Name>_<hash>`` form (``Button_a1B2c``, ``card-title_x9f3k``): the hash has a
+#: digit; the name before it is the stable part.
+_MODULE = re.compile(r"^([A-Za-z][A-Za-z0-9-]*?)_([A-Za-z0-9]*\d[A-Za-z0-9]*)$")
+
+
+def stable_stem(tok: str) -> str:
+    """The STABLE part of a generated class (``StyledListItem`` of ``ssrcss-evdvfk-StyledListItem``,
+    ``Button`` of ``Button_a1B2c``) -- what a durable selector matches with ``[class*="..."]``;
+    ``""`` when ``tok`` is not a recognised generated form (or has no label)."""
+    m = _LABELLED.match(tok) or _MODULE.match(tok)
+    return m.group(1) if m and len(m.group(1)) >= 3 else ""
+
+
+def class_hook(tok: str) -> str:
+    """``tok`` as a DURABLE selector fragment: ``.tok`` for a semantic class, ``[class*="Stem"]``
+    for a generated class with a stable stem, ``""`` for noise (a utility / a stemless hash) -- so
+    a caller composing a selector skips it."""
+    stem = stable_stem(tok)
+    if stem:
+        return f'[class*="{stem}"]'
+    return "" if is_noise_class(tok) else f".{tok}"
+
+
 def is_utility_class(tok: str) -> bool:
     """A layout/spacing/typography utility (Tailwind & co.) that carries no record identity."""
     return tok in _UTILITY_BARE or bool(_UTILITY_PREFIX.match(tok))
@@ -91,4 +118,4 @@ def semantic_classes(classes: "list[str]") -> "list[str]":
     return [c for c in classes if not is_noise_class(c)]
 
 
-__all__ = ["is_utility_class", "is_noise_class", "semantic_classes"]
+__all__ = ["class_hook", "is_noise_class", "is_utility_class", "semantic_classes", "stable_stem"]

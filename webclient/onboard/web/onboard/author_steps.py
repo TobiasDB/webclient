@@ -48,14 +48,24 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
-from web.dsl import SourceError, UnknownVerb, from_source, resolve_memo, resolve_memoised, verbs_of
+from web.dsl import (
+    Arg,
+    Plan,
+    SourceError,
+    UnknownVerb,
+    from_source,
+    resolve_memo,
+    resolve_memoised,
+    verbs_of,
+)
 from web.fetch import WebException, emit
 from web.parse import Document, Element
-from web.parse.classes import is_noise_class
+from web.parse.classes import class_hook
+from web.parse.selectors import normalise, problems
 from web.resolve import Flag, Resolver
 
 from .agent import BoundedLoop, Done
-from .compile import Query, clean_reply, parse_query, reroot
+from .compile import Query, QueryError, clean_reply, hygienic, parse_query, reroot
 from .evaluate import skeleton_for
 from .llm import Conversation, Conversational, Llm, ReasonEvent
 from .models import DatasetBrief, Reference, in_range
@@ -190,6 +200,71 @@ class Draft:
             if self.identity is not None:
                 q += ".identity(" + ", ".join(repr(p) for p in self.identity) + ")"
         return q
+
+
+def _plan_arg(arg: "Arg") -> str:
+    """A plan argument as source: a sub-plan's ``wq`` chain, a literal's repr."""
+    return arg.plan.to_source() if arg.plan is not None else repr(arg.value)
+
+
+def _detail_of(plan: "Plan") -> "tuple[str, bool, dict[str, str], list[str] | None] | None":
+    """A detail column's sub-plan as ``(link css, json, detail fields, detail identity)`` when it
+    has the shape the draft renders -- ``select(L).attr("href").resolve().extract(...)`` (JSON:
+    ``attr(L).resolve().extract(...)``) -- else ``None``."""
+    names = [st.name for st in plan.steps if st.kind == "get"]
+    calls = [st for st in plan.steps if st.kind == "call"]
+    if names[:4] == ["select", "attr", "resolve", "extract"] and len(calls) >= 4:
+        link, js, kwargs = calls[0].args, False, calls[3].kwargs
+    elif names[:3] == ["attr", "resolve", "extract"] and len(calls) >= 3:
+        link, js, kwargs = calls[0].args, True, calls[2].kwargs
+    else:
+        return None
+    if not link or not isinstance(link[0].value, str):
+        return None
+    fields = {k: _plan_arg(v) for k, v in kwargs.items()}
+    ident: "list[str] | None" = None
+    if names[len(names) - 1 :] == ["identity"] and calls:
+        ident = [str(a.value) for a in calls[-1].args]
+    return link[0].value, js, fields, ident
+
+
+def draft_of(query: Query) -> "Draft | None":
+    """The :class:`Draft` a finished ``wq`` chain corresponds to -- so a one-shot query becomes the
+    starting point of the step engine (repair / deepen op by op instead of re-writing the whole
+    chain). ``None`` when the chain has a shape the draft cannot render (no ``select_all``, a
+    nested extract that is not a detail follow); the caller then starts from nothing."""
+    plan = Plan.from_blob(query.to_blob())
+    steps = plan.steps
+    gets = [(i, st) for i, st in enumerate(steps) if st.kind == "get"]
+    at = next((i for i, st in gets if st.name == "select_all"), -1)
+    if at == -1 or at + 1 >= len(steps) or not steps[at + 1].args:
+        return None
+    records = steps[at + 1].args[0].value
+    if not isinstance(records, str):
+        return None
+    draft = Draft(records=records)
+    i = at + 2
+    while i + 1 < len(steps) and steps[i].kind == "get":
+        name, call = steps[i].name, steps[i + 1]
+        if name == "filter" and call.args:
+            draft.where = _plan_arg(call.args[0])
+        elif name == "extract":
+            for col, arg in call.kwargs.items():
+                detail = _detail_of(arg.plan) if arg.plan is not None else None
+                if col == DETAIL_COLUMN and detail is not None:
+                    draft.link, draft.json, draft.detail_fields, draft.detail_identity = detail
+                elif arg.plan is not None and "resolve" in [
+                    st.name for st in arg.plan.steps if st.kind == "get"
+                ]:
+                    return None  # a nested follow the draft has no op for
+                else:
+                    draft.fields[col] = _plan_arg(arg)
+        elif name == "identity":
+            draft.identity = [str(a.value) for a in call.args]
+        elif name not in ("project", "limit", "skip"):
+            return None
+        i += 2
+    return draft
 
 
 @dataclass
@@ -522,14 +597,16 @@ def _tokens(text: str) -> "set[str]":
     return {t.lower() for t in re.findall(r"[A-Za-z][\w-]*", text)}
 
 
-def _candidates(el: Element) -> "list[str]":
-    """The selectors this element answers to: its tag, ``tag.class`` (semantic classes), ``#id``,
-    ``tag[attr]`` for its data / semantic attributes."""
+def _candidates(el: Element, *, ids: bool = False) -> "list[str]":
+    """The DURABLE selectors this element answers to: its tag, ``tag.class`` / ``tag[class*=stem]``
+    (semantic classes; a generated class by its stable stem), ``tag[attr]`` for its data / semantic
+    attributes -- and ``#id`` only when ``ids`` (a detail page: its own document; never a record
+    or a listing field, where an id names one element and misleads a record selector)."""
     attrs = el.attrs
     tag = el.tag or "*"
     out = [tag]
-    out += [f"{tag}.{c}" for c in attrs.get("class", "").split() if not is_noise_class(c)][:3]
-    if attrs.get("id"):
+    out += [f"{tag}{h}" for c in attrs.get("class", "").split() if (h := class_hook(c))][:3]
+    if ids and attrs.get("id"):
         out.append(f"#{attrs['id']}")
     out += [f"{tag}[{a}]" for a in attrs if a not in _SKIP_ATTRS][:4]
     return out
@@ -541,8 +618,9 @@ def suggest_selectors(scope: "Document | Element", css: str, *, limit: int = 6) 
     when nothing in the scope shares a token (then :func:`leaf_selectors` shows what IS there)."""
     want = _tokens(css)
     scored: dict[str, int] = {}
+    ids = isinstance(scope, Document)  # a page of its own (a detail page) may be read by id
     for el in scope.select_all("*")[:600]:
-        for cand in _candidates(el):
+        for cand in _candidates(el, ids=ids):
             shared = len(want & _tokens(cand))
             if shared and scored.get(cand, 0) < shared:
                 scored[cand] = shared
@@ -797,7 +875,10 @@ async def _send(session: StepSession, llm: Llm) -> str:
     if session.conv is None and isinstance(llm, Conversational):
         session.conv = llm.conversation()
     if session.conv is not None:
-        text = session.opening if not session.opened else session.pending
+        if session.opened:
+            text = session.pending
+        else:  # the opening ONCE -- with the note that opened this run (a seed / a failure)
+            text = session.opening + (f"\n\n---\n{session.pending}" if session.pending else "")
         session.opened = True
         return await session.conv.send(text)
     session.opened = True
@@ -976,8 +1057,15 @@ async def _step(
             f"section {len(session.finished) + 1}: matched {n} record(s)",
         )
     if op.name == "records":
-        new.records = op.args[0]
+        new.records = normalise(op.args[0])
         new.json = doc.kind == "json"
+        wrong = problems(new.records, "records")
+        if wrong:  # an id / a position names ONE element, never the repeating record
+            return (
+                False,
+                f"{head}\nNOT APPLIED -- " + " ".join(wrong),
+                "not applied (an id / position is not a record selector)",
+            )
         try:
             n = await _count(new, doc, resolver)
         except Exception as exc:  # a bad selector can raise anything from the parser: not applied
@@ -1050,11 +1138,20 @@ async def _step(
         )
     if op.name == "detail_field" and not new.link:
         return False, f'{head}\nNOT APPLIED -- call detail("<link css>") first', "no detail link"
+    column = op.args[1] if len(op.args) > 1 else ""
+    if op.name in ("field", "detail_field"):
+        try:  # durable selectors: normalised; a listing field by id is refused with the reason
+            chain = hygienic(from_source(column), "field" if op.name == "field" else "detail")
+        except QueryError as exc:
+            return False, f"{head}\nNOT APPLIED -- {exc}", "not applied (selector hygiene)"
+        except (SourceError, UnknownVerb) as exc:
+            return False, f"{head}\nNOT APPLIED -- {exc}", "not applied (chain did not parse)"
+        column = chain.to_source()  # the draft keeps the durable form; the op line stays as written
     if op.name == "field":  # a column name is unique across the listing / detail scopes
-        new.fields[op.args[0]] = op.args[1]
+        new.fields[op.args[0]] = column
         new.detail_fields.pop(op.args[0], None)
     elif op.name == "detail_field":
-        new.detail_fields[op.args[0]] = op.args[1]
+        new.detail_fields[op.args[0]] = column
         new.fields.pop(op.args[0], None)
     elif op.name == "where":
         new.where = op.args[0]

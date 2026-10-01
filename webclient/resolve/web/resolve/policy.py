@@ -18,6 +18,8 @@ from web.fetch import ClientPool, Fetcher, Fingerprint, Middleware
 from web.fetch import Profile as FetchProfile
 from web.fetch import Snapshot
 
+from .document import document
+from .flags import flags
 from .middleware import escalate as _escalate
 from .middleware import rate_limit as _rate_limit
 from .middleware import retry as _retry
@@ -77,8 +79,11 @@ class PaginatePolicy(BaseModel):
 class EscalationPolicy(BaseModel):
     """The transport LADDER as a policy: ``tiers`` are the fetch identities to climb (base first,
     then the tiers to escalate to on a block), and ``on`` names the triggers -- status codes
-    (``"403"``), error codes (``"fetch.timeout"``), or ``"blocked"`` for the default heuristic
-    (bad status / anti-bot / JS-gated). Empty ``on`` uses that heuristic."""
+    (``"403"``), error codes (``"fetch.timeout"``), or ``"blocked"`` for a REAL block only -- a
+    401 / 403 / 429, or a challenge (CAPTCHA / bot-wall) page at any status; never a 404, a 5xx or
+    a timeout, which a stronger transport does not cure (and, with domain stickiness, would floor
+    every later same-host fetch at a browser for one missing page). Empty ``on`` uses the
+    flag-driven heuristic (JS-gated shell / IP deny / backoff)."""
 
     tiers: "tuple[FetchProfile, ...]" = ()
     on: "tuple[str, ...]" = ()
@@ -108,9 +113,28 @@ def _triggers(on: "tuple[str, ...]") -> "Callable[[Snapshot], bool] | None":
             return True
         if snap.error is not None and snap.error.code in tokens:
             return True
-        return "blocked" in tokens and (not snap.ok)
+        return "blocked" in tokens and is_block(snap)
 
     return blocked
+
+
+#: the statuses that MEAN "you may not have this" (a block a stronger identity can cure) -- not a
+#: 404 (gone), not a 5xx (the origin's problem), not a transport error (retry's job).
+_BLOCK_STATUSES = frozenset({401, 403, 429})
+
+
+def is_block(snap: Snapshot) -> bool:
+    """Whether ``snap`` is a REAL block: a block status, or a challenge page (CAPTCHA / bot-wall
+    signal) at any status. The ``"blocked"`` trigger; what domain stickiness may floor a host on."""
+    if snap.status in _BLOCK_STATUSES:
+        return True
+    if snap.status == 0 or snap.status >= 500 or not snap.content:
+        return False
+    return any(f.name in _BLOCK_FLAGS and f.present for f in flags(document(snap), snap))
+
+
+#: the flags that conclude "a challenge stands between you and the page".
+_BLOCK_FLAGS = frozenset({"js_challenge", "captcha", "ip_blocked"})
 
 
 __all__ = [

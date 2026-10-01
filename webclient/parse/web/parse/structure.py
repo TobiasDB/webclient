@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from .classes import semantic_classes
+from .classes import class_hook
 from .nodes import Node
 from .nodes import classes as _all_classes
 from .nodes import tag as _tag
@@ -81,9 +81,9 @@ def _signature(node: Node) -> str:
     node_id = node.get("id")
     if node_id:
         out += f"#{node_id}"
-    classes = semantic_classes(_all_classes(node))
-    if classes:
-        out += "." + ".".join(classes[:4])
+    # each class in its DURABLE selector form: ``.item`` for a semantic class, ``[class*="Stem"]``
+    # for a labelled build class (the model copies what it sees -- never the hash)
+    out += "".join([h for c in _all_classes(node) if (h := class_hook(c))][:4])
     for a in ("role", "aria-label", "name", "type", "placeholder"):
         v = node.get(a)
         if v:

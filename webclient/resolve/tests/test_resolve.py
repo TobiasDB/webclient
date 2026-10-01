@@ -577,3 +577,27 @@ def test_policies_are_serialisable_and_build_middleware() -> None:
             return callable(RetryPolicy(max_attempts=2).build(pool))
 
     assert _run(go())
+
+
+def test_blocked_trigger_means_a_real_block_only() -> None:
+    # USER: "lots of sticky tier 1 messages during authoring": the author climbs on "blocked", which
+    # used to mean ANY non-ok snapshot -- one 404 detail page floored the whole domain at a browser.
+    from web.fetch import err
+    from web.resolve.policy import _triggers
+
+    blocked = _triggers(("blocked",))
+    assert blocked is not None
+    for status, expect in (
+        (403, True),
+        (429, True),
+        (401, True),
+        (404, False),
+        (500, False),
+        (200, False),
+    ):
+        snap = Snapshot(request=Request(url="https://x/p"), status=status, content=b"<p>x</p>")
+        assert blocked(snap) is expect, status
+    assert (
+        blocked(Snapshot(request=Request(url="https://x/p"), error=err("fetch.timeout", "slow")))
+        is False
+    )

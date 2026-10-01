@@ -73,12 +73,26 @@ returns an empty collection), and `.attr(...)` on a null short-circuits to null.
 
 ## Durable selectors
 
-Prefer hooks that say *what* a node is over *where* it sits: an id / `[data-testid]`, a semantic
-attribute (`[itemprop=…]`, `article`, `time`), or a meaningful class (`.product-card`, `.price`).
-Avoid hashed/utility classes and deep positional chains (`div > div:nth-child(3)`). Anchor on a
-stable container then a semantic leaf: `.card .price`. Read fields RELATIVE to each record — a page
-has chrome (nav / sidebar / footer) that reuses the same class names, so selecting a field at the
-top level would pick up the chrome; selecting it inside the record does not.
+A selector names WHAT an element is — never where it sits, and never how a build happened to
+label it:
+
+- **the records**: the element that REPEATS — its tag plus a semantic class (`li.item`,
+  `article`, `tr`) or an attribute every record shares (`[data-type="event"]`). NEVER an id: an id
+  names ONE element, and a list of ids (`#r1, #r2`) selects the records you looked at, not the
+  dataset. Never a position (`li:nth-child(2)`).
+- **a field**: RELATIVE to the record (chrome reuses class names), by tag / semantic class /
+  attribute (`.price`, `time[datetime]`, `a[href*="/articles/"]`). Never an id (unique on the
+  page: every record would read the same element). A column position in a table
+  (`td:nth-child(3)`) is fine.
+- **a detail page** is its own document: an id there (`#article-body`) is a good hook.
+- **generated classes** (`css-1a2b3c`, `ssrcss-evdvfk-StyledListItem`, `Button_a1B2c`) change every
+  build — match the stable part: `li[class*="StyledListItem"]`.
+- prefer the descendant form (`ul li`) over the strict child (`ul > li`): one inserted wrapper
+  breaks the latter.
+
+The pipeline enforces this: it rewrites `>` to a descendant and a generated class it recognises
+to its stem match, and REFUSES a record or listing-field selector by id / position — the reason
+tells you what to use instead.
 
 ## Identity — what makes a record unique
 

@@ -2779,3 +2779,132 @@ def test_frontier_drops_leaves_and_stops_once_a_listing_is_reached() -> None:
         _run(go())
     assert any("single-record link(s) left out" in t for t in seen)
     assert any("stopping the crawl here" in t for t in seen)
+
+
+def test_selector_hygiene_rewrites_and_refuses() -> None:
+    # USER: "the LLM wrote select_all by ids -- criminally wrong". The parse layer owns the rules:
+    # ids / positions never select records, a listing field is never read by id, generated classes
+    # become their stem match, `>` relaxes to a descendant; a detail page may be read by id.
+    from web.parse.classes import class_hook, stable_stem
+    from web.parse.selectors import normalise, problems
+
+    assert normalise("ul > li.ssrcss-evdvfk-StyledListItem") == 'ul li[class*="StyledListItem"]'
+    assert normalise('a[href*=".pdf"] > b') == 'a[href*=".pdf"] b'  # quoted values untouched
+    assert normalise("//div[@id='x']/a") == "//div[@id='x']/a"  # xpath untouched
+    assert normalise(".css-1a2b3c") == ".css-1a2b3c"  # a stemless hash: nothing better, kept
+    assert stable_stem("Button_a1B2c") == "Button" and class_hook("nav-item") == ".nav-item"
+    assert class_hook("mt-4") == ""  # a utility is no hook at all
+    assert "ENUMERATES" in problems("#r1, #r2", "records")[0]
+    assert "an id names ONE element" in problems("li#first", "records")[0]
+    assert "positional" in problems("li:nth-child(2)", "records")[0]
+    assert "by id" in problems("#price", "field")[0]
+    assert problems("#article-body", "detail") == []
+    assert problems("#main li.item", "records") == []  # an id as the ANCHOR is fine
+    assert problems("td:nth-child(3)", "field") == []  # a table column position is fine
+
+
+def test_parse_query_applies_selector_hygiene() -> None:
+    from web.onboard.compile import QueryError, parse_query
+
+    q = parse_query(
+        "wq.doc.select_all('ul > li.css-1a2b3c-Card').extract(t=wq.doc.select('h3 > b').attr('text'))"
+    )
+    assert "select_all('ul li[class*=\"Card\"]')" in q.describe()
+    assert "select('h3 b')" in q.describe()
+    with pytest.raises(QueryError, match="ENUMERATES"):
+        parse_query("wq.doc.select_all('#r1, #r2').extract(t=wq.doc.select('b').attr('text'))")
+    with pytest.raises(QueryError, match="by id"):
+        parse_query("wq.doc.select_all('li.row').extract(t=wq.doc.select('#title').attr('text'))")
+    # a DETAIL page is its own document: an id there is a fine hook
+    parse_query(
+        "wq.doc.select_all('li.row').extract(detail=wq.doc.select('a').attr('href').resolve()"
+        ".extract(body=wq.doc.select('#article-body').attr('text')))"
+    )
+
+
+def test_steps_engine_refuses_id_records_and_keeps_durable_forms(httpserver: HTTPServer) -> None:
+    rows = "".join(
+        f"<li id='r{n}' class='ssrcss-evdvfk-StyledListItem'><b id='t{n}'>N{n}</b></li>"
+        for n in range(1, 6)
+    )
+    httpserver.expect_request("/list").respond_with_data(
+        f"<ul>{rows}</ul>", content_type="text/html"
+    )
+    llm = _StepConv(
+        [
+            "records('#r1, #r2, #r3')",  # refused: enumerates by id
+            "records('li.ssrcss-evdvfk-StyledListItem')",  # applied as the stem match
+            "field(name, wq.doc.select('#t1').attr('text'))",  # refused: a field by id
+            "field(name, wq.doc.select('b').attr('text'))",
+            "done()",
+        ]
+    )
+    art = cast("QueryArtifact", _steps_art(httpserver, llm, ["name"]))
+    assert art.complete and art.row_count == 5, art.reason
+    assert "select_all('li[class*=\"StyledListItem\"]')" in art.describe
+    assert "ENUMERATES records by id" in llm.turns[1]
+    assert "reads a field by id" in llm.turns[3]
+    # the detector's own suggestion is the durable form too (never the hash)
+    from web.parse import parse
+
+    doc = parse(f"<ul>{rows}</ul>".encode(), url="http://x/", content_type="text/html")
+    assert doc.records(top_k=1)[0].item_selector == 'li[class*="StyledListItem"]'
+
+
+def test_auto_engine_takes_one_shot_then_repairs_on_the_step_engine(
+    httpserver: HTTPServer,
+) -> None:
+    # USER: "an initial one shot with prompt, then steps to repair or deepen". The base turn is the
+    # whole chain; the review rejects it; the step engine starts FROM that chain (seeded draft, its
+    # ops marked tried) and the repair is one field op -- never a re-written chain.
+    from web.onboard import write_query
+
+    rows = "".join(
+        f"<li class='row'><span class='name'>N{n}<i class='hidden'>, published 10:0{n}</i>"
+        f"</span></li>"
+        for n in range(1, 6)
+    )
+    httpserver.expect_request("/list").respond_with_data(
+        f"<ul>{rows}</ul>", content_type="text/html"
+    )
+
+    class _Reviewer(_StepConv):
+        def __init__(self, replies: "list[str]") -> None:
+            super().__init__(replies)
+            self.reviews = 0
+
+        async def complete(self, prompt: str) -> str:
+            if "reviewing extracted sample rows" in prompt:
+                self.reviews += 1
+                return "NO — the names carry the publish time" if self.reviews == 1 else "YES"
+            return _stage_reply(prompt) or "YES"
+
+    llm = _Reviewer(
+        [
+            "wq.doc.select_all('ul > li.row').extract(name=wq.doc.select('.name').attr('text'))",
+            "field(name, wq.doc.select('.name').attr('text').regex('^[^,]+'))",  # the repair op
+            "done()",
+        ]
+    )
+
+    async def go() -> QueryArtifact:
+        async with Resolver() as r:
+            return await write_query(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                DatasetBrief(fields=["name"]),
+                resolver=r,
+                llm=cast("object", llm),  # type: ignore[arg-type]
+                review=cast("object", llm),  # type: ignore[arg-type]
+                engine="auto",
+            )
+
+    art = _run(go())
+    assert art.complete and art.row_count == 5, art.reason
+    assert cast("dict[str, object]", plain(art.sample[0]))["name"] == "N1"
+    assert "wq.doc" in llm.turns[0] and "records(" not in llm.turns[0]  # turn 1: the chain prompt
+    # turn 2: the step engine's opening WITH the seed -- the one-shot query (normalised) as the
+    # draft and its failure, so the repair changes a field instead of re-picking records
+    assert "QUERY SO FAR" in llm.turns[1]
+    assert "select_all('ul li.row')" in llm.turns[1]
+    assert "FAILED" in llm.turns[1] and "publish time" in llm.turns[1]
+    assert len(llm.turns) == 3  # chain, field, done -- no re-written chain, no records() re-pick
