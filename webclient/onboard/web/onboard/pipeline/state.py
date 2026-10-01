@@ -131,6 +131,9 @@ class DatasetSource(BaseModel):
     api: "ApiDescription | None" = None
     ordered: str = ""  # newest-first | oldest-first | "" (unknown)
     filtered: bool = False
+    #: the FILTER / TAB controls the page shows (described, never selected for the author): e.g.
+    #: "year tabs: 2026 (selected), 2025, 2024 -- older years sit in a different container"
+    filters: list[str] = []
     spa: "SpaDescription | None" = None
     detail: dict[str, JsonValue] = {}
 

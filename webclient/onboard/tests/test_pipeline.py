@@ -680,3 +680,38 @@ def test_the_author_may_narrow_a_query_with_a_where_predicate() -> None:
     assert _check_where("") == "" and _check_where("wq.doc.attr('d') < '2026-10-01'") == ""
     assert "not a valid" in _check_where("wq.doc.attr('d') >=")
     assert "not a valid" in _check_where("1 == 1")  # a bool, not a wq chain
+
+
+def test_expand_describes_year_tabs_and_the_author_hears_the_latest_data_rule() -> None:
+    # USER (the Adobe case): data before 2026 sits in a different container with a different
+    # format under year tabs; nothing told the author. Expand DESCRIBES the tabs (which year is
+    # selected); the author prompt carries the source description and the latest-data rule.
+    from web.onboard.pipeline import DatasetSource
+    from web.onboard.pipeline.ask import render
+    from web.onboard.pipeline.stages.expand import filters_of
+    from web.onboard.pipeline.stages.review_location import describe
+    from web.parse import parse
+
+    html = (
+        "<html><body><ul class=tabs><li><a class=active href='#2026'>2026</a></li><li><a href='#2025'>2025</a></li>"
+        "<li><a href='#2024'>2024</a></li></ul><select><option selected>2026</option><option>2025</option></select>"
+        "<div id=y2026><article class=r>A</article></div><div id=y2025><table><tr><td>B</td></tr></table></div></body></html>"
+    )
+    doc = parse(html.encode(), url="http://x/", content_type="text/html")
+    found = filters_of(doc)
+    assert any("year selector: 2026 (selected), 2025" in f for f in found)
+    assert any("year tabs / links: 2026 (selected), 2025, 2024" in f for f in found)
+    src = DatasetSource(url="http://x/", filters=found, filtered=True)
+    assert "filters: year tabs" in describe(src)
+    prompt = render(
+        "author_extract",
+        goal="g",
+        schema="- a",
+        kind="an HTML document",
+        skeleton="<ul>",
+        hint="",
+        source=describe(src),
+        today="2026-10-01",
+        note="",
+    )
+    assert prompt.startswith("NOW: ") and "year tabs" in prompt and "LATEST data" in prompt

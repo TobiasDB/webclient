@@ -140,6 +140,7 @@ def test_prompts_render_from_package_data_and_clip_to_budget() -> None:
             kind="an HTML document",
             skeleton="<ul>",
             hint="",
+            source="url: a",
             today="2026-10-01",
             note="",
         ),
@@ -156,7 +157,8 @@ def test_prompts_render_from_package_data_and_clip_to_budget() -> None:
     }
     for name, variables in sets.items():
         out = render(name, **variables)
-        assert out and "$" not in out and len(out) < 2500, name  # rendered, tiny, no leftover
+        assert out and "$" not in out and len(out) < 2800, name  # rendered, tiny, no leftover
+        assert out.startswith("NOW: 20")  # every prompt carries the date and time
     try:
         render("review_search", goal="g")
     except KeyError:

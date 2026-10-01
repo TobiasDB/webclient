@@ -9,6 +9,7 @@ asked for -- the full reply is kept in the error so a human can see why.
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -72,8 +73,15 @@ def _template(stage: str) -> Template:
 
 
 def render(stage: str, **args: str) -> str:
-    """The stage's prompt rendered (every ``$arg`` must be supplied -- a typo fails loudly)."""
-    return _template(stage).substitute(args)
+    """The stage's prompt rendered (every ``$arg`` must be supplied -- a typo fails loudly),
+    headed by NOW -- today's date and time -- so every stage can judge what is latest / upcoming
+    (USER 2026-10-01: all prompts carry the date and time)."""
+    return f"NOW: {now_line()}\n" + _template(stage).substitute(args)
+
+
+def now_line() -> str:
+    """``2026-10-01 14:05 UTC`` -- the moment a stage runs."""
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def _spent(llm: Llm) -> "tuple[int, float]":

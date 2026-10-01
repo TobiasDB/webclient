@@ -2,9 +2,13 @@ GOAL: extract these fields from each record of: $goal
 FIELDS:
 $schema
 
+What is known about this source:
+$source
+
 This is $kind. The document's structure (chrome dropped, clipped):
 $skeleton
 $hint
+The dataset wanted is the LATEST data: when records sit under year tabs / filters or a "current" and an "archive" section, author the CURRENT (latest) section. Include older sections only when the SAME record selector covers them with the same fields; an older year in a different container or format is left out.
 Today is $today. Reply with JSON only:
 {"records": "<the repeating record element / the record array path>", "where": "<optional: a wq.doc predicate that keeps only THIS query's records, e.g. wq.doc.attr('StartDate').datetime() >= '$today' or wq.doc.select('time').attr('datetime') < '$today'; omit when every record belongs>", "fields": {"<field>": {"css": "<selector relative to the record>" | "key": "<json key>", "read": "text" | "href" | "src" | "datetime" | "number" | "attr:<name>"}}}
 Name every field you can read from a record; leave out a field the record does not hold.

@@ -5,6 +5,7 @@ a pager's parameters, an API's knobs -- are later refinements of this stage.)"""
 
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qs, urlparse
 
 from pydantic import JsonValue
@@ -48,6 +49,47 @@ def pager_of(doc: Document, kind: str, note: str) -> PaginateDescription:
             if cand in names:
                 return PaginateDescription(kind="param", param=names[cand], note=note)
     return PaginateDescription(kind="next_link", note=note)
+
+
+_YEAR = re.compile(r"^(?:FY\s*)?(19|20)\d{2}$")
+
+
+def filters_of(doc: Document) -> "list[str]":
+    """The year tabs / filters a page shows, DESCRIBED: which years are offered and which one is
+    selected -- so the author knows the latest data is the current tab and older years sit in
+    another container (often another format). A ``<select>`` of years, year tabs / links /
+    buttons. Empty when none."""
+    if doc.kind != "html":
+        return []
+    out: list[str] = []
+    for sel in doc.select_all("select"):
+        opts = [
+            (o.text.strip(), o.attrs.get("selected") is not None) for o in sel.select_all("option")
+        ]
+        years = [(t, chosen) for t, chosen in opts if _YEAR.match(t)]
+        if len(years) >= 2:
+            out.append(
+                "a year selector: "
+                + ", ".join(f"{t}{' (selected)' if chosen else ''}" for t, chosen in years[:12])
+            )
+    tabs: list[tuple[str, bool]] = []
+    for el in doc.select_all("[role=tab], a, button"):
+        text = el.text.strip()
+        if _YEAR.match(text):
+            attrs = el.attrs
+            chosen = attrs.get("aria-selected") == "true" or any(
+                c in ("active", "selected", "current", "is-active")
+                for c in attrs.get("class", "").split()
+            )
+            if text not in [t for t, _ in tabs]:
+                tabs.append((text, chosen))
+    if len(tabs) >= 2:
+        out.append(
+            "year tabs / links: "
+            + ", ".join(f"{t}{' (selected)' if chosen else ''}" for t, chosen in tabs[:12])
+            + " -- the other years' records are usually in a different container, often a different format"
+        )
+    return out
 
 
 def knobs_of(url: str) -> "dict[str, str]":
@@ -132,6 +174,7 @@ async def run(state: Onboarding, ctx: Context) -> DatasetSource:
         profile=profile,
         flags=sorted(by),
         filtered="tabbed" in by,
+        filters=filters_of(doc),
     )
     for flag, kind in _PAGERS.items():
         if flag in by:

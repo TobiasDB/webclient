@@ -30,7 +30,9 @@ def describe(src: DatasetSource) -> str:
         lines.append(f"pagination: {src.pagination.kind} {src.pagination.next_selector}".rstrip())
     if src.spa is not None:
         lines.append(f"javascript app: {src.spa.reason}")
-    if src.filtered:
+    for f in src.filters:
+        lines.append(f"filters: {f}")
+    if src.filtered and not src.filters:
         lines.append("filtered / tabbed sections present")
     title = src.detail.get("title")
     if isinstance(title, str) and title:

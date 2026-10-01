@@ -26,6 +26,7 @@ from ..brief import QueryGuide
 from ..hints import attrs_of, closest, leaves, record_structure, typical
 from ..state import ExtractQuery, Onboarding
 from .review_candidate import skeleton
+from .review_location import describe
 
 _REPAIRS = 2
 
@@ -259,6 +260,7 @@ async def _one(
             ),
             skeleton=outline,
             hint=guidance,
+            source=describe(state.expand) if state.expand is not None else "",
             today=_dt.date.today().isoformat(),
             note=note,
         )
