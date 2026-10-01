@@ -341,8 +341,9 @@ async def onboard_story(base: str) -> None:
         state = await onboard(
             brief, resolver=rs, llm=_StubLlm(), search=_stub_search, shop="the demo shop"
         )
-        src, ex = state.expand, state.author_extract
-        assert src is not None and ex is not None, state.stopped
+        src, queries = state.expand, state.author_extract or []
+        assert src is not None and queries, state.stopped
+        ex = queries[0]  # one authoring guide -> one query
         print("stages:  ", " → ".join(f"{l.stage}({l.calls})" for l in state.log))
         print("source:  ", src.url, f"({src.profile}; {', '.join(src.flags)})")
         print("authored:", ex.source[:72], "...")
