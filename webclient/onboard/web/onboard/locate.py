@@ -162,17 +162,58 @@ def _consistent(page: Document, api: Document) -> bool:
     return hits >= max(2, len(leaves) // 4)
 
 
-def best_api(page: Document, snap: Snapshot) -> "tuple[str, Document] | None":
-    """The RICHEST same-origin JSON data-API the render called that is CONSISTENT with the page
-    (its values appear in the page text) -- the dataset's own feed, preferred over the HTML. The
-    richest = the most scalar leaves (a year list or a locale file loses to the event list)."""
-    best: "tuple[int, str, Document] | None" = None
+_STOP = frozenset(
+    "the a an of to for and or in on at by with its if is as from that this each per".split()
+)
+
+
+def _words(*texts: str) -> "set[str]":
+    """Lower-cased word tokens (camelCase split) of some texts, minus stopwords and short bits."""
+    out: set[str] = set()
+    for t in texts:
+        t = re.sub(r"([a-z])([A-Z])", r"\1 \2", t)
+        out.update(w for w in re.findall(r"[a-z0-9]+", t.lower()) if len(w) > 2 and w not in _STOP)
+    return out
+
+
+def _json_keys(value: object, out: "set[str]", depth: int = 0) -> None:
+    if depth > 6:
+        return
+    if isinstance(value, dict):
+        for k, v in value.items():
+            out.add(str(k))
+            _json_keys(v, out, depth + 1)
+    elif isinstance(value, list):
+        for v in value[:5]:
+            _json_keys(v, out, depth + 1)
+
+
+def schema_fit(api: Document, brief: "LocateBrief") -> int:
+    """How well a JSON API's KEY NAMES cover the brief's schema (field names + descriptions) --
+    the event feed beats the presentation feed for an events brief, whatever their sizes."""
+    keys: set[str] = set()
+    _json_keys(api.json(), keys)
+    key_words = _words(*keys)
+    want = _words(*brief.fields, *brief.descriptions.values())
+    return len(want & key_words)
+
+
+def best_api(
+    page: Document, snap: Snapshot, brief: "LocateBrief | None" = None
+) -> "tuple[str, Document] | None":
+    """The same-origin JSON data-API the render called that is CONSISTENT with the page (its values
+    appear in the page text) and FITS the brief's schema best (its key names cover the fields; ties
+    broken by richness) -- the dataset's own feed, preferred over the HTML."""
+    best: "tuple[tuple[int, int], str, Document] | None" = None
     for url, api in _json_xhr(snap):
         if not _consistent(page, api):
             continue
-        size = len(api.json_leaves(budget=20000))
-        if best is None or size > best[0]:
-            best = (size, url, api)
+        rank = (
+            schema_fit(api, brief) if brief is not None else 0,
+            len(api.json_leaves(budget=20000)),
+        )
+        if best is None or rank > best[0]:
+            best = (rank, url, api)
     return (best[1], best[2]) if best is not None else None
 
 
@@ -326,7 +367,7 @@ async def _loading_requirements(
         )
         ref = ref.model_copy(update={"profile": "basic"})
         if brief.prefer_api:  # the render's XHR stream is in hand: a consistent JSON API wins
-            best = best_api(rendered, snap)
+            best = best_api(rendered, snap, brief)
             if best is not None:
                 url, api = best
                 emit(
@@ -347,7 +388,7 @@ async def _loading_requirements(
     )
     emit(ReasonEvent(stage="load", subject=page.url, text=f"JS-gated — {why} — needs a browser"))
     ref = ref.model_copy(update={"profile": "full_browser", "needs_browser": True})
-    best = best_api(rendered, snap)  # the JSON API the render actually called (reuse the render)
+    best = best_api(rendered, snap, brief)  # the JSON API the render called (reuse the render)
     if best is not None:
         url, api = best
         emit(ReasonEvent(stage="load", subject=url, text="found the data-API — easier to scrape"))

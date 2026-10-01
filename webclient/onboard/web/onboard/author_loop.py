@@ -573,7 +573,7 @@ async def _escalate_to_browser(state: AuthorState) -> bool:
         )
         return False
     rendered = _locate_mod.document(snap)
-    api = _locate_mod.best_api(rendered, snap)
+    api = _locate_mod.best_api(rendered, snap, state.brief)
     if api is not None:  # the render CALLED a JSON data-API consistent with the page: the dataset
         api_url, api_doc = api
         state.doc = api_doc

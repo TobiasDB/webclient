@@ -2119,3 +2119,106 @@ def test_check_escalation_prefers_the_data_api_the_render_called(
         "Q3 2026 Earnings Call",
         "AGM",
     ]
+
+
+def test_best_api_prefers_the_feed_that_fits_the_schema_over_the_richer_one() -> None:
+    # Eval C3: the render called BOTH the presentation feed (richer) and the event feed; the
+    # events brief must get the event feed. Consistency is required; the schema fit decides.
+    import json as _json
+
+    from web.fetch import NetworkEvent, Request, Snapshot
+    from web.onboard import Brief
+    from web.onboard.locate import best_api, schema_fit
+    from web.parse import Document
+
+    page = Document(
+        content=b"<p>Q3 2026 Earnings Call webcast</p><p>Investor deck Q2 2026</p>", kind="html"
+    )
+    events = {
+        "GetEventListResult": [
+            {
+                "Title": "Q3 2026 Earnings Call",
+                "StartDate": "2026-11-03",
+                "WebcastUrl": "https://x/w",
+                "EventType": "Earnings",
+            }
+        ]
+    }
+    decks = {
+        "GetPresentationListResult": [
+            {
+                "Title": "Investor deck Q2 2026",
+                "PresentationDate": "2026-08-04",
+                "DocumentPath": "https://x/a.pdf",
+                "Author": "IR",
+                "Pages": 40,
+                "Tags": ["a", "b"],
+            }
+        ]
+    }
+    host = "https://ir.example.com"
+
+    def ev(path: str, body: object) -> NetworkEvent:
+        return NetworkEvent(
+            method="GET",
+            url=host + path,
+            status=200,
+            resource_type="xhr",
+            body=_json.dumps(body).encode(),
+        )
+
+    snap = Snapshot(
+        request=Request(url=host + "/events"),
+        url=host + "/events",
+        status=200,
+        content=page.content,
+        events=[
+            ev("/feed/Presentation.svc/GetPresentationList", decks),
+            ev("/feed/Event.svc/GetEventList", events),
+        ],
+    )
+    brief = Brief.resolve("ir-events")
+    assert schema_fit(
+        Document(content=_json.dumps(events).encode(), kind="json"), brief
+    ) > schema_fit(Document(content=_json.dumps(decks).encode(), kind="json"), brief)
+    best = best_api(page, snap, brief)
+    assert best is not None and best[0].endswith("/feed/Event.svc/GetEventList")
+    assert best_api(page, snap) is not None  # without a brief, consistency alone still picks one
+
+
+def test_steps_engine_lists_a_json_records_keys_when_an_attr_is_empty(
+    httpserver: HTTPServer,
+) -> None:
+    from web.onboard import QueryArtifact
+
+    feed = {
+        "items": [
+            {"Title": "A", "StartDate": "2026-11-03"},
+            {"Title": "B", "StartDate": "2026-04-28"},
+        ]
+    }
+    httpserver.expect_request("/list").respond_with_json(feed)
+    llm = _StepConv(
+        [
+            'records("items")',
+            'field(title, wq.doc.attr("LinkToDetailPage"))',  # a guessed key
+            'field(title, wq.doc.attr("Title"))',
+            "done()",
+        ]
+    )
+
+    async def go() -> QueryArtifact:
+        from web.onboard import write_query
+
+        async with Resolver() as r:
+            return await write_query(
+                Reference(url=httpserver.url_for("/list"), kind="json"),
+                DatasetBrief(fields=["title"]),
+                resolver=r,
+                llm=cast("object", llm),  # type: ignore[arg-type]
+                engine="steps",
+            )
+
+    art = _run(go())
+    assert art.complete, art.reason
+    assert "The record's keys are: Title (str), StartDate (str)" in llm.turns[2]

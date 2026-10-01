@@ -500,6 +500,9 @@ def _summarize_author(
     ok = art.complete and art.row_count > 0
     if ok and art.review:  # extracts, but the reviewer rejected the final sample -- not "ready"
         outcome = "extracts, but the sample was REJECTED by the review (see review: below)"
+    elif ok and [f for f in art.absent if f not in brief.optional]:
+        gone = [f for f in art.absent if f not in brief.optional]
+        outcome = f"ready — PARTIAL: required field(s) {', '.join(gone)} absent from the source"
     elif ok:
         outcome = "ready"
     elif art.reason.startswith("one-shot"):

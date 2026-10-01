@@ -621,6 +621,36 @@ def miss_pattern(doc: Document, records: str, missed: str, skip: int) -> str:
     )
 
 
+def _json_kind(value: object) -> str:
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, (int, float)):
+        return "number"
+    return "null" if value is None else "str"
+
+
+def _json_keys_hint(session: StepSession, op: Op) -> str:
+    """On a JSON document: the keys the (first) record actually has -- what an ``attr`` could read
+    -- so a key name is never guessed twice."""
+    doc = session.detail_doc if op.name == "detail_field" else session.doc
+    if doc is None or doc.kind != "json":
+        return ""
+    value = (
+        doc.at(session.draft.records)
+        if (op.name == "field" and session.draft.records)
+        else doc.json()
+    )
+    first = value[0] if isinstance(value, list) and value else value
+    if not isinstance(first, dict):
+        return ""
+    keys = ", ".join(f"{k} ({_json_kind(v)})" for k, v in list(first.items())[:40])
+    return f" The record's keys are: {keys}. Read one of those with .attr('<key>')."
+
+
 def _scope(session: StepSession, op: Op) -> "Document | Element | None":
     """Where a column's selector is evaluated: the FIRST record (field), or the sampled detail
     page (detail_field)."""
@@ -1034,7 +1064,7 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
                     "EMPTY after the transform (reverted)",
                 )
             scope = _scope(session, op)
-            hint = _attr_hint(scope, op.args[1])
+            hint = _attr_hint(scope, op.args[1]) or _json_keys_hint(session, op)
             if not hint:
                 m = _SELECT_ARG.search(op.args[1])
                 where = "the detail page" if op.name == "detail_field" else "the record"
