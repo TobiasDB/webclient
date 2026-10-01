@@ -20,7 +20,11 @@ class _Reply(BaseModel):
 async def run(state: Onboarding, ctx: Context) -> AuthorReview:
     assert state.author_extract is not None
     ex = state.author_extract
-    rows = json.dumps(ex.sample[:3], ensure_ascii=False, indent=0, default=str)
+    shown = [  # the pipeline's own columns (_identity / _url) are not the model's concern
+        {k: v for k, v in r.items() if not k.startswith("_")} if isinstance(r, dict) else r
+        for r in ex.sample[:3]
+    ]
+    rows = json.dumps(shown, ensure_ascii=False, indent=0, default=str)
     reply = await ask_json(
         ctx,
         state,
@@ -30,6 +34,7 @@ async def run(state: Onboarding, ctx: Context) -> AuthorReview:
         schema=state.brief.schema_lines(),
         count=str(ex.row_count),
         expected=state.brief.expect_rows or "no expectation",
+        optional=", ".join(f.name for f in state.brief.fields if f.optional) or "none",
         rows=clip(rows, PROMPT_INPUT_CHARS, "rows", kind="json"),
         note="",
     )
