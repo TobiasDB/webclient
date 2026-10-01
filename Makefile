@@ -33,7 +33,7 @@ install: venv
 	  -e ./webclient/dsl \
 	  -e "./webclient/onboard[search]"
 	$(UV) pip install --python $(PY) \
-	  pytest pytest-httpserver mypy pyright isort black lxml-stubs types-PyYAML
+	  pytest pytest-httpserver mypy pyright isort black lxml-stubs types-PyYAML types-python-dateutil
 
 browsers:
 	$(PY) -m playwright install chromium

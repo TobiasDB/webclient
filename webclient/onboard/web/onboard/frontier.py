@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from web.crawl import FrontierItem, FrontierMiddleware, Select
 from web.fetch import WebException, emit
 
-from .llm import Llm, ReasonEvent
+from .llm import Conversation, Conversational, Llm, ReasonEvent
 
 #: Cap how many frontier edges are shown to the model PER ROUND. The crawl frontier GROWS every round
 #: (each fetched page adds all its anchors; only the picked few are removed), so sending the whole
@@ -106,6 +106,17 @@ def _prompt(
     k: int,
     entity: str = "",
 ) -> str:
+    """The whole prompt (a stateless model): the standing instructions + this round's frontier."""
+    return _opening(goal, _guides(goal, fields, look, ignore, entity)) + "\n\n" + _turn(pending, k)
+
+
+def _guides(
+    goal: str,
+    fields: "Sequence[str]",
+    look: "Sequence[str]",
+    ignore: "Sequence[str]",
+    entity: str = "",
+) -> str:
     guides = ""
     if entity:
         guides += (
@@ -122,16 +133,27 @@ def _prompt(
         guides += "\nPrefer links about: " + "; ".join(look)
     if ignore:
         guides += "\nAvoid links about: " + "; ".join(ignore)
-    listing = "\n".join(_edge(i, it) for i, it in enumerate(pending))
+    return guides
+
+
+def _opening(goal: str, guides: str) -> str:
+    """The crawl's standing instructions -- sent ONCE on a conversation, so every round's pick is a
+    short turn over a cached prefix (the frontier calls were a locate's main LLM cost)."""
     return (
         f"You are crawling a website to find this dataset: {goal or 'the target dataset'}.{guides}\n\n"
-        f"These links are on the frontier (not yet fetched). Each shows its link text and the "
-        f"status / title / detection flags of the page it was found on:\n{listing}\n\n"
-        f"Reply with ONLY a JSON array of the links to fetch next, most-promising first, at most "
-        f'{k}, each as {{"n": <index>, "why": "<short reason>"}} (e.g. '
-        f'[{{"n": 3, "why": "the board listing"}}]). Choose the links most likely to reach the '
-        f"dataset (a listing / records / a data API); omit nav, legal, login and unrelated sections."
+        "Each round you get the links on the frontier (not yet fetched); each shows its link text "
+        "and the status / title / detection flags of the page it was found on. Reply with ONLY a "
+        'JSON array of the links to fetch next, most-promising first, each as {"n": <index>, '
+        '"why": "<short reason>"} (e.g. [{"n": 3, "why": "the board listing"}]). Choose the links '
+        "most likely to reach the dataset (a listing / records / a data API); omit nav, legal, "
+        "login and unrelated sections. Do not re-pick a link you already chose in an earlier round."
     )
+
+
+def _turn(pending: "Sequence[FrontierItem]", k: int) -> str:
+    """One round's frontier + the pick budget."""
+    listing = "\n".join(_edge(i, it) for i, it in enumerate(pending))
+    return f"FRONTIER this round (pick at most {k}):\n{listing}\n\nJSON array only."
 
 
 def llm_frontier(
@@ -151,6 +173,20 @@ def llm_frontier(
     pages and reject third-party sources that merely mention it. Falls back to the next handler
     (FIFO) when the model errors, replies unparseably, or picks nothing."""
 
+    state: dict[str, "Conversation | None"] = {"conv": None}  # one conversation per crawl
+
+    async def ask(window: "Sequence[FrontierItem]") -> str:
+        """The pick for this round: on a Conversational model the standing instructions go once
+        (cached) and each round is a short turn; a stateless model gets the whole prompt."""
+        if not isinstance(llm, Conversational):
+            return await llm.complete(_prompt(goal, fields, look, ignore, window, k, entity))
+        conv = state["conv"]
+        if conv is None:
+            conv = state["conv"] = llm.conversation()
+            guides = _guides(goal, fields, look, ignore, entity)
+            return await conv.send(_opening(goal, guides) + "\n\n" + _turn(window, k))
+        return await conv.send(_turn(window, k))
+
     async def mw(pending: "Sequence[FrontierItem]", nxt: Select) -> "Sequence[FrontierItem]":
         if len(pending) <= 1:
             return await nxt(pending)  # nothing to choose
@@ -158,7 +194,7 @@ def llm_frontier(
         # grows every round, so sending all of it is the crawl's runaway token cost.
         window = _window(pending, goal, fields, look, ignore)
         try:
-            reply = await llm.complete(_prompt(goal, fields, look, ignore, window, k, entity))
+            reply = await ask(window)
         except WebException:
             return await nxt(pending)  # model unavailable -> plain breadth-first, don't break
         picks: list[FrontierItem] = []

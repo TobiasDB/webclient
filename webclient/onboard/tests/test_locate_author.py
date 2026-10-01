@@ -2447,3 +2447,77 @@ def test_detail_selector_miss_beyond_the_probe_gets_the_outer_loop_hint(
     assert art.complete, (art.reason, art.attempts)
     repair_turn = next(t for t in llm.turns if "FAILED and must be fixed" in t)
     assert "is read on the DETAIL pages and one of them lacks it" in repair_turn
+
+
+def test_frontier_picks_run_over_one_conversation_per_crawl() -> None:
+    # USER: £10 for 50 locates -- the crawl's frontier picks were one fresh process + prompt per
+    # round. On a Conversational model the standing instructions go ONCE and each round is a short
+    # turn (a cached prefix); a stateless model still gets the whole prompt.
+    from web.crawl import FrontierItem
+    from web.onboard.frontier import llm_frontier
+
+    class _Conv:
+        def __init__(self) -> None:
+            self.turns: list[str] = []
+            self.completes = 0
+
+        async def complete(self, prompt: str) -> str:
+            self.completes += 1
+            return "[]"
+
+        def conversation(self) -> "_Conv":
+            return self
+
+        async def send(self, text: str) -> str:
+            self.turns.append(text)
+            return '[{"n": 1, "why": "the listing"}]'
+
+    llm = _Conv()
+    mw = llm_frontier(llm, "find the data", fields=["title"])
+    items = tuple(FrontierItem(url=f"http://x/{i}", text=f"link {i}") for i in range(4))
+
+    async def nxt(pending: object) -> object:
+        return list(cast("tuple[FrontierItem, ...]", pending))[:1]
+
+    async def go() -> None:
+        first = await mw(items, nxt)  # type: ignore[arg-type]
+        second = await mw(items[1:], nxt)  # type: ignore[arg-type]
+        assert [i.url for i in first] == ["http://x/1"] and [i.url for i in second] == [
+            "http://x/2"
+        ]
+
+    _run(go())
+    assert llm.completes == 0 and len(llm.turns) == 2
+    assert "You are crawling a website" in llm.turns[0] and "FRONTIER this round" in llm.turns[0]
+    assert "You are crawling" not in llm.turns[1] and "FRONTIER this round" in llm.turns[1]
+
+
+def test_loading_requirements_lets_the_verdict_or_flag_win_over_the_count(
+    httpserver: HTTPServer,
+) -> None:
+    # USER: "11 marked as needing a browser chose basic". A page whose evaluate VERDICT says the
+    # records need rendering, or whose needs_browser flag is set, bakes a browser profile even when
+    # the render shows no more records than the static page (the count is a guide, not the rule).
+    import importlib
+
+    from web.onboard.evaluate import reference as build_ref
+    from web.parse import parse
+    from web.resolve import flags
+
+    httpserver.expect_request("/list").respond_with_data(_LISTING, content_type="text/html")
+    loc = importlib.import_module("web.onboard.locate")
+    brief = LocateBrief(goal="people", fields=["name"])
+
+    async def go(reason: str, needs_browser: bool) -> Reference:
+        page = parse(_LISTING, content_type="text/html", url=httpserver.url_for("/list"))
+        ref = build_ref(page, {f.name: f for f in flags(page)}).model_copy(
+            update={"detail": {"reason": reason}, "needs_browser": needs_browser}
+        )
+        async with Resolver() as r:
+            return cast(Reference, await loc._loading_requirements(page, ref, r, brief))
+
+    assert _run(go("a plain static list", False)).profile == "basic"
+    assert _run(go("static HTML; does not require JavaScript", False)).profile == "basic"
+    assert _run(go("the records require rendering by JavaScript", False)).profile == "full_browser"
+    # the needs_browser CONCLUSION alone does not bake a browser (it fires on any small page)
+    assert _run(go("a plain static list", True)).profile == "basic"

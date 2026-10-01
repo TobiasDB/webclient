@@ -301,7 +301,25 @@ def _show_range(bounds: "tuple[int, int] | None") -> str:
 
 
 #: words in an evaluate verdict that say the records are injected by script.
-_RENDER_WORDS = re.compile(r"render|javascript|\bjs\b|dynamic|ajax|client-side|xhr", re.I)
+_RENDER_WORDS = re.compile(
+    r"(requires?|needs?|must be|only after|loaded|injected|populated|rendered)\s+(?:\w+\s+){0,3}?"
+    r"(browser|render\w*|javascript|\bjs\b|client-side|dynamic\w*|ajax|xhr|script)"
+    r"|javascript[- ]rendered|client-side[- ]rendered|dynamically[- ](loaded|rendered|injected)"
+    r"|needs? a browser|requires? (a )?(headless )?browser|loads? (via|through|by) (ajax|xhr|js)",
+    re.I,
+)
+_NEGATED = re.compile(r"\b(no|not|without|doesn'?t|does not|never|isn'?t|is not)\b", re.I)
+
+
+def _says_render(text: str) -> bool:
+    """Whether an evaluate verdict POSITIVELY says the records are script-rendered -- a phrase such
+    as "requires rendering" / "loaded by JavaScript" / "needs a browser", and not negated within
+    the preceding few words ("no rendering needed", "does not require JavaScript")."""
+    for m in _RENDER_WORDS.finditer(text):
+        before = text[max(0, m.start() - 24) : m.start()]
+        if not _NEGATED.search(before):
+            return True
+    return False
 
 
 async def _render_page(url: str, pool: ClientPool) -> Snapshot:
@@ -334,7 +352,7 @@ async def _loading_requirements(
     try:
         snap = await _render_page(page.url, resolver.pool)
     except Exception as exc:  # the render failed -> never sink Locate, but never a SILENT profile
-        verdict_says_render = bool(_RENDER_WORDS.search(str(ref.detail.get("reason") or "")))
+        verdict_says_render = _says_render(str(ref.detail.get("reason") or ""))
         if signalled or verdict_says_render:  # the page's signals / the evaluate verdict say JS
             why = (
                 "the page's signals say JS-app (SPA)"
@@ -373,9 +391,15 @@ async def _loading_requirements(
     bounds = brief.expected_range()
     below_static = in_range(static_ct, bounds) is not None and static_ct < (bounds or (0, 0))[0]
     within_rendered = in_range(rendered_ct, bounds) is None
+    # the evaluate VERDICT (the model read the skeleton and says the records are script-rendered)
+    # WINS over the count heuristic: a record count is a flexible guide, never the rule that bakes
+    # HTTP for such a page (USER: "11 marked as needing a browser chose basic"). The `needs_browser`
+    # CONCLUSION is deliberately not used: it fires on `empty` (any small page) and over-bakes.
+    verdict_says_render = _says_render(str(ref.detail.get("reason") or ""))
     js_gated = (
         signalled
         or gained
+        or verdict_says_render
         or (_has_records(rendered, brief) and not static_ok)
         or (below_static and within_rendered)
     )
@@ -409,9 +433,17 @@ async def _loading_requirements(
     why = (
         "the page's signals say JS-app (SPA)"
         if signalled
-        else f"the render revealed the dataset ({static_ct}→{rendered_ct} records"
-        + (f"; the brief expects {_show_range(bounds)}" if bounds else "")
-        + ")"
+        else (
+            f"the render revealed the dataset ({static_ct}→{rendered_ct} records"
+            + (f"; the brief expects {_show_range(bounds)}" if bounds else "")
+            + ")"
+            if gained or (below_static and within_rendered)
+            else (
+                "the evaluate verdict says the records need rendering"
+                if verdict_says_render
+                else f"the render shows the schema the static page lacks ({static_ct}→{rendered_ct})"
+            )
+        )
     )
     emit(ReasonEvent(stage="load", subject=page.url, text=f"JS-gated — {why} — needs a browser"))
     ref = ref.model_copy(update={"profile": "full_browser", "needs_browser": True})

@@ -44,7 +44,7 @@ class DdgSearch:
     with ``WEB_SEARCH_BACKEND``). Async so it fits the Protocol; the sync ``ddgs`` call runs off the
     event loop in a thread."""
 
-    def __init__(self, *, k: int = 6, backend: "str | None" = None) -> None:
+    def __init__(self, *, k: int = 10, backend: "str | None" = None) -> None:
         self._k = k
         self._backend = backend or os.environ.get("WEB_SEARCH_BACKEND", "auto")
 

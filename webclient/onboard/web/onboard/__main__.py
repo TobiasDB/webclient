@@ -88,6 +88,8 @@ class _Progress:
         self.pages = 0
         self.llm_calls = 0
         self.llm_spent = 0.0
+        self._stage = "search"  # the stage the next LLM call belongs to (from the trace lines)
+        self.by_stage: "dict[str, list[float]]" = {}  # stage -> [spent, calls]
         #: the author loop's OUTCOME (from its ``done`` AuthorEvent): the row count its final query
         #: sampled, a one-row preview, and the last unresolved error -- so the CLI reports clearly.
         self.author_rows = 0
@@ -106,6 +108,9 @@ class _Progress:
         elif isinstance(event, LlmEvent):  # cost AS IT GOES -- one line per model call
             self.llm_calls = event.calls
             self.llm_spent = event.spent_usd
+            tally = self.by_stage.setdefault(self._stage, [0.0, 0])
+            tally[0] += event.cost_usd
+            tally[1] += 1
             u = event.usage  # show the token breakdown so the cost (usage x price) is verifiable
             _err(
                 f"  · llm [{event.model}] call {event.calls}: "
@@ -113,6 +118,8 @@ class _Progress:
                 f"→ ${event.cost_usd:.4f}  (running ${event.spent_usd:.4f})"
             )
         elif isinstance(event, ReasonEvent):  # WHY a choice was made
+            if event.stage != "llm":  # a retry notice is not a stage change
+                self._stage = event.stage
             subj = f"{event.subject} — " if event.subject else ""  # full URL/subject, not truncated
             _err(f"  ⋯ {event.stage}: {subj}{event.text}")
         elif isinstance(event, AuthorEvent):  # the authoring stages
@@ -228,6 +235,14 @@ def _record_verbs(brief_arg: str, url: str, engine: str, art: QueryArtifact) -> 
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(line, ensure_ascii=False) + "\n")
     return path
+
+
+def _by_stage(prog: "_Progress") -> str:
+    """``  (frontier $0.12/6, select $0.03/1, ...)`` -- where the LLM spend went."""
+    if not prog.by_stage:
+        return ""
+    parts = [f"{st} ${v[0]:.3f}/{int(v[1])}" for st, v in prog.by_stage.items()]
+    return "  (" + ", ".join(parts) + ")"
 
 
 def _cache_path(brief: Brief, brief_arg: str, entity: "str | None") -> Path:
@@ -431,7 +446,7 @@ async def _locate(args: argparse.Namespace) -> int:
         if llm is not None:
             await llm.aclose()
     cost = (
-        f"LLM (frontier + review): ${prog.llm_spent:.4f} over {prog.llm_calls} call(s)"
+        f"LLM: ${prog.llm_spent:.4f} over {prog.llm_calls} call(s)" + _by_stage(prog)
         if prog.llm_calls
         else "deterministic — no LLM cost"
     )
@@ -886,7 +901,7 @@ def _parser() -> argparse.ArgumentParser:
     loc = subs.add_parser("locate", help="find WHERE the dataset is (-> a Reference)")
     _transport_args(loc)  # adds the `brief` + `entity` positionals too
     loc.add_argument(
-        "--search-k", type=int, default=6, metavar="N", help="how many search results to seed from"
+        "--search-k", type=int, default=10, metavar="N", help="how many search results to seed from"
     )
 
     aut = subs.add_parser("author", help="write the wq query that extracts the dataset")
