@@ -16,11 +16,10 @@ real source instead of dying at "no candidates".
 
 from __future__ import annotations
 
-import re
-from urllib.parse import urlparse
-
 import json
+import re
 from collections.abc import Sequence
+from urllib.parse import urlparse
 
 from web.fetch import WebException, emit
 from web.parse import Document
@@ -81,13 +80,17 @@ _DETAIL_PATH = re.compile(
 )
 
 
+def detail_shaped(url: str) -> bool:
+    """Whether a URL names ONE record (a detail page) by its path shape -- a leaf, never a listing."""
+    return bool(_DETAIL_PATH.search(urlparse(url).path.rstrip("/") + "/"))
+
+
 def _single_record(doc: Document, by: "dict[str, Flag]") -> bool:
     """A page that IS one record: a detail-shaped URL on a page with no paginated / real record
     region (the only repeating things are nav, tags or related links)."""
     if doc.kind != "html" or "paginated" in by:
         return False
-    path = urlparse(doc.url).path.rstrip("/")
-    if not _DETAIL_PATH.search(path + "/"):
+    if not detail_shaped(doc.url):
         return False
     # the paragraphs / links of ONE article register as a "record region" too (item selector `p`,
     # `a`, `li`): only a CLASSED repeating item of real size says this page is a listing

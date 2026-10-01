@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import cast
-from typing import Any
+from typing import Any, cast
 
 from pytest_httpserver import HTTPServer
 from web.dsl import Collection, Field, Plan, WebClient, from_blob, run_blob, wq

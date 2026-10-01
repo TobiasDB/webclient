@@ -73,6 +73,17 @@ def resolve_memo() -> "Iterator[None]":
         _RESOLVE_CACHE.reset(token)
 
 
+async def resolve_memoised(url: str, resolver: "Resolver") -> Document:
+    """Fetch ``url`` THROUGH the live resolve memo (see :func:`resolve_memo`): a page an author
+    fetched by hand (to show the model a detail page's structure) is the SAME document a later
+    ``.resolve()`` in its query reuses -- one fetch per page across the whole authoring loop.
+    Outside a memo block it is a plain fetch."""
+    doc = await _resolve(url, resolver)
+    if not isinstance(doc, Document):  # a URL always resolves to one document (never a fan-out)
+        raise WebException(err("dsl.resolve_miss", f"{url} did not resolve to a document"))
+    return doc
+
+
 _MISSING: object = object()
 #: ops whose call args stay LAZY sub-plans, evaluated per element (not once, eagerly).
 _ROW_OPS = frozenset({"extract", "filter"})

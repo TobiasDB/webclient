@@ -25,7 +25,6 @@ JUDGES over real fetched pages. Locate is ALLOWED to fail -- ``None`` when nothi
 from __future__ import annotations
 
 import re
-
 from urllib.parse import urlparse
 
 from web.crawl import Crawler, FrontierMiddleware, Goal
@@ -42,7 +41,7 @@ from .evaluate import (
     reference,
 )
 from .llm import Llm, ReasonEvent
-from .models import in_range, LocateBrief, Reference
+from .models import LocateBrief, Reference, in_range
 from .search import Search, search_web
 from .select import registrable, select_candidates
 

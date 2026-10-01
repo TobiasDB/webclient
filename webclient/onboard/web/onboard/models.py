@@ -25,7 +25,6 @@ pydantic model (not an ad-hoc dict) is what lets Locate and Author stay independ
 from __future__ import annotations
 
 import re
-
 from importlib.resources import files
 from pathlib import Path
 

@@ -48,7 +48,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
-from web.dsl import SourceError, UnknownVerb, from_source, resolve_memo, verbs_of
+from web.dsl import SourceError, UnknownVerb, from_source, resolve_memo, resolve_memoised, verbs_of
 from web.fetch import WebException, emit
 from web.parse import Document, Element
 from web.parse.classes import is_noise_class
@@ -1035,7 +1035,7 @@ async def _step(
                 "no such link in the records (not applied)",
             )
         try:
-            page = await resolver.resolve(href)
+            page = await resolve_memoised(href, resolver)  # the query's .resolve() reuses it
         except WebException as exc:
             return False, f"{head}\nNOT APPLIED -- fetching {href} failed: {exc}", "fetch failed"
         new.link = op.args[0]

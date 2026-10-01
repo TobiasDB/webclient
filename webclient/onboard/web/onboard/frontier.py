@@ -15,6 +15,7 @@ from web.crawl import FrontierItem, FrontierMiddleware, Select
 from web.fetch import WebException, emit
 
 from .llm import Llm, ReasonEvent
+from .select import detail_shaped
 
 #: Cap how many frontier edges are shown to the model PER ROUND. The crawl frontier GROWS every round
 #: (each fetched page adds all its anchors; only the picked few are removed), so sending the whole
@@ -26,6 +27,26 @@ _WORD = re.compile(r"[a-z0-9]+")
 
 def _tokens(*groups: "Sequence[str]") -> "set[str]":
     return {t for g in groups for s in g for t in _WORD.findall(s.lower()) if len(t) >= 3}
+
+
+def _listing_reached(
+    pending: "Sequence[FrontierItem]",
+    goal: str,
+    fields: "Sequence[str]",
+    look: "Sequence[str]",
+) -> str:
+    """The URL of a fetched page that IS a listing for the dataset, judged from what the pending
+    edges say about their parents: a record region AND a pager (or the parent's path naming the
+    dataset -- events / news / filings / ...), not a detail page. ``""`` when none."""
+    want = _tokens([goal], fields, look)
+    for it in pending:
+        flags = set(it.parent_flags)
+        if "record_list" not in flags or not it.parent or detail_shaped(it.parent):
+            continue
+        path_words = set(_WORD.findall(it.parent.lower()))
+        if "paginated" in flags or (want & path_words):
+            return it.parent
+    return ""
 
 
 def _window(
@@ -181,6 +202,27 @@ def llm_frontier(
         return await llm.complete(_prompt(goal, fields, look, ignore, window, k, entity))
 
     async def mw(pending: "Sequence[FrontierItem]", nxt: Select) -> "Sequence[FrontierItem]":
+        found = _listing_reached(pending, goal, fields, look)
+        if found:  # the dataset's listing is fetched: expanding further only costs
+            emit(
+                ReasonEvent(
+                    stage="frontier",
+                    subject=found,
+                    text="a listing page for the dataset is fetched — stopping the crawl here",
+                )
+            )
+            return []
+        # a DETAIL page (one record) is a leaf, never the listing: it is not worth a fetch, a
+        # model call, or a line in the window
+        leaves = [it for it in pending if detail_shaped(it.url)]
+        pending = [it for it in pending if not detail_shaped(it.url)] or list(pending)
+        if leaves and len(leaves) < 40:
+            emit(
+                ReasonEvent(
+                    stage="frontier",
+                    text=f"{len(leaves)} single-record link(s) left out of the frontier (leaves)",
+                )
+            )
         if len(pending) <= 1:
             return await nxt(pending)  # nothing to choose
         # show the model only a BOUNDED, keyword-ranked window of the frontier -- the pending list

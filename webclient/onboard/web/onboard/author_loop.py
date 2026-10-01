@@ -41,8 +41,10 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import JsonValue
-from web.dsl import verbs_of
-from web.fetch import ClientPool, Profile as FetchProfile, WebException, emit
+from web.dsl import resolve_memo, verbs_of
+from web.fetch import ClientPool
+from web.fetch import Profile as FetchProfile
+from web.fetch import WebException, emit
 from web.fetch import profiles as _fp
 from web.parse import Document
 from web.resolve import EscalationPolicy, Resolver, flags
@@ -51,7 +53,7 @@ from web.resolve import profiles as _rp
 from .agent import BoundedLoop, Done, Verdict
 from .author import AuthorEvent
 from .author_steps import StepSession, miss_pattern, run_steps, suggest_selectors
-from .compile import Query, QueryError, parse_query, reroot
+from .compile import Query, QueryError, limited, parse_query, reroot
 from .evaluate import skeleton_for
 from .llm import Conversation, Conversational, Llm, ReasonEvent
 from .models import DatasetBrief, QueryArtifact, QuerySection, Reference
@@ -246,11 +248,19 @@ def _scope(state: AuthorState) -> str:
     return f" It must be {state.entity}'s OWN data." if state.entity else ""
 
 
-async def _test_query(query: Query, resolver: Resolver) -> "tuple[bool, list[object]]":
-    """Run the query against the source, HARD-BOUNDED by :data:`_QUERY_TEST_TIMEOUT` -> ``(ran,
-    rows)``. A transport/select failure or a timeout is ``(False, [])`` with the reason raised as a
-    :class:`WebException` by the caller's handling."""
-    result = await asyncio.wait_for(query.acollect(resolver=resolver), timeout=_QUERY_TEST_TIMEOUT)
+#: how many RECORDS a validation run covers while the loop repairs -- a fan-out query fetches one
+#: detail page per record, so every attempt used to fetch them ALL; the final run is unbounded.
+_VALIDATE_ROWS = 10
+
+
+async def _test_query(
+    query: Query, resolver: Resolver, *, limit: int = 0, timeout: float = _QUERY_TEST_TIMEOUT
+) -> "tuple[bool, list[object]]":
+    """Run the query against the source, HARD-BOUNDED by ``timeout`` and -- with ``limit`` -- to a
+    window of records -> ``(ran, rows)``. A transport/select failure or a timeout is raised as a
+    :class:`WebException` / ``TimeoutError`` for the caller's handling."""
+    q = limited(query, limit) if limit else query
+    result = await asyncio.wait_for(q.acollect(resolver=resolver), timeout=timeout)
     rows: list[object] = list(result) if isinstance(result, list) else [result]
     return True, rows
 
@@ -476,7 +486,7 @@ async def _author(state: AuthorState) -> None:
     state.page_sections = []
     for q in queries[:-1]:  # a split dataset: test the earlier sections now; the last is sampled
         try:
-            _ran, rows = await _test_query(q, state.resolver)
+            _ran, rows = await _test_query(q, state.resolver, limit=_VALIDATE_ROWS)
         except (WebException, asyncio.TimeoutError) as exc:
             state.last_error = f"section {q.describe()} failed to run: {exc}"
             state.hint = "Fix that section's selectors (or drop the section if it is empty)."
@@ -758,7 +768,7 @@ async def _observe(state: AuthorState) -> _Obs:
         )
     assert state.query is not None
     try:  # SAMPLE: run the current query (bounded)
-        _ran, rows = await _test_query(state.query, state.resolver)
+        _ran, rows = await _test_query(state.query, state.resolver, limit=_VALIDATE_ROWS)
         state.rows = rows[:_SAMPLE]
         state.rows_full = rows
     except WebException as exc:  # a select-miss / transport failure -> feed it back
@@ -974,6 +984,29 @@ async def _apply(state: AuthorState, turn: "str | Done") -> None:
         state.last_error = state.hint = ""  # keep the partial as the section's query
 
 
+async def _final_run(state: AuthorState, verdict: Verdict) -> None:
+    """The ONE unbounded run of the finished query (the loop validated on a window of records):
+    the artifact's rows / row count / timeliness come from it. Pages the loop already fetched are
+    in the memo; a slow full run keeps the window's rows and says so."""
+    if state.query is None or not verdict.ok:
+        return
+    try:
+        _ran, rows = await _test_query(state.query, state.resolver, timeout=_QUERY_TEST_TIMEOUT * 4)
+    except (WebException, asyncio.TimeoutError) as exc:
+        state.attempts.append(
+            f"the final full run did not finish ({exc}) — the rows are the validation window's"
+        )
+        return
+    state.rows_full = rows
+    state.rows = rows[:_SAMPLE]
+    emit(
+        ReasonEvent(
+            stage="author",
+            text=f"final run: {len(_with_fields(rows, state.brief))} row(s) over the whole source",
+        )
+    )
+
+
 def _json_rows(rows: "list[object]") -> "list[JsonValue]":
     """The rows as JSON values (what the DSL's collect yields); a non-JSON item is dropped."""
     out: list[JsonValue] = []
@@ -1071,11 +1104,15 @@ async def _run(
         max_rounds=max_rounds,
     )
     wall = budget_s if budget_s > 0 else _DEFAULT_BUDGET_S[engine]
-    try:
-        verdict = await asyncio.wait_for(loop.arun(state), timeout=wall)
-    except asyncio.TimeoutError:  # a slow model / stuck page -- take the sections so far
-        emit(ReasonEvent(stage="author", text=f"authoring hit the {wall:.0f}s budget — stopping"))
-        verdict = Verdict(reason="budget", rounds=state.repairs)
+    with resolve_memo():  # ONE memo for the whole loop: a detail page is fetched once, ever
+        try:
+            verdict = await asyncio.wait_for(loop.arun(state), timeout=wall)
+        except asyncio.TimeoutError:  # a slow model / stuck page -- take the sections so far
+            emit(
+                ReasonEvent(stage="author", text=f"authoring hit the {wall:.0f}s budget — stopping")
+            )
+            verdict = Verdict(reason="budget", rounds=state.repairs)
+        await _final_run(state, verdict)
     if verdict.reason == "error" and verdict.error:
         emit(ReasonEvent(stage="author", text=f"authoring aborted — {verdict.error}"))
     preview = json.dumps(state.rows[0], ensure_ascii=False, default=str)[:400] if state.rows else ""

@@ -25,7 +25,7 @@ from .expr import Expr, from_blob, from_plan
 from .facade import WebClient
 from .identity import IDENTITY_COLUMN, URL_COLUMN, digest, identity_of
 from .plan import Arg, Plan, Step
-from .run import resolve_memo, run_blob
+from .run import resolve_memo, resolve_memoised, run_blob
 from .surface import (
     KNOWN_VERBS,
     LazyCollection,
@@ -56,6 +56,7 @@ __all__ = [
     "unknown_verbs",
     "run_blob",
     "resolve_memo",
+    "resolve_memoised",
     "IDENTITY_COLUMN",
     "URL_COLUMN",
     "digest",

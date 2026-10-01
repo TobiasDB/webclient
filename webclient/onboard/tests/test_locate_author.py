@@ -31,6 +31,7 @@ from web.onboard.__main__ import main
 from web.onboard.author import author  # the reference-based one-shot primitive
 from web.onboard.locate import locate  # the core (explicit resolver/search/review)
 from web.resolve import Resolver
+from werkzeug.wrappers import Response
 
 
 def _stage_reply(prompt: str) -> "str | None":
@@ -1979,8 +1980,8 @@ def test_check_escalates_to_a_browser_render_when_the_page_looks_js_gated(
     # authors over the rendered page with full_browser baked into the reference.
     import importlib
 
-    from web.onboard import QueryArtifact, write_query
     from web.fetch import Request, Snapshot
+    from web.onboard import QueryArtifact, write_query
 
     shell = b"<html><body><div class='events'></div><p>loading</p></body></html>"
     full = (
@@ -2641,3 +2642,140 @@ def test_select_skips_pages_off_the_entitys_verified_domains() -> None:
         )
     assert [c.url for c in cast("list[object]", out)] == ["https://investors.10xgenomics.com/events/"]  # type: ignore[attr-defined]
     assert any("not 10x Genomics's host" in t for t in seen)
+
+
+def test_authoring_fetches_each_detail_page_once_and_validates_on_a_window(
+    httpserver: HTTPServer,
+) -> None:
+    # USER: "the authoring is fetching lots of documents and looping". One resolve memo spans the
+    # whole loop (a detail page is fetched ONCE across probes, repairs and reviews); validation
+    # runs cover a window of records; one final unbounded run gives the true row count.
+    from web.onboard import QueryArtifact, write_query
+
+    n_records = 15
+    rows = b"".join(
+        f"<li class='row'><span class='name'>N{n}</span><a class='more' href='/d/{n}'>read</a></li>".encode()
+        for n in range(1, n_records + 1)
+    )
+    httpserver.expect_request("/list").respond_with_data(
+        b"<ul>" + rows + b"</ul>", content_type="text/html"
+    )
+    fetched: dict[str, int] = {}
+
+    def detail(request: object) -> "Response":
+        path = getattr(request, "path", "")
+        fetched[path] = fetched.get(path, 0) + 1
+        return Response(f"<article class='body'>Body {path}</article>", content_type="text/html")
+
+    for n in range(1, n_records + 1):
+        httpserver.expect_request(f"/d/{n}").respond_with_handler(detail)
+
+    class _Reviewer(_StepConv):
+        def __init__(self, replies: "list[str]") -> None:
+            super().__init__(replies)
+            self.reviews = 0
+
+        async def complete(self, prompt: str) -> str:
+            if "reviewing extracted sample rows" in prompt:
+                self.reviews += 1
+                return "NO\nfirst sample rejected" if self.reviews == 1 else "YES"
+            return _stage_reply(prompt) or "YES"
+
+    llm = _Reviewer(
+        [
+            'records("li.row")',
+            'field(name, wq.doc.select(".name").attr("text"))',
+            'detail("a.more")',
+            'detail_field(body, wq.doc.select("article.body").attr("text"))',
+            "done()",  # validation run (10 records) -> review NO -> repair
+            'field(name, wq.doc.select(".name").attr("text"))',
+            "done()",  # validation run again -> review YES -> final full run
+        ]
+    )
+
+    async def go() -> QueryArtifact:
+        async with Resolver() as r:
+            return await write_query(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                DatasetBrief(fields=["name", "body"]),
+                resolver=r,
+                llm=cast("object", llm),  # type: ignore[arg-type]
+                review=cast("object", llm),  # type: ignore[arg-type]
+                engine="steps",
+            )
+
+    art = _run(go())
+    assert art.complete and art.row_count == n_records, (art.reason, art.row_count)
+    assert all(count == 1 for count in fetched.values()), fetched  # each detail page ONCE
+    assert len(fetched) == n_records  # ...and the final run covered them all
+
+
+def test_limited_puts_the_window_after_the_records_and_their_filter() -> None:
+    from web.onboard.compile import limited, parse_query
+
+    q = parse_query(
+        'wq.doc.select_all("li").filter(wq.doc.select("a").attr("href").is_ok())'
+        '.extract(t=wq.doc.select("b").attr("text"))'
+    )
+    assert ".filter(" in limited(cast("object", q), 7).describe()  # type: ignore[arg-type]
+    assert "is_ok()).limit(7).extract(" in limited(cast("object", q), 7).describe()  # type: ignore[arg-type]
+    single = parse_query('wq.doc.select("b").attr("text")')
+    assert limited(cast("object", single), 7).describe() == single.describe()  # type: ignore[arg-type]
+
+
+def test_frontier_drops_leaves_and_stops_once_a_listing_is_reached() -> None:
+    from web.crawl import FrontierItem
+    from web.fetch import EventBus, using
+    from web.onboard.frontier import llm_frontier
+    from web.onboard.llm import ReasonEvent
+
+    class _Llm:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def complete(self, prompt: str) -> str:
+            self.prompts.append(prompt)
+            return '[{"n": 0, "why": "the events page"}]'
+
+    llm = _Llm()
+    mw = llm_frontier(llm, "investor relations events", fields=["title"], look=["events calendar"])
+    seen: list[str] = []
+    bus = EventBus()
+    bus.subscribe("", lambda ev: seen.append(ev.text) if isinstance(ev, ReasonEvent) else None)
+
+    async def nxt(pending: object) -> object:
+        return list(cast("tuple[FrontierItem, ...]", pending))[:1]
+
+    async def go() -> None:
+        # round 1: a listing link + three detail links (leaves) found on the IR home page
+        pending = (
+            FrontierItem(url="https://ir.x.com/events/", text="Events", parent="https://ir.x.com/"),
+            FrontierItem(
+                url="https://ir.x.com/news/detail/101/q3-results-call-webcast-today",
+                parent="https://ir.x.com/",
+            ),
+            FrontierItem(
+                url="https://ir.x.com/news/2026/09/30/some-release", parent="https://ir.x.com/"
+            ),
+            FrontierItem(
+                url="https://ir.x.com/overview/", text="Overview", parent="https://ir.x.com/"
+            ),
+        )
+        picks = await mw(pending, nxt)  # type: ignore[arg-type]
+        assert [p.url for p in picks] == ["https://ir.x.com/events/"]
+        assert "detail/101" not in llm.prompts[0]  # the leaves never reached the model
+        # round 2: the events page was fetched (record_list + a pager) -> the crawl stops
+        after = (
+            FrontierItem(
+                url="https://ir.x.com/events/?page=2",
+                parent="https://ir.x.com/events/",
+                parent_flags=["record_list", "paginated"],
+            ),
+            FrontierItem(url="https://ir.x.com/overview/", parent="https://ir.x.com/"),
+        )
+        assert list(await mw(after, nxt)) == []  # type: ignore[arg-type]
+
+    with using(bus):
+        _run(go())
+    assert any("single-record link(s) left out" in t for t in seen)
+    assert any("stopping the crawl here" in t for t in seen)
