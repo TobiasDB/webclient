@@ -16,6 +16,9 @@ real source instead of dying at "no candidates".
 
 from __future__ import annotations
 
+import re
+from urllib.parse import urlparse
+
 import json
 from collections.abc import Sequence
 
@@ -49,6 +52,15 @@ def _rank(doc: Document, brief: LocateBrief) -> "tuple[float, dict[str, Flag]] |
     if is_docs(doc.url):
         return None
     by = {f.name: f for f in flags(doc)}
+    if _single_record(doc, by):  # one article / release / event: a leaf, never the listing
+        emit(
+            ReasonEvent(
+                stage="select",
+                subject=doc.url,
+                text="skipped — a single record (a detail page), not the listing",
+            )
+        )
+        return None
     s = score(doc, by)
     if brief.download:  # a DOWNLOAD brief: a page that LISTS the target files IS the source
         targets = download_targets(doc)
@@ -57,6 +69,30 @@ def _rank(doc: Document, brief: LocateBrief) -> "tuple[float, dict[str, Flag]] |
     if s <= 0.0:
         return None
     return s + field_bonus(doc, brief.fields), by
+
+
+#: a URL path that names ONE record: a detail segment, a dated slug, a long hyphenated slug, a
+#: trailing numeric id.
+_DETAIL_PATH = re.compile(
+    r"/(detail|details|article|articles|release|press-release|event|events|news|story|post|blog)s?/"
+    r"(?:\d{4}/\d{1,2}/(?:\d{1,2}/)?)?[^/]*[a-z][^/]*-[^/]*-[^/]*-[^/]+/?$"
+    r"|/\d{4}/\d{2}/\d{2}/[^/]+/?$|[-/]\d{3,}/?$|/detail/\d+/",
+    re.I,
+)
+
+
+def _single_record(doc: Document, by: "dict[str, Flag]") -> bool:
+    """A page that IS one record: a detail-shaped URL on a page with no paginated / real record
+    region (the only repeating things are nav, tags or related links)."""
+    if doc.kind != "html" or "paginated" in by:
+        return False
+    path = urlparse(doc.url).path.rstrip("/")
+    if not _DETAIL_PATH.search(path + "/"):
+        return False
+    # the paragraphs / links of ONE article register as a "record region" too (item selector `p`,
+    # `a`, `li`): only a CLASSED repeating item of real size says this page is a listing
+    regions = [r for r in doc.records(top_k=3) if any(c in r.item_selector for c in ".#[")]
+    return not regions or regions[0].count < 6
 
 
 def _page_row(doc: Document, by: "dict[str, Flag]") -> "dict[str, object]":
@@ -76,6 +112,7 @@ async def select_candidates(
     *,
     llm: "Llm | None",
     seed_urls: "Sequence[str]" = (),
+    entity: str = "",
 ) -> "list[Candidate]":
     """Rank the crawled pages into must / should / could candidates (see the module docstring).
     Deterministic gates first; then one metadata-only model call (or the score order without a
@@ -94,11 +131,19 @@ async def select_candidates(
             emit(ReasonEvent(stage="select", subject=c.url, text=f"[{c.tier}] {c.note}"))
         return plain
     pages = [_page_row(d, by) for d, _, by in ranked]
+    scope = (
+        f"The dataset belongs to '{entity}': pick only pages HOSTED BY {entity} itself (its own "
+        f"site / investor-relations host) -- a page about {entity} on someone else's domain is not "
+        "its data, never pick it."
+        if entity
+        else ""
+    )
     prompt = render_prompt(
         "select_candidates",
         description=brief.goal or "the target dataset",
         fields_line=brief_hints(brief),
         pages_json=clip(json.dumps(pages, indent=0), MAX_PAGES_CHARS, "pages list", kind="json"),
+        scope=scope,
     )
     try:
         data = parse_json(await llm.complete(prompt))

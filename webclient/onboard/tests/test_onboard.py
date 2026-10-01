@@ -130,7 +130,7 @@ def test_prompts_render_from_package_data_and_clip_to_budget() -> None:
     sets = {
         "pick_edges": dict(entity="Acme", description="d", fields_line="", listing="0. http://a"),
         "verify_seeds": dict(entity="Acme", description="d", fields_line="", seeds="0. http://a"),
-        "select_candidates": dict(description="d", fields_line="", pages_json="[]"),
+        "select_candidates": dict(description="d", fields_line="", pages_json="[]", scope=""),
         "evaluate_candidate": dict(
             description="d",
             fields_line="",

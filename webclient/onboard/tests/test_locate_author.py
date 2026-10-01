@@ -2521,3 +2521,65 @@ def test_loading_requirements_lets_the_verdict_or_flag_win_over_the_count(
     assert _run(go("the records require rendering by JavaScript", False)).profile == "full_browser"
     # the needs_browser CONCLUSION alone does not bake a browser (it fires on any small page)
     assert _run(go("a plain static list", True)).profile == "basic"
+
+
+def test_select_skips_a_single_record_page_and_states_the_entity_scope(
+    httpserver: HTTPServer,
+) -> None:
+    # USER: "ir-events 10x Genomics: a single news article was selected on a domain that wasn't
+    # even the company". Three gates now: verify keeps only pages HOSTED BY the entity; select
+    # skips a single-record (detail-shaped) page deterministically and tells the model the entity
+    # scope; evaluate calls a single record "not the dataset".
+    from web.onboard.prompts import render_prompt
+    from web.onboard.select import _single_record, select_candidates
+    from web.parse import parse
+    from web.resolve import flags
+
+    article = (
+        b"<html><body><article><h1>10x Genomics announces Q3 results</h1>"
+        + b"".join(f"<p>Paragraph {n} of the release body text.</p>".encode() for n in range(12))
+        + b"</article><ul class='related'><li><a href='/a'>Related 1</a></li><li><a href='/b'>Related 2</a></li></ul></body></html>"
+    )
+    listing = (
+        b"<ul>"
+        + b"".join(
+            f"<li class='ev'><a href='/events/e{n}'>Event {n}</a><span>2026-1{n%3}-01</span></li>".encode()
+            for n in range(1, 9)
+        )
+        + b"</ul>"
+    )
+    one = parse(
+        article,
+        content_type="text/html",
+        url="https://news.example.com/news/10x-genomics-announces-third-quarter-results-123456",
+    )
+    many = parse(listing, content_type="text/html", url="https://investors.example.com/events/")
+    assert _single_record(one, {f.name: f for f in flags(one)})
+    assert not _single_record(many, {f.name: f for f in flags(many)})
+
+    class _Spy:
+        def __init__(self) -> None:
+            self.prompt = ""
+
+        async def complete(self, prompt: str) -> str:
+            self.prompt = prompt
+            return '[{"url": "https://investors.example.com/events/", "tier": "must", "reason": "the listing"}]'
+
+    spy = _Spy()
+    out = _run(select_candidates([one, many], LocateBrief(goal="events", fields=["title"]), llm=cast("object", spy), entity="10x Genomics"))  # type: ignore[arg-type]
+    assert [c.url for c in cast("list[object]", out)] == ["https://investors.example.com/events/"]  # type: ignore[attr-defined]
+    assert "news.example.com" not in spy.prompt  # the single record never reached the model
+    assert "HOSTED BY 10x Genomics itself" in spy.prompt
+    assert "HOSTED BY '10x Genomics' ITSELF" in render_prompt(
+        "verify_seeds", entity="10x Genomics", description="d", fields_line="", seeds="0. x"
+    )
+    assert "A page that IS a single record" in render_prompt(
+        "evaluate_candidate",
+        description="d",
+        fields_line="",
+        candidate_url="u",
+        flag_map_json="{}",
+        endpoints_json="[]",
+        skeleton="<ul>",
+        exit_condition="",
+    )

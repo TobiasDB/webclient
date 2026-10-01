@@ -95,7 +95,7 @@ async def locate(
     by_url = {d.url: d for d in docs}
 
     # -- 3. select ----------------------------------------------------------------------------
-    candidates = await select_candidates(docs, lb, llm=llm, seed_urls=seeds)
+    candidates = await select_candidates(docs, lb, llm=llm, seed_urls=seeds, entity=entity)
     if not candidates:
         emit(ReasonEvent(stage="select", text="no candidate pages (every page gated out)"))
         return None

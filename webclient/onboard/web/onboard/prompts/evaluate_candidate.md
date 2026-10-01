@@ -8,6 +8,7 @@ $skeleton
 Assess this page as the source to scrape. Judge from the skeleton what the page ACTUALLY is:
 - "is_queryable" is true ONLY if this page IS a data endpoint (its body is the records as JSON/XML) OR it is backed by a same-origin data endpoint (listed above) that returns the records. A page that DOCUMENTS, DESCRIBES or lets you TRY an API -- developer docs, API reference, an OpenAPI/Swagger page, integration guides -- is NOT queryable and does NOT hold the dataset: set dataset_present=false, is_queryable=false and say so in the verdict.
 - The records must be the dataset itself, not examples, code samples, or a description of the data.
+- A page that IS a single record (one article, one press release, one event's own page) is NOT the dataset -- the dataset is the listing those records sit in: set dataset_present=false and say "a single record" in the reason.
 - RECENCY (for a dated dataset -- news/press releases/filings/events): read the visible dates to judge the SORT ORDER, and find WHERE THE MOST RECENT records are. They are often split from older ones behind a control: YEAR TABS (an older year may be shown by default), a "Latest" vs "Archive" toggle, a category filter, or the first page. Clickable tab/filter controls are marked "← clickable", the repeating dataset "← RECORD LIST". Give a short "recency_hint" the query writer can act on.
 
 $exit_condition
