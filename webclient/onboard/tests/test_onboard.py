@@ -133,7 +133,7 @@ def test_prompts_render_from_package_data_and_clip_to_budget() -> None:
         "review_candidate": dict(
             goal="g", scope="", url="http://a", tier="the HTTP tier", skeleton="<ul>", note=""
         ),
-        "review_location": dict(goal="g", scope="", source="url: a", note=""),
+        "review_location": dict(goal="g", scope="", source="url: a", skeleton="<ul>", note=""),
         "author_extract": dict(
             goal="g",
             schema="- a (string): x",

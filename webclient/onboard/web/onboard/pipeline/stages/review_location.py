@@ -1,5 +1,6 @@
-"""Stage 6 -- review location: one small call summarising the located source against the brief;
-``ok`` is advisory (a concern is reported, it never blocks the author)."""
+"""Stage 6 -- review location: one call judging the located source against the brief -- what
+expand described (tier, pager, feed, filters) AND the page's full outline (USER: the reviewer
+had too little to go on); ``ok`` is advisory (a concern is reported, it never blocks the author)."""
 
 from __future__ import annotations
 
@@ -9,6 +10,8 @@ from web.fetch import emit
 from ...llm import ReasonEvent
 from ..ask import Context, ask_json
 from ..state import DatasetSource, LocationReview, Onboarding
+from .expand import page_of
+from .review_candidate import skeleton
 
 
 class _Reply(BaseModel):
@@ -42,6 +45,7 @@ def describe(src: DatasetSource) -> str:
 
 async def run(state: Onboarding, ctx: Context) -> LocationReview:
     assert state.expand is not None
+    doc, _snap = await page_of(ctx, state.expand.url, state.expand.profile)
     reply = await ask_json(
         ctx,
         state,
@@ -50,6 +54,7 @@ async def run(state: Onboarding, ctx: Context) -> LocationReview:
         goal=state.brief.goal,
         scope=state.brief.scope(),
         source=describe(state.expand),
+        skeleton=skeleton(doc),
         note="",
     )
     emit(
