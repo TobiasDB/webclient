@@ -307,3 +307,31 @@ def test_find_records_never_picks_head_tags() -> None:
         content_type="text/html",
     )
     assert [r.item_selector for r in doc.records(top_k=3)] == ["li.item"]
+
+
+def test_record_region_carries_its_container_selector() -> None:
+    # bbc.co.uk: the nav's li[class*="ListItem"] and the news list's share one item selector; the
+    # region's container selector scopes them apart
+    nav = (
+        "<ul class=nav-list>"
+        + "".join(
+            f"<li class='ssrcss-a1b2c3-ListItem'><a href='/s{i}'>S{i}</a></li>" for i in range(4)
+        )
+        + "</ul>"
+    )
+    news = (
+        "<ul class=news-list>"
+        + "".join(
+            f"<li class='ssrcss-a1b2c3-ListItem'><h3><a href='/n{i}'>N{i}</a></h3><time>t</time></li>"
+            for i in range(6)
+        )
+        + "</ul>"
+    )
+    doc = parse(
+        f"<html><body><nav>{nav}</nav><main>{news}</main></body></html>".encode(),
+        url="http://x/",
+        content_type="text/html",
+    )
+    top = doc.records(top_k=1)[0]
+    assert top.item_selector == 'li[class*="ListItem"]' and top.container_selector == "ul.news-list"
+    assert len(doc.select_all(f"{top.container_selector} {top.item_selector}")) == 6 == top.count

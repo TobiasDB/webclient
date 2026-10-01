@@ -36,6 +36,10 @@ class RecordRegion(BaseModel):
     """
 
     item_selector: str
+    #: the CONTAINER's own durable selector (tag + its class hooks / id) -- ``container_selector
+    #: item_selector`` scopes the items when the bare item selector also matches elsewhere on the
+    #: page (a nav's ``li[class*="ListItem"]`` next to the news list's).
+    container_selector: str = ""
     count: int
     container_tag: str = ""
     container_id: str = ""
@@ -99,6 +103,15 @@ def _richness(members: "list[Node]") -> float:
     return min(total / len(sample), 10.0) / 10.0 if sample else 0.0
 
 
+def _container_selector(container: Node) -> str:
+    """The container as a durable selector: ``#id`` when it has one, else its tag plus up to two
+    class hooks (``ul[class*="Stack"]``), else the bare tag."""
+    node_id = container.get("id")
+    if node_id:
+        return f"#{node_id}"
+    return _tag(container) + "".join(_classes(container)[:2])
+
+
 def _item_selector(members: "list[Node]") -> str:
     """A selector for the records: the unwrapped tag, narrowed by a durable class hook common to
     ALL members (a semantic class, or the stem of a generated one -- never the hash itself)."""
@@ -141,6 +154,7 @@ def scan(doc: "Document", *, min_items: int = 3) -> "list[tuple[Node, RecordRegi
                     container,
                     RecordRegion(
                         item_selector=_item_selector(members),
+                        container_selector=_container_selector(container),
                         count=len(members),
                         container_tag=_tag(container),
                         container_id=container.get("id") or "",

@@ -376,3 +376,57 @@ def test_author_review_marks_the_nested_seam_and_spend_estimates_the_api_cost() 
     # the spend carries the prompt / reply sizes; the API estimate prices them at Haiku rates
     assert state.spend.chars_in > 100 and state.spend.chars_out > 10
     assert 0 < state.spend.api_estimate() < 0.001
+
+
+def test_expand_renders_once_when_the_http_page_is_thin_and_switches_to_the_browser(
+    httpserver: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the lesson kept from the old locate: a script app's HTTP shell shows two rows and passes a
+    # skeleton read; the dataset appears only rendered. Expand renders ONCE, compares, and bakes
+    # the browser tier when the render shows materially more records.
+    import web.onboard.pipeline.stages.review_candidate as rc
+    from web.fetch import Request, Snapshot
+    from web.onboard.pipeline import CandidateReview
+    from web.onboard.pipeline.stages import expand
+
+    shell = (
+        "<html><body><ul>"
+        + "".join(f"<li class=ev><a href='/e{n}'>Event {n}</a></li>" for n in range(2))
+        + "</ul><script>app()</script></body></html>"
+    )
+    httpserver.expect_request("/events").respond_with_data(shell, content_type="text/html")
+    full = (
+        "<html><body><ul>"
+        + "".join(
+            f"<li class=ev><a href='/e{n}'>Event {n}</a><time datetime='2026-10-{n + 1:02d}'>d</time></li>"
+            for n in range(14)
+        )
+        + "</ul></body></html>"
+    ).encode()
+
+    async def fake_render(ctx: object, url: str) -> Snapshot:
+        return Snapshot(
+            request=Request(url=url),
+            status=200,
+            content=full,
+            headers={"content-type": "text/html"},
+        )
+
+    monkeypatch.setattr(rc, "render", fake_render)
+    state = Onboarding.start(Brief.from_markdown(_BRIEF), company="acme")
+    state.review_candidate = CandidateReview(
+        url=httpserver.url_for("/events"), present=True, profile="basic"
+    )
+
+    async def go() -> object:
+        async with Resolver() as r:
+            ctx = Context(resolver=r, llm=cast("object", None), search=_Search([]))  # type: ignore[arg-type]
+            return await expand.run(state, ctx)
+
+    src = cast("expand.DatasetSource", _run(go()))
+    assert src.profile == "full_browser" and src.records == 14 and src.record_selector == "li.ev"
+    assert (
+        src.spa is not None
+        and "reviewed through a browser" in src.spa.reason
+        or src.spa is not None
+    )

@@ -11,13 +11,14 @@ from urllib.parse import parse_qs, urlparse
 from pydantic import JsonValue
 from web.fetch import Request, Snapshot, emit
 from web.parse import Document, Element
-from web.resolve import Resolver, document, flags
+from web.resolve import Flag, Resolver, document, flags
 from web.resolve import profiles as _rp
 
 from ...llm import ReasonEvent
 from ..apis import consistent, declared_endpoints, observed_endpoints, records_path, schema_fit
 from ..ask import Context
 from ..brief import Brief
+from ..hints import record_structure
 from ..state import (
     ApiDescription,
     DatasetSource,
@@ -25,6 +26,7 @@ from ..state import (
     PaginateDescription,
     SpaDescription,
 )
+from . import review_candidate as _rc
 
 _PAGERS = {"paginated": "next_link", "infinite_scroll": "scroll"}
 #: query parameters a pager bumps, most common first.
@@ -77,7 +79,14 @@ def pick_records(doc: Document, brief: Brief) -> "tuple[str, int]":
         return "", 0
     merged: dict[str, int] = {}
     for reg in doc.records(top_k=6):
-        merged[reg.item_selector] = merged.get(reg.item_selector, 0) + reg.count
+        selector = reg.item_selector
+        # the bare item selector also matches elsewhere (a nav's list items): scope it to the
+        # region's container; several regions with the same scoped selector merge (sections)
+        if reg.container_selector and len(doc.select_all(selector)) > reg.count * 2:
+            scoped = f"{reg.container_selector} {selector}"
+            if doc.select_all(scoped):
+                selector = scoped
+        merged[selector] = merged.get(selector, 0) + reg.count
     if not merged:
         return "", 0
     want = {f.type for f in brief.fields if not f.optional} & {"url", "datetime", "string"}
@@ -116,16 +125,77 @@ async def page_of(ctx: Context, url: str, profile: str) -> "tuple[Document, Snap
     return doc, snap
 
 
+def render_worth(
+    doc: Document, by: "dict[str, Flag]", count: int, brief: Brief, structure: str
+) -> str:
+    """Why the HTTP-tier page should be RENDERED once before trusting it: no / few records against
+    the brief's expectation, a script-app or data-API signal, or a thin record. ``""`` = trust it.
+    """
+    bounds = brief.expected_range()
+    if count == 0:
+        return "no record region at the HTTP tier"
+    if bounds is not None and count < bounds[0]:
+        return f"{count} record(s) at the HTTP tier, the brief expects at least {bounds[0]}"
+    hot = [n for n in ("spa", "needs_browser", "data_api", "iframe") if n in by]
+    if hot:
+        return f"signals {', '.join(hot)}"
+    if len(structure) < 200:
+        return "a thin record (the content may be injected by script)"
+    return ""
+
+
 async def run(state: Onboarding, ctx: Context) -> DatasetSource:
     assert state.review_candidate is not None and state.review_candidate.present
     review = state.review_candidate
     doc, snap = await page_of(ctx, review.url, review.profile)
     by = {f.name: f for f in flags(doc, snap)}
     selector, count = pick_records(doc, state.brief)
+    profile = review.profile
+    if doc.kind == "html" and profile == "basic":
+        # EMPIRICAL loading requirements (a lesson kept): the static page is not trusted on its own
+        # -- a script app server-renders a thin shell whose few rows pass a skeleton read while the
+        # dataset is injected later. Render once and compare; prefer the feed the render called.
+        why = render_worth(
+            doc, by, count, state.brief, record_structure(doc, selector) if selector else ""
+        )
+        if why:
+            emit(
+                ReasonEvent(
+                    stage="expand", subject=review.url, text=f"rendering once to compare ({why})"
+                )
+            )
+            try:
+                snap2 = await _rc.render(ctx, review.url)
+            except Exception as exc:  # noqa: BLE001 -- no browser: the static page stands
+                emit(ReasonEvent(stage="expand", text=f"no browser render: {exc}"))
+            else:
+                doc2 = document(snap2)
+                selector2, count2 = pick_records(doc2, state.brief)
+                emit(
+                    ReasonEvent(
+                        stage="expand",
+                        text=f"rendered: {count2} record(s) at {selector2!r} vs {count} static; "
+                        f"{len(observed_endpoints(snap2))} json call(s) observed",
+                    )
+                )
+                if count2 > max(count * 1.5, count + 2) or (count == 0 and count2 > 0):
+                    doc, snap, selector, count, profile = (
+                        doc2,
+                        snap2,
+                        selector2,
+                        count2,
+                        "full_browser",
+                    )
+                    by = {f.name: f for f in flags(doc, snap)}
+                    ctx.docs[review.url] = (doc, snap)
+                elif observed_endpoints(
+                    snap2
+                ):  # the feed is what matters; the page may stay static
+                    snap = snap2
     src = DatasetSource(
         url=review.url,
         kind=doc.kind,
-        profile=review.profile,
+        profile=profile,
         record_selector=selector,
         records=count,
         flags=sorted(by),
@@ -140,7 +210,7 @@ async def run(state: Onboarding, ctx: Context) -> DatasetSource:
                 note=by[flag].description,
             )
             break
-    if any(n in by for n in ("needs_browser", "spa", "iframe")) or review.profile == "full_browser":
+    if any(n in by for n in ("needs_browser", "spa", "iframe")) or profile == "full_browser":
         src.spa = SpaDescription(
             profile="full_browser",
             reason=", ".join(n for n in ("needs_browser", "spa", "iframe") if n in by)
