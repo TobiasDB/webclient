@@ -13,7 +13,6 @@ from __future__ import annotations
 from importlib.resources import files
 from pathlib import Path
 from string import Formatter
-from typing import Literal
 
 from pydantic import BaseModel, JsonValue
 
@@ -89,7 +88,7 @@ class Brief(BaseModel):
         if Path(spec).is_file():
             return cls.from_markdown(Path(spec).read_text(encoding="utf-8"))
         for name in {spec, spec.replace("-", "_"), spec.replace("_", "-")}:
-            res = files(__name__.rsplit(".", 1)[0]).joinpath(f"briefs/{name}.md")
+            res = files("web.onboard").joinpath(f"briefs/{name}.md")
             if res.is_file():
                 return cls.from_markdown(res.read_text(encoding="utf-8"))
         return cls(goal=spec)
@@ -145,7 +144,12 @@ class Brief(BaseModel):
         return parse_range(self.expect_rows)
 
 
-Scalar = Literal["str"]
+def packaged_briefs() -> "list[str]":
+    """The names of the briefs bundled with the package (``web/onboard/briefs/*.md``)."""
+    root = files("web.onboard").joinpath("briefs")
+    return sorted(p.name[:-3] for p in root.iterdir() if p.name.endswith(".md"))
+
+
 _FMT = Formatter()
 
 
@@ -173,4 +177,4 @@ def _collect(value: JsonValue, found: "set[str]") -> None:
             _collect(v, found)
 
 
-__all__ = ["Brief", "BriefError", "FieldSpec", "SearchSpec"]
+__all__ = ["Brief", "BriefError", "FieldSpec", "SearchSpec", "packaged_briefs"]

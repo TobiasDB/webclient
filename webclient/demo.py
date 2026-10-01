@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlparse
 from web.dsl import WebClient, from_blob, run_blob, wq
 from web.fetch import Profile as FetchProfile
 from web.fetch import Request, fetch
-from web.onboard import Brief, DatasetBrief, MemorySink, locate_and_author, run
+from web.onboard import Brief, FieldSpec, MemorySink, SearchSpec, onboard, run
 from web.resolve import EscalationPolicy, PaginatePolicy
 from web.resolve import Profile as ResolveProfile
 from web.resolve import Resolver, RetryPolicy, flags, resolve
@@ -285,54 +285,80 @@ async def evaluator(wc: WebClient, base: str, blob: str) -> None:
 
 
 class _StubLlm:
-    """An offline stand-in for AnthropicLlm: writes the product-extraction wq query the Author asks
-    for (locate is deterministic here -- the stub is only hit by author)."""
+    """An offline stand-in for the model: answers each STAGE's tiny prompt with the JSON it asks for
+    (the stages are recognisable by their first line), and for the extraction names the product
+    fields' selectors. It reports its own (zero) spend like the real clients."""
+
+    spent_usd = 0.0
+    calls = 0
 
     async def complete(self, prompt: str) -> str:
-        return (
-            'wq.doc.select_all("li.product").extract('
-            'name=wq.doc.select(".name").attr("text"), '
-            'price=wq.doc.select(".price").attr("text"))'
-        )
+        self.calls += 1
+        if "search results" in prompt:  # review_search / crawl: the first result is the listing
+            return json.dumps({"picks": [{"n": 1, "tier": "must", "why": "the catalogue"}]})
+        if "Does THIS page hold" in prompt:  # review_candidate
+            return json.dumps({"present": True, "reason": "a product list"})
+        if "located this source" in prompt:  # review_location
+            return json.dumps({"ok": True, "summary": "the product catalogue", "concerns": []})
+        if "extract these fields" in prompt:  # author_extract: selector + read per field
+            return json.dumps(
+                {
+                    "fields": {
+                        "name": {"css": ".name", "read": "text"},
+                        "price": {"css": ".price", "read": "text"},
+                        "spec": {"css": "a.link", "read": "href"},
+                    }
+                }
+            )
+        return json.dumps({"ok": True, "notes": "names and prices look right"})  # author_review
+
+
+async def _stub_search(goal: str) -> "list[str]":
+    return [_BASE[0] + "/"]
+
+
+_BASE: list[str] = [""]
 
 
 async def onboard_story(base: str) -> None:
-    """The capstone: LOCATE the best source for a goal, AUTHOR its wq query, then run it -> dataset."""
-    _h("locate + author -- goal -> source -> wq query -> dataset")
-    brief = Brief(goal="each product's name and price", candidates=[base + "/"], fields=["name"])
-    async with Resolver() as rs:
-        query = await locate_and_author(brief, brief, resolver=rs, llm=_StubLlm())
-        if query is None:
-            print("no source located")
-            return
-        result = await query.acollect(resolver=rs)  # Query is a collection|document union
-        rows = cast("list[dict[str, object]]", result if isinstance(result, list) else [result])
-        print("authored:", query.describe()[:72], "...")
-        print("dataset:", [(r.get("name"), r.get("price")) for r in rows])
-
-
-async def sinks_story(base: str) -> None:
-    """The clean execute interface: ``run`` a query to a Dataset -- scalar ROWS + fetched DOCUMENTS
-    (the schema's document-typed fields, each resolved to a blob and keyed to its row) -- or stream
-    to a custom sink (a DB table + object store)."""
-    _h("sinks -- run a query to rows + documents (the Dataset interface)")
-    query = (
-        wq.reference(base + "/")
-        .resolve()
-        .select_all("li.product")
-        .extract(
-            name=wq.doc.select(".name").attr("text"),
-            spec=wq.doc.select("a.link").attr("href"),  # a `document`-typed field -> a fetched blob
-        )
+    """The capstone: the STAGED pipeline -- search -> review -> crawl -> review -> expand -> review ->
+    resolve -> extract -> review -- for a brief with arguments, resumable from its JSON state."""
+    _h("onboard -- brief -> source -> wq query -> dataset (nine stages, one state)")
+    _BASE[0] = base
+    brief = Brief(
+        name="products",
+        goal="each product's name, price and spec sheet in the {shop} catalogue",
+        args=["shop"],
+        search=SearchSpec(term="{shop} products", domain=["localhost", "127.0.0.1"], path=["/"]),
+        fields=[
+            FieldSpec(name="name", description="the product name"),
+            FieldSpec(name="price", description="the price as shown"),
+            FieldSpec(name="spec", type="document", description="the spec sheet", optional=True),
+        ],
     )
-    brief = DatasetBrief(fields=["name", "spec"], types={"spec": "document"})
     async with Resolver() as rs:
-        data = await run([query], resolver=rs, brief=brief)  # -> Dataset(rows, documents)
+        state = await onboard(
+            brief, resolver=rs, llm=_StubLlm(), search=_stub_search, shop="the demo shop"
+        )
+        src, ex = state.expand, state.author_extract
+        assert src is not None and ex is not None, state.stopped
+        print("stages:  ", " → ".join(f"{l.stage}({l.calls})" for l in state.log))
+        print("source:  ", src.url, f"{src.records} records at {src.record_selector!r}")
+        print("authored:", ex.source[:72], "...")
+        print(
+            "dataset: ",
+            [(r.get("name"), r.get("price")) for r in cast("list[dict[str, object]]", ex.sample)],
+        )
+        data = await run(state, resolver=rs)  # -> Dataset(rows, documents): the spec sheets fetched
         assert data is not None
-        print("rows:     ", [r.get("name") for r in data.rows])
-        print("documents:", [(d.url.rsplit("/", 1)[-1], len(d.content)) for d in data.documents])
+        print(
+            "rows:     ",
+            len(data.rows),
+            "documents:",
+            [d.url.rsplit("/", 1)[-1] for d in data.documents],
+        )
         sink = MemorySink()  # ...or stream to your own sink instead of collecting a Dataset
-        await run([query], resolver=rs, brief=brief, sink=sink)
+        await run(state, resolver=rs, sink=sink)
         print("custom sink:", len(sink.rows), "rows,", len(sink.blobs), "blobs")
 
 
@@ -349,7 +375,6 @@ async def main() -> None:
             blob = lazy_plans(base)
             await evaluator(wc, base, blob)
         await onboard_story(base)
-        await sinks_story(base)
     finally:
         server.shutdown()
     print("\n\033[1mdemo ok\033[0m")

@@ -26,7 +26,7 @@ from web.dsl import IDENTITY_COLUMN, URL_COLUMN, digest, resolve_memo
 from web.resolve import Resolver
 
 from .compile import Query
-from .models import DatasetBrief
+from .pipeline.brief import Brief
 
 #: schema types whose VALUE is a downloadable document (the field's cell holds the file URL).
 DOCUMENT_TYPES = frozenset({"document", "file", "blob", "pdf", "download", "attachment", "binary"})
@@ -88,15 +88,14 @@ class MemorySink:
         self.blobs[key] = (content, metadata)
 
 
-def document_fields(brief: DatasetBrief) -> "set[str]":
+def document_fields(brief: Brief) -> "set[str]":
     """The brief's fields typed as a downloadable document (per :data:`DOCUMENT_TYPES`)."""
-    return {f for f in brief.fields if brief.types.get(f, "").lower() in DOCUMENT_TYPES}
+    return {f.name for f in brief.fields if f.type.lower() in DOCUMENT_TYPES}
 
 
-def row_schema(brief: DatasetBrief) -> "dict[str, str]":
-    """The row schema a sink receives: every brief field -> its type (``string`` when untyped),
-    plus the identity column."""
-    schema = {f: (brief.types.get(f) or "string") for f in brief.fields}
+def row_schema(brief: Brief) -> "dict[str, str]":
+    """The row schema a sink receives: every brief field -> its type, plus the identity column."""
+    schema = {f.name: (f.type or "string") for f in brief.fields}
     schema[IDENTITY_COLUMN] = "identity"
     return schema
 
@@ -121,7 +120,7 @@ def _pages(value: JsonValue) -> "list[dict[str, JsonValue]]":
 
 
 async def run_to_sink(
-    query: Query, brief: DatasetBrief, sink: Sink, *, resolver: Resolver
+    query: Query, brief: Brief, sink: Sink, *, resolver: Resolver
 ) -> "tuple[int, int]":
     """Run ``query`` and route its results to ``sink`` (see the module docstring): each row ->
     ``record`` with the schema; each document-typed field's URL, each identified page the query

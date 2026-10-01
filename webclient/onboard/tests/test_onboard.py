@@ -121,51 +121,38 @@ def test_budget_from_env_reads_the_cap(monkeypatch: "pytest.MonkeyPatch") -> Non
 
 
 def test_prompts_render_from_package_data_and_clip_to_budget() -> None:
-    # The LLM steps' prompts are DATA (`prompts/*.md` string.Templates): each renders with its
-    # placeholder set, a MISSING placeholder fails loudly (never a half-filled prompt), and every
+    # The stages' prompts are DATA (`pipeline/prompts/*.md` string.Templates): each renders with
+    # its placeholder set, a MISSING placeholder fails loudly (never a half-filled prompt), and every
     # page-derived input is clipped to a hard char budget, trimming where the content type is least
     # useful (head / centre / both ends) and noting the trim.
-    from web.onboard.prompts import MAX_SKELETON_CHARS, clip, render_prompt
+    from web.onboard.pipeline.ask import render
+    from web.onboard.prompts import clip
 
     sets = {
-        "pick_edges": dict(entity="Acme", description="d", fields_line="", listing="0. http://a"),
-        "verify_seeds": dict(entity="Acme", description="d", fields_line="", seeds="0. http://a"),
-        "select_candidates": dict(description="d", fields_line="", pages_json="[]", scope=""),
-        "evaluate_candidate": dict(
-            description="d",
-            fields_line="",
-            candidate_url="http://a",
-            flag_map_json="{}",
-            endpoints_json="[]",
-            skeleton="<ul>",
-            exit_condition="",
+        "review_search": dict(goal="g", scope="", results="1. [2] http://a", note=""),
+        "review_candidate": dict(
+            goal="g", scope="", url="http://a", records="3", skeleton="<ul>", note=""
         ),
-        "write_query": dict(
-            guide="G",
-            description="d",
-            fields_line="",
-            pager="",
-            skeleton="<ul>",
-            hints="",
-            recency="",
+        "review_location": dict(goal="g", scope="", source="url: a", note=""),
+        "author_extract": dict(
+            goal="g",
+            schema="- a (string): x",
+            kind="HTML record",
+            records="li",
+            count="3",
+            structure="<li>",
+            hint="",
+            note="",
         ),
-        "build_steps": dict(
-            guide="G",
-            description="d",
-            fields_line="",
-            pager="",
-            skeleton="<ul>",
-            hints="",
-            recency="",
-            start='records("li")',
+        "author_review": dict(
+            goal="g", schema="- a", count="3", expected="1-5", optional="none", rows="[]", note=""
         ),
     }
     for name, variables in sets.items():
-        out = render_prompt(name, **variables)
-        assert out and "$" not in out, name  # fully rendered, no unresolved placeholder
-    assert "Acme's own website" in render_prompt("pick_edges", **sets["pick_edges"])
+        out = render(name, **variables)
+        assert out and "$" not in out and len(out) < 2500, name  # rendered, tiny, no leftover
     try:
-        render_prompt("pick_edges", entity="Acme")
+        render("review_search", goal="g")
     except KeyError:
         pass
     else:
@@ -175,7 +162,7 @@ def test_prompts_render_from_package_data_and_clip_to_budget() -> None:
     assert clip(text, 60, kind="html").splitlines()[1].startswith("MMMMM")  # the centre
     json_clip = clip(text, 60, kind="json")
     assert json_clip.startswith("HHHHH") and json_clip.endswith("TTTTT")  # both ends
-    assert clip("short", 60) == "short" and MAX_SKELETON_CHARS == 16_000  # no-op below budget
+    assert clip("short", 60) == "short"  # no-op below budget
 
 
 def test_anthropic_llm_retries_transient_errors_but_not_bad_requests(
@@ -281,11 +268,6 @@ def test_expected_rows_is_a_flexible_guide() -> None:
     assert "BELOW" in (in_range(3, (10, 50)) or "") and "ABOVE" in (in_range(200, (10, 50)) or "")
     brief = Brief.from_markdown("---\nexpect_rows: 10-50\nschema:\n  - a: x\n---\ng")
     assert brief.expected_range() == (10, 50)
-    from web.onboard.patterns import steps_prompt
-
-    assert "EXPECTED SIZE (from the brief): about 10-50 records" in steps_prompt(
-        brief, "<ul>", [], kind="html"
-    )
 
 
 def test_claude_shim_conversation_keeps_one_process_and_recovers(

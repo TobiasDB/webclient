@@ -1,32 +1,31 @@
-"""The programmatic interface -- ``locate()`` and ``author()``, the onboard analogues of
+"""The programmatic interface -- ``onboard()`` and ``run()``, the onboard analogues of
 ``fetch()`` / ``resolve()``: give a brief (a :class:`Brief`, a packaged name, a file, or a bare
-goal) plus an optional entity, and get back the located source or the authored query, with EVERY
-dependency (resolver / LLM / web search) defaulted from the standardised env config (see
-:mod:`web.onboard.config`). Then EXECUTE the authored query and route its results with a clean
+goal) and its arguments, get back the :class:`Onboarding` state (resumable; every stage's contract
+on it), with EVERY dependency (resolver / model / web search) defaulted from the env config
+(:mod:`web.onboard.config`). Then EXECUTE the authored query and route its results with a clean
 :class:`Dataset` (scalar rows + fetched documents) or your own :class:`~web.onboard.sink.Sink`.
 
-    from web.onboard import author
-
-    authored = await author("ir-events", "Acme United")   # locate + author (env-configured model)
-    data = await authored.run()                            # Dataset(rows=[...], documents=[...])
+    from web.onboard import onboard, run
+    state = await onboard("ir-news", company="Intel")      # the nine stages, env-configured
+    data = await run(state)                                 # Dataset(rows=[...], documents=[...])
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import cast
 
 from pydantic import JsonValue
+from web.dsl import from_blob
 from web.resolve import Resolver
 
-from .author_loop import ENGINES, Engine, author_agent
 from .compile import Query
-from .config import build_resolver, default_llm, default_search, env
-from .frontier import llm_frontier
+from .config import build_resolver, default_llm, default_search
 from .llm import Llm
-from .locate import Search
-from .locate import locate as _locate_core
-from .models import Brief, DatasetBrief, Reference
+from .pipeline import Brief, Context, Onboarding
+from .pipeline import run as _run_stages
+from .search import Search
 from .sink import Sink, run_to_sink
 
 
@@ -38,8 +37,6 @@ class Attachment:
     url: str
     content: bytes
     content_type: str
-    #: the row it belongs to (``row``) and, for a fanned-out page, the fields read from it
-    #: (``fields`` -- with the ``_identity`` the query gave it).
     metadata: "dict[str, JsonValue]" = field(default_factory=dict)
 
 
@@ -48,14 +45,13 @@ class Dataset:
     """An executed query's result, split by kind: scalar ROWS (the table) and fetched DOCUMENTS (the
     files the schema's document-typed fields point at, each keyed to its row)."""
 
-    rows: "list[dict[str, JsonValue]]" = field(default_factory=list)  # as extracted (+ `_identity`)
+    rows: "list[dict[str, JsonValue]]" = field(default_factory=list)
     documents: "list[Attachment]" = field(default_factory=list)
-    schema: "dict[str, str]" = field(default_factory=dict)  # field -> type (+ `_identity`)
+    schema: "dict[str, str]" = field(default_factory=dict)
 
 
 class _Collector:
-    """A :class:`~web.onboard.sink.Sink` that gathers into a :class:`Dataset` -- the default when no
-    custom sink is given."""
+    """A :class:`~web.onboard.sink.Sink` that gathers into a :class:`Dataset`."""
 
     def __init__(self) -> None:
         self.data = Dataset()
@@ -72,154 +68,63 @@ class _Collector:
         )
 
 
-@dataclass
-class Authored:
-    """What :func:`author` returns: the located source and the authored SECTION queries (usually
-    one; more for a split-source dataset). :meth:`run` executes every section, concatenates, and
-    routes to a :class:`Dataset` or a custom sink."""
-
-    reference: "Reference | None"
-    queries: "list[Query]"
-    brief: DatasetBrief
-
-    def blobs(self) -> "list[str]":
-        """Each section query's serialised (wire) form."""
-        return [q.to_blob() for q in self.queries]
-
-    def describe(self) -> str:
-        """Each section query as a readable ``wq`` chain."""
-        return "\n".join(q.describe() for q in self.queries)
-
-    async def run(
-        self, *, resolver: "Resolver | None" = None, sink: "Sink | None" = None
-    ) -> "Dataset | None":
-        """Execute the section queries (see :func:`run`)."""
-        return await run(self, resolver=resolver, sink=sink)
-
-
-def _frontier(llm: Llm, brief: Brief, entity: str) -> "tuple[object, ...]":
-    return (
-        llm_frontier(
-            llm,
-            brief.goal,
-            entity=entity,
-            fields=brief.fields,
-            look=brief.look,
-            ignore=brief.ignore,
-        ),
-    )
-
-
-async def locate(
+async def onboard(
     brief: "str | Brief",
-    entity: str = "",
     *,
     resolver: "Resolver | None" = None,
     llm: "Llm | None" = None,
     search: "Search | None" = None,
-    profile: "str | None" = None,
-    proxy: "str | None" = None,
-    browser_path: "str | None" = None,
-) -> "Reference | None":
-    """Find the entity's own source for a brief and return a :class:`Reference` (or ``None`` -- Locate
-    is allowed to fail). Every dependency defaults from the env config: the resolver (WEB_PROFILE /
-    WEB_PROXY / WEB_BROWSER_PATH), the LLM (WEB_LLM_*, used for the entity-aware crawl frontier + the
-    candidate review), and the web search. A resolver built here is closed on the way out."""
-    lb = Brief.resolve(brief).with_entity(entity)
-    own = resolver is None
-    resolver = resolver or build_resolver(profile=profile, proxy=proxy, browser_path=browser_path)
-    llm = llm or default_llm()
-    try:
-        return await _locate_core(
-            lb,
-            resolver=resolver,
-            search=search or default_search(),
-            frontier=_frontier(llm, lb, entity),  # type: ignore[arg-type]
-            entity=entity,
-            review=llm,
-        )
-    finally:
-        if own:
-            await resolver.aclose()
-
-
-#: an engine by its name (the CLI / env spelling) -- unknown names fall back to ``auto``.
-_ENGINE_BY_NAME: "dict[str, Engine]" = {e: e for e in ENGINES}
-
-
-async def author(
-    source: "str | Brief | Reference",
-    brief: "str | Brief | None" = None,
-    entity: str = "",
-    *,
-    resolver: "Resolver | None" = None,
-    llm: "Llm | None" = None,
-    profile: "str | None" = None,
-    proxy: "str | None" = None,
-    browser_path: "str | None" = None,
-    engine: "Engine | None" = None,
-) -> Authored:
-    """Author the extraction query for a dataset. ``source`` is a :class:`Reference` (author it) OR a
-    brief spec (locate it first, then author) -- with an optional ``brief`` to describe a Reference's
-    schema. Env-defaulted like :func:`locate`; ``engine`` (``WEB_AUTHOR_ENGINE``) picks how the
-    loop writes the query. Returns an :class:`Authored` (the section queries); call
-    :meth:`Authored.run` to execute + sink."""
-    if isinstance(source, Reference):
-        reference: "Reference | None" = source
-        lb = (Brief.resolve(brief) if brief is not None else DatasetBrief()).with_entity(entity)
+    state: "str | Path | None" = None,
+    until: "str | None" = None,
+    **values: str,
+) -> Onboarding:
+    """Onboard a dataset: run the staged pipeline for ``brief`` rendered with ``values`` (its
+    declared arguments), resuming from ``state`` (a JSON file) when it exists and saving to it
+    after every stage. Returns the :class:`Onboarding` -- ``state.author_extract`` holds the
+    authored query, ``state.stopped`` says why a run ended early."""
+    spec = brief if isinstance(brief, Brief) else Brief.load(brief)
+    path = Path(state) if state is not None else None
+    if path is not None and path.is_file():
+        current = Onboarding.load(path)
     else:
-        lb = Brief.resolve(source).with_entity(entity)
-        reference = None
+        current = Onboarding.start(spec, **values)
     own = resolver is None
-    resolver = resolver or build_resolver(profile=profile, proxy=proxy, browser_path=browser_path)
-    llm = llm or default_llm()
+    resolver = resolver or build_resolver()
+    ctx = Context(resolver=resolver, llm=llm or default_llm(), search=search or default_search())
     try:
-        if reference is None:
-            reference = await _locate_core(
-                lb,
-                resolver=resolver,
-                search=default_search(),
-                frontier=_frontier(llm, lb, entity),  # type: ignore[arg-type]
-                entity=entity,
-                review=llm,
-            )
-        if reference is None:
-            return Authored(reference=None, queries=[], brief=lb)
-        picked = engine or env("WEB_AUTHOR_ENGINE") or "auto"  # one shot, then steps
-        queries, _verdict = await author_agent(
-            reference,
-            lb,
-            resolver=resolver,
-            llm=llm,
-            review=llm,
-            entity=entity,
-            engine=_ENGINE_BY_NAME.get(picked, "auto"),
-        )
-        return Authored(reference=reference, queries=queries, brief=lb)
+        return await _run_stages(current, ctx, until=until, save=path)
     finally:
         if own:
             await resolver.aclose()
+
+
+def query_of(state: Onboarding) -> "Query | None":
+    """The authored query of an onboarding (``None`` before / without a complete extraction)."""
+    ex = state.author_extract
+    if ex is None or not ex.blob:
+        return None
+    return cast(Query, from_blob(ex.blob))
 
 
 async def run(
-    source: "Authored | Query | list[Query]",
+    source: "Onboarding | Query | list[Query]",
     *,
     resolver: "Resolver | None" = None,
     sink: "Sink | None" = None,
-    brief: "DatasetBrief | None" = None,
+    brief: "Brief | None" = None,
 ) -> "Dataset | None":
     """Execute an authored query and route its results: scalar rows -> the table, document-typed
-    fields' URLs -> fetched blobs (keyed to their row). ``source`` is an :class:`Authored`, a single
-    query, or a list of section queries; the ``brief`` (an Authored carries its own -- else pass one)
-    types which fields are documents. Without a ``sink``, returns an in-memory :class:`Dataset`
-    (``rows`` + ``documents``); with a custom :class:`~web.onboard.sink.Sink`, streams to it and
-    returns ``None``. A resolver built here is closed on the way out."""
-    if isinstance(source, Authored):
-        queries, spec = source.queries, brief or source.brief
+    fields' URLs -> fetched blobs (keyed to their row). ``source`` is an :class:`Onboarding`, a
+    query, or a list of queries; the ``brief`` (an Onboarding carries its own) types which fields
+    are documents. Without a ``sink``, returns an in-memory :class:`Dataset`; with a custom
+    :class:`~web.onboard.sink.Sink`, streams to it and returns ``None``."""
+    if isinstance(source, Onboarding):
+        q = query_of(source)
+        queries, spec = ([q] if q is not None else []), brief or source.brief
     elif isinstance(source, list):
-        queries, spec = source, brief or DatasetBrief()
+        queries, spec = source, brief or Brief()
     else:
-        queries, spec = [source], brief or DatasetBrief()
+        queries, spec = [source], brief or Brief()
     own = resolver is None
     resolver = resolver or build_resolver()
     collector = _Collector() if sink is None else None
@@ -233,4 +138,4 @@ async def run(
     return collector.data if collector is not None else None
 
 
-__all__ = ["locate", "author", "run", "Authored", "Dataset", "Attachment"]
+__all__ = ["Attachment", "Dataset", "onboard", "query_of", "run"]

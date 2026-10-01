@@ -1,35 +1,26 @@
-"""web.onboard -- the capstone: ``goal -> dataset``, and the LLM tier.
+"""web.onboard -- the capstone: ``brief -> dataset``, and the model tier.
 
-The PROGRAMMATIC interface mirrors ``fetch()`` / ``resolve()``: :func:`locate` finds the entity's
-source for a brief, :func:`author` writes the extraction query, and :func:`run` executes it and
-routes the results to a :class:`Dataset` (rows + documents) or your own sink -- every dependency
-defaulted from the env config (:mod:`.config`), so it is a one-liner:
+The PROGRAMMATIC interface mirrors ``fetch()`` / ``resolve()``: :func:`onboard` runs the staged
+pipeline (search -> review -> crawl -> review -> expand -> review -> resolve -> extract -> review;
+see ``webclient/onboard/PIPELINE.md``) for a brief and its arguments and returns the resumable
+:class:`Onboarding` state; :func:`run` executes the authored query and routes the results to a
+:class:`Dataset` (rows + documents) or your own sink -- every dependency defaulted from the env
+config (:mod:`.config`):
 
-    from web.onboard import author
+    from web.onboard import onboard, run
+    state = await onboard("ir-news", company="Intel")
+    data = await run(state)                                 # Dataset(rows=[...], documents=[...])
 
-    authored = await author("ir-events", "Acme United")   # locate + author (env-configured model)
-    data = await authored.run()                            # Dataset(rows=[...], documents=[...])
-
-The lower-level building blocks are still here: the core :func:`web.onboard.locate.locate` and the
-one-shot :func:`web.onboard.author.author` (explicit resolver / LLM), :func:`build_query`,
-:func:`author_agent`, and the :class:`Llm` clients (:class:`AnthropicLlm`, keyless :class:`ClaudeShim`).
+The building blocks are here too: the stage contracts + :func:`web.onboard.pipeline.run` with an
+explicit :class:`Context`, the ``wq`` compile step (:func:`parse_query` / :func:`reroot`), and the
+:class:`Llm` clients (:class:`AnthropicLlm`, the keyless :class:`ClaudeShim`).
 """
 
 from __future__ import annotations
 
-from web.resolve import Resolver
-
-from .author import Authored as AuthoredQuery
-from .author import AuthorEvent
-from .author import author as author_query  # the reference-based one-shot primitive
-from .author import authored, build_query
-from .author_loop import author_agent, write_query
-from .behaviours import Behaviour, apply_behaviours, behaviour, register_behaviour
-from .compile import Query, QueryError, parse_query, reroot
+from .compile import Query, QueryError, hygienic, parse_query, reroot
 from .config import build_resolver, default_llm, default_search
-from .entries import Attachment, Authored, Dataset, author, locate, run
-from .evaluate import evaluate_candidate, evaluate_candidates
-from .frontier import llm_frontier
+from .entries import Attachment, Dataset, onboard, query_of, run
 from .llm import (
     AnthropicLlm,
     Budget,
@@ -43,24 +34,38 @@ from .llm import (
     ReasonEvent,
     Usage,
 )
-from .locate import Search, data_api_endpoints
-from .locate import locate as locate_source  # the core locate (explicit resolver/search/review)
-from .models import (
+from .models import SearchHit
+from .pipeline import (
+    STAGE_NAMES,
+    STAGES,
+    ApiDescription,
+    AuthorReview,
     Brief,
-    Candidate,
-    CandidateEval,
-    DatasetBrief,
-    LocateBrief,
-    QueryArtifact,
-    QuerySection,
-    Reference,
-    SearchHit,
+    BriefError,
+    CandidateReview,
+    Context,
+    CrawlResult,
+    DatasetSource,
+    ExtractQuery,
+    FieldSpec,
+    Hit,
+    LocationReview,
+    Onboarding,
+    PaginateDescription,
+    Pick,
+    ReplyError,
+    ResolvePlan,
+    SearchResult,
+    SearchReview,
+    SearchSpec,
+    SpaDescription,
+    Spend,
+    Stage,
+    StageLog,
+    Visited,
     packaged_briefs,
 )
-from .patterns import PATTERNS_GUIDE, author_prompt
-from .review import review
-from .search import DdgSearch, search_web
-from .select import select_candidates
+from .search import DdgSearch, Search
 from .shim import ClaudeShim
 from .sink import (
     DOCUMENT_TYPES,
@@ -72,96 +77,73 @@ from .sink import (
     run_to_sink,
 )
 
-
-async def locate_and_author(
-    goal: "str | LocateBrief",
-    brief: "DatasetBrief | None" = None,
-    *,
-    resolver: Resolver,
-    llm: Llm,
-    search: "Search | None" = None,
-) -> "Query | None":
-    """The thin composition over the PRIMITIVES: core locate then the one-shot author, sharing
-    ``resolver``. Returns the ``wq`` query, or ``None`` if no source holds the dataset. (For the
-    friendly env-defaulted flow, prefer :func:`author` which returns a runnable :class:`Authored`.)
-    """
-    reference = await locate_source(goal, resolver=resolver, search=search)
-    if reference is None:
-        return None
-    return await author_query(reference, brief, resolver=resolver, llm=llm)
-
-
 __all__ = [
-    # -- the programmatic interface (env-defaulted, like fetch()/resolve()) --
-    "locate",
-    "author",
+    # -- the programmatic interface --
+    "onboard",
     "run",
-    "Authored",
+    "query_of",
     "Dataset",
     "Attachment",
-    # -- env config + default builders --
-    "build_resolver",
-    "default_llm",
-    "default_search",
-    # -- the LLM tier --
-    "Llm",
-    "AnthropicLlm",
-    "ClaudeShim",
-    "Usage",
-    "Pricing",
-    "RateLimit",
-    "LlmEvent",
-    "ReasonEvent",
-    "llm_frontier",
-    "Conversation",
-    "Conversational",
-    "Budget",
-    "BudgetExceeded",
-    # -- the locate stages (search -> crawl -> select -> evaluate -> load) --
-    "search_web",
-    "select_candidates",
-    "evaluate_candidate",
-    "evaluate_candidates",
-    "SearchHit",
-    "Candidate",
-    "CandidateEval",
-    # -- lower-level building blocks --
-    "locate_source",
-    "author_query",
-    "authored",
-    "build_query",
-    "author_agent",
-    "write_query",
-    "QueryArtifact",
-    "QuerySection",
-    "locate_and_author",
-    "Reference",
+    "Onboarding",
     "Brief",
-    "LocateBrief",
-    "DatasetBrief",
+    "BriefError",
+    "FieldSpec",
+    "SearchSpec",
     "packaged_briefs",
-    "AuthoredQuery",
-    "AuthorEvent",
-    "Search",
-    "DdgSearch",
-    "data_api_endpoints",
-    "PATTERNS_GUIDE",
-    "author_prompt",
+    # -- the stages and their contracts --
+    "Context",
+    "Stage",
+    "STAGES",
+    "STAGE_NAMES",
+    "StageLog",
+    "Spend",
+    "Hit",
+    "SearchResult",
+    "Pick",
+    "SearchReview",
+    "Visited",
+    "CrawlResult",
+    "CandidateReview",
+    "DatasetSource",
+    "PaginateDescription",
+    "ApiDescription",
+    "SpaDescription",
+    "LocationReview",
+    "ResolvePlan",
+    "ExtractQuery",
+    "AuthorReview",
+    "ReplyError",
+    # -- compile --
     "Query",
     "QueryError",
     "parse_query",
     "reroot",
-    "Behaviour",
-    "behaviour",
-    "register_behaviour",
-    "apply_behaviours",
-    "review",
-    # -- sinks --
-    "run_to_sink",
-    "row_schema",
-    "identity_key",
+    "hygienic",
+    # -- the model tier --
+    "Llm",
+    "Conversation",
+    "Conversational",
+    "AnthropicLlm",
+    "ClaudeShim",
+    "Pricing",
+    "RateLimit",
+    "Budget",
+    "BudgetExceeded",
+    "Usage",
+    "LlmEvent",
+    "ReasonEvent",
+    # -- search / config / sinks --
+    "Search",
+    "DdgSearch",
+    "SearchHit",
+    "build_resolver",
+    "default_llm",
+    "default_search",
     "Sink",
     "MemorySink",
+    "run_to_sink",
     "document_fields",
+    "identity_key",
+    "row_schema",
     "DOCUMENT_TYPES",
 ]
