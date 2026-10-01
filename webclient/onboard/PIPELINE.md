@@ -68,6 +68,13 @@ a debugging path.
 
 ## Learnings carried over (from the old monolith and the loop pipeline)
 
+- **Upstream pointers poison the entire request.** A selector, a count or a verdict handed down
+  from an earlier stage (the record detector's "9 records at `tr`") becomes gospel for every later
+  stage: the review passed an app's empty shell, the browser was never tried, the feed was never
+  seen, the author was forced onto the wrong element. Stages pass DESCRIPTIONS and SIGNALS and say
+  which tier they came from; a later stage reaches its own conclusion from the evidence and
+  verifies any pointer that must flow (render-and-compare, probe) before relying on it.
+
 - Flags (the detection surface) are ground truth; the model judges, it never discovers structure.
 - A seed must be HOSTED BY the entity (registrable domain), never a page "about" it; a single
   record (a detail-shaped URL) is never the dataset; the crawl drops detail-shaped leaves and stops
