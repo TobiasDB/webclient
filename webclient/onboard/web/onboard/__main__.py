@@ -940,10 +940,10 @@ def _parser() -> argparse.ArgumentParser:
     aut.add_argument(
         "--engine",
         choices=ENGINES,
-        default=os.environ.get("WEB_AUTHOR_ENGINE") or "chain",
-        help="how the loop writes the query: 'chain' = the whole wq chain per turn; 'steps' = one "
-        "op per turn (records / field / detail / ...) with the result of each step fed back "
-        "[env WEB_AUTHOR_ENGINE]",
+        default=os.environ.get("WEB_AUTHOR_ENGINE") or "steps",
+        help="how the loop writes the query: 'steps' (default) = one op per turn (records / field "
+        "/ detail / ...) with the result of each step fed back; 'chain' = the whole wq chain per "
+        "turn [env WEB_AUTHOR_ENGINE]",
     )
     aut.add_argument(
         "--review",

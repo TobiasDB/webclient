@@ -1055,7 +1055,9 @@ def test_cli_author_locates_from_the_brief_and_runs(
     httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
     brief = _brief_file(tmp_path, httpserver.url_for("/people"))
     monkeypatch.setattr("web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(_REPLY))
-    rc = main(["author", brief, "--run", "--no-cache"])
+    rc = main(
+        ["author", brief, "--run", "--no-cache", "--engine", "chain"]
+    )  # scripted whole-chain replies
     out = capsys.readouterr()
     assert rc == 0
     Plan.from_blob(out.out.strip())  # stdout is a rebuildable wq blob
@@ -1210,7 +1212,7 @@ def test_cli_author_shim_writes_query(
     httpserver.expect_request("/people").respond_with_data(_PEOPLE, content_type="text/html")
     brief = _brief_file(tmp_path, httpserver.url_for("/people"))
     monkeypatch.setattr("web.onboard.__main__.ClaudeShim", lambda **_k: _ClosableLlm(_REPLY))
-    rc = main(["author", brief, "--shim", "--no-cache"])
+    rc = main(["author", brief, "--shim", "--no-cache", "--engine", "chain"])
     out = capsys.readouterr()
     assert rc == 0
     Plan.from_blob(out.out.strip())  # the shim wrote a rebuildable wq blob
@@ -1234,7 +1236,7 @@ def test_cli_locate_then_author_chain_via_cache(
     assert "cached →" in capsys.readouterr().err
 
     monkeypatch.setattr("web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(_REPLY))
-    assert main(["author", brief]) == 0  # reads the cached reference
+    assert main(["author", brief, "--engine", "chain"]) == 0  # reads the cached reference
     out = capsys.readouterr()
     assert "using the located reference" in out.err and Plan.from_blob(out.out.strip())
 
@@ -1253,7 +1255,7 @@ def test_cli_locate_pipes_into_author(
     assert rc == 0
     monkeypatch.setattr("sys.stdin", type("S", (), {"read": staticmethod(lambda: located)})())
     monkeypatch.setattr("web.onboard.__main__.AnthropicLlm", lambda **_k: _ClosableLlm(_REPLY))
-    rc = main(["author", brief, "--ref", "-", "--no-cache"])
+    rc = main(["author", brief, "--ref", "-", "--no-cache", "--engine", "chain"])
     assert rc == 0 and Plan.from_blob(capsys.readouterr().out.strip())
 
 

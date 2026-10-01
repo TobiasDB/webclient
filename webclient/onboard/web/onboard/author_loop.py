@@ -56,8 +56,9 @@ from .models import DatasetBrief, QueryArtifact, QuerySection, Reference
 from .patterns import author_prompt, field_schema
 from .timeliness import timeliness
 
-#: the authoring ENGINES: ``chain`` asks for the whole ``wq`` chain per turn (the default);
-#: ``steps`` builds it one op at a time with per-step feedback (:mod:`.author_steps`).
+#: the authoring ENGINES: ``steps`` builds the query one op at a time with per-step feedback
+#: (:mod:`.author_steps`) -- the CLI / programmatic default; ``chain`` asks for the whole ``wq``
+#: chain per turn (the library functions' parameter default, for callers that script replies).
 Engine = Literal["chain", "steps"]
 ENGINES: "tuple[Engine, ...]" = ("chain", "steps")
 #: the default wall clock per engine (``budget_s=0``): the step engine makes one model call per op,

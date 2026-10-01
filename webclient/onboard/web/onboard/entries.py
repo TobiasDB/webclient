@@ -180,7 +180,7 @@ async def author(
             )
         if reference is None:
             return Authored(reference=None, queries=[], brief=lb)
-        picked = engine or env("WEB_AUTHOR_ENGINE") or "chain"
+        picked = engine or env("WEB_AUTHOR_ENGINE") or "steps"  # steps is the default engine
         queries, _verdict = await author_agent(
             reference,
             lb,
