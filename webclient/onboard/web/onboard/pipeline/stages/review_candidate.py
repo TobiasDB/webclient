@@ -16,7 +16,7 @@ from web.resolve import profiles as _rp
 
 from ...llm import ReasonEvent
 from ...prompts import clip
-from ..ask import PROMPT_INPUT_CHARS, Context, ask_json
+from ..ask import Context, ask_json
 from ..state import CandidateReview, Onboarding
 
 #: this module, looked up at call time so a test's stub of :func:`render` is what runs.
@@ -28,13 +28,22 @@ class _Reply(BaseModel):
     reason: str = ""
 
 
+#: the page outline a review / the author sees: ~1.4k tokens, shallow enough to cover the WHOLE
+#: page (a deep widget -- a PDF viewer's toolbar -- must not eat the budget), chrome dropped, and
+#: WITHOUT the record detector's marks (a selector pointer upstream poisons what follows).
+SKELETON_CHARS = 5_600
+_DEPTH = 12
+
+
 def skeleton(doc: Document) -> str:
-    """The page outline the model judges by, chrome dropped, clipped to the prompt budget."""
+    """The page outline the model judges / authors by: a JSON shape, or the DOM outline with
+    chrome dropped, nesting capped, no detector marks, clipped from the top (page order)."""
     if doc.kind == "json":
-        return clip(doc.json_skeleton(max_lines=400), PROMPT_INPUT_CHARS, "skeleton", kind="json")
-    return clip(
-        doc.skeleton(max_lines=400, drop_chrome=True), PROMPT_INPUT_CHARS, "skeleton", kind="html"
+        return clip(doc.json_skeleton(max_lines=400), SKELETON_CHARS, "skeleton", kind="json")
+    outline = doc.skeleton(
+        max_lines=600, text_chars=40, max_depth=_DEPTH, mark_records=False, drop_chrome=True
     )
+    return clip(outline, SKELETON_CHARS, "skeleton")
 
 
 async def _judge(state: Onboarding, ctx: Context, doc: Document, profile: str) -> _Reply:

@@ -507,3 +507,21 @@ def test_a_rejected_review_sends_the_extraction_back_once_with_its_note(
         "author_extract",
         "author_review",
     ]
+
+
+def test_review_skeleton_outlines_the_whole_page_without_detector_marks() -> None:
+    # a rendered IR page's skeleton was 32k chars: centre-clipping landed inside a PDF viewer's
+    # toolbar and the review saw no records. The outline is shallow, chrome-free, top-first, and
+    # carries no `select_all(...)` mark (an upstream pointer).
+    from web.onboard.pipeline.stages.review_candidate import SKELETON_CHARS, skeleton
+    from web.parse import parse
+
+    deep = "<div>" * 30 + "<button>deep toolbar</button>" + "</div>" * 30
+    rows = "".join(f"<li class=ev><a href='/e{i}'>Event {i}</a></li>" for i in range(6))
+    html = f"<html><body><nav><a href='/'>home</a></nav><main><ul class=events>{rows}</ul>{deep}</main></body></html>"
+    doc = parse(html.encode(), url="http://x/", content_type="text/html")
+    out = skeleton(doc)
+    assert len(out) <= SKELETON_CHARS + 100 and "li.ev" in out and "Event 0" in out
+    assert "select_all(" not in out and "RECORD LIST" not in out  # no detector pointer
+    assert "deep toolbar" not in out  # beyond the depth cap
+    assert "nav" not in out.split("main")[0]  # chrome dropped
