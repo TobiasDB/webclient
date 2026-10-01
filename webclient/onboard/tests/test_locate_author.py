@@ -2222,3 +2222,47 @@ def test_steps_engine_lists_a_json_records_keys_when_an_attr_is_empty(
     art = _run(go())
     assert art.complete, art.reason
     assert "The record's keys are: Title (str), StartDate (str)" in llm.turns[2]
+
+
+def test_json_detail_follows_a_relative_link_and_a_failed_detail_is_not_already_done(
+    httpserver: HTTPServer,
+) -> None:
+    # Eval C4: a JSON feed's LinkToDetailPage is a RELATIVE path -> detail() said "no such link",
+    # and the repeat of that NOT-applied detail was refused as "already done". Now the path
+    # resolves against the feed's URL, and only an APPLIED detail is "already done".
+    from web.onboard import QueryArtifact, write_query
+
+    feed = {"items": [{"Title": "A", "Link": "/e/1"}, {"Title": "B", "Link": "/e/2"}]}
+    httpserver.expect_request("/feed").respond_with_json(feed)
+    for n, body in ((1, "Body One"), (2, "Body Two")):
+        httpserver.expect_request(f"/e/{n}").respond_with_data(
+            f"<article class='body'>{body}</article>".encode(), content_type="text/html"
+        )
+    llm = _StepConv(
+        [
+            'records("items")',
+            'field(title, wq.doc.attr("Title"))',
+            'detail("Nope")',  # no such key -> not applied
+            'detail("Nope")',  # the same again: refused, but NOT as "already done"
+            'detail("Link")',  # a relative path, resolved against the feed's URL
+            'detail_field(body, wq.doc.select("article.body").attr("text"))',
+            "done()",
+        ]
+    )
+
+    async def go() -> QueryArtifact:
+        async with Resolver() as r:
+            return await write_query(
+                Reference(url=httpserver.url_for("/feed"), kind="json"),
+                DatasetBrief(fields=["title", "body"]),
+                resolver=r,
+                llm=cast("object", llm),  # type: ignore[arg-type]
+                engine="steps",
+            )
+
+    art = _run(go())
+    assert art.complete, art.reason
+    assert "is already done" not in llm.turns[4] and "you already called exactly" in llm.turns[4]
+    assert "followed a typical record's link, " + httpserver.url_for("/e/1") in llm.turns[5]
+    first = cast("dict[str, object]", art.sample[0])
+    assert cast("dict[str, object]", first["detail"])["body"] == "Body One"

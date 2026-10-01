@@ -691,3 +691,36 @@ def test_map_takes_a_dict_literal_and_elements_project_to_text() -> None:
     chain = 'wq.doc.select_all("p.r").attr("text").map({"Three": 3, "One": 1})'
     assert from_source(chain).collect(doc) == [3, 1]
     assert from_source('wq.doc.select_all("p.r").project()').collect(doc) == ["Three", "One"]
+
+
+def test_a_relative_url_read_from_a_record_resolves_against_its_page(
+    httpserver: HTTPServer,
+) -> None:
+    # USER: relative URLs are resolved by resolve()/fetch automatically, against the page the value
+    # was read on -- a document/parsing feature, not the author's job. A JSON feed's record link
+    # ("/e/1") is followed; `.link()` on the same value is absolute.
+    from web.parse import Document
+
+    httpserver.expect_request("/e/1").respond_with_data(
+        b"<article class='body'>Body One</article>", content_type="text/html"
+    )
+    feed = Document(
+        content=b'{"items":[{"Title":"A","Link":"/e/1"}]}',
+        kind="json",
+        url=httpserver.url_for("/feed"),
+    )
+    chain = wq.doc.select_all("items").extract(
+        title=wq.doc.attr("Title"),
+        link=wq.doc.attr("Link").link(),
+        detail=wq.doc.attr("Link")
+        .resolve()
+        .extract(body=wq.doc.select("article.body").attr("text")),
+    )
+
+    async def go() -> object:
+        async with Resolver() as r:
+            return await chain.acollect(feed, resolver=r)
+
+    rows = cast("list[dict[str, object]]", asyncio.run(go()))
+    assert rows[0]["link"] == httpserver.url_for("/e/1")
+    assert cast("dict[str, object]", rows[0]["detail"])["body"] == "Body One"

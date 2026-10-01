@@ -204,6 +204,12 @@ class Field(Generic[T]):
         return cast(T, self._value)
 
     @property
+    def base(self) -> str:
+        """The page this value was read on (``""`` when unknown) -- what a relative URL resolves
+        against."""
+        return self._base
+
+    @property
     def ok(self) -> bool:
         """Whether the field is present (matched and non-None)."""
         return self._ok

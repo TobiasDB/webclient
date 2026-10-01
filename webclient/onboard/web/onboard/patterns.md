@@ -265,6 +265,8 @@ wq.doc.select_all("li.product").extract(
 )
 ```
 If the detail page is JSON, read it the JSON way (§3): `…resolve().extract(stock=wq.doc.select("stock.count").attr("text"))`.
+If the RECORDS are JSON, the link is a key, not an element: `wq.doc.attr("url").resolve().extract(...)`
+(a relative path resolves against the feed's URL automatically).
 
 ### 9 — two sections, one dataset (a grouped selector)
 

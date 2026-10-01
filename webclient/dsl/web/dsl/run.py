@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import cast
+from urllib.parse import urljoin
 
 from pydantic import JsonValue
 from web.fetch import Request, WebException, err
@@ -102,7 +103,7 @@ async def run_blob(blob: str, root: object = None, *, resolver: "Resolver | None
 
 
 async def _walk(
-    plan: Plan, root: object, rs: "Resolver", row: "dict[str, object] | None"
+    plan: Plan, root: object, rs: "Resolver", row: "dict[str, object] | None", base: str = ""
 ) -> object:
     """Walk a plan's steps against a context, returning the RAW current value (Field/Collection/…);
     the smart unwrap happens only at the :func:`arun` terminal. ``row`` is the element's
@@ -115,10 +116,10 @@ async def _walk(
         if s.kind == "get":
             nxt = steps[i + 1] if i + 1 < len(steps) else None
             if nxt is not None and nxt.kind == "call":
-                cur = await _invoke(cur, s.name, nxt, root, rs, row)
+                cur = await _invoke(cur, s.name, nxt, root, rs, row, base)
                 i += 2
             else:  # a bare attribute access = a property read
-                cur = await _invoke(cur, s.name, None, root, rs, row)
+                cur = await _invoke(cur, s.name, None, root, rs, row, base)
                 i += 1
         elif s.kind == "op":
             other = await _arg(s.args[0], root, rs, row) if s.args else _MISSING
@@ -152,8 +153,10 @@ async def _invoke(
     root: object,
     rs: "Resolver",
     row: "dict[str, object] | None",
+    base: str = "",
 ) -> object:
-    """Dispatch one ``get`` (+ optional ``call``) step. The row-shaping ops and the fetch/lookup ops
+    """Dispatch one ``get`` (+ optional ``call``) step. ``base`` is the page a bare JSON context
+    (a record dict) was read on, so a relative URL in it resolves against that page. The row-shaping ops and the fetch/lookup ops
     are handled explicitly; everything else dispatches onto the current value (fanning out over a
     Collection)."""
     if name == "doc":  # the reference -> document join spelling (wc.resolve(url).doc()); identity
@@ -196,8 +199,8 @@ async def _invoke(
         return _identify(cur, [str(a) for a in args], row)
     args, kwargs = await _eager_args(call, root, rs, row)
     if isinstance(cur, Collection):
-        return _fan(cur, name, args, kwargs)
-    return _one(cur, name, args, kwargs)
+        return _fan(cur, name, args, kwargs, base)
+    return _one(cur, name, args, kwargs, base)
 
 
 async def _resolve(
@@ -218,6 +221,10 @@ async def _resolve(
                 docs.append(doc)
         return Collection(docs)
     url = cur.url if isinstance(cur, Ref) else (cur.get() if isinstance(cur, Field) else cur)
+    if isinstance(url, str) and url and not url.startswith(("http://", "https://")):
+        base = getattr(cur, "base", "")  # a relative URL resolves against the page it was read on
+        if isinstance(base, str) and base:
+            url = urljoin(base, url)
     if isinstance(url, str) and url:
         cache = _RESOLVE_CACHE.get() if memo else None
         if cache is not None and url in cache:
@@ -286,7 +293,9 @@ def _flag(call: "Step | None", key: str) -> bool:
     return bool(arg.value) if arg is not None else False
 
 
-def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object]") -> object:
+def _one(
+    obj: object, name: str, args: "list[object]", kwargs: "dict[str, object]", base: str = ""
+) -> object:
     """Dispatch a single read onto one value. The SAME verbs work over an HTML and a JSON document:
     ``select`` / ``select_all`` navigate (a CSS selector for markup, a dotted JSON path for JSON),
     ``attr`` / ``text`` read a leaf (an HTML attribute/text, or a JSON scalar). A miss (``None``)
@@ -324,7 +333,7 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
         nodes: "list[object]" = (
             value if isinstance(value, list) else ([] if value is None else [value])
         )
-        return Collection(nodes, base=_base_of(obj))
+        return Collection(nodes, base=_base_of(obj) or base)
     if name == "attr":  # HTML attribute (attr('text') -> text, attr('href') -> a resolvable Ref)
         key = str(args[0]) if args else ""
         if isinstance(obj, Element):
@@ -335,11 +344,13 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
             return Field(obj.attr(key), base=_base_of(obj))
         if _markup(obj):  # a markup Document has no attributes of its own; text pseudo only
             return Field(_text_of(obj) if key in _TEXT_ATTRS else None, base=_base_of(obj))
-        return Field(_json_get(obj, "" if key in _TEXT_ATTRS else key))  # JSON: value / key access
+        # JSON: value / key access -- read on the page the record came from (so a relative URL in
+        # a feed resolves against it)
+        return Field(_json_get(obj, "" if key in _TEXT_ATTRS else key), base=_base_of(obj) or base)
     if name == "text":
         if _markup(obj):
             return Field(_text_of(obj), base=_base_of(obj))
-        return Field(_json_get(obj, ""))  # the JSON scalar value itself
+        return Field(_json_get(obj, ""), base=_base_of(obj) or base)  # the JSON scalar itself
     if name == "links" and isinstance(obj, Document):  # resolvable refs, so .resolve() can follow
         return Collection([Ref(u, base=obj.url) for u in obj.links()])
     attr = getattr(obj, name, _MISSING)
@@ -348,7 +359,7 @@ def _one(obj: object, name: str, args: "list[object]", kwargs: "dict[str, object
             err("dsl.unknown_verb", f"{type(obj).__name__} has no verb {name!r}", verb=name)
         )
     value = attr(*args, **kwargs) if callable(attr) else attr
-    return _wrap(value, _base_of(obj))
+    return _wrap(value, _base_of(obj) or base)
 
 
 def _markup(obj: object) -> bool:
@@ -373,6 +384,7 @@ def _fan(
     name: str,
     args: "list[object]",
     kwargs: "dict[str, object]",
+    base: str = "",
 ) -> object:
     """Fan an element op out over a collection, ALWAYS returning a Collection so the chain stays
     uniform (``select``/``select_all`` flatten nested collections and drop misses; a scalar read
@@ -382,7 +394,7 @@ def _fan(
         return getattr(coll, name)(*args, **kwargs)
     flat: list[object] = []
     for item in coll:
-        result = _one(item, name, args, kwargs)
+        result = _one(item, name, args, kwargs, coll.base or base)
         if isinstance(result, Collection):  # select_all fanned -> flatten one level
             flat.extend(result)
         elif result is None and name in {"select", "select_all"}:
@@ -410,7 +422,7 @@ async def _row_op(
             for (
                 a
             ) in args:  # explicit loop: an `await` inside all(...) would build an async generator
-                if not _truthy(await _arg(a, item, rs, row)):
+                if not _truthy(await _arg(a, item, rs, row, coll.base)):
                     keep = False
                     break
             if keep:
@@ -427,7 +439,7 @@ async def _row_op(
             # CONSTANT (e.g. status="UPCOMING") -- _arg yields the literal as-is. (It used to route
             # through a plan wrapper that compared the element TO the literal, so a constant column
             # came back as False.)
-            built[key] = raw(await _arg(arg, item, rs, built))
+            built[key] = raw(await _arg(arg, item, rs, built, coll.base))
         # identity is IMPLICIT: every extracted row carries the hash of its fields (see identity.py);
         # an explicit `.identity(...)` later overrides it
         scope = item if isinstance(item, (Document, Element)) else None
@@ -534,10 +546,13 @@ async def _eager_args(
     return args, kwargs
 
 
-async def _arg(arg: "Arg", root: object, rs: "Resolver", row: "dict[str, object] | None") -> object:
-    """One argument value: its literal, or the result of walking its sub-plan against the context."""
+async def _arg(
+    arg: "Arg", root: object, rs: "Resolver", row: "dict[str, object] | None", base: str = ""
+) -> object:
+    """One argument value: its literal, or the result of walking its sub-plan against the context
+    (``base``: the page that context was read on)."""
     if arg.plan is not None:
-        return await _walk(arg.plan, root, rs, row)
+        return await _walk(arg.plan, root, rs, row, base)
     return arg.value
 
 

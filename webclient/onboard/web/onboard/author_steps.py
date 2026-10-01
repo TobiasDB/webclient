@@ -46,7 +46,7 @@ import re
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from web.dsl import SourceError, UnknownVerb, from_source, resolve_memo, verbs_of
 from web.fetch import WebException, emit
@@ -135,6 +135,7 @@ class Draft:
     link: str = ""  # the css of the link followed ONCE per record
     detail_fields: "dict[str, str]" = field(default_factory=dict)  # name -> chain (detail page)
     where: str = ""
+    json: bool = False  # a JSON document: a record's link is a KEY (attr), not an element (select)
     identity: "list[str] | None" = None  # the record's identity parts (None = not declared)
     detail_identity: "list[str] | None" = None  # the detail page's identity parts
 
@@ -145,6 +146,7 @@ class Draft:
             self.link,
             dict(self.detail_fields),
             self.where,
+            self.json,
             list(self.identity) if self.identity is not None else None,
             list(self.detail_identity) if self.detail_identity is not None else None,
         )
@@ -157,13 +159,15 @@ class Draft:
         cols = dict(self.fields)
         if self.link and self.detail_fields:
             inner = ", ".join(f"{n}={c}" for n, c in self.detail_fields.items())
-            cols[DETAIL_COLUMN] = (
-                f'wq.doc.select({self.link!r}).attr("href").resolve().extract({inner})'
-                + (
-                    ".identity(" + ", ".join(repr(p) for p in self.detail_identity) + ")"
-                    if self.detail_identity is not None
-                    else ""
-                )
+            follow = (  # a JSON record's link is a key holding a URL (often relative); HTML: an href
+                f"wq.doc.attr({self.link!r}).resolve()"
+                if self.json
+                else f'wq.doc.select({self.link!r}).attr("href").resolve()'
+            )
+            cols[DETAIL_COLUMN] = f"{follow}.extract({inner})" + (
+                ".identity(" + ", ".join(repr(p) for p in self.detail_identity) + ")"
+                if self.detail_identity is not None
+                else ""
             )
         return cols
 
@@ -432,8 +436,10 @@ def _record_links(doc: Document, records: str, css: str) -> "list[str]":
         items = val if isinstance(val, list) else [val]
         for item in items[:_LINK_SAMPLE]:
             got = item.get(css) if isinstance(item, dict) else None
-            if isinstance(got, str) and got.startswith(("http://", "https://")):
-                out.append(got)
+            if isinstance(got, str) and got.strip():
+                absolute = urljoin(doc.url, got.strip())  # a feed often carries a relative path
+                if absolute.startswith(("http://", "https://")):
+                    out.append(absolute)
         return out
     for rec in doc.select_all(records)[:_LINK_SAMPLE]:
         el = rec.select(css)
@@ -793,7 +799,8 @@ def _observe_with(llm: Llm) -> "Callable[[StepSession], Awaitable[_Obs]]":
             return _Obs(error="done() before any records(...) -- nothing to finish")
         if op.name != "done" and op.line() in session.tried:
             earlier = session.tried[op.line()]
-            if op.name in ("detail", "absent", "section"):  # already DONE -- move on
+            applied_before = "not applied" not in earlier and "reverted" not in earlier
+            if op.name in ("detail", "absent", "section") and applied_before:  # DONE -- move on
                 return _Obs(
                     error=f"{op.line()} is already done ({earlier}) -- continue with the next op "
                     "(detail_field(...) reads the detail page; done() finishes)."
@@ -900,7 +907,7 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
                 "field) before starting another.",
                 "current section unfinished (not applied)",
             )
-        probe = Draft(records=op.args[0])
+        probe = Draft(records=op.args[0], json=doc.kind == "json")
         try:
             n = await _count(probe, doc, resolver)
         except Exception as exc:  # as for records(...)
@@ -923,6 +930,7 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
         )
     if op.name == "records":
         new.records = op.args[0]
+        new.json = doc.kind == "json"
         try:
             n = await _count(new, doc, resolver)
         except Exception as exc:  # a bad selector can raise anything from the parser: not applied
