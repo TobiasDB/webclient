@@ -59,7 +59,7 @@ from .compile import Query, clean_reply, parse_query, reroot
 from .evaluate import skeleton_for
 from .llm import Conversation, Conversational, Llm, ReasonEvent
 from .models import DatasetBrief, Reference, in_range
-from .patterns import steps_prompt
+from .patterns import field_schema, steps_prompt
 from .prompts import clip
 
 #: the op vocabulary the model may call (see the module docstring).
@@ -213,6 +213,7 @@ class StepSession:
     unknown: "list[str]" = field(default_factory=list)
     steps: int = 0
     zero_picks: int = 0  # consecutive records() picks that matched NOTHING (a shell page tells)
+    failed: "Counter[str]" = field(default_factory=Counter)  # per field: reverted / missed attempts
     skip: int = (
         0  # leading records that are NOT typical (a table header row) -- the probe skips them
     )
@@ -449,6 +450,10 @@ def _record_links(doc: Document, records: str, css: str) -> "list[str]":
     return out
 
 
+# NOTE (USER 2026-10-01): the detail page is SAMPLED ONCE, from the typical record's link (the
+# largest URL-shape group). A dataset whose detail pages differ by kind (article vs video, event vs
+# webcast) gets one shape's selectors. If that shows up in evals: sample one page per URL shape and
+# let detail_field(...) be probed across them (or author one nested extract per shape).
 def _typical_link(links: "list[str]") -> "str | None":
     """The link to sample as THE detail page: the first of the LARGEST group sharing a URL shape
     (host + first two path segments) -- so a listing whose first item is an odd one (a live blog
@@ -567,20 +572,40 @@ def leaf_selectors(scope: "Document | Element", *, limit: int = 8) -> "list[str]
 
 
 def _selector_hint(scope: "Document | Element | None", css: str, where: str) -> str:
-    """One line naming the closest selectors to ``css`` in ``scope`` (or what the scope holds)."""
+    """One line naming the closest selectors to ``css`` in ``scope`` (or what the scope holds),
+    plus the SURROUNDING structure (the record's parent) when the scope is a record."""
     if scope is None or not css:
         return ""
     close = suggest_selectors(scope, css)
     if close:
-        return f" Closest selectors in {where}: " + ", ".join(close) + "."
-    leaves = leaf_selectors(scope)
-    return (
-        f" Nothing in {where} matches those tokens; its text-bearing elements are: "
-        + ", ".join(leaves)
-        + "."
-        if leaves
-        else ""
+        hint = f" Closest selectors in {where}: " + ", ".join(close) + "."
+    else:
+        leaves = leaf_selectors(scope)
+        hint = (
+            f" Nothing in {where} matches those tokens; its text-bearing elements are: "
+            + ", ".join(leaves)
+            + "."
+            if leaves
+            else ""
+        )
+    return hint + _surroundings(scope)
+
+
+def _surroundings(scope: "Document | Element | None") -> str:
+    """The structure ONE level up from a record (its parent): a field that sits beside the record
+    rather than inside it (a date column, a section heading) shows up here."""
+    if not isinstance(scope, Element):
+        return ""
+    parent = scope.parent
+    if parent is None:
+        return ""
+    frag = Document(content=parent.html.encode("utf-8"), kind="html", url=scope.attr("href") or "")
+    skel = clip(
+        frag.skeleton(max_lines=60, text_chars=40, mark_records=False, mark_interactive=False),
+        1_500,
+        "surroundings",
     )
+    return f"\nSURROUNDING STRUCTURE (the record's parent, one level up):\n{skel}"
 
 
 def _attr_hint(scope: "Document | Element | None", chain: str) -> str:
@@ -612,18 +637,21 @@ def _regions_line(doc: Document) -> str:
 
 
 def miss_pattern(doc: Document, records: str, missed: str, skip: int) -> str:
-    """Which of the probed records DO contain the missed selector -- a miss on some of them means the
-    record selector includes non-records (a table header row, an ad), not that the field is
-    gone."""
-    els = doc.select_all(records)[skip : skip + _PROBE_ROWS]
+    """Which of the next few records DO contain the missed selector. A miss on SOME of them has
+    two readings the model must choose between: the record selector includes non-records (a
+    table header row, an ad) -- narrow it; or the field is genuinely SPARSE -- read it with
+    ``select(css, optional=True)``. A miss on all of them is not this pattern."""
+    els = doc.select_all(records)[skip : skip + _PROBE_ROWS_OPTIONAL]
     hits = [i + skip + 1 for i, el in enumerate(els) if el.select(missed) is not None]
     if not els or not hits:
         return ""
     misses = [i + skip + 1 for i, el in enumerate(els) if el.select(missed) is None]
     return (
-        f" It matched on record(s) {hits} but not {misses}: your records(...) selector includes "
-        "non-records (a table header row? a featured item?) -- narrow it to the data rows (a class "
-        "they share, 'tbody tr', ...) or keep only records with the field via where(...)."
+        f" It matched on record(s) {hits} but not {misses} (of {len(els)} probed): EITHER your "
+        "records(...) selector includes non-records (a table header row? a featured item?) -- "
+        "narrow it to the data rows (a class they share, 'tbody tr', ...) or keep only records "
+        "with the field via where(...); OR the field is genuinely sparse -- read it with "
+        "select(css, optional=True) so a record without it yields null instead of failing."
     )
 
 
@@ -714,15 +742,30 @@ def _turn(session: StepSession, result: str, brief: DatasetBrief) -> str:
             + [f"SECTION {len(session.finished) + 1} (current): {so_far}"]
         )
     parts = [result, "QUERY SO FAR:\n" + so_far]
+    schema = {  # "  - name (type) -- description  (optional)" -> keyed by the field name
+        m.group(1): line
+        for line in field_schema(brief)
+        if (m := re.match(r"\s*-\s*(\S+)", line)) is not None
+    }
     if required:
         parts.append(
-            "STILL TO ADD (required): "
-            + ", ".join(required)
-            + " -- from the structure shown; a field that is NOT there (nor on the detail page) "
-            "is absent(<name>), never a guessed selector."
+            "NOT YET IN THE QUERY (required) -- add each from an element in the structure shown; if "
+            "it is not there (nor on the detail page), reply absent(<name>) rather than guess:\n"
+            + "\n".join(schema.get(f, f"  - {f}") for f in required)
         )
     if optional:
-        parts.append("still to add (optional): " + ", ".join(optional))
+        parts.append(
+            "not yet in the query (optional -- fine to leave out):\n"
+            + "\n".join(schema.get(f, f"  - {f}") for f in optional)
+        )
+    tried_hard = [f for f in required if session.failed[f] >= 2]
+    if tried_hard:
+        parts.append(
+            "You have tried "
+            + ", ".join(f"{f} {session.failed[f]} times" for f in tried_hard)
+            + " without a value -- if the field is not in the structure shown (nor on the detail "
+            "page), say absent(<name>) now."
+        )
     if session.absent:
         parts.append("declared absent: " + ", ".join(sorted(session.absent)))
     if not required and session.draft.records:
@@ -838,6 +881,8 @@ def _apply_with(
             emit(ReasonEvent(stage="author", text=f"step rejected: {op.args[0]}"))
             return
         applied, result, summary = await _step(session, op, resolver, brief)
+        if not applied and op.name in ("field", "detail_field"):
+            session.failed[op.args[0]] += 1
         if not summary.startswith(_PRECONDITION):  # a precondition can change -- do not memorise
             session.tried[op.line()] = summary
         if applied:
@@ -1066,6 +1111,20 @@ async def _step(
                     f"EMPTY on all {len(wider)} probed records (reverted)",
                 )
         if all(_empty(v) for v in vals) and "optional=True" not in op.args[1]:
+            # empty on the first probed records -- look WIDER before deciding (a value present on
+            # later records means the field is real but sparse)
+            wider = await _probe(new, doc, resolver, skip=session.skip, rows=_PROBE_ROWS_OPTIONAL)
+            found = [_dig(r, key) for r in wider if not _empty(_dig(r, key))]
+            if found:
+                session.draft = new
+                return (
+                    True,
+                    f"{head}\n{key}: EMPTY on the first {len(vals)} records but present on "
+                    f"{len(found)} of {len(wider)} probed -- e.g. {', '.join(_short(v) for v in found[:3])}. "
+                    "Applied; since SOME records lack it, read it with select(css, optional=True) "
+                    "(a required select that misses on a record fails the whole query).",
+                    f"{key}: present on {len(found)}/{len(wider)} probed records",
+                )
             raw = await _raw_values(new, op, doc, resolver)
             if raw:  # the selector DID match -- the transform threw the value away
                 return (

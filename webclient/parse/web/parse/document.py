@@ -75,6 +75,12 @@ class Element:
         """The element's tag name (lower-case)."""
         return _tag(self._node)
 
+    @property
+    def parent(self) -> "Element | None":
+        """The enclosing element (``None`` at the root) -- the surrounding structure."""
+        node = self._node.getparent()
+        return Element(node, self._base) if node is not None else None
+
     def select(self, css: str) -> "Element | None":
         """The FIRST descendant matching a CSS selector, or ``None`` (nested selection)."""
         els = query(self._node, css)

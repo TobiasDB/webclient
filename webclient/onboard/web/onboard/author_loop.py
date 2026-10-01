@@ -42,7 +42,8 @@ from typing import Literal
 
 from pydantic import JsonValue
 from web.dsl import verbs_of
-from web.fetch import ClientPool, WebException, emit
+from web.fetch import ClientPool, Profile as FetchProfile, WebException, emit
+from web.fetch import profiles as _fp
 from web.parse import Document
 from web.resolve import EscalationPolicy, Resolver, flags
 from web.resolve import profiles as _rp
@@ -78,14 +79,28 @@ _QUERY_TEST_TIMEOUT = 45.0
 _SAMPLE = 5
 
 
-def _fetch_resolver(reference: Reference, pool: ClientPool) -> Resolver:
-    """The transport LOCATE determined (``reference.profile``) as a FIXED single tier -- a FETCH, not
-    the escalation ladder: choosing the transport is Locate's job, done. The author writes the query
-    over exactly what this fetch returns; if the dataset is not there, LOCATE picked the wrong source
-    / profile, not the author. Shares the pool (so a browser tier is reused, not relaunched)."""
+#: the realness ladder a fetch may climb (base first); the author starts at Locate's tier.
+_LADDER: "tuple[FetchProfile, ...]" = (_fp.BASIC, _fp.BROWSER, _fp.HEADED_BROWSER, _fp.REAL_CHROME)
+
+
+def _author_policy(reference: Reference) -> EscalationPolicy:
+    """The transport policy for the author's fetches: it STARTS at the tier LOCATE determined
+    (``reference.profile`` -- the listing is fetched exactly there, so the query is written over
+    what that tier returns) and may CLIMB the realness ladder from there on a BLOCK (403 / 429 /
+    a failed fetch) -- a DETAIL page can be blocked where the listing was not, and the sticky
+    policy remembers the tier a host needed. Whether a page is JS-gated is Locate's call for the
+    listing and the entry check's for the author -- never a per-fetch heuristic (that would
+    launch a browser for every small page)."""
     prof = _rp.get(reference.profile or "basic") or _rp.BASIC
-    base = prof.escalation.tiers[:1] if prof.escalation else ()
-    return Resolver(escalation=EscalationPolicy(tiers=base), pool=pool)
+    start = prof.escalation.tiers[0] if prof.escalation and prof.escalation.tiers else _fp.BASIC
+    rank = _LADDER.index(start) if start in _LADDER else 0
+    tiers = (start, *(t for t in _LADDER[rank + 1 :] if t != start))
+    return EscalationPolicy(tiers=tiers, on=("blocked",))
+
+
+def _fetch_resolver(reference: Reference, pool: ClientPool) -> Resolver:
+    """A resolver on :func:`_author_policy`, sharing the pool (a browser tier is reused)."""
+    return Resolver(escalation=_author_policy(reference), pool=pool)
 
 
 @dataclass

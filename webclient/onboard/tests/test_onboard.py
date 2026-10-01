@@ -79,7 +79,9 @@ def test_conversation_sends_the_opening_once_cache_marked_and_budget_caps() -> N
             pricing=Pricing(input=1.0, output=1.0, cache_read=0.1, cache_write=1.25),
         )
         assert isinstance(llm, Conversational)  # the author's conversation seam
-        assert isinstance(ClaudeShim(), Conversational)  # one persistent claude -p process per conversation
+        assert isinstance(
+            ClaudeShim(), Conversational
+        )  # one persistent claude -p process per conversation
         conv = llm.conversation()
         assert isinstance(conv, Conversation)
         assert await conv.send("BIG OPENING: skeleton+guide") == "reply-1"

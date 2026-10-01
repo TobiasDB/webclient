@@ -1490,9 +1490,10 @@ def test_steps_engine_builds_the_query_one_op_at_a_time(httpserver: HTTPServer) 
     opening, after_records, after_name, after_url = llm.turns
     assert "OPS" in opening and "li.row" in opening and 'records("<css>")' in opening
     assert "matched 2 record(s)" in after_records and "span.name" in after_records
-    assert "STILL TO ADD (required): name, url" in after_records
+    assert "NOT YET IN THE QUERY (required)" in after_records
+    assert "  - name\n  - url" in after_records
     assert 'name: "A", "B"' in after_name and "QUERY SO FAR" in after_name
-    assert "STILL TO ADD (required): url" in after_name
+    assert "NOT YET IN THE QUERY (required)" in after_name and "  - url" in after_name
     assert "Every required field is in the query" in after_url
     assert "select_all('li.row')" in art.describe or 'select_all("li.row")' in art.describe
     assert art.sample and plain(art.sample[0]) == {
@@ -1592,7 +1593,7 @@ def test_steps_engine_absent_repeat_empty_and_unknown_verb(httpserver: HTTPServe
     assert "EMPTY on every probed record -- REVERTED" in llm.turns[2]
     assert "you already called exactly" in llm.turns[3]
     assert "unknown DSL verb(s): join" in llm.turns[4]
-    assert "absent(<name>), never a guessed selector" in llm.turns[1]
+    assert "reply absent(<name>) rather than guess" in llm.turns[1]
     assert art.unknown_verbs == ["join"] and art.verbs["select"] >= 2
     assert any("declared absent" in a for a in art.attempts)
 
@@ -1916,7 +1917,7 @@ def test_steps_engine_probes_typical_records_and_names_the_miss_pattern(
     # and the repair hint names the miss pattern -- so the model narrows records(...) next
     assert not art.complete
     assert any("select_miss" in a for a in art.attempts)
-    assert any("matched on record(s) [2, 3] but not [1]" in t for t in llm.turns)
+    assert any("matched on record(s) [2, 3, 4] but not [1]" in t for t in llm.turns)
 
 
 def test_steps_engine_miss_pattern_and_optional_guard(httpserver: HTTPServer) -> None:
@@ -1925,7 +1926,7 @@ def test_steps_engine_miss_pattern_and_optional_guard(httpserver: HTTPServer) ->
 
     doc = Document(content=_TABLE, kind="html")
     note = miss_pattern(doc, "tr", "td:nth-child(1)", skip=0)
-    assert "matched on record(s) [2, 3] but not [1]" in note and "header row" in note
+    assert "matched on record(s) [2, 3, 4] but not [1]" in note and "header row" in note
     # an optional read that is EMPTY on every one of 8 probed records is reverted, not applied
     from web.onboard import QueryArtifact
 
@@ -2286,3 +2287,88 @@ def test_records_result_notes_a_count_outside_the_expected_range(httpserver: HTT
 
     _run(go())
     assert "NOTE: 4 record(s) is BELOW the brief's expectation (50-100)" in llm.turns[1]
+
+
+def test_still_to_add_carries_descriptions_and_a_sparse_field_is_probed_wider(
+    httpserver: HTTPServer,
+) -> None:
+    # USER: the still-to-add list must carry each field's description; a field EMPTY on the first
+    # 3 records but present on later ones is real (sparse) -- probed wider, applied, with the
+    # optional=True advice -- not reverted as "empty everywhere".
+    from web.onboard import QueryArtifact, write_query
+
+    rows = b"".join(
+        f"<li class='row'><span class='name'>N{n}</span>{'<em class=\"tag\">hot</em>' if n > 5 else ''}</li>".encode()
+        for n in range(1, 9)
+    )
+    httpserver.expect_request("/list").respond_with_data(
+        b"<ul>" + rows + b"</ul>", content_type="text/html"
+    )
+    llm = _StepConv(
+        [
+            'records("li.row")',
+            'field(name, wq.doc.select(".name").attr("text"))',
+            'field(tag, wq.doc.select("em.tag").attr("text"))',  # present on records 4-8 only
+            'field(tag, wq.doc.select("em.tag", optional=True).attr("text"))',
+            "done()",
+        ]
+    )
+
+    async def go() -> QueryArtifact:
+        async with Resolver() as r:
+            return await write_query(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                DatasetBrief(
+                    fields=["name", "tag"],
+                    descriptions={"name": "the item's name", "tag": "a promo tag if shown"},
+                    types={"tag": "string"},
+                    optional=["tag"],
+                ),
+                resolver=r,
+                llm=cast("object", llm),  # type: ignore[arg-type]
+                engine="steps",
+            )
+
+    art = _run(go())
+    assert "  - name -- the item's name" in llm.turns[1]  # the schema line, not the bare name
+    assert "  - tag (string) -- a promo tag if shown  (optional)" in llm.turns[1]
+    assert "matched on record(s) [6, 7, 8] but not [1, 2, 3, 4, 5] (of 8 probed)" in llm.turns[3]
+    assert "genuinely sparse -- read it with select(css, optional=True)" in llm.turns[3]
+    assert art.complete, art.reason
+
+
+def test_miss_hint_shows_the_surrounding_structure(httpserver: HTTPServer) -> None:
+    # USER: the model only saw the record's own structure; a field beside the record (a heading, a
+    # date column in the parent) was invisible. A miss now shows the parent's structure too.
+    from web.onboard import QueryArtifact
+
+    page = (
+        b"<section class='day'><h2 class='date'>1 Oct</h2>"
+        b"<ul><li class='row'><span class='name'>A</span></li><li class='row'><span class='name'>B</span></li></ul></section>"
+    )
+    httpserver.expect_request("/list").respond_with_data(page, content_type="text/html")
+    llm = _StepConv(
+        [
+            'records("li.row")',
+            'field(date, wq.doc.select("h2.date").attr("text"))',  # not inside the record
+            "absent(date)",
+            'field(name, wq.doc.select(".name").attr("text"))',
+            "done()",
+        ]
+    )
+    art = _steps_art(httpserver, llm, ["name", "date"])
+    assert isinstance(art, QueryArtifact)
+    assert "SURROUNDING STRUCTURE (the record's parent, one level up):" in llm.turns[2]
+    assert "li.row" in llm.turns[2].split("SURROUNDING STRUCTURE")[1]
+
+
+def test_author_resolver_starts_at_the_located_tier_and_may_climb() -> None:
+    # USER: "does detail use the base fetch's profile?" -- it STARTS there (the listing is fetched
+    # at Locate's tier) and may climb the realness ladder for a detail page that needs more.
+    from web.fetch import profiles as fp
+    from web.onboard.author_loop import _author_policy
+
+    basic = _author_policy(Reference(url="http://x", profile="basic"))
+    assert basic.tiers[0] == fp.BASIC and fp.BROWSER in basic.tiers and basic.on == ("blocked",)
+    full = _author_policy(Reference(url="http://x", profile="full_browser"))
+    assert full.tiers[0] == fp.BROWSER and fp.BASIC not in full.tiers
