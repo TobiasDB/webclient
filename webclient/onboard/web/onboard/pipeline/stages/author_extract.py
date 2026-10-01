@@ -41,6 +41,8 @@ class _Reply(BaseModel):
     records: str = ""  # the repeating element (css) / the record array (json path)
     where: str = ""  # optional: a wq.doc predicate keeping only THIS query's records
     fields: dict[str, _Read] = {}
+    none: bool = False  # this query's records are NOT on this source (declared, with why)
+    why: str = ""
 
 
 def _chain(field: str, spec: _Read, *, json: bool, optional: bool) -> str:
@@ -273,7 +275,13 @@ async def _one(
             today=_dt.date.today().isoformat(),
             note=note,
         )
-        records = reply.records.strip() if not is_json else reply.records.strip()
+        if reply.none:  # declared: this query's records are not on this source
+            out.attempts.append(
+                f"attempt {attempt + 1}: declared none -- {reply.why or 'no reason given'}"
+            )
+            emit(ReasonEvent(stage="author_extract", text=out.attempts[-1]))
+            break
+        records = reply.records.strip()
         if is_json and not records:
             records = records_path(doc.json())
         specs = {n: r for n, r in reply.fields.items() if n in names}
@@ -339,6 +347,22 @@ async def _one(
         if not failure and rows and not misses:
             break
         hints = _hints(doc, records, matched, specs, misses, failure)
+        if where and not failure and not rows:  # the predicate kept nothing: say what it had
+            try:
+                plain = Query.of(
+                    reroot(
+                        parse_query(compile_source(records, fields)), plan.url, profile=plan.profile
+                    )
+                ).with_schema(schema)
+                had = await plain.run(resolver, lenient=True)
+                hints += (
+                    f"\n- where: {where!r} kept NONE of the {had.report.rows} record(s) the records "
+                    f"selector matches (newest dated value seen: {had.report.newest or 'none'}). "
+                    "If this query's records are genuinely not on this source, reply "
+                    '{"none": true, "why": "<reason>"} instead of another predicate.'
+                )
+            except Exception as exc:  # noqa: BLE001 -- a hint, never a stop
+                hints += f"\n- (could not count the records without the predicate: {exc})"
         emit(ReasonEvent(stage="author_extract", text=f"repair hints:\n{hints}"))
         note = "\nREPAIR -- fix ONLY what is listed, keep the rest:\n" + hints
     if out.source and not out.misses:  # the final run is LOUD (the default): the authored query
