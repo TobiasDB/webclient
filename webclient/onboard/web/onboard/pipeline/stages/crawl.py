@@ -19,7 +19,7 @@ from ...llm import ReasonEvent
 from ..ask import Context, ask_json
 from ..hints import detail_shaped, registrable
 from ..state import CrawlResult, Onboarding, Pick, Visited
-from .review_candidate import record_count, review_one
+from .review_candidate import review_one
 from .review_search import hit_lines
 from .search import score_url
 
@@ -110,7 +110,6 @@ async def run(state: Onboarding, ctx: Context) -> CrawlResult:
     goal = Goal(start=seeds, scope=scope, max_pages=brief.search.max_pages, frontier=(frontier,))
     async for doc in Crawler(ctx.resolver).crawl(goal):
         fired = [f.name for f in flags(doc)]
-        count = record_count(doc)
         result.visited.append(
             Visited(
                 url=doc.url,
@@ -118,7 +117,6 @@ async def run(state: Onboarding, ctx: Context) -> CrawlResult:
                 ok=True,
                 kind=doc.kind,
                 flags=fired,
-                records=count,
                 tier=tiers.get(doc.url, ""),
                 score=scores.get(doc.url, 0.0),
             )
@@ -127,7 +125,7 @@ async def run(state: Onboarding, ctx: Context) -> CrawlResult:
             ReasonEvent(
                 stage="crawl",
                 subject=doc.url,
-                text=f"fetched: {count} record(s), flags {', '.join(fired) or 'none'}, tier "
+                text=f"fetched: flags {', '.join(fired) or 'none'}, tier "
                 f"{tiers.get(doc.url) or '-'}, score {scores.get(doc.url, 0.0):g}",
             )
         )

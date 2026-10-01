@@ -313,6 +313,10 @@ def _one(
     short-circuits the chain; scalars come back wrapped in a ``Field`` so the read helpers chain.
     """
     if obj is None:
+        # a miss short-circuits every READ -- except the PRESENCE tests, which must answer: a
+        # missed optional select is not ok / is empty (a filter on ``~x.is_empty()`` relies on it)
+        if name in ("is_ok", "is_empty"):
+            return _apply_fn(Field(None, ok=False), name)
         return None
     if isinstance(obj, Ref) and name != "resolve" and hasattr(Field, name):
         # a reference READS as the Field of its URL for every leaf verb (regex / link / split /

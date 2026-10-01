@@ -834,3 +834,16 @@ def test_query_is_loud_by_default_and_lenient_on_request(httpserver: HTTPServer)
     assert (
         rep.fill["name"] == pytest.approx(2 / 3) and len(rep.issues) == 1 and rep.issues[0].row == 2
     )
+
+
+def test_presence_tests_answer_on_a_missed_optional_select() -> None:
+    # `~x.is_empty()` in a filter kept records lacking x: a miss short-circuited is_empty()/is_ok()
+    # to None, and `not None` is True. The presence tests always answer.
+    from web.dsl import from_source
+    from web.parse import parse
+
+    doc = parse(b"<li><i>promo</i></li>", url="http://x/", content_type="text/html")
+    probe = "wq.doc.select('span.h', optional=True).attr('text')"
+    assert asyncio.run(from_source(probe + ".is_empty()").acollect(doc)) is True
+    assert asyncio.run(from_source(probe + ".is_ok()").acollect(doc)) is False
+    assert asyncio.run(from_source("~" + probe + ".is_empty()").acollect(doc)) is False

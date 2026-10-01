@@ -49,6 +49,18 @@ def _run(coro: object) -> object:
     return asyncio.run(cast("asyncio.Future[object]", coro))
 
 
+@pytest.fixture(autouse=True)
+def _no_browser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A test never launches a browser: the render seam serves the page at the HTTP tier."""
+    import web.onboard.pipeline.stages.review_candidate as rc
+    from web.fetch import Request
+
+    async def http_render(ctx: object, url: str) -> object:
+        return await cast("Context", ctx).resolver.snapshot(Request(url=url))
+
+    monkeypatch.setattr(rc, "render", http_render)
+
+
 class _Llm:
     """A scripted model: one reply per call, recording every prompt; reports its own spend."""
 
@@ -215,12 +227,13 @@ def test_whole_pipeline_offline_from_a_lead_to_the_authored_query(
         ),  # review_location
         json.dumps(  # author_extract, one shot: published read as text (not a datetime)
             {
+                "records": "li.release",
                 "fields": {
                     "headline": {"css": "h3 a", "read": "text"},
                     "published": {"css": "time", "read": "attr:datetime"},
                     "url": {"css": "h3 a", "read": "href"},
                     "bogus": {"css": "x", "read": "text"},
-                }
+                },
             }
         ),
         json.dumps({"ok": True, "notes": "eight releases, newest first"}),  # author_review
@@ -247,7 +260,7 @@ def test_whole_pipeline_offline_from_a_lead_to_the_authored_query(
     assert state.review_candidate is not None and state.review_candidate.url == listing
     assert state.review_candidate.present and not state.review_candidate.retried_browser
     src = state.expand
-    assert src is not None and src.record_selector == "li.release" and src.records == 8
+    assert src is not None and "record_list" in src.flags  # a signal, never a selector
     assert src.pagination is not None and src.pagination.next_selector == "a[rel=next]"
     assert src.api is None and src.spa is None
     assert state.review_location is not None and state.review_location.ok
@@ -256,7 +269,8 @@ def test_whole_pipeline_offline_from_a_lead_to_the_authored_query(
     ex = state.author_extract
     assert ex is not None and ex.complete and ex.row_count == 8, ex.attempts
     assert set(ex.fields) == {"headline", "published", "url"}  # the bogus field was dropped
-    assert "select_all('li.release')" in ex.source and "time" in ex.fields["published"]
+    assert ex.record_selector == "li.release" and "select_all('li.release')" in ex.source
+    assert "time" in ex.fields["published"]
     first = cast("dict[str, object]", ex.sample[0])
     assert first["headline"] == "Release 1" and first["published"] == "2026-09-11"
     assert str(first["url"]).endswith("/news/release-1")
@@ -383,7 +397,7 @@ def test_expand_renders_once_when_the_http_page_is_thin_and_switches_to_the_brow
 ) -> None:
     # the lesson kept from the old locate: a script app's HTTP shell shows two rows and passes a
     # skeleton read; the dataset appears only rendered. Expand renders ONCE, compares, and bakes
-    # the browser tier when the render shows materially more records.
+    # the browser tier when the render shows materially more content.
     import web.onboard.pipeline.stages.review_candidate as rc
     from web.fetch import Request, Snapshot
     from web.onboard.pipeline import CandidateReview
@@ -398,7 +412,8 @@ def test_expand_renders_once_when_the_http_page_is_thin_and_switches_to_the_brow
     full = (
         "<html><body><ul>"
         + "".join(
-            f"<li class=ev><a href='/e{n}'>Event {n}</a><time datetime='2026-10-{n + 1:02d}'>d</time></li>"
+            f"<li class=ev><a href='/e{n}'>Event {n}</a><time datetime='2026-10-{n + 1:02d}'>d</time>"
+            f"<p>Event {n} is a conference presentation with a webcast replay and slides.</p></li>"
             for n in range(14)
         )
         + "</ul></body></html>"
@@ -424,7 +439,7 @@ def test_expand_renders_once_when_the_http_page_is_thin_and_switches_to_the_brow
             return await expand.run(state, ctx)
 
     src = cast("expand.DatasetSource", _run(go()))
-    assert src.profile == "full_browser" and src.records == 14 and src.record_selector == "li.ev"
+    assert src.profile == "full_browser"
     assert (
         src.spa is not None
         and "reviewed through a browser" in src.spa.reason
@@ -442,3 +457,53 @@ def test_optional_rewrite_and_presence_go_through_the_plan() -> None:
     already = "wq.doc.select('.x', optional=True).attr('text')"
     assert _optional(already) == already
     assert _presence("wq.doc.attr('k')") == "~wq.doc.attr('k').is_empty()"
+
+
+def test_a_rejected_review_sends_the_extraction_back_once_with_its_note(
+    httpserver: HTTPServer, tmp_path: Path
+) -> None:
+    _site(httpserver)
+    brief = Brief.from_markdown(
+        _BRIEF.replace(
+            'domain: ["{company}", "investors.{company}", "ir.{company}", "q4cdn", "gcs-web"]',
+            'domain: ["localhost", "127.0.0.1"]',
+        )
+    )
+    good = {
+        "headline": {"css": "h3 a", "read": "text"},
+        "published": {"css": "time", "read": "attr:datetime"},
+        "url": {"css": "h3 a", "read": "href"},
+    }
+    bad = dict(good, published={"css": "span.tag", "read": "text"})  # reads the tag as the date
+    good_reply = {"records": "li.release", "fields": good}
+    bad_reply = {"records": "li.release", "fields": bad}
+    replies = [
+        json.dumps({"picks": [{"n": 1, "tier": "must", "why": "the listing"}]}),
+        json.dumps({"present": True, "reason": "a list of releases"}),
+        json.dumps({"ok": True, "summary": "the listing", "concerns": []}),
+        json.dumps(bad_reply),  # extract 1
+        json.dumps(
+            {"ok": False, "notes": "published holds the category tag, not the date"}
+        ),  # review 1
+        json.dumps(good_reply),  # extract 2 (the repair pass)
+        json.dumps({"ok": True, "notes": "dates are right now"}),  # review 2
+    ]
+    llm = _Llm(replies)
+
+    async def go() -> Onboarding:
+        async with Resolver() as r:
+            state = Onboarding.start(brief, company="acme")
+            ctx = Context(resolver=r, llm=cast("object", llm), search=_Search([httpserver.url_for("/news/")]))  # type: ignore[arg-type]
+            return await run(state, ctx, save=tmp_path / "s.json")
+
+    state = cast(Onboarding, _run(go()))
+    assert state.repairs == 1 and state.author_review is not None and state.author_review.ok
+    ex = state.author_extract
+    assert ex is not None and "time" in ex.fields["published"] and ex.row_count == 8
+    assert "REPAIR -- a reviewer rejected" in llm.prompts[5] and "category tag" in llm.prompts[5]
+    assert [l.stage for l in state.log][-4:] == [
+        "author_extract",
+        "author_review",
+        "author_extract",
+        "author_review",
+    ]

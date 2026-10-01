@@ -20,7 +20,6 @@ class _Reply(BaseModel):
 def describe(src: DatasetSource) -> str:
     lines = [
         f"url: {src.url} ({src.kind}, tier {src.profile})",
-        f"records detected: {src.records} at {src.record_selector or '(no repeating region)'}",
         f"flags: {', '.join(src.flags) or 'none'}",
     ]
     if src.api is not None:

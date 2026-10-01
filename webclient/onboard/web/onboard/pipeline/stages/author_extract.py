@@ -1,30 +1,30 @@
-"""Stage 8 -- author extract: the FIELD EXTRACTION over the resolved document. The model sees one
-typical record's structure and the schema and replies with a selector + read per field (JSON --
-no DSL syntax to get wrong); the stage compiles that into the ``wq`` chain through the selector
-hygiene, probes a window of records, and on a miss asks ONCE more with precise hints (the closest
-selectors, what the record holds, the attributes available). No nested resolves: a record's own
-page is a later onboarding of its own."""
+"""Stage 8 -- author extract: the extraction over the resolved document, written by the model from
+the DOCUMENT and the brief: the record selector (the repeating element) and, per field, a selector
++ read -- as JSON, no DSL syntax to get wrong. The stage compiles that into the ``wq`` chain through
+the selector hygiene, probes it LENIENTLY (every field optional: one bad selector never hides the
+rest; the report's fill rates say what each field read), and on a miss asks again with precise
+hints: how many elements the record selector matched, a typical record's structure, the closest
+selectors, what the record holds. No nested resolves: a record's own page is a later onboarding."""
 
 from __future__ import annotations
 
-import asyncio
-from typing import cast
-
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel
 from web.dsl import Arg, Plan, Query, from_plan, from_source
-from web.fetch import Request, WebException, emit
+from web.fetch import Request, emit
 from web.parse import Document, Element
+from web.parse.selectors import normalise, problems
 from web.resolve import Resolver, document
 from web.resolve import profiles as _rp
 
 from ...compile import QueryError, parse_query, reroot
 from ...llm import ReasonEvent
+from ..apis import records_path
 from ..ask import Context, ask_json
 from ..hints import attrs_of, closest, leaves, record_structure, typical
 from ..state import ExtractQuery, Onboarding
+from .review_candidate import skeleton
 
 _REPAIRS = 2
-_READS = ("text", "href", "src", "datetime", "number")
 
 
 class _Read(BaseModel):
@@ -34,6 +34,7 @@ class _Read(BaseModel):
 
 
 class _Reply(BaseModel):
+    records: str = ""  # the repeating element (css) / the record array (json path)
     fields: dict[str, _Read] = {}
 
 
@@ -89,21 +90,44 @@ def _presence(chain: str) -> str:
     return f"~{_optional(chain)}.is_empty()"
 
 
+def _empty(v: object) -> bool:
+    return (
+        v is None
+        or (isinstance(v, str) and not v.strip())
+        or (isinstance(v, (list, dict)) and not v)
+    )
+
+
 def _hints(
-    doc: Document, records: str, fields: "dict[str, _Read]", misses: "list[str]", failure: str
+    doc: Document,
+    records: str,
+    matched: int,
+    fields: "dict[str, _Read]",
+    misses: "list[str]",
+    failure: str,
 ) -> str:
-    """Precise per-field hints for the repair turn."""
+    """Precise hints for the repair turn: the record selector's match count and a typical record,
+    then per missed field the closest selectors, its attributes, what the record holds."""
     lines: list[str] = []
     if failure:
         lines.append(f"The query FAILED: {failure}")
     scope: "Document | Element | None" = None
     if doc.kind != "json":
-        els = doc.select_all(records)
-        scope = els[typical(doc, records)] if els else None
+        if matched == 0:
+            lines.append(
+                f"- records: {records!r} matched NO element. Pick the element that repeats once per "
+                "record from the page structure (a tag plus a semantic class or attribute)."
+            )
+        else:
+            lines.append(
+                f"- records: {records!r} matched {matched} element(s); a typical one:\n{record_structure(doc, records)}"
+            )
+            els = doc.select_all(records)
+            scope = els[typical(doc, records)] if els else None
     for name in misses:
         spec = fields.get(name)
-        css = spec.css if spec is not None else ""
-        line = f"- {name}: {css!r} read nothing on every probed record."
+        css = spec.css or spec.key if spec is not None else ""
+        line = f"- {name}: {css!r} read nothing on every record."
         if scope is not None and css:
             near = closest(scope, css)
             if near:
@@ -126,30 +150,23 @@ async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
     resolver = Resolver(profile=prof, pool=ctx.resolver.pool)
     doc = document(await resolver.snapshot(Request(url=plan.url)))
     is_json = doc.kind == "json"
-    records = (
-        (src.api.records_path if (plan.via_api and src.api is not None) else "")
-        if is_json
-        else src.record_selector
-    )
-    if not is_json and not records:
-        regions = doc.records(top_k=1)
-        records = regions[0].item_selector if regions else ""
-    if not is_json and not records:
-        state.stopped = "author_extract: no repeating record region on the document"
-        return ExtractQuery(attempts=["no record selector"])
-    structure = record_structure(doc, records)
+    outline = skeleton(doc)
     emit(
         ReasonEvent(
             stage="author_extract",
             subject=plan.url,
-            text=f"{doc.kind} document; records at {records!r}; the typical record "
-            f"({len(structure)} chars):\n{structure}",
+            text=f"{doc.kind} document ({len(doc.content)} bytes); the structure shown "
+            f"({len(outline)} chars):\n{outline}",
         )
     )
-    out = ExtractQuery(record_selector=records)
+    out = ExtractQuery()
     optional = {f.name for f in brief.fields if f.optional}
-    note = ""
-    specs: dict[str, _Read] = {}
+    note = (
+        f"\nREPAIR -- a reviewer rejected the previous extraction: {state.review_note}\n"
+        "Fix what it names; keep the rest."
+        if state.review_note
+        else ""
+    )
     schema = brief.as_schema()
     for attempt in range(1 + _REPAIRS):
         reply = await ask_json(
@@ -160,48 +177,61 @@ async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
             goal=brief.goal,
             schema=brief.schema_lines(),
             kind=(
-                "JSON record (keys)"
+                "a JSON document: 'records' is the dotted path to the record array (\"\" when "
+                "the document IS the array), a field reads a key of each record"
                 if is_json
-                else "HTML record (CSS selectors, relative to the record)"
+                else "an HTML document: 'records' is the CSS selector of the element that repeats "
+                "once per record, a field reads an element RELATIVE to that record"
             ),
-            records=records,
-            count=str(src.records),
-            structure=structure,
+            skeleton=outline,
             hint=brief.hints.get("author_extract", ""),
             note=note,
         )
+        records = reply.records.strip() if not is_json else reply.records.strip()
+        if is_json and not records:
+            records = records_path(doc.json())
         specs = {n: r for n, r in reply.fields.items() if n in brief.names}
-        if not specs:
-            note = "\nREPAIR: your reply named none of the schema's fields. Use the field names exactly."
-            out.attempts.append(f"attempt {attempt + 1}: no schema field in the reply")
-            continue
-        fields = {n: _chain(n, r, json=is_json, optional=n in optional) for n, r in specs.items()}
         failure = ""
+        if not is_json:
+            records = normalise(records)
+            wrong = (
+                problems(records, "records") if records else ["no 'records' selector in the reply"]
+            )
+            if wrong:
+                failure = " ".join(wrong)
+        if not specs and not failure:
+            failure = "the reply named none of the schema's fields (use the field names exactly)"
+        fields = {n: _chain(n, r, json=is_json, optional=n in optional) for n, r in specs.items()}
+        matched = len(doc.select_all(records)) if (records and not is_json) else 0
         rates: dict[str, float] = {n: 0.0 for n in brief.required}
         rows = 0
-        try:  # the probe is a LENIENT run: every field optional, so one bad selector never hides
-            # the rest, and the report's fill rates say what each field read
-            probe = Query.of(
-                reroot(parse_query(compile_source(records, fields)), plan.url, profile=plan.profile)
-            ).with_schema(schema)
-            result = await probe.run(resolver, lenient=True)
-            rows = result.report.rows
-            rates = {n: result.report.fill.get(n, 0.0) for n in brief.required}
-            if result.report.failures:
-                failure = "; ".join(result.report.failures)
-        except QueryError as exc:  # selector hygiene refused something: the reason goes back
-            failure = str(exc)
-        except Exception as exc:  # noqa: BLE001 -- a model-written selector the engine rejects
-            failure = f"the query could not run ({type(exc).__name__}: {exc})"
+        if not failure:
+            try:  # a LENIENT probe: every field optional; the report's fill rates say what read
+                probe = Query.of(
+                    reroot(
+                        parse_query(compile_source(records, fields)), plan.url, profile=plan.profile
+                    )
+                ).with_schema(schema)
+                result = await probe.run(resolver, lenient=True)
+                rows = result.report.rows
+                rates = {n: result.report.fill.get(n, 0.0) for n in brief.required}
+                if result.report.failures:
+                    failure = "; ".join(result.report.failures)
+            except QueryError as exc:  # selector hygiene refused something: the reason goes back
+                failure = str(exc)
+            except Exception as exc:  # noqa: BLE001 -- a model-written selector the engine rejects
+                failure = f"the query could not run ({type(exc).__name__}: {exc})"
         # a required field read on NO record is a miss (repair); on SOME records it marks the
         # elements that are not records of the dataset (a promo in the list) -> filter them out
         misses = [n for n in brief.required if rates[n] == 0.0] if rows else list(brief.required)
         keep = [n for n in brief.required if 0.0 < rates[n] < 1.0]
-        source = compile_source(records, fields, keep=keep)
-        out.fields, out.source, out.misses = fields, source, misses
+        source = compile_source(records, fields, keep=keep) if records and fields else ""
+        out.record_selector, out.fields, out.source, out.misses = records, fields, source, misses
         fill = ", ".join(f"{n} {rates[n]:.0%}" for n in brief.required) if rows else "no rows"
         out.attempts.append(
-            f"attempt {attempt + 1}: "
+            f"attempt {attempt + 1}: records {records!r}"
+            + (f" ({matched} matched)" if not is_json else "")
+            + "; "
             + (
                 failure
                 or f"{rows} probed row(s); fill: {fill}; misses: {', '.join(misses) or 'none'}"
@@ -209,10 +239,11 @@ async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
             )
         )
         emit(ReasonEvent(stage="author_extract", text=out.attempts[-1]))
-        emit(ReasonEvent(stage="author_extract", text=f"attempt {attempt + 1} query: {source}"))
+        if source:
+            emit(ReasonEvent(stage="author_extract", text=f"attempt {attempt + 1} query: {source}"))
         if not failure and rows and not misses:
             break
-        hints = _hints(doc, records, specs, misses, failure)
+        hints = _hints(doc, records, matched, specs, misses, failure)
         emit(ReasonEvent(stage="author_extract", text=f"repair hints:\n{hints}"))
         note = "\nREPAIR -- fix ONLY what is listed, keep the rest:\n" + hints
     if out.source and not out.misses:  # the final run is LOUD (the default): the authored query

@@ -303,11 +303,12 @@ class _StubLlm:
         if "extract these fields" in prompt:  # author_extract: selector + read per field
             return json.dumps(
                 {
+                    "records": "li.product",
                     "fields": {
                         "name": {"css": ".name", "read": "text"},
                         "price": {"css": ".price", "read": "text"},
                         "spec": {"css": "a.link", "read": "href"},
-                    }
+                    },
                 }
             )
         return json.dumps({"ok": True, "notes": "names and prices look right"})  # author_review
@@ -343,7 +344,7 @@ async def onboard_story(base: str) -> None:
         src, ex = state.expand, state.author_extract
         assert src is not None and ex is not None, state.stopped
         print("stages:  ", " → ".join(f"{l.stage}({l.calls})" for l in state.log))
-        print("source:  ", src.url, f"{src.records} records at {src.record_selector!r}")
+        print("source:  ", src.url, f"({src.profile}; {', '.join(src.flags)})")
         print("authored:", ex.source[:72], "...")
         print(
             "dataset: ",

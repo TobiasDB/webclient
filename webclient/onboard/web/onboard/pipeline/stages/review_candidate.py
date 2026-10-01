@@ -37,12 +37,7 @@ def skeleton(doc: Document) -> str:
     )
 
 
-def record_count(doc: Document) -> int:
-    regions = doc.records(top_k=1)
-    return regions[0].count if regions else 0
-
-
-async def _judge(state: Onboarding, ctx: Context, doc: Document) -> _Reply:
+async def _judge(state: Onboarding, ctx: Context, doc: Document, profile: str) -> _Reply:
     return await ask_json(
         ctx,
         state,
@@ -51,7 +46,11 @@ async def _judge(state: Onboarding, ctx: Context, doc: Document) -> _Reply:
         goal=state.brief.goal,
         scope=state.brief.scope(),
         url=doc.url,
-        records=str(record_count(doc)),
+        tier=(
+            "a BROWSER (scripts ran)"
+            if profile == "full_browser"
+            else "the HTTP tier (no script ran: an app's empty shell shows no records here)"
+        ),
         skeleton=skeleton(doc),
         note="",
     )
@@ -71,7 +70,7 @@ async def review_one(state: Onboarding, ctx: Context, url: str) -> CandidateRevi
     snap = await ctx.resolver.snapshot(Request(url=url))
     doc = document(snap)
     profile = "basic"
-    verdict = await _judge(state, ctx, doc)
+    verdict = await _judge(state, ctx, doc, profile)
     retried = False
     if not verdict.present and not any(f.name in ("blocked",) for f in flags(doc, snap)):
         emit(
@@ -89,7 +88,7 @@ async def review_one(state: Onboarding, ctx: Context, url: str) -> CandidateRevi
             )
         else:
             doc, profile, retried = document(snap), "full_browser", True
-            verdict = await _judge(state, ctx, doc)
+            verdict = await _judge(state, ctx, doc, profile)
     if verdict.present:
         ctx.docs[url] = (doc, snap)
     emit(
@@ -105,7 +104,6 @@ async def review_one(state: Onboarding, ctx: Context, url: str) -> CandidateRevi
         profile=profile,
         reason=verdict.reason,
         retried_browser=retried,
-        records=record_count(doc),
         kind=doc.kind,
     )
 

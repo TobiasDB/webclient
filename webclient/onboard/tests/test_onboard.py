@@ -131,16 +131,14 @@ def test_prompts_render_from_package_data_and_clip_to_budget() -> None:
     sets = {
         "review_search": dict(goal="g", scope="", results="1. [2] http://a", note=""),
         "review_candidate": dict(
-            goal="g", scope="", url="http://a", records="3", skeleton="<ul>", note=""
+            goal="g", scope="", url="http://a", tier="the HTTP tier", skeleton="<ul>", note=""
         ),
         "review_location": dict(goal="g", scope="", source="url: a", note=""),
         "author_extract": dict(
             goal="g",
             schema="- a (string): x",
-            kind="HTML record",
-            records="li",
-            count="3",
-            structure="<li>",
+            kind="an HTML document",
+            skeleton="<ul>",
             hint="",
             note="",
         ),

@@ -46,6 +46,10 @@ STAGES: "tuple[Stage, ...]" = (
 assert tuple(s.name for s in STAGES) == STAGE_NAMES
 
 
+#: how many times a rejected review may send the extraction back for a repair.
+MAX_REVIEW_REPAIRS = 1
+
+
 async def run(
     state: Onboarding,
     ctx: Context,
@@ -54,7 +58,34 @@ async def run(
     save: "str | Path | None" = None,
 ) -> Onboarding:
     """Run every stage whose output is missing, in order, stopping after ``until`` (inclusive) or
-    when a stage sets ``state.stopped``. The state is saved to ``save`` after each stage."""
+    when a stage sets ``state.stopped``. The state is saved to ``save`` after each stage. A
+    REJECTED author review sends the extraction back once (its notes become the repair note)."""
+    await _pass(state, ctx, until=until, save=save)
+    review = state.author_review
+    while (
+        review is not None
+        and not review.ok
+        and review.next == "done"
+        and state.repairs < MAX_REVIEW_REPAIRS
+        and until in (None, "author_review")
+    ):
+        state.repairs += 1
+        state.review_note = review.notes
+        state.author_extract, state.author_review = None, None
+        emit(
+            ReasonEvent(
+                stage="author_review",
+                text=f"rejected — repairing the extraction once: {review.notes}",
+            )
+        )
+        await _pass(state, ctx, until=until, save=save)
+        review = state.author_review
+    return state
+
+
+async def _pass(
+    state: Onboarding, ctx: Context, *, until: "str | None", save: "str | Path | None"
+) -> None:
     for stage in STAGES:
         if state.stopped:
             break
@@ -81,7 +112,6 @@ async def run(
                 state.save(save)
         if stage.name == until:
             break
-    return state
 
 
 __all__ = ["STAGES", "Stage", "run"]

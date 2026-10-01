@@ -66,7 +66,6 @@ class Visited(BaseModel):
     ok: bool = False
     kind: str = "html"
     flags: list[str] = []
-    records: int = 0
     tier: str = ""
     score: float = 0.0
 
@@ -81,7 +80,6 @@ class CandidateReview(BaseModel):
     profile: str = "basic"
     reason: str = ""
     retried_browser: bool = False
-    records: int = 0
     kind: str = "html"
 
 
@@ -121,14 +119,13 @@ class SpaDescription(BaseModel):
 
 
 class DatasetSource(BaseModel):
-    """THE contract between locating and authoring: where the dataset is and how it loads --
-    everything the author needs and nothing it must rediscover."""
+    """THE contract between locating and authoring: where the dataset is and how it LOADS -- the
+    tier, the pager, the feed, the filters, the app -- each a DESCRIPTION from the page's signals.
+    Never a selector: what to select is the author's call over the document."""
 
     url: str
     kind: str = "html"
     profile: str = "basic"
-    record_selector: str = ""
-    records: int = 0
     flags: list[str] = []
     pagination: "PaginateDescription | None" = None
     api: "ApiDescription | None" = None
@@ -251,6 +248,10 @@ class Onboarding(BaseModel):
     log: list[StageLog] = []
     trace: list[Trace] = []
     stopped: str = ""
+    #: the review -> repair loop: how many times the author review sent the extraction back, and
+    #: the reviewer's note the next extraction attempt opens with.
+    repairs: int = 0
+    review_note: str = ""
 
     @classmethod
     def start(cls, brief: Brief, **values: str) -> "Onboarding":

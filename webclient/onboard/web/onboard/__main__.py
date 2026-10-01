@@ -410,7 +410,7 @@ async def _onboard(args: argparse.Namespace) -> int:
     if state.expand is not None:
         src = state.expand
         _err(
-            f"  source:     {src.url} ({src.kind}, {src.profile}, {src.records} records at {src.record_selector!r})"
+            f"  source:     {src.url} ({src.kind}, {src.profile}; {', '.join(src.flags) or 'no flags'})"
         )
     if state.review_location is not None:
         _err(
@@ -533,8 +533,8 @@ def _one_line(model: BaseModel) -> str:
         return f"{len(data['visited'])} visited, {len(data['candidates'])} candidate(s), {len(data['reviews'])} reviewed; {data.get('note')}"
     if "present" in data:
         return f"{'present' if data['present'] else 'absent'} at {data.get('profile')}: {data.get('url')} — {data.get('reason')}"
-    if "record_selector" in data and "flags" in data:
-        return f"{data['records']} record(s) at {data['record_selector']!r}; flags {', '.join(data['flags'])}; api {'yes' if data.get('api') else 'no'}"
+    if "profile" in data and "flags" in data and "url" in data:
+        return f"{data['kind']} at {data['profile']}; flags {', '.join(data['flags'])}; api {'yes' if data.get('api') else 'no'}"
     if "summary" in data:
         return f"{'ok' if data['ok'] else 'CONCERN'} — {data['summary']}"
     if "via_api" in data:

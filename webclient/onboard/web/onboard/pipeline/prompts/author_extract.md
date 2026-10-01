@@ -2,10 +2,11 @@ GOAL: extract these fields from each record of: $goal
 FIELDS:
 $schema
 
-Each record is one $kind matched by $records ($count on the page). A typical record's structure:
-$structure
+This is $kind. The document's structure (chrome dropped, clipped):
+$skeleton
 $hint
-Reply with JSON only -- for every field you can read from the record (leave out a field the record does not hold):
-{"fields": {"<field>": {"css": "<selector relative to the record>" | "key": "<json key>", "read": "text" | "href" | "src" | "datetime" | "number" | "attr:<name>"}}}
+Reply with JSON only:
+{"records": "<the repeating record element / the record array path>", "fields": {"<field>": {"css": "<selector relative to the record>" | "key": "<json key>", "read": "text" | "href" | "src" | "datetime" | "number" | "attr:<name>"}}}
+Name every field you can read from a record; leave out a field the record does not hold.
 
-Good selectors name WHAT the element is: a tag plus a semantic class or attribute (`h3 a`, `time[datetime]`, `.price`, `a[href*="/release/"]`), read RELATIVE to the record. Never an id, never a position like :nth-child (except a table column), never a generated class hash -- use its stable part: `[class*="Title"]`. A link is read with "href" on the <a>, a date on <time> with "attr:datetime" or from its text with "datetime", a number with "number". Prefer the element that holds ONLY that value.$note
+Good selectors name WHAT an element is: a tag plus a semantic class or attribute (`li.release`, `h3 a`, `time[datetime]`, `a[href*="/release/"]`). The record selector names the element that repeats ONCE per record (not its container, not a nav item); a field is read RELATIVE to it. Never an id, never a position like :nth-child (except a table column), never a generated class hash -- use its stable part: `[class*="ListItem"]`. A link is read with "href" on the <a>, a date on <time> with "attr:datetime" or from its text with "datetime", a number with "number". Prefer the element that holds ONLY that value.$note
