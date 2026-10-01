@@ -48,11 +48,13 @@ reach for `.regex` only when the value is genuinely embedded in a text node that
 its own — never to avoid finding the element.
 
 For a LONG TEXT field — an article body, a press release, a description that spans many
-paragraphs — do not read a container's `.attr("text")` (it drags in captions, "share" chrome and
-player notices). On the page that holds it, use the document-level readers: `wq.doc.readable()`
-(the main content as clean text) or `wq.doc.markdown()` (the same, with headings/links kept). Inside
-a per-record `.resolve().extract(...)` fan-out, `wq.doc` IS the detail page, so
-`body=wq.doc.readable()` is the whole article.
+paragraphs — read the page's OWN content element when the structure shows one: an `<article>`, a
+`main` article body, a `.content`/`.article-body` container — `body=wq.doc.select("article").attr("text")`
+— the whole text, nothing outside it. When the brief says the document is identified by that content,
+declare the identity over the SAME element (`.identity("article")` on the detail extract). Only when
+no such element exists fall back to the document-level readers: `wq.doc.readable()` (the main content
+as clean text, heuristically chosen) or `wq.doc.markdown()` (the same, with headings/links kept).
+Inside a per-record `.resolve().extract(...)` fan-out, `wq.doc` IS the detail page.
 
 There is no `.as_json()`; on a JSON document, `.at("dotted.path")` reads a scalar leaf directly.
 For a whole `<table>` whose cells are hard to select positionally, a document-level
@@ -92,7 +94,7 @@ right after the `.extract(...)`:
 - a part that is not a field name is a CSS SELECTOR resolved on the record and hashed —
   `.identity("h2.title")`.
 - on a DETAIL page (a per-record `.resolve().extract(...)`), pick the STABLE element that IS the
-  document — `.resolve().extract(body=wq.doc.readable()).identity("article")` hashes the
+  document — `.resolve().extract(body=wq.doc.select("article").attr("text")).identity("article")` hashes the
   `<article>` text, so a clock, a sidebar or a related-links box changing does not make it a new
   document. Choose the selector from the detail page's structure.
 

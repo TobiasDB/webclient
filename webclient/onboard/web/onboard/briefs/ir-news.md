@@ -16,7 +16,12 @@ author_hint: >
   or behind a year filter — capture the CURRENT year's records, not an archived year's tab). Each
   row carries the headline, the date, often a category tag, and a link to the release's own page;
   the body text lives on that page — follow the link ONCE per record and read the body there. If
-  the page has a JSON news API, prefer it. Many releases also attach a PDF of the release.
+  the page has a JSON news API, prefer it. Many releases also attach a PDF of the release. The body
+  is the FULL release text read from the release page's own content element (not a summary or a
+  generic readable extraction).
+identity_hint: >
+  A release is identified by its text content: declare the release page's identity over the same
+  content element the body is read from (e.g. detail_identity("article")).
 review_hint: >
   Be strict on recency: the rows must be the LATEST releases (the newest row within the last few
   months for an active company) — reject a sample from an archived year or a category subset only.
