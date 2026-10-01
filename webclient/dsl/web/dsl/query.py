@@ -292,8 +292,12 @@ def _forwarding_bus(fetches: "list[Fetch]") -> EventBus:
     return bus
 
 
+#: the verbs a lenient run makes optional: every navigation that may miss on a record.
+_OPTIONAL_VERBS = frozenset({"select", "next", "prev"})
+
+
 def _lenient_plan(plan: Plan) -> Plan:
-    """Every ``select`` call in the plan (sub-plans included) made optional."""
+    """Every ``select`` / ``next`` / ``prev`` call in the plan (sub-plans included) made optional."""
 
     def walk(p: Plan) -> Plan:
         steps = list(p.steps)

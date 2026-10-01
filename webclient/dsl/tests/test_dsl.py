@@ -872,6 +872,23 @@ def test_next_and_prev_read_a_records_sibling_elements(httpserver: HTTPServer) -
         ("Earnings call", "Nov 5, 2026", None),
         ("Annual meeting", "Dec 1, 2026", "Nov 5, 2026"),
     ]
+    # the search is BOUNDED by `stop`: a value is never read across the next record
+    html2 = b"<div><p class=t><a href='/e1'>No date yet</a></p><hr><p class=t><a href='/e2'>Dated</a></p><p class=d>Dec 1, 2026</p></div>"
+    httpserver.expect_request("/b").respond_with_data(html2, content_type="text/html")
+    bounded = Query.from_source(
+        f"wq.reference({httpserver.url_for('/b')!r}).resolve().select_all('p.t')"
+        ".extract(title=wq.doc.select('a').attr('text'), when=wq.doc.next('p.d', stop='p.t', optional=True).attr('text'))"
+    )
+
+    async def go2() -> object:
+        async with Resolver() as r:
+            return await bounded.run(r)
+
+    rows2 = cast("list[dict[str, object]]", asyncio.run(go2()).rows)  # type: ignore[attr-defined]
+    assert [(r["title"], r["when"]) for r in rows2] == [
+        ("No date yet", None),
+        ("Dated", "Dec 1, 2026"),
+    ]
     loud = Query.from_source(
         f"wq.reference({httpserver.url_for('/')!r}).resolve().select_all('p.d').extract(x=wq.doc.next('p.zzz').attr('text'))"
     )

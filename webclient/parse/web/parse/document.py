@@ -90,23 +90,24 @@ class Element:
         """ALL descendants matching a CSS selector (nested selection)."""
         return [Element(n, self._base) for n in query(self._node, css)]
 
-    def next(self, css: str = "") -> "Element | None":
+    def next(self, css: str = "", *, stop: str = "") -> "Element | None":
         """The first FOLLOWING sibling element matching ``css`` (``""`` = the very next element),
         or ``None`` -- a record whose values are sibling elements (a title paragraph, then a date
-        paragraph) is read this way."""
-        for sib in self._node.itersiblings():
+        paragraph) is read this way. The search ENDS at a sibling matching ``stop`` (the next
+        record: a value is never read across it)."""
+        return self._sibling(css, stop, preceding=False)
+
+    def prev(self, css: str = "", *, stop: str = "") -> "Element | None":
+        """The first PRECEDING sibling element matching ``css`` (``""`` = the previous element),
+        bounded by ``stop`` like :meth:`next`."""
+        return self._sibling(css, stop, preceding=True)
+
+    def _sibling(self, css: str, stop: str, *, preceding: bool) -> "Element | None":
+        for sib in self._node.itersiblings(preceding=preceding):
             if not isinstance(sib.tag, str):
                 continue  # a comment / processing instruction
-            cand = Element(sib, self._base)
-            if not css or _matches(sib, css):
-                return cand
-        return None
-
-    def prev(self, css: str = "") -> "Element | None":
-        """The first PRECEDING sibling element matching ``css`` (``""`` = the previous element)."""
-        for sib in self._node.itersiblings(preceding=True):
-            if not isinstance(sib.tag, str):
-                continue
+            if stop and _matches(sib, stop):
+                return None
             if not css or _matches(sib, css):
                 return Element(sib, self._base)
         return None

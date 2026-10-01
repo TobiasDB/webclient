@@ -928,6 +928,9 @@ def test_the_author_may_read_a_sibling_with_a_plus_prefix() -> None:
     assert _chain("when", _Read(css="+ p.date", read="datetime"), json=False, optional=False) == (
         "wq.doc.next('p.date').attr(\"text\").datetime()"
     )
+    assert _chain(
+        "when", _Read(css="+ p.date", read="text"), json=False, optional=False, records="p.t"
+    ) == ("wq.doc.next('p.date', stop='p.t').attr(\"text\")")
     assert _chain("x", _Read(css="~ p.d", read="text"), json=False, optional=True) == (
         "wq.doc.next('p.d', optional=True).attr(\"text\")"
     )

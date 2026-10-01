@@ -20,8 +20,8 @@ schema:
   - kind: {type: string, description: the event type — earnings call, conference, annual meeting, investor day}
   - event_url: {type: url, description: the link to the event's own page}
   - webcast_url: {type: url, description: the live / replay webcast or registration link}
-optional: [kind, event_url, webcast_url]
+optional: [datetime, kind, event_url, webcast_url]
 hints:
-  author_extract: "Events sit in an UPCOMING and a PAST/ARCHIVED section with the same record shape -- one record selector covers both when the shape is the same; otherwise the current (latest) section. A webcast / registration link is a separate <a> in the record."
+  author_extract: "Events sit in an UPCOMING and a PAST/ARCHIVED section with the same record shape -- one record selector covers both when the shape is the same; otherwise the current (latest) section. The date is often a SIBLING paragraph after the title (`+ p`); the latest entries may show no date yet. A webcast / registration link is a separate <a> in the record."
 ---
 Every investor-relations event {company} lists — upcoming and archived: the event name, its date and time, its type, the link to its own page and the webcast link.

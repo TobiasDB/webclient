@@ -342,8 +342,9 @@ def _one(
         )  # a JSON sub-value (dict/list -> navigable, scalar -> leaf)
     if name in ("next", "prev"):  # a SIBLING of the current element (loud like select)
         css = str(args[0]) if args else ""
+        stop = str(kwargs.get("stop") or "")  # a boundary: never read across the next record
         sib = (
-            (obj.next(css) if name == "next" else obj.prev(css))
+            (obj.next(css, stop=stop) if name == "next" else obj.prev(css, stop=stop))
             if isinstance(obj, Element)
             else None
         )

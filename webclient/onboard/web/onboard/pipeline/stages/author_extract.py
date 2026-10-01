@@ -43,15 +43,18 @@ class _Reply(BaseModel):
     why: str = ""
 
 
-def _chain(field: str, spec: _Read, *, json: bool, optional: bool) -> str:
-    """One column's ``wq.doc`` chain from the model's selector + read."""
+def _chain(field: str, spec: _Read, *, json: bool, optional: bool, records: str = "") -> str:
+    """One column's ``wq.doc`` chain from the model's selector + read. A ``+ css`` read is the
+    record's following sibling, bounded by the record selector (never read across the next
+    record: a record lacking that sibling reads nothing instead of the next record's value)."""
     if json:
         chain = f"wq.doc.attr({(spec.key or spec.css)!r})"
     else:
         opt = ", optional=True" if optional else ""
         css = spec.css.strip()
         if css.startswith(("+", "~")):  # a SIBLING of the record: the value sits next to it
-            chain = f"wq.doc.next({css[1:].strip()!r}{opt})"
+            bound = f", stop={records!r}" if records else ""
+            chain = f"wq.doc.next({css[1:].strip()!r}{bound}{opt})"
         else:
             chain = f"wq.doc.select({css!r}{opt})"
     read = spec.read or "text"
@@ -102,7 +105,12 @@ def _optional(chain: str) -> str:
     steps = list(plan.steps)
     for i, step in enumerate(steps):
         nxt = steps[i + 1] if i + 1 < len(steps) else None
-        if step.kind == "get" and step.name == "select" and nxt is not None and nxt.kind == "call":
+        if (
+            step.kind == "get"
+            and step.name in ("select", "next", "prev")
+            and nxt is not None
+            and nxt.kind == "call"
+        ):
             if "optional" not in nxt.kwargs:
                 steps[i + 1] = nxt.model_copy(
                     update={"kwargs": {**nxt.kwargs, "optional": Arg(value=True)}}
@@ -297,7 +305,12 @@ async def _one(
                 failure = " ".join(wrong)
         if not specs and not failure:
             failure = "the reply named none of the schema's fields (use the field names exactly)"
-        fields = {n: _chain(n, r, json=is_json, optional=n in optional) for n, r in specs.items()}
+        fields = {
+            n: _chain(
+                n, r, json=is_json, optional=n in optional, records=records if not is_json else ""
+            )
+            for n, r in specs.items()
+        }
         matched = 0
         if records and not is_json and not failure:
             matched, bad = matches(doc, records)
