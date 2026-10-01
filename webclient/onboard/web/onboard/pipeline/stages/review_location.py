@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 from pydantic import BaseModel
+from web.fetch import emit
 
+from ...llm import ReasonEvent
 from ..ask import Context, ask_json
 from ..state import DatasetSource, LocationReview, Onboarding
 
@@ -48,5 +50,12 @@ async def run(state: Onboarding, ctx: Context) -> LocationReview:
         scope=state.brief.scope(),
         source=describe(state.expand),
         note="",
+    )
+    emit(
+        ReasonEvent(
+            stage="review_location",
+            text=f"{'ok' if reply.ok else 'CONCERN'} — {reply.summary}"
+            + (f" (concerns: {'; '.join(reply.concerns)})" if reply.concerns else ""),
+        )
     )
     return LocationReview(ok=reply.ok, summary=reply.summary, concerns=reply.concerns)

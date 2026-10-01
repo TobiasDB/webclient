@@ -5,6 +5,9 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+from web.fetch import emit
+
+from ...llm import ReasonEvent
 from ...search import as_hits
 from ..ask import Context
 from ..state import Hit, Onboarding, SearchResult
@@ -31,6 +34,9 @@ async def run(state: Onboarding, ctx: Context) -> SearchResult:
         score, d, p = score_url(h.url, spec.domain, spec.path)
         hits.append(Hit(url=h.url, title=h.title, snippet=h.snippet, score=score, domain=d, path=p))
     hits.sort(key=lambda h: -h.score)
+    emit(ReasonEvent(stage="search", text=f"{term!r}: {len(hits)} result(s)"))
+    for hit in hits[:8]:
+        emit(ReasonEvent(stage="search", subject=hit.url, text=f"[{hit.score:g}] {hit.title[:70]}"))
     if not hits:
         state.stopped = "search: no results"
     return SearchResult(term=term, hits=hits)

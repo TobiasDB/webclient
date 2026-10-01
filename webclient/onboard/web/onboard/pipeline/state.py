@@ -187,6 +187,21 @@ class AuthorReview(BaseModel):
 # -- the state --------------------------------------------------------------------------------------
 
 
+#: how much of a prompt / reply the state keeps per exchange (the whole reply is what a human
+#: needs to see why a stage failed; a prompt is reproducible from the state's own values).
+TRACE_CHARS = 6_000
+
+
+class Trace(BaseModel):
+    """One model exchange kept on the state: the stage, the prompt sent and the reply received
+    (each clipped to :data:`TRACE_CHARS`) -- so ``state.json`` shows exactly what the model saw
+    and said at every step."""
+
+    stage: str
+    prompt: str = ""
+    reply: str = ""
+
+
 class StageLog(BaseModel):
     stage: str
     started: str
@@ -233,6 +248,7 @@ class Onboarding(BaseModel):
     author_review: "AuthorReview | None" = None
     spend: Spend = Spend()
     log: list[StageLog] = []
+    trace: list[Trace] = []
     stopped: str = ""
 
     @classmethod
@@ -311,6 +327,8 @@ __all__ = [
     "Spend",
     "STAGE_NAMES",
     "StageLog",
+    "TRACE_CHARS",
     "Tier",
+    "Trace",
     "Visited",
 ]

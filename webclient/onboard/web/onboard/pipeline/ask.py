@@ -21,9 +21,9 @@ from web.fetch import emit
 from web.resolve import Resolver
 
 from ..compile import clean_reply
-from ..llm import Llm, ReasonEvent
+from ..llm import Llm, ReasonEvent, TraceEvent
 from ..search import Search
-from .state import Onboarding
+from .state import TRACE_CHARS, Onboarding, Trace
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -90,6 +90,8 @@ async def ask(
     reply = await ctx.llm.complete(text)
     calls1, usd1 = _spent(ctx.llm)
     state.charge(stage, calls1 - calls0, usd1 - usd0, chars_in=len(text), chars_out=len(reply))
+    state.trace.append(Trace(stage=stage, prompt=text[:TRACE_CHARS], reply=reply[:TRACE_CHARS]))
+    emit(TraceEvent(stage=stage, prompt=text, reply=reply))
     return reply
 
 

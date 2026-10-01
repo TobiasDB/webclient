@@ -295,3 +295,15 @@ def test_find_records_never_picks_a_selects_options() -> None:
     )
     top = doc.records(top_k=1)[0]
     assert top.item_selector == "article.release" and top.count == 12
+
+
+def test_find_records_never_picks_head_tags() -> None:
+    # a page's <head> repeats <meta> / <link> tags -- they outranked the real list on bbc.co.uk
+    head = "".join(f"<meta name=m{i} content=x><link rel=l{i} href=/x{i}>" for i in range(25))
+    rows = "".join(f"<li class=item><a href='/a{i}'>A{i}</a></li>" for i in range(5))
+    doc = parse(
+        f"<html><head>{head}</head><body><ul>{rows}</ul></body></html>".encode(),
+        url="http://x/",
+        content_type="text/html",
+    )
+    assert [r.item_selector for r in doc.records(top_k=3)] == ["li.item"]

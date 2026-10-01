@@ -54,6 +54,11 @@ async def run(state: Onboarding, ctx: Context) -> CrawlResult:
             result.note = "a must from the search review holds the dataset"
             return result
     seeds = [p.url for p in picks if p.tier in ("could", "lead")]
+    emit(
+        ReasonEvent(
+            stage="crawl", text=f"crawling from {len(seeds)} seed(s): {', '.join(seeds[:4])}"
+        )
+    )
     if not seeds:
         result.candidates = []
         state.stopped = "crawl: nothing to crawl (every must was rejected)"
@@ -85,8 +90,12 @@ async def run(state: Onboarding, ctx: Context) -> CrawlResult:
             )
             for r in reply.picks:
                 if 1 <= r.n <= len(unknown):
-                    tiers[unknown[r.n - 1].url] = (
-                        r.tier if r.tier in ("must", "could", "lead") else "could"
+                    tier = r.tier if r.tier in ("must", "could", "lead") else "could"
+                    tiers[unknown[r.n - 1].url] = tier
+                    emit(
+                        ReasonEvent(
+                            stage="crawl", subject=unknown[r.n - 1].url, text=f"{tier} — {r.why}"
+                        )
                     )
             for it in unknown:
                 tiers.setdefault(it.url, "drop")
@@ -112,6 +121,14 @@ async def run(state: Onboarding, ctx: Context) -> CrawlResult:
                 records=count,
                 tier=tiers.get(doc.url, ""),
                 score=scores.get(doc.url, 0.0),
+            )
+        )
+        emit(
+            ReasonEvent(
+                stage="crawl",
+                subject=doc.url,
+                text=f"fetched: {count} record(s), flags {', '.join(fired) or 'none'}, tier "
+                f"{tiers.get(doc.url) or '-'}, score {scores.get(doc.url, 0.0):g}",
             )
         )
         listing = (
@@ -145,6 +162,7 @@ async def run(state: Onboarding, ctx: Context) -> CrawlResult:
     coulds.sort(key=lambda p: -p.score)
     result.candidates = coulds
     result.note = f"{len(result.visited)} page(s) crawled, {len(coulds)} could(s) to evaluate"
+    emit(ReasonEvent(stage="crawl", text=result.note))
     if not coulds:
         state.stopped = "crawl: no page holds the dataset"
     return result

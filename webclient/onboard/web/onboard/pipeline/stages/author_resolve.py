@@ -4,6 +4,9 @@ review needed. (Pagination / several source URLs join this stage later.)"""
 
 from __future__ import annotations
 
+from web.fetch import emit
+
+from ...llm import ReasonEvent
 from ..ask import Context
 from ..state import Onboarding, ResolvePlan
 
@@ -19,6 +22,13 @@ async def run(state: Onboarding, ctx: Context) -> ResolvePlan:
             (src.spa.profile if src.spa is not None else src.profile),
             False,
         )
+    emit(
+        ReasonEvent(
+            stage="author_resolve",
+            subject=url,
+            text=f"{'the data api' if via else 'the page'} at {profile}",
+        )
+    )
     return ResolvePlan(
         url=url,
         profile=profile,

@@ -5,16 +5,19 @@ a pager's parameters, an API's knobs -- are later refinements of this stage.)"""
 
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qs, urlparse
 
 from pydantic import JsonValue
-from web.fetch import Request, Snapshot
-from web.parse import Document
+from web.fetch import Request, Snapshot, emit
+from web.parse import Document, Element
 from web.resolve import Resolver, document, flags
 from web.resolve import profiles as _rp
 
+from ...llm import ReasonEvent
 from ..apis import consistent, declared_endpoints, observed_endpoints, records_path, schema_fit
 from ..ask import Context
+from ..brief import Brief
 from ..state import (
     ApiDescription,
     DatasetSource,
@@ -22,7 +25,6 @@ from ..state import (
     PaginateDescription,
     SpaDescription,
 )
-from .review_candidate import record_count
 
 _PAGERS = {"paginated": "next_link", "infinite_scroll": "scroll"}
 #: query parameters a pager bumps, most common first.
@@ -46,6 +48,51 @@ def pager_of(doc: Document, kind: str, note: str) -> PaginateDescription:
             if cand in names:
                 return PaginateDescription(kind="param", param=names[cand], note=note)
     return PaginateDescription(kind="next_link", note=note)
+
+
+_DATE = re.compile(
+    r"\b(?:19|20)\d{2}\b|\b\d{1,2}[:.]\d{2}\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b",
+    re.I,
+)
+
+
+def _hooks(el: Element) -> "set[str]":
+    """Which field TYPES a record element can serve: a link (``url``), a date (``datetime``), text."""
+    out: set[str] = set()
+    if el.select("a[href]") is not None:
+        out.add("url")
+    if el.select("time") is not None or _DATE.search(el.text):
+        out.add("datetime")
+    if el.text.strip():
+        out.add("string")
+    return out
+
+
+def pick_records(doc: Document, brief: Brief) -> "tuple[str, int]":
+    """The record region FOR THE BRIEF: among the detected regions (merged by selector -- three
+    sections of twelve are one dataset of thirty-six), the one whose typical record can serve the
+    most of the brief's REQUIRED field types (a url field needs a link; a datetime needs a date),
+    then the largest. A JSON document has no region (``("", 0)``)."""
+    if doc.kind == "json":
+        return "", 0
+    merged: dict[str, int] = {}
+    for reg in doc.records(top_k=6):
+        merged[reg.item_selector] = merged.get(reg.item_selector, 0) + reg.count
+    if not merged:
+        return "", 0
+    want = {f.type for f in brief.fields if not f.optional} & {"url", "datetime", "string"}
+    best: "tuple[tuple[int, int], str] | None" = None
+    for selector, count in merged.items():
+        els = doc.select_all(selector)
+        if not els:
+            continue
+        served = len(want & _hooks(els[min(len(els) - 1, 1)]))  # the second element: a typical one
+        rank = (served, count)
+        if best is None or rank > best[0]:
+            best = (rank, selector)
+    if best is None:
+        return "", 0
+    return best[1], len(doc.select_all(best[1]))
 
 
 def knobs_of(url: str) -> "dict[str, str]":
@@ -74,13 +121,13 @@ async def run(state: Onboarding, ctx: Context) -> DatasetSource:
     review = state.review_candidate
     doc, snap = await page_of(ctx, review.url, review.profile)
     by = {f.name: f for f in flags(doc, snap)}
-    regions = doc.records(top_k=1)
+    selector, count = pick_records(doc, state.brief)
     src = DatasetSource(
         url=review.url,
         kind=doc.kind,
         profile=review.profile,
-        record_selector=regions[0].item_selector if regions else "",
-        records=record_count(doc),
+        record_selector=selector,
+        records=count,
         flags=sorted(by),
         filtered="tabbed" in by,
     )
@@ -124,4 +171,21 @@ async def run(state: Onboarding, ctx: Context) -> DatasetSource:
         str(n) for n in sorted({s.name for f in by.values() for s in f.signals})
     ]
     src.detail = {"title": doc.metadata().title or "", "signals": signals}
+    api_line = (
+        f"api {src.api.url} (fit {src.api.fit}); " if src.api is not None else "no data api; "
+    )
+    pager = (
+        f"pager {src.pagination.kind} {src.pagination.next_selector or src.pagination.param}; "
+        if src.pagination is not None
+        else "no pager; "
+    )
+    emit(
+        ReasonEvent(
+            stage="expand",
+            subject=src.url,
+            text=f"{src.kind} at {src.profile}: {src.records} record(s) at {src.record_selector!r}; "
+            f"flags {', '.join(src.flags) or 'none'}; {api_line}{pager}"
+            + (f"spa ({src.spa.reason})" if src.spa is not None else "static"),
+        )
+    )
     return src

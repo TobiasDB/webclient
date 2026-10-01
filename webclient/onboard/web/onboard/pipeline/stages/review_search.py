@@ -4,7 +4,9 @@ worth following, each as ``must`` (the listing itself), ``could`` or ``lead``.""
 from __future__ import annotations
 
 from pydantic import BaseModel
+from web.fetch import emit
 
+from ...llm import ReasonEvent
 from ..ask import PROMPT_INPUT_CHARS, Context, ask_json
 from ..state import Onboarding, Pick, SearchReview
 
@@ -58,6 +60,9 @@ async def run(state: Onboarding, ctx: Context) -> SearchReview:
     order = {"must": 0, "could": 1, "lead": 2}
     picks.sort(key=lambda p: (order[p.tier], -p.score))
     dropped = [h.url for h in hits if h.url not in {p.url for p in picks}]
+    for pk in picks:
+        emit(ReasonEvent(stage="review_search", subject=pk.url, text=f"{pk.tier} — {pk.why}"))
+    emit(ReasonEvent(stage="review_search", text=f"{len(picks)} pick(s), {len(dropped)} dropped"))
     if not picks:
         state.stopped = "review_search: no result leads to the dataset"
     return SearchReview(picks=picks, dropped=dropped)

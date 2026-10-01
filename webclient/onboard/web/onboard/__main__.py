@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 from web.crawl import CrawlEvent
 from web.fetch import Event, EventBus, FetchEvent, Profile, WebException, aclose_default_pool
 from web.fetch import fetch as _fetch_one
@@ -48,8 +48,8 @@ from .config import PIPELINE_MODEL, build_resolver, default_search
 from .config import env as _env
 from .config import env_flag as _env_flag
 from .config import env_float as _env_float
-from .llm import AnthropicLlm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage
-from .pipeline import Brief, BriefError, Context, Onboarding, packaged_briefs
+from .llm import AnthropicLlm, LlmEvent, Pricing, RateLimit, ReasonEvent, TraceEvent, Usage
+from .pipeline import STAGE_NAMES, Brief, BriefError, Context, Onboarding, packaged_briefs
 from .pipeline import run as pipeline_run
 from .pipeline.ask import MAX_TOKENS, SYSTEM
 from .shim import ClaudeShim
@@ -107,6 +107,15 @@ class _Progress:
                 f"  · llm [{event.model}] call {event.calls}: "
                 f"in={u.input} out={u.output} cache_r={u.cache_read} cache_w={u.cache_write} tok "
                 f"→ ${event.cost_usd:.4f}  (running ${event.spent_usd:.4f})"
+            )
+        elif isinstance(event, TraceEvent):  # the model exchange: the reply always, the prompt -v
+            if self._verbose:
+                _err(f"  ┌ {event.stage} PROMPT ({len(event.prompt)} chars):")
+                for line in event.prompt[:3000].splitlines():
+                    _err(f"  │ {line}")
+            reply = " ".join(event.reply.split())
+            _err(
+                f"  └ {event.stage} REPLY ({len(event.reply)} chars): {reply[:1500 if self._verbose else 300]}"
             )
         elif isinstance(event, ReasonEvent):  # WHY a choice was made
             if event.stage != "llm":  # a retry notice is not a stage change
@@ -422,6 +431,92 @@ async def _onboard(args: argparse.Namespace) -> int:
     return 0 if (ex is not None and ex.complete and not state.stopped) else 1
 
 
+# -- view: a stage's debug record + its contract -------------------------------------------------
+
+
+def _view(args: argparse.Namespace) -> int:
+    """Show an onboarding's state file: every stage's outcome at a glance, or ONE stage in full --
+    its contract (the model it returned, as JSON), its log line, and every model exchange it made
+    (the reply always; the prompt with ``--prompt``)."""
+    path = Path(args.state)
+    if not path.is_file():
+        _err(f"no state file at {path}")
+        return 2
+    state = Onboarding.load(path)
+    if args.stage is None:  # the overview
+        print(f"brief: {state.brief.name or '(ad hoc)'} {state.brief.values}")
+        print(
+            f"next:  {state.next_stage() or 'done'}"
+            + (f"  (stopped: {state.stopped})" if state.stopped else "")
+        )
+        for name in STAGE_NAMES:
+            out = getattr(state, name)
+            log = next((l for l in state.log if l.stage == name), None)
+            calls = f"{log.calls} call(s) ${log.usd:.4f} {log.elapsed_s:.1f}s" if log else ""
+            summary = _one_line(out) if out is not None else "(to do)"
+            print(f"  {name:<17} {calls:<28} {summary}")
+        print(
+            f"spend: ${state.spend.usd:.4f} over {state.spend.calls} call(s); "
+            f"API estimate ${state.spend.api_estimate():.4f}; {len(state.trace)} exchange(s) traced"
+        )
+        return 0
+    if args.stage not in STAGE_NAMES:
+        _err(f"unknown stage {args.stage!r}; stages are {', '.join(STAGE_NAMES)}")
+        return 2
+    out = getattr(state, args.stage)
+    log = next((l for l in state.log if l.stage == args.stage), None)
+    print(
+        f"== {args.stage}: "
+        + (
+            f"{log.calls} call(s), ${log.usd:.4f}, {log.elapsed_s:.1f}s, {log.chars_in} chars in / {log.chars_out} out"
+            if log
+            else "not run"
+        )
+    )
+    if log and log.note:
+        print(f"   note: {log.note}")
+    print("-- contract:")
+    print(out.model_dump_json(indent=1) if out is not None else "(no output yet)")
+    traces = [t for t in state.trace if t.stage == args.stage]
+    print(f"-- model exchanges: {len(traces)}")
+    for i, t in enumerate(traces, 1):
+        if args.prompt:
+            print(f"[{i}] PROMPT ({len(t.prompt)} chars):")
+            print(t.prompt)
+        print(f"[{i}] REPLY ({len(t.reply)} chars):")
+        print(t.reply)
+    return 0
+
+
+def _one_line(model: BaseModel) -> str:
+    """A stage output in one line for the overview."""
+    data = model.model_dump()
+    if "hits" in data:
+        return f"{len(data['hits'])} hit(s) for {data.get('term')!r}"
+    if "picks" in data and "dropped" in data:
+        return f"{len(data['picks'])} pick(s): " + ", ".join(
+            f"{p['tier']} {p['url']}" for p in data["picks"][:3]
+        )
+    if "visited" in data:
+        return f"{len(data['visited'])} visited, {len(data['candidates'])} candidate(s), {len(data['reviews'])} reviewed; {data.get('note')}"
+    if "present" in data:
+        return f"{'present' if data['present'] else 'absent'} at {data.get('profile')}: {data.get('url')} — {data.get('reason')}"
+    if "record_selector" in data and "flags" in data:
+        return f"{data['records']} record(s) at {data['record_selector']!r}; flags {', '.join(data['flags'])}; api {'yes' if data.get('api') else 'no'}"
+    if "summary" in data:
+        return f"{'ok' if data['ok'] else 'CONCERN'} — {data['summary']}"
+    if "via_api" in data:
+        return f"{'api' if data['via_api'] else 'page'} {data['url']} at {data['profile']}"
+    if "attempts" in data:
+        return (
+            f"{'complete' if data['complete'] else 'INCOMPLETE'}, {data['row_count']} row(s); "
+            + (data["attempts"][-1] if data["attempts"] else "")
+        )
+    if "notes" in data:
+        return f"{'ok' if data['ok'] else 'REJECTED'} ({data.get('next')}) — {data['notes']}"
+    return str(data)[:120]
+
+
 # -- entry ----------------------------------------------------------------------------------------
 
 
@@ -511,11 +606,24 @@ def _parser() -> argparse.ArgumentParser:
         "--sample", type=int, default=5, metavar="N", help="how many rows to print (default 5)"
     )
 
+    view = subs.add_parser(
+        "view",
+        help="show an onboarding state: every stage at a glance, or one stage's contract + exchanges",
+    )
+    view.add_argument(
+        "state", metavar="FILE", help="the onboarding state file (web onboard --state)"
+    )
+    view.add_argument("stage", nargs="?", default=None, help="a stage name for the full record")
+    view.add_argument(
+        "--prompt", action="store_true", help="also print the prompts sent to the model"
+    )
     return parser
 
 
 def main(argv: "Sequence[str] | None" = None) -> int:
     args = _parser().parse_args(argv)
+    if args.cmd == "view":
+        return _view(args)
     runner = {"fetch": _fetch, "resolve": _resolve, "onboard": _onboard}[args.cmd]
 
     async def _run() -> int:

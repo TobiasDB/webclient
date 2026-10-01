@@ -6,7 +6,9 @@ from __future__ import annotations
 import json
 
 from pydantic import BaseModel
+from web.fetch import emit
 
+from ...llm import ReasonEvent
 from ...prompts import clip
 from ..ask import PROMPT_INPUT_CHARS, Context, ask_json
 from ..state import AuthorReview, Onboarding
@@ -39,6 +41,11 @@ async def run(state: Onboarding, ctx: Context) -> AuthorReview:
         note="",
     )
     review = AuthorReview(ok=reply.ok, notes=reply.notes)
+    emit(
+        ReasonEvent(
+            stage="author_review", text=f"{'ok' if reply.ok else 'REJECTED'} — {reply.notes}"
+        )
+    )
     pending = [f for f in state.brief.required if f not in ex.fields or f in ex.misses]
     url_fields = [f.name for f in state.brief.fields if f.type == "url" and f.name in ex.fields]
     if pending and url_fields:  # the rest lives on each record's own page: the nested seam

@@ -22,8 +22,9 @@ if TYPE_CHECKING:
 
 _SKIP = frozenset({"script", "style", "noscript", "template", "svg", "path", "br", "hr"})
 _DRAWING = frozenset({"svg", "math", "canvas"})  # repetition here is geometry, not records
-#: form CONTROLS: a <select>'s options / a <datalist> repeat, but they are choices, never records
-_CONTROLS = frozenset({"select", "datalist", "optgroup"})
+#: form CONTROLS: a <select>'s options / a <datalist> repeat, but they are choices, never records;
+#: the <head> repeats <meta> / <link> tags that are not content at all.
+_CONTROLS = frozenset({"select", "datalist", "optgroup", "head"})
 _CHROME_TAGS = frozenset({"nav", "header", "footer", "aside"})
 _CHROME_ROLES = frozenset({"navigation", "banner", "contentinfo", "complementary"})
 _WRAPPER_TAGS = frozenset({"div", "span", "li", "section", "article"})
@@ -121,7 +122,7 @@ def scan(doc: "Document", *, min_items: int = 3) -> "list[tuple[Node, RecordRegi
     found: list[tuple[Node, RecordRegion]] = []
     for container in doc._root().iter():
         if _tag(container) in _DRAWING | _CONTROLS or any(
-            _tag(a) in _DRAWING for a in container.iterancestors()
+            _tag(a) in _DRAWING | _CONTROLS for a in container.iterancestors()
         ):
             continue
         children = _kids(container)

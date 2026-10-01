@@ -229,6 +229,16 @@ class LlmEvent(BaseModel):
     usage: Usage = Usage()
 
 
+class TraceEvent(BaseModel):
+    """One model EXCHANGE (the prompt sent, the reply received) published on the bus -- the
+    visibility a human needs to see why a stage decided what it did. ``stage`` names the stage."""
+
+    topic: str = "trace"
+    stage: str = ""
+    prompt: str = ""
+    reply: str = ""
+
+
 class ReasonEvent(BaseModel):
     """A WHY published on the bus -- the reasoning behind a choice, so a caller can log why things
     were chosen: ``stage`` names the phase (``frontier`` / ``author`` / ``review``) and ``text`` is
@@ -529,4 +539,5 @@ __all__ = [
     "BudgetExceeded",
     "LlmEvent",
     "ReasonEvent",
+    "TraceEvent",
 ]
