@@ -27,7 +27,9 @@ def describe(src: DatasetSource) -> str:
     ]
     if src.api is not None:
         lines.append(
-            f"data api: {src.api.url} (records at {src.api.records_path or 'root'}, schema fit {src.api.fit})"
+            f"data api ({src.api.method}"
+            + ("" if src.api.usable else ", not replayable -- the page is used")
+            + f"): {src.api.url} (records at {src.api.records_path or 'root'}, schema fit {src.api.fit})"
         )
     if src.pagination is not None:
         lines.append(f"pagination: {src.pagination.kind} {src.pagination.next_selector}".rstrip())

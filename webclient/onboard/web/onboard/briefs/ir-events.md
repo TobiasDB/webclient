@@ -21,10 +21,7 @@ schema:
   - event_url: {type: url, description: the link to the event's own page}
   - webcast_url: {type: url, description: the live / replay webcast or registration link}
 optional: [kind, event_url, webcast_url]
-queries:
-  - name: upcoming
-    hint: "ONLY the UPCOMING / future events (the section or list headed Upcoming, or records whose date is in the future). A webcast / registration link is a separate <a> in the record."
-  - name: past
-    hint: "ONLY the PAST / ARCHIVED events (the section or list headed Past / Archive, or records whose date has passed). A replay / webcast link is a separate <a> in the record."
+hints:
+  author_extract: "Events sit in an UPCOMING and a PAST/ARCHIVED section with the same record shape -- one record selector covers both when the shape is the same; otherwise the current (latest) section. A webcast / registration link is a separate <a> in the record."
 ---
 Every investor-relations event {company} lists — upcoming and archived: the event name, its date and time, its type, the link to its own page and the webcast link.

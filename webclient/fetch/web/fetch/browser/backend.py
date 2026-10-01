@@ -243,6 +243,10 @@ class BrowserSession:
                     status=r.status,
                     resource_type=rtype,
                     body=body,
+                    request_body=(
+                        (r.request.post_data_buffer or b"") if r.request.method != "GET" else b""
+                    ),
+                    request_content_type=r.request.headers.get("content-type", ""),
                 )
             )
         return out

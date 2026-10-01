@@ -14,7 +14,7 @@ from ..state import Onboarding, ResolvePlan
 async def run(state: Onboarding, ctx: Context) -> ResolvePlan:
     assert state.expand is not None
     src = state.expand
-    if src.api is not None:
+    if src.api is not None and src.api.usable:  # a replayable GET feed; else the page
         url, profile, via = src.api.url, "basic", True
     else:
         url, profile, via = (

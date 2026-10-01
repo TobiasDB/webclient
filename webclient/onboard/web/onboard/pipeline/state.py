@@ -108,9 +108,15 @@ class PaginateDescription(BaseModel):
 class ApiDescription(BaseModel):
     url: str
     kind: str = "json"
+    method: str = "GET"  # how the page called it; a POST carries ``body`` + ``content_type``
+    body: str = ""
+    content_type: str = ""
     records_path: str = ""  # the JSON path to the record array
     fit: int = 0  # how many brief fields its keys resemble
     knobs: dict[str, str] = {}  # the endpoint's query parameters as called (page / year / type…)
+    #: replayable by the authored query (a GET that answered with records when fetched again);
+    #: a POST or a feed that did not answer again is DESCRIBED but the page is authored instead.
+    usable: bool = True
 
 
 class SpaDescription(BaseModel):

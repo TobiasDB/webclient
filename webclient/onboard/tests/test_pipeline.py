@@ -717,6 +717,9 @@ def test_expand_describes_year_tabs_and_the_author_hears_the_latest_data_rule() 
         note="",
     )
     assert prompt.startswith("NOW: ") and "year tabs" in prompt and "LATEST data" in prompt
+    assert (
+        "dotted path INSIDE one record" in prompt and "where" not in prompt
+    )  # JSON taught, no split text
 
 
 def test_a_guide_with_no_records_does_not_stop_the_run_when_another_completes(
@@ -851,3 +854,69 @@ def test_a_404_candidate_is_rejected_without_a_model_call_and_the_crawl_falls_ba
     assert "Does THIS page" not in llm.prompts[1]  # the 404 never reached the model
     assert state.review_candidate is not None and state.review_candidate.present
     assert state.review_candidate.url == httpserver.url_for("/news/")
+
+
+def test_a_feed_is_used_only_when_it_replays_as_a_get_else_the_page_is_authored(
+    httpserver: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # USER: the API used a POST but we tried a GET -- carry the method; fall back to the page when
+    # the feed cannot be queried
+    import web.onboard.pipeline.stages.review_candidate as rc
+    from web.fetch import NetworkEvent, Request, Snapshot
+    from web.onboard.pipeline import CandidateReview
+    from web.onboard.pipeline.stages import author_resolve, expand
+
+    page = (
+        "<html><body><ul>"
+        + "".join(f"<li class=ev>Event {n} on 2026-11-0{n}</li>" for n in range(1, 4))
+        + "</ul><script>app()</script></body></html>"
+    )
+    httpserver.expect_request("/events").respond_with_data(page, content_type="text/html")
+    feed = json.dumps(
+        {"items": [{"Title": f"Event {n}", "When": f"2026-11-0{n}"} for n in range(1, 4)]}
+    ).encode()
+    # the feed answers a POST only: a GET replay gets an empty envelope
+    httpserver.expect_request("/api/events", method="POST").respond_with_data(
+        feed, content_type="application/json"
+    )
+    httpserver.expect_request("/api/events", method="GET").respond_with_data(
+        b'{"items": []}', content_type="application/json"
+    )
+
+    async def fake_render(ctx: object, url: str) -> Snapshot:
+        snap = Snapshot(
+            request=Request(url=url),
+            status=200,
+            content=page.encode(),
+            headers={"content-type": "text/html"},
+        )
+        snap.events.append(
+            NetworkEvent(
+                method="POST",
+                url=httpserver.url_for("/api/events"),
+                status=200,
+                resource_type="xhr",
+                body=feed,
+                request_body=b'{"year": 2026}',
+                request_content_type="application/json",
+            )
+        )
+        return snap
+
+    monkeypatch.setattr(rc, "render", fake_render)
+    state = Onboarding.start(Brief.from_markdown(_BRIEF), company="acme")
+    state.review_candidate = CandidateReview(
+        url=httpserver.url_for("/events"), present=True, profile="basic"
+    )
+
+    async def go() -> "tuple[object, object]":
+        async with Resolver() as r:
+            ctx = Context(resolver=r, llm=cast("object", None), search=_Search([]))  # type: ignore[arg-type]
+            src = await expand.run(state, ctx)
+            state.expand = src
+            return src, await author_resolve.run(state, ctx)
+
+    src, plan = cast("tuple[expand.DatasetSource, author_resolve.ResolvePlan]", _run(go()))
+    assert src.api is not None and src.api.method == "POST" and not src.api.usable
+    assert src.api.body == '{"year": 2026}' and src.api.records_path == "items"
+    assert not plan.via_api and plan.url == httpserver.url_for("/events")  # the page is authored

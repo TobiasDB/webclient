@@ -16,6 +16,7 @@ from web.resolve import profiles as _rp
 
 from ...llm import ReasonEvent
 from ..apis import (
+    Feed,
     consistent,
     declared_endpoints,
     has_records,
@@ -126,6 +127,23 @@ def filters_of(doc: Document) -> "list[str]":
 _ACTIVE = frozenset({"active", "selected", "current", "is-active", "is-selected", "on"})
 
 
+async def _replays(ctx: Context, feed: Feed) -> bool:
+    """Whether fetching the feed AGAIN, the way the page called it, answers with records -- the
+    test an authored query must pass before the feed replaces the page."""
+    try:
+        again = await ctx.resolver.resolve(
+            Request(
+                url=feed.url,
+                method=feed.method,
+                body=feed.body or None,
+                headers={"content-type": feed.content_type} if feed.content_type else {},
+            )
+        )
+    except Exception:  # noqa: BLE001 -- not reachable at the cheap tier: not usable
+        return False
+    return again.kind == "json" and has_records(again.json())
+
+
 def knobs_of(url: str) -> "dict[str, str]":
     """An endpoint's query parameters as called (the knobs a feed exposes: page / year / type)."""
     return {k: v[0] for k, v in parse_qs(urlparse(url).query).items() if v}
@@ -227,27 +245,44 @@ async def run(state: Onboarding, ctx: Context) -> DatasetSource:
         )
     # the data API behind the page: a declared endpoint, else (after a render) the XHR stream --
     # consistent with the page, best schema fit wins
-    best: "tuple[int, str, Document] | None" = None
-    found: list[tuple[str, Document]] = []
+    best: "tuple[int, Feed] | None" = None
+    found: list[Feed] = []
     for url in declared_endpoints(doc)[:4]:
         try:
             api = await ctx.resolver.resolve(url)
         except Exception:  # noqa: BLE001 -- a dead declared endpoint is simply not the API
             continue
-        found.append((url, api))
+        found.append(Feed(url, api, "GET", b"", ""))
     found.extend(observed_endpoints(snap))
-    for url, api in found:
-        if api.kind != "json" or not has_records(api.json()):
+    for feed in found:
+        if feed.doc.kind != "json" or not has_records(feed.doc.json()):
             continue  # no record array: not the dataset's feed (an empty / status reply)
-        if consistent(doc, api):
-            fit = schema_fit(api, state.brief)
+        if consistent(doc, feed.doc):
+            fit = schema_fit(feed.doc, state.brief)
             if best is None or fit > best[0]:
-                best = (fit, url, api)
+                best = (fit, feed)
     if best is not None:
-        fit, url, api = best
+        fit, feed = best
+        usable = feed.method == "GET" and await _replays(ctx, feed)
         src.api = ApiDescription(
-            url=url, kind="json", records_path=records_path(api.json()), fit=fit
+            url=feed.url,
+            kind="json",
+            method=feed.method,
+            body=feed.body.decode("utf-8", "replace")[:2000],
+            content_type=feed.content_type,
+            records_path=records_path(feed.doc.json()),
+            fit=fit,
+            knobs=knobs_of(feed.url),
+            usable=usable,
         )
+        if not usable:
+            emit(
+                ReasonEvent(
+                    stage="expand",
+                    subject=feed.url,
+                    text=f"the feed is {feed.method} / did not answer again -- described, the page is authored instead",
+                )
+            )
     signals: list[JsonValue] = [
         str(n) for n in sorted({s.name for f in by.values() for s in f.signals})
     ]

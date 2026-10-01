@@ -57,6 +57,9 @@ class NetworkEvent(BaseModel):
     resource_type: str = ""
     body: bytes = b""
     source: str = ""
+    #: the REQUEST side (a POST feed): its body and content type, so the call can be replayed.
+    request_body: bytes = b""
+    request_content_type: str = ""
 
 
 class DOMEvent(BaseModel):

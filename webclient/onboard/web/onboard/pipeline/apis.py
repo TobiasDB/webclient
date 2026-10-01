@@ -103,10 +103,21 @@ def declared_endpoints(doc: Document) -> "list[str]":
     return out
 
 
-def observed_endpoints(snap: Snapshot) -> "list[tuple[str, Document]]":
-    """The same-origin XHR / fetch responses in a rendered snapshot whose body is JSON."""
+class Feed:
+    """A JSON call the rendered page made: its url, the parsed reply, and the REQUEST side
+    (method, body, content type) -- what replaying it needs."""
+
+    def __init__(
+        self, url: str, doc: Document, method: str, body: bytes, content_type: str
+    ) -> None:
+        self.url, self.doc, self.method = url, doc, method or "GET"
+        self.body, self.content_type = body, content_type
+
+
+def observed_endpoints(snap: Snapshot) -> "list[Feed]":
+    """The same-origin XHR / fetch calls in a rendered snapshot whose reply is JSON."""
     host = urlparse(snap.request.url).hostname
-    out: list[tuple[str, Document]] = []
+    out: list[Feed] = []
     seen: set[str] = set()
     for ev in snap.events:
         if not isinstance(ev, NetworkEvent) or ev.resource_type not in ("xhr", "fetch"):
@@ -116,11 +127,12 @@ def observed_endpoints(snap: Snapshot) -> "list[tuple[str, Document]]":
         seen.add(ev.url)
         doc = parse(ev.body, url=ev.url)
         if doc.kind == "json":
-            out.append((ev.url, doc))
+            out.append(Feed(ev.url, doc, ev.method, ev.request_body, ev.request_content_type))
     return out
 
 
 __all__ = [
+    "Feed",
     "consistent",
     "declared_endpoints",
     "has_records",

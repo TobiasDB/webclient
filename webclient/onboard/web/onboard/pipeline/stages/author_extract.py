@@ -8,8 +8,6 @@ selectors, what the record holds. No nested resolves: a record's own page is a l
 
 from __future__ import annotations
 
-import datetime as _dt
-
 from pydantic import BaseModel
 from web.dsl import Arg, Plan, Query, from_plan, from_source
 from web.fetch import Request, emit
@@ -272,7 +270,6 @@ async def _one(
             skeleton=outline,
             hint=guidance,
             source=describe(state.expand) if state.expand is not None else "",
-            today=_dt.date.today().isoformat(),
             note=note,
         )
         if reply.none:  # declared: this query's records are not on this source
