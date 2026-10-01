@@ -25,7 +25,11 @@ from .expr import Expr, from_blob, from_plan
 from .facade import WebClient
 from .identity import IDENTITY_COLUMN, URL_COLUMN, digest, identity_of
 from .plan import Arg, Plan, Step
+from .query import Query, Run, RunEvent
+from .report import ISSUES_COLUMN, Fetch, Issue, Report, assess
 from .run import resolve_memo, resolve_memoised, run_blob
+from .schema import DOCUMENT_TYPES, FieldDef, Schema, in_range, parse_range
+from .sink import Attachment, Dataset, MemorySink, Sink, content_type_of, identity_key
 from .surface import (
     KNOWN_VERBS,
     LazyCollection,
@@ -62,6 +66,25 @@ __all__ = [
     "digest",
     "identity_of",
     "Plan",
+    "Query",
+    "Run",
+    "RunEvent",
+    "Report",
+    "Fetch",
+    "Issue",
+    "ISSUES_COLUMN",
+    "assess",
+    "Schema",
+    "FieldDef",
+    "DOCUMENT_TYPES",
+    "parse_range",
+    "in_range",
+    "Sink",
+    "Dataset",
+    "MemorySink",
+    "Attachment",
+    "identity_key",
+    "content_type_of",
     "Step",
     "Arg",
     "Collection",

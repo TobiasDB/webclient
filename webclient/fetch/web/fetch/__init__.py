@@ -39,7 +39,7 @@ from .browser import (
     real_chrome_path,
     supply_for,
 )
-from .bus import Event, EventBus, Subscription, Trace, emit, topic_matches, using
+from .bus import Event, EventBus, Subscription, Trace, current, emit, topic_matches, using
 from .entry import Entry, fetch  # the functional fetch() face
 from .errors import WebError, WebException, err
 from .fingerprint import CHROME, Fingerprint, fleet, generate
@@ -111,6 +111,7 @@ __all__ = [
     "EventBus",
     "Subscription",
     "topic_matches",
+    "current",
     "emit",
     "using",
     "Trace",

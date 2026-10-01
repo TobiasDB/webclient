@@ -3,13 +3,13 @@
 The PROGRAMMATIC interface mirrors ``fetch()`` / ``resolve()``: :func:`onboard` runs the staged
 pipeline (search -> review -> crawl -> review -> expand -> review -> resolve -> extract -> review;
 see ``webclient/onboard/PIPELINE.md``) for a brief and its arguments and returns the resumable
-:class:`Onboarding` state; :func:`run` executes the authored query and routes the results to a
-:class:`Dataset` (rows + documents) or your own sink -- every dependency defaulted from the env
+:class:`Onboarding` state; :func:`run` executes the authored query (``web.dsl.Query.run``) into a
+:class:`Run` (rows + documents + report), streamed to your own sink if you pass one -- every dependency defaulted from the env
 config (:mod:`.config`):
 
     from web.onboard import onboard, run
     state = await onboard("ir-news", company="Intel")
-    data = await run(state)                                 # Dataset(rows=[...], documents=[...])
+    result = await run(state)                               # Run(rows, documents, report)
 
 The building blocks are here too: the stage contracts + :func:`web.onboard.pipeline.run` with an
 explicit :class:`Context`, the ``wq`` compile step (:func:`parse_query` / :func:`reroot`), and the
@@ -18,9 +18,11 @@ explicit :class:`Context`, the ``wq`` compile step (:func:`parse_query` / :func:
 
 from __future__ import annotations
 
-from .compile import Query, QueryError, hygienic, parse_query, reroot
+from web.dsl import Attachment, Dataset, MemorySink, Query, Run, Sink, identity_key
+
+from .compile import QueryError, hygienic, parse_query, reroot
 from .config import build_resolver, default_llm, default_search
-from .entries import Attachment, Dataset, onboard, query_of, run
+from .entries import onboard, query_of, run
 from .llm import (
     AnthropicLlm,
     Budget,
@@ -67,15 +69,6 @@ from .pipeline import (
 )
 from .search import DdgSearch, Search
 from .shim import ClaudeShim
-from .sink import (
-    DOCUMENT_TYPES,
-    MemorySink,
-    Sink,
-    document_fields,
-    identity_key,
-    row_schema,
-    run_to_sink,
-)
 
 __all__ = [
     # -- the programmatic interface --
@@ -84,6 +77,7 @@ __all__ = [
     "query_of",
     "Dataset",
     "Attachment",
+    "Run",
     "Onboarding",
     "Brief",
     "BriefError",
@@ -141,9 +135,6 @@ __all__ = [
     "default_search",
     "Sink",
     "MemorySink",
-    "run_to_sink",
-    "document_fields",
     "identity_key",
-    "row_schema",
-    "DOCUMENT_TYPES",
+    "Run",
 ]

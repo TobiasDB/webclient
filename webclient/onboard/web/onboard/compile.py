@@ -22,13 +22,9 @@ from collections.abc import Sequence
 from typing import cast
 
 from web.dsl import (
-    Arg,
     Expr,
-    LazyCollection,
-    LazyDocument,
     Plan,
     SourceError,
-    Step,
     UnknownVerb,
     from_plan,
     from_source,
@@ -36,9 +32,6 @@ from web.dsl import (
     wq,
 )
 from web.parse.selectors import Role, normalise, problems
-
-#: any query Author can emit: rows / a scalar fan-out (a Collection) or a single document.
-Query = LazyCollection[object] | LazyDocument
 
 #: typographic characters a model sometimes emits instead of the ASCII forms ``ast.parse`` needs.
 _SMART = {
@@ -152,7 +145,7 @@ def _walk(plan: Plan, role: Role, found: "list[str]") -> None:
                     _walk(sub.plan, inner, found)
 
 
-def reroot(chain: Expr, url: str, *, profile: "str | None" = None) -> Query:
+def reroot(chain: Expr, url: str, *, profile: "str | None" = None) -> Expr:
     """Root a page-relative ``wq.doc`` chain at ``url`` by prepending ``reference(url).resolve()``
     -- composed through the DSL's public plan API so the result is one self-contained, portable
     blob. ``profile`` bakes the KNOWN-good transport into the root (``resolve(profile=...)``) -- the
@@ -161,40 +154,11 @@ def reroot(chain: Expr, url: str, *, profile: "str | None" = None) -> Query:
     """
     tail = Plan.from_blob(chain.to_blob())
     if tail.source is not None:  # already self-contained -- don't double-root
-        return cast(Query, chain)
+        return chain
     root = wq.reference(url).resolve(profile=profile) if profile else wq.reference(url).resolve()
     base = Plan.from_blob(cast(Expr, root).to_blob())
     merged = Plan(root=base.root, source=base.source, steps=[*base.steps, *tail.steps])
-    return cast(Query, from_plan(merged))
+    return from_plan(merged)
 
 
-def limited(query: Query, n: int) -> Query:
-    """``query`` with ``.limit(n)`` on its RECORDS (right after the first ``select_all`` and the
-    ``filter`` that may follow it) -- the author validates a repair on a window of records instead
-    of fanning out to every record's detail page on every attempt. A query without a
-    ``select_all`` (a single document) is returned as it is."""
-    plan = Plan.from_blob(query.to_blob())
-    steps = list(plan.steps)
-    at = -1
-    for i, s in enumerate(steps):
-        if s.kind == "get" and s.name == "select_all" and i + 1 < len(steps):
-            at = i + 2  # after the select_all call
-            if at + 1 < len(steps) and steps[at].kind == "get" and steps[at].name == "filter":
-                at += 2  # after the filter call too (it narrows the records)
-            break
-    if at == -1:
-        return query
-    lim = [Step(kind="get", name="limit"), Step(kind="call", args=[Arg(value=n)])]
-    return cast(Query, from_plan(plan.model_copy(update={"steps": steps[:at] + lim + steps[at:]})))
-
-
-__all__ = [
-    "Query",
-    "QueryError",
-    "clean_reply",
-    "hygienic",
-    "limited",
-    "parse_query",
-    "query_code",
-    "reroot",
-]
+__all__ = ["QueryError", "clean_reply", "hygienic", "parse_query", "query_code", "reroot"]

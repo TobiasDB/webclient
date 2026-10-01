@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
+import pytest
 from pytest_httpserver import HTTPServer
 from web.dsl import Collection, Field, Plan, WebClient, from_blob, run_blob, wq
 from web.resolve import Resolver
@@ -734,3 +735,102 @@ def test_first_and_last_pick_one_item_of_a_list() -> None:
     assert read.first().collect(doc) == "Storm hits coast"
     assert read.last().collect(doc) == "published at 17:09"
     assert wq.doc.select_all("em").first(default="none").collect(doc) == "none"
+
+
+def test_query_runs_to_rows_documents_and_a_report(httpserver: HTTPServer) -> None:
+    # ONE interface (RUN.md): Query.from_source / from_blob, an OPTIONAL schema in the plan (it
+    # rides the blob), run() -> rows + documents + report, a sink streamed as rows come.
+    from web.dsl import Dataset, FieldDef, MemorySink, Query, Schema
+
+    rows = "".join(
+        f"<li class=p><span class=n>P{i}</span><a class=s href='/s{i}'>spec</a>"
+        + (f"<time>2026-09-{20 + i:02d}</time>" if i else "")
+        + "</li>"
+        for i in range(4)
+    )
+    httpserver.expect_request("/").respond_with_data(f"<ul>{rows}</ul>", content_type="text/html")
+    for i in range(4):
+        httpserver.expect_request(f"/s{i}").respond_with_data(
+            f"spec {i}", content_type="text/plain"
+        )
+    base = httpserver.url_for("/")
+    q = Query.from_source(
+        f"wq.reference({base!r}).resolve().select_all('li.p').extract("
+        "name=wq.doc.select('.n').attr('text'), spec=wq.doc.select('a.s').attr('href'), "
+        "when=wq.doc.select('time', optional=True).attr('text'))"
+    )
+    assert q.schema is None
+    schema = Schema(
+        fields=[
+            FieldDef(name="name"),
+            FieldDef(name="spec", type="document"),
+            FieldDef(name="when", type="datetime", optional=True),
+        ],
+        expect_rows="2-3",
+    )
+    q = q.with_schema(schema)
+    again = Query.from_blob(q.to_blob())  # the schema rides the blob
+    assert again.schema is not None and again.schema.documents == ["spec"]
+
+    async def go() -> object:
+        async with Resolver() as r:
+            sink = MemorySink()
+            run = await again.run(r, sink=sink)
+            return run, sink
+
+    run, sink = cast("tuple[object, MemorySink]", asyncio.run(go()))
+    rows_out = cast("list[dict[str, object]]", run.rows)  # type: ignore[attr-defined]
+    rep = run.report  # type: ignore[attr-defined]
+    assert [r["name"] for r in rows_out] == ["P0", "P1", "P2", "P3"]
+    assert len(run.documents) == 4 and run.documents[0].content == b"spec 0"  # type: ignore[attr-defined]
+    assert run.documents[0].metadata["field"] == "spec"  # type: ignore[attr-defined]
+    assert rep.rows == 4 and "ABOVE" in rep.expected  # 4 rows against the expected 2-3
+    assert rep.fill == {"name": 1.0, "spec": 1.0, "when": 0.75}
+    assert (
+        rep.duplicates == 0
+        and rep.newest.startswith("2026-09-23")
+        and rep.newest_age_days is not None
+    )
+    assert len(rep.fetches) >= 5 and not rep.failures and rep.ok
+    assert sink.rows == rows_out and len(sink.blobs) == 4 and sink.schema["spec"] == "document"
+    assert "4 row(s)" in rep.summary() and "partial: when 75%" in rep.summary()
+    # the default sink is a Dataset
+    data = Dataset()
+    asyncio.run(_run_sink(again, data))
+    assert len(data.rows) == 4 and data.schema["_identity"] == "identity"
+
+
+async def _run_sink(q: object, sink: object) -> None:
+    async with Resolver() as r:
+        await q.run(r, sink=sink)  # type: ignore[attr-defined]
+
+
+def test_query_is_loud_by_default_and_lenient_on_request(httpserver: HTTPServer) -> None:
+    from web.dsl import FieldDef, Query, Schema
+
+    rows = "<li class=p><b>A</b><i>x</i></li><li class=p><b>B</b></li><li class=p><i>y</i></li>"
+    httpserver.expect_request("/").respond_with_data(f"<ul>{rows}</ul>", content_type="text/html")
+    q = Query.from_source(
+        f"wq.reference({httpserver.url_for('/')!r}).resolve().select_all('li.p')"
+        ".extract(name=wq.doc.select('b').attr('text'), note=wq.doc.select('i').attr('text'))"
+    ).with_schema(Schema(fields=[FieldDef(name="name"), FieldDef(name="note", optional=True)]))
+
+    async def loud() -> object:
+        async with Resolver() as r:
+            return await q.run(r)
+
+    run = asyncio.run(loud())
+    assert run.rows == [] and run.report.failures and "select_miss" in run.report.failures[0]  # type: ignore[attr-defined]
+
+    async def soft() -> object:
+        async with Resolver() as r:
+            return await q.run(r, lenient=True)
+
+    run = asyncio.run(soft())
+    rows_out = cast("list[dict[str, object]]", run.rows)  # type: ignore[attr-defined]
+    assert [r.get("name") for r in rows_out] == ["A", "B", None]
+    assert rows_out[2]["_issues"] == ["missing name"] and "_issues" not in rows_out[0]
+    rep = run.report  # type: ignore[attr-defined]
+    assert (
+        rep.fill["name"] == pytest.approx(2 / 3) and len(rep.issues) == 1 and rep.issues[0].row == 2
+    )

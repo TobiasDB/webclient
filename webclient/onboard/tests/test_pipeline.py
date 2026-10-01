@@ -433,17 +433,12 @@ def test_expand_renders_once_when_the_http_page_is_thin_and_switches_to_the_brow
 
 
 def test_optional_rewrite_and_presence_go_through_the_plan() -> None:
-    from web.onboard.pipeline.stages.author_extract import _presence, lenient
+    from web.onboard.pipeline.stages.author_extract import _optional, _presence
 
     chain = "wq.doc.select('td:nth-child(2) a, td:nth-child(2)').attr('text')"
-    assert (
-        lenient({"t": chain})["t"]
-        == "wq.doc.select('td:nth-child(2) a, td:nth-child(2)', optional=True).attr('text')"
-    )
-    assert (
-        _presence(chain)
-        == "wq.doc.select('td:nth-child(2) a, td:nth-child(2)', optional=True).is_ok()"
-    )
+    soft = "wq.doc.select('td:nth-child(2) a, td:nth-child(2)', optional=True).attr('text')"
+    assert _optional(chain) == soft
+    assert _presence(chain) == "~" + soft + ".is_empty()"  # the VALUE, not just the element
     already = "wq.doc.select('.x', optional=True).attr('text')"
-    assert lenient({"t": already})["t"] == already
-    assert _presence("wq.doc.attr('k')") == "wq.doc.attr('k').is_ok()"
+    assert _optional(already) == already
+    assert _presence("wq.doc.attr('k')") == "~wq.doc.attr('k').is_empty()"

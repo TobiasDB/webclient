@@ -15,8 +15,9 @@ from pathlib import Path
 from string import Formatter
 
 from pydantic import BaseModel, JsonValue
+from web.dsl import FieldDef, Schema, parse_range
 
-from ..models import _parse_frontmatter, _schema, parse_range
+from ..models import _parse_frontmatter, _schema
 
 
 class BriefError(ValueError):
@@ -35,11 +36,8 @@ class SearchSpec(BaseModel):
     max_pages: int = 12  # the crawl bound (stage 3)
 
 
-class FieldSpec(BaseModel):
-    name: str
-    type: str = "string"
-    description: str = ""
-    optional: bool = False
+#: a brief field IS the DSL's field definition (name / type / description / optional).
+FieldSpec = FieldDef
 
 
 class Brief(BaseModel):
@@ -142,6 +140,10 @@ class Brief(BaseModel):
 
     def expected_range(self) -> "tuple[int, int] | None":
         return parse_range(self.expect_rows)
+
+    def as_schema(self) -> Schema:
+        """The brief as the query's OPTIONAL schema (rides the authored blob)."""
+        return Schema(fields=list(self.fields), expect_rows=self.expect_rows)
 
 
 def packaged_briefs() -> "list[str]":

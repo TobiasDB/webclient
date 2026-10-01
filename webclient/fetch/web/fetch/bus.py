@@ -104,6 +104,12 @@ class _Using:
             _CURRENT.reset(self._token)
 
 
+def current() -> "EventBus | None":
+    """The ambient bus of this context (``None`` when none is installed) -- so a scope can forward
+    its own bus's events to the caller's instead of hiding them."""
+    return _CURRENT.get()
+
+
 def using(bus: EventBus) -> _Using:
     """Install ``bus`` as the ambient bus for the ``with`` scope (so :func:`emit` reaches it)."""
     return _Using(bus)
@@ -136,6 +142,7 @@ __all__ = [
     "EventBus",
     "Subscription",
     "topic_matches",
+    "current",
     "emit",
     "using",
     "Trace",

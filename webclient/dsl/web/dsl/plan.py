@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 from typing import Literal
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
+
+from .schema import Schema
 
 
 class Arg(BaseModel):
@@ -66,6 +68,12 @@ class Plan(BaseModel):
     root: str = ""
     source: str | None = None
     steps: list[Step] = []
+    #: OPTIONAL: what the rows mean -- the fields (types, which are documents), the identity rule,
+    #: the expected size and cadence. A query with none still runs; with one, a run's report can
+    #: judge the rows and a sink knows the row schema. Rides the blob as ``"schema"`` (the
+    #: attribute is ``schema_`` only because pydantic reserves the bare name).
+    schema_: "Schema | None" = Field(default=None, alias="schema")
+    model_config = ConfigDict(populate_by_name=True)
 
     def extend(self, step: Step) -> "Plan":
         """A copy with ``step`` appended -- recording never mutates a shared plan."""
@@ -76,7 +84,7 @@ class Plan(BaseModel):
         compression -- an LLM can author, pass around, rebuild and validate a plan as one string).
         """
         return json.dumps(
-            self.model_dump(exclude_defaults=True, exclude_none=True),
+            self.model_dump(exclude_defaults=True, exclude_none=True, by_alias=True),
             separators=(",", ":"),
             sort_keys=True,
         )

@@ -1,58 +1,11 @@
-"""Small shared value models + helpers: the expected-rows RANGE grammar, the markdown
-frontmatter / schema parsing a brief is loaded with, and a web-search hit."""
+"""Small shared helpers: the markdown frontmatter / schema parsing a brief is loaded with, and a
+web-search hit."""
 
 from __future__ import annotations
-
-import re
 
 import yaml
 from pydantic import BaseModel, JsonValue
 from web.resolve import Flag
-
-
-def parse_range(spec: str) -> "tuple[int, int] | None":
-    """A row-count expectation -> ``(low, high)``: ``"10-50"``, ``"~20"`` (half to double),
-    ``">=5"`` / ``"5+"``, ``"<200"`` / ``"<=200"``, or a bare number (exactly, ±25%)."""
-    text = spec.strip().replace(" ", "")
-    if not text:
-        return None
-    big = 10**9
-    m = re.fullmatch(r"(\d+)-(\d+)", text)
-    if m:
-        return int(m.group(1)), int(m.group(2))
-    m = re.fullmatch(r"~(\d+)", text)
-    if m:
-        n = int(m.group(1))
-        return max(1, n // 2), n * 2
-    m = re.fullmatch(r"(?:>=|>)?(\d+)\+?", text)
-    if m and (text.startswith((">", ">=")) or text.endswith("+")):
-        return int(m.group(1)), big
-    m = re.fullmatch(r"<=?(\d+)", text)
-    if m:
-        return 0, int(m.group(1)) - (0 if text.startswith("<=") else 1)
-    m = re.fullmatch(r"(\d+)", text)
-    if m:
-        n = int(m.group(1))
-        return max(1, n * 3 // 4), n * 5 // 4 + 1
-    return None
-
-
-def in_range(count: int, bounds: "tuple[int, int] | None") -> "str | None":
-    """``None`` when ``count`` is within ``bounds`` (or there are none); else a short note saying how
-    it is off -- a flexible guide for a log line or a model hint, never a veto."""
-    if bounds is None:
-        return None
-    low, high = bounds
-    if count < low:
-        return f"{count} record(s) is BELOW the brief's expectation ({_show(bounds)})"
-    if count > high:
-        return f"{count} record(s) is ABOVE the brief's expectation ({_show(bounds)})"
-    return None
-
-
-def _show(bounds: "tuple[int, int]") -> str:
-    low, high = bounds
-    return f">= {low}" if high >= 10**9 else f"{low}-{high}"
 
 
 def _parse_frontmatter(text: str) -> "tuple[dict[str, JsonValue], str]":
@@ -100,4 +53,4 @@ class SearchHit(BaseModel):
     snippet: str = ""
 
 
-__all__ = ["SearchHit", "in_range", "parse_range"]
+__all__ = ["SearchHit"]

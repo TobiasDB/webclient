@@ -41,9 +41,10 @@ report; `web view` shows the report of the last run on a state.
 
 ## Steps (each a green commit)
 
-1. `Schema` in the plan + `Query` in web.dsl (onboard's `compile.Query` alias retired).
-2. `Run` / `Report` + `stream()` + sinks moved into web.dsl; `run_to_sink` retired.
+1. DONE — `Schema` in the plan (blob key `"schema"`) + `Query` in web.dsl.
+2. DONE — `Run` / `Report` + `stream()` + sinks in web.dsl (`web.dsl.sink`); onboard's sink gone.
 3. identity onto Document / Element (web.parse); the DSL reads it.
-4. lenient mode (per-row issues) — the author's probe uses it instead of rewriting selectors.
+4. DONE — lenient mode (`_issues` per row, the report's issues); the author's probe uses it.
 5. nested queries (parent row inherited; streamed).
-6. onboarding switched: the brief fills the schema; stage 8 / 9 read the report; `web run`.
+6. DONE — the brief fills the schema; stage 8 probes and finalises through `Query.run`; `web run`.
+   Still to do here: stage 9 reads the report before asking the model.

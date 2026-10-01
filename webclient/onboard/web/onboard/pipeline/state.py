@@ -168,6 +168,7 @@ class ExtractQuery(BaseModel):
     sample: list[JsonValue] = []
     misses: list[str] = []
     attempts: list[str] = []
+    report: str = ""  # the final run's report summary (web.dsl.Report.summary())
     complete: bool = False
 
 

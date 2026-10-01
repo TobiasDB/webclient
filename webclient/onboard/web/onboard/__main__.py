@@ -38,6 +38,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, JsonValue
 from web.crawl import CrawlEvent
+from web.dsl import Query
 from web.fetch import Event, EventBus, FetchEvent, Profile, WebException, aclose_default_pool
 from web.fetch import fetch as _fetch_one
 from web.fetch import profiles as _fp
@@ -48,6 +49,7 @@ from .config import PIPELINE_MODEL, build_resolver, default_search
 from .config import env as _env
 from .config import env_flag as _env_flag
 from .config import env_float as _env_float
+from .entries import query_of
 from .llm import AnthropicLlm, LlmEvent, Pricing, RateLimit, ReasonEvent, TraceEvent, Usage
 from .pipeline import STAGE_NAMES, Brief, BriefError, Context, Onboarding, packaged_briefs
 from .pipeline import run as pipeline_run
@@ -431,6 +433,36 @@ async def _onboard(args: argparse.Namespace) -> int:
     return 0 if (ex is not None and ex.complete and not state.stopped) else 1
 
 
+# -- run: execute an authored query ----------------------------------------------------------------
+
+
+async def _run_query(args: argparse.Namespace) -> int:
+    """Run a query -- an onboarding state's authored query, or a blob -- and print the report and
+    a sample of rows (``--lenient``: never abort on a missing field; each row says what it lacked).
+    """
+    path = Path(args.source)
+    if path.is_file() and path.suffix == ".json":
+        query = query_of(Onboarding.load(path))
+        if query is None:
+            _err(f"{path} holds no authored query yet")
+            return 2
+    else:
+        query = Query.from_blob(path.read_text(encoding="utf-8") if path.is_file() else args.source)
+    resolver = _resolver(args.profile, args.proxy, args.browser_path)
+    try:
+        with _Progress(args.verbose):
+            result = await query.run(resolver, lenient=args.lenient)
+    finally:
+        await resolver.aclose()
+    _err(f"  report:     {result.report.summary()}")
+    for row in result.rows[: args.sample]:
+        _err(f"    {json.dumps(row, ensure_ascii=False, default=str)[:400]}")
+    for doc in result.documents[: args.sample]:
+        _err(f"    document {doc.url} ({len(doc.content)} bytes, {doc.content_type})")
+    print(json.dumps(result.rows, ensure_ascii=False, default=str))
+    return 0 if result.report.ok else 1
+
+
 # -- view: a stage's debug record + its contract -------------------------------------------------
 
 
@@ -606,6 +638,30 @@ def _parser() -> argparse.ArgumentParser:
         "--sample", type=int, default=5, metavar="N", help="how many rows to print (default 5)"
     )
 
+    runp = subs.add_parser(
+        "run",
+        help="run an authored query (a state file or a blob) -> the report + the rows (JSON on stdout)",
+    )
+    runp.add_argument(
+        "source", metavar="STATE|BLOB", help="an onboarding state file, a blob file, or a blob"
+    )
+    runp.add_argument(
+        "--lenient",
+        action="store_true",
+        help="never abort on a missing field; rows say what they lacked",
+    )
+    runp.add_argument(
+        "--sample", type=int, default=5, metavar="N", help="how many rows to print (default 5)"
+    )
+    runp.add_argument(
+        "--profile",
+        default=_env("WEB_PROFILE", "basic_browser"),
+        choices=("basic", "basic_browser", "full_browser"),
+    )
+    runp.add_argument("--proxy", default=_env("WEB_PROXY"))
+    runp.add_argument("--browser-path", default=_env("WEB_BROWSER_PATH"), metavar="EXE")
+    runp.add_argument("-v", "--verbose", action="store_true")
+
     view = subs.add_parser(
         "view",
         help="show an onboarding state: every stage at a glance, or one stage's contract + exchanges",
@@ -624,7 +680,9 @@ def main(argv: "Sequence[str] | None" = None) -> int:
     args = _parser().parse_args(argv)
     if args.cmd == "view":
         return _view(args)
-    runner = {"fetch": _fetch, "resolve": _resolve, "onboard": _onboard}[args.cmd]
+    runner = {"fetch": _fetch, "resolve": _resolve, "onboard": _onboard, "run": _run_query}[
+        args.cmd
+    ]
 
     async def _run() -> int:
         # Close the process-wide default pool on THIS run's loop before it ends: pooled backends

@@ -332,7 +332,7 @@ async def onboard_story(base: str) -> None:
         search=SearchSpec(term="{shop} products", domain=["localhost", "127.0.0.1"], path=["/"]),
         fields=[
             FieldSpec(name="name", description="the product name"),
-            FieldSpec(name="price", description="the price as shown"),
+            FieldSpec(name="price", description="the price as shown", optional=True),
             FieldSpec(name="spec", type="document", description="the spec sheet", optional=True),
         ],
     )

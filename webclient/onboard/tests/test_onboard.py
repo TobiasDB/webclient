@@ -255,8 +255,8 @@ def test_claude_shim_retries_a_timed_out_call() -> None:
 def test_expected_rows_is_a_flexible_guide() -> None:
     # USER: record counts are flawed as a hard rule -- the brief may carry an EXPECTED range of rows
     # and every stage treats it as a guide (a note), never a veto.
+    from web.dsl import in_range, parse_range
     from web.onboard import Brief
-    from web.onboard.models import in_range, parse_range
 
     assert parse_range("10-50") == (10, 50)
     assert parse_range("~20") == (10, 40)

@@ -11,13 +11,13 @@ import asyncio
 from typing import cast
 
 from pydantic import BaseModel, JsonValue
-from web.dsl import Arg, Plan, from_plan, from_source, resolve_memo
+from web.dsl import Arg, Plan, Query, from_plan, from_source
 from web.fetch import Request, WebException, emit
 from web.parse import Document, Element
 from web.resolve import Resolver, document
 from web.resolve import profiles as _rp
 
-from ...compile import Query, QueryError, limited, parse_query, reroot
+from ...compile import QueryError, parse_query, reroot
 from ...llm import ReasonEvent
 from ..ask import Context, ask_json
 from ..hints import attrs_of, closest, leaves, record_structure, typical
@@ -83,50 +83,10 @@ def _optional(chain: str) -> str:
 
 
 def _presence(chain: str) -> str:
-    """A column chain as a presence test: its first call made optional, then ``.is_ok()``."""
-    plan = Plan.from_blob(from_source(_optional(chain)).to_blob())
-    steps = list(plan.steps)
-    cut = next(
-        (i + 2 for i, st in enumerate(steps) if st.kind == "get" and st.name in ("select", "attr")),
-        len(steps),
-    )
-    head = from_plan(plan.model_copy(update={"steps": steps[:cut]})).to_source()
-    return f"{head}.is_ok()"
-
-
-def lenient(fields: "dict[str, str]") -> "dict[str, str]":
-    """Every column's ``select(css)`` made optional -- the PROBE never aborts on one bad field, so
-    the fill rate of every field is measured in one run."""
-    return {n: _optional(c) for n, c in fields.items()}
-
-
-def fill_rates(rows: "list[JsonValue]", names: "list[str]") -> "dict[str, float]":
-    """Per field, the fraction of rows where it read a value."""
-    if not rows:
-        return {n: 0.0 for n in names}
-    return {
-        n: sum(1 for r in rows if isinstance(r, dict) and not _empty(r.get(n))) / len(rows)
-        for n in names
-    }
-
-
-def _empty(v: object) -> bool:
-    return (
-        v is None
-        or (isinstance(v, str) and not v.strip())
-        or (isinstance(v, (list, dict)) and not v)
-    )
-
-
-async def _probe(query: Query, resolver: Resolver, *, limit: int) -> "list[JsonValue]":
-    q = limited(query, limit) if limit else query
-    got = await asyncio.wait_for(q.acollect(resolver=resolver), timeout=60)
-    rows = got if isinstance(got, list) else [got]
-    out: list[JsonValue] = []
-    for r in rows:
-        if r is None or isinstance(r, (dict, list, str, int, float)):
-            out.append(cast(JsonValue, r))
-    return out
+    """A column chain as a presence test of its VALUE: the chain made optional, ``~….is_empty()``
+    (an element that is there but reads nothing does not count -- the same rule as the fill rate).
+    """
+    return f"~{_optional(chain)}.is_empty()"
 
 
 def _hints(
@@ -190,87 +150,84 @@ async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
     optional = {f.name for f in brief.fields if f.optional}
     note = ""
     specs: dict[str, _Read] = {}
-    with resolve_memo():
-        for attempt in range(1 + _REPAIRS):
-            reply = await ask_json(
-                ctx,
-                state,
-                "author_extract",
-                _Reply,
-                goal=brief.goal,
-                schema=brief.schema_lines(),
-                kind=(
-                    "JSON record (keys)"
-                    if is_json
-                    else "HTML record (CSS selectors, relative to the record)"
-                ),
-                records=records,
-                count=str(src.records),
-                structure=structure,
-                hint=brief.hints.get("author_extract", ""),
-                note=note,
+    schema = brief.as_schema()
+    for attempt in range(1 + _REPAIRS):
+        reply = await ask_json(
+            ctx,
+            state,
+            "author_extract",
+            _Reply,
+            goal=brief.goal,
+            schema=brief.schema_lines(),
+            kind=(
+                "JSON record (keys)"
+                if is_json
+                else "HTML record (CSS selectors, relative to the record)"
+            ),
+            records=records,
+            count=str(src.records),
+            structure=structure,
+            hint=brief.hints.get("author_extract", ""),
+            note=note,
+        )
+        specs = {n: r for n, r in reply.fields.items() if n in brief.names}
+        if not specs:
+            note = "\nREPAIR: your reply named none of the schema's fields. Use the field names exactly."
+            out.attempts.append(f"attempt {attempt + 1}: no schema field in the reply")
+            continue
+        fields = {n: _chain(n, r, json=is_json, optional=n in optional) for n, r in specs.items()}
+        failure = ""
+        rates: dict[str, float] = {n: 0.0 for n in brief.required}
+        rows = 0
+        try:  # the probe is a LENIENT run: every field optional, so one bad selector never hides
+            # the rest, and the report's fill rates say what each field read
+            probe = Query.of(
+                reroot(parse_query(compile_source(records, fields)), plan.url, profile=plan.profile)
+            ).with_schema(schema)
+            result = await probe.run(resolver, lenient=True)
+            rows = result.report.rows
+            rates = {n: result.report.fill.get(n, 0.0) for n in brief.required}
+            if result.report.failures:
+                failure = "; ".join(result.report.failures)
+        except QueryError as exc:  # selector hygiene refused something: the reason goes back
+            failure = str(exc)
+        except Exception as exc:  # noqa: BLE001 -- a model-written selector the engine rejects
+            failure = f"the query could not run ({type(exc).__name__}: {exc})"
+        # a required field read on NO record is a miss (repair); on SOME records it marks the
+        # elements that are not records of the dataset (a promo in the list) -> filter them out
+        misses = [n for n in brief.required if rates[n] == 0.0] if rows else list(brief.required)
+        keep = [n for n in brief.required if 0.0 < rates[n] < 1.0]
+        source = compile_source(records, fields, keep=keep)
+        out.fields, out.source, out.misses = fields, source, misses
+        fill = ", ".join(f"{n} {rates[n]:.0%}" for n in brief.required) if rows else "no rows"
+        out.attempts.append(
+            f"attempt {attempt + 1}: "
+            + (
+                failure
+                or f"{rows} probed row(s); fill: {fill}; misses: {', '.join(misses) or 'none'}"
+                + (f"; filtering records lacking {', '.join(keep)}" if keep else "")
             )
-            specs = {n: r for n, r in reply.fields.items() if n in brief.names}
-            if not specs:
-                note = "\nREPAIR: your reply named none of the schema's fields. Use the field names exactly."
-                out.attempts.append(f"attempt {attempt + 1}: no schema field in the reply")
-                continue
-            fields = {
-                n: _chain(n, r, json=is_json, optional=n in optional) for n, r in specs.items()
-            }
-            failure = ""
-            rows: list[JsonValue] = []
-            try:  # the probe is LENIENT: every field optional, so one bad selector never hides the rest
-                probe = reroot(
-                    parse_query(compile_source(records, lenient(fields))),
-                    plan.url,
-                    profile=plan.profile,
-                )
-                rows = await _probe(probe, resolver, limit=0)  # the whole document: no fan-out
-            except QueryError as exc:  # selector hygiene refused something: the reason goes back
-                failure = str(exc)
-            except WebException as exc:
-                failure = f"{exc.error.code}: {exc.error.message}"
-            except asyncio.TimeoutError:
-                failure = "the probe timed out"
-            except Exception as exc:  # noqa: BLE001 -- a model-written selector the engine rejects
-                failure = f"the query could not run ({type(exc).__name__}: {exc})"
-            rates = fill_rates(rows, brief.required)
-            # a required field read on NO record is a miss (repair); on SOME records it marks the
-            # elements that are not records of the dataset (a promo in the list) -> filter them out
-            misses = (
-                [n for n in brief.required if rates[n] == 0.0] if rows else list(brief.required)
-            )
-            keep = [n for n in brief.required if 0.0 < rates[n] < 1.0]
-            source = compile_source(records, fields, keep=keep)
-            out.fields, out.source, out.misses = fields, source, misses
-            fill = ", ".join(f"{n} {rates[n]:.0%}" for n in brief.required) if rows else "no rows"
-            out.attempts.append(
-                f"attempt {attempt + 1}: "
-                + (
-                    failure
-                    or f"{len(rows)} probed row(s); fill: {fill}; misses: {', '.join(misses) or 'none'}"
-                    + (f"; filtering records lacking {', '.join(keep)}" if keep else "")
-                )
-            )
-            emit(ReasonEvent(stage="author_extract", text=out.attempts[-1]))
-            emit(ReasonEvent(stage="author_extract", text=f"attempt {attempt + 1} query: {source}"))
-            if not failure and rows and not misses:
-                break
-            hints = _hints(doc, records, specs, misses, failure)
-            emit(ReasonEvent(stage="author_extract", text=f"repair hints:\n{hints}"))
-            note = "\nREPAIR -- fix ONLY what is listed, keep the rest:\n" + hints
-        if out.source and not out.misses:
-            query = reroot(parse_query(out.source), plan.url, profile=plan.profile)
-            try:
-                rows = await _probe(query, resolver, limit=0)
-            except (WebException, asyncio.TimeoutError, Exception) as exc:  # noqa: BLE001
-                out.attempts.append(f"the full run did not finish ({exc})")
-                rows = []
-            out.row_count, out.sample = len(rows), rows[:5]
-            out.blob = query.to_blob()
-            out.complete = bool(rows)
-            emit(ReasonEvent(stage="author_extract", text=f"final run: {len(rows)} row(s)"))
+        )
+        emit(ReasonEvent(stage="author_extract", text=out.attempts[-1]))
+        emit(ReasonEvent(stage="author_extract", text=f"attempt {attempt + 1} query: {source}"))
+        if not failure and rows and not misses:
+            break
+        hints = _hints(doc, records, specs, misses, failure)
+        emit(ReasonEvent(stage="author_extract", text=f"repair hints:\n{hints}"))
+        note = "\nREPAIR -- fix ONLY what is listed, keep the rest:\n" + hints
+    if out.source and not out.misses:  # the final run is LOUD (the default): the authored query
+        query = Query.of(
+            reroot(parse_query(out.source), plan.url, profile=plan.profile)
+        ).with_schema(schema)
+        final = await query.run(resolver)
+        if final.report.failures:
+            out.attempts.append("the full run failed: " + "; ".join(final.report.failures))
+        out.row_count = final.report.rows
+        out.sample = list(final.rows[:5])
+        out.blob = query.to_blob()
+        out.report = final.report.summary()
+        out.complete = bool(final.rows) and not final.report.failures
+        emit(ReasonEvent(stage="author_extract", text=f"final run: {final.report.summary()}"))
     if not out.complete:
         state.stopped = (
             f"author_extract: {out.attempts[-1] if out.attempts else 'nothing extracted'}"
