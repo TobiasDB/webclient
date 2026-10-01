@@ -77,9 +77,9 @@ class ClaudeShim:
             self._max_retries = 2
         self._model = model or env("WEB_LLM_MODEL") or "haiku"  # WEB_LLM_MODEL / --model / "haiku"
         try:
-            self._timeout = timeout if timeout is not None else float(env("WEB_LLM_TIMEOUT", "90"))
+            self._timeout = timeout if timeout is not None else float(env("WEB_LLM_TIMEOUT", "180"))
         except ValueError:
-            self._timeout = 90.0
+            self._timeout = 180.0
         #: WEB_LLM_RATE throttles the claude -p spawns too (a shared plan / an LLM proxy in front).
         self._gate = _Gate(rate)
         #: the spend CAP (WEB_LLM_BUDGET), charged with claude -p's OWN reported cost -- share one
@@ -118,9 +118,10 @@ class ClaudeShim:
         ]
 
     def _budget(self, sent: str) -> float:
-        """The wall clock for one call: the configured timeout plus a second per thousand chars
-        sent -- a full page outline (100k chars) needs minutes, a tiny stage prompt does not."""
-        return self._timeout + len(sent) / 1000.0
+        """The wall clock for one call: the configured timeout (WEB_LLM_TIMEOUT, default 180s)
+        plus two seconds per thousand chars sent -- a full page outline needs minutes through the
+        CLI, a tiny stage prompt does not."""
+        return self._timeout + 2.0 * len(sent) / 1000.0
 
     async def complete(self, prompt: str) -> str:
         self.budget.ensure()  # stop BEFORE spending past the cap (raises BudgetExceeded)
