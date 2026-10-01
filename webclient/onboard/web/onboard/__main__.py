@@ -569,9 +569,7 @@ def _summarize_author(
     if art.timeliness:  # a FLAG for the human: is the newest extracted row recent?
         lines.append(f"  timeliness:{' ⚠️ STALE —' if art.stale else ' ✓'} {art.timeliness}")
     if art.absent:
-        lines.append(
-            f"  absent:    {', '.join(art.absent)}   (required field(s) the source does not carry)"
-        )
+        lines.append(f"  absent:    {', '.join(art.absent)}   (field(s) the source does not carry)")
     lines.append("  sample:")
     lines += _render_table(art.sample)
     if art.attempts:  # the rejection trail: why each earlier attempt was rejected

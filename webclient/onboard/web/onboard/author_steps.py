@@ -82,6 +82,8 @@ OPS = frozenset(
 _PROBE_ROWS = 3
 #: a probe's wall clock -- a step must never hang the loop.
 _PROBE_TIMEOUT = 30.0
+#: how many records() picks that match NOTHING (in a row) prove the records are not in the HTML.
+_MAX_ZERO_PICKS = 3
 #: how many CONSECUTIVE non-applied ops (rejected / reverted / refused) end a run: a rejection is a
 #: legitimate turn the model learns from, so the guard is looser than the base loop's default.
 _MAX_STALLS = 5
@@ -206,6 +208,7 @@ class StepSession:
     verbs: "Counter[str]" = field(default_factory=Counter)
     unknown: "list[str]" = field(default_factory=list)
     steps: int = 0
+    zero_picks: int = 0  # consecutive records() picks that matched NOTHING (a shell page tells)
     skip: int = (
         0  # leading records that are NOT typical (a table header row) -- the probe skips them
     )
@@ -225,6 +228,9 @@ class StepResult:
     hint: str = ""
     sibling: str = ""
     note: str = ""  # a one-line remark for the rejection trail (a budget stop, ...)
+    #: the records are NOT on the fetched page: every record selector the model tried matched
+    #: nothing (a shell page) -- a defined stop for the outer loop, not a repair
+    no_records: bool = False
     absent: "set[str]" = field(default_factory=set)
     #: the FINISHED earlier sections of this page (query + its rows); ``query`` is the last one.
     sections: "list[tuple[Query, list[object]]]" = field(default_factory=list)
@@ -235,6 +241,7 @@ class _Obs:
     op: "Op | None" = None
     error: str = ""
     sibling: str = ""
+    stop: bool = False  # the engine itself ends the run (nothing on the page to author)
 
 
 # -- parsing one op call ---------------------------------------------------------------------------
@@ -736,6 +743,8 @@ def _observe_with(llm: Llm) -> "Callable[[StepSession], Awaitable[_Obs]]":
     with that op's earlier result -- the model must do something different."""
 
     async def observe(session: StepSession) -> _Obs:
+        if not session.draft.records and session.zero_picks >= _MAX_ZERO_PICKS:
+            return _Obs(stop=True)  # three record selectors matched nothing: a shell page
         reply = await _send(session, llm)
         stripped = reply.strip()
         if session.offer_sibling and stripped.upper().startswith("SIBLING:"):
@@ -772,7 +781,7 @@ def _observe_with(llm: Llm) -> "Callable[[StepSession], Awaitable[_Obs]]":
 
 
 def _decide(obs: _Obs) -> "Op | Done":
-    if obs.sibling or (obs.op is not None and obs.op.name == "done"):
+    if obs.stop or obs.sibling or (obs.op is not None and obs.op.name == "done"):
         return Done()
     if obs.op is None:
         return Op("bad", [obs.error])
@@ -889,6 +898,7 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
         except Exception as exc:  # a bad selector can raise anything from the parser: not applied
             return False, f"{head}\nNOT APPLIED -- {exc}", f"not applied ({exc})"
         if n == 0:
+            session.zero_picks += 1
             return (
                 False,
                 f"{head}\nNOT APPLIED -- {op.args[0]!r} matched 0 elements. Pick the repeating "
@@ -911,6 +921,7 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
                 return False, f"{head}\nNOT APPLIED -- with this record selector {exc}", "failed"
         session.draft = new
         session.skip = skip
+        session.zero_picks = 0
         text = f"{head}\nmatched {n} record(s). The FIRST record's structure (wq.doc for field(...)):\n"
         text += _first_record(doc, new.records) or "(not a markup record)"
         if session.record_selector and new.records != session.record_selector:
@@ -1103,6 +1114,18 @@ async def run_steps(
         verdict = await loop.arun(session)
     if session.sibling:
         return StepResult(sibling=session.sibling)
+    if not session.draft.records and session.zero_picks >= _MAX_ZERO_PICKS:
+        emit(
+            ReasonEvent(
+                stage="author",
+                text=f"{session.zero_picks} record selectors matched nothing on the fetched page "
+                "— the records are not in this HTML (a shell: JS / interaction-gated beyond a "
+                "plain render); stopping instead of guessing",
+            )
+        )
+        return StepResult(
+            error="no record selector matches anything on the fetched page", no_records=True
+        )
     if not session.draft.records:
         return StepResult(
             error=f"the step-by-step build produced no record selector ({verdict.reason})",

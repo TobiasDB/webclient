@@ -2028,3 +2028,94 @@ def test_check_escalates_to_a_browser_render_when_the_page_looks_js_gated(
     assert "li.ev" in llm.turns[0]  # the opening shows the RENDERED page
     assert "matched 5 record(s)" in llm.turns[1]
     assert "resolve(profile='full_browser')" in art.describe
+
+
+def test_three_zero_match_record_picks_stop_with_records_absent(httpserver: HTTPServer) -> None:
+    # Eval C: the engine guessed a dozen invented class names at a JS shell. Three records() picks
+    # that match NOTHING end the run with a DEFINED reason (records_absent) instead of a repair.
+    from web.onboard import QueryArtifact
+
+    shell = b"<html><body><div class='events'></div><p>loading</p></body></html>"
+    httpserver.expect_request("/list").respond_with_data(shell, content_type="text/html")
+    llm = _StepConv(['records(".event-item")', 'records(".event-row")', 'records("article.ev")'])
+    art = _steps_art(httpserver, llm, ["title"])
+    assert isinstance(art, QueryArtifact)
+    assert not art.complete and art.reason.startswith("records_absent")
+    assert len(llm.turns) == 3  # the opening + two results; the third zero pick ends the run
+
+
+def test_check_escalation_prefers_the_data_api_the_render_called(
+    httpserver: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Eval C (Pfizer events): the browser render CALLS the JSON feeds behind the page; a feed
+    # consistent with the page is the dataset itself -- the escalation roots the reference at it
+    # (kind json, profile basic) and the author writes a JSON query.
+    import importlib
+    import json as _json
+
+    from web.fetch import NetworkEvent, Request, Snapshot
+    from web.onboard import QueryArtifact, write_query
+
+    shell = b"<html><body><div class='events'></div><p>loading</p></body></html>"
+    httpserver.expect_request("/events").respond_with_data(shell, content_type="text/html")
+    feed = {
+        "items": [
+            {"title": "Q3 2026 Earnings Call", "when": "2026-11-03"},
+            {"title": "AGM", "when": "2026-04-28"},
+        ]
+    }
+    rendered = (
+        b"<html><body><ul><li class='ev'>Q3 2026 Earnings Call</li><li class='ev'>AGM</li></ul>"
+        b"</body></html>"
+    )
+    api_url = httpserver.url_for("/feed/Event.svc/GetEventList")
+    httpserver.expect_request("/feed/Event.svc/GetEventList").respond_with_json(feed)
+    loc = importlib.import_module("web.onboard.locate")
+
+    async def fake_render(url: str, pool: object) -> Snapshot:
+        return Snapshot(
+            request=Request(url=url),
+            url=url,
+            status=200,
+            headers={"content-type": "text/html"},
+            content=rendered,
+            events=[
+                NetworkEvent(
+                    method="GET",
+                    url=api_url,
+                    status=200,
+                    resource_type="xhr",
+                    body=_json.dumps(feed).encode(),
+                )
+            ],
+        )
+
+    monkeypatch.setattr(loc, "_render_page", fake_render)
+
+    class _Llm(_StepConv):
+        async def complete(self, prompt: str) -> str:
+            if "verifying a page holds a dataset" in prompt:
+                return "NO\nThe events are loaded dynamically by JavaScript."
+            return _stage_reply(prompt) or "YES"
+
+    llm = _Llm(['records("items")', 'field(title, wq.doc.attr("title"))', "done()"])
+
+    async def go() -> QueryArtifact:
+        async with Resolver() as r:
+            return await write_query(
+                Reference(url=httpserver.url_for("/events"), kind="html", profile="basic"),
+                DatasetBrief(fields=["title"]),
+                resolver=r,
+                llm=cast("object", llm),  # type: ignore[arg-type]
+                review=cast("object", llm),  # type: ignore[arg-type]
+                engine="steps",
+            )
+
+    art = _run(go())
+    assert "JSON document" in llm.turns[0]  # the opening is the API's, not the shell's
+    assert art.complete, art.reason
+    assert f"reference('{api_url}')" in art.describe
+    assert [r["title"] for r in cast("list[dict[str, str]]", art.sample)] == [
+        "Q3 2026 Earnings Call",
+        "AGM",
+    ]

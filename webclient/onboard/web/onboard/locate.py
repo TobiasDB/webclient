@@ -162,6 +162,20 @@ def _consistent(page: Document, api: Document) -> bool:
     return hits >= max(2, len(leaves) // 4)
 
 
+def best_api(page: Document, snap: Snapshot) -> "tuple[str, Document] | None":
+    """The RICHEST same-origin JSON data-API the render called that is CONSISTENT with the page
+    (its values appear in the page text) -- the dataset's own feed, preferred over the HTML. The
+    richest = the most scalar leaves (a year list or a locale file loses to the event list)."""
+    best: "tuple[int, str, Document] | None" = None
+    for url, api in _json_xhr(snap):
+        if not _consistent(page, api):
+            continue
+        size = len(api.json_leaves(budget=20000))
+        if best is None or size > best[0]:
+            best = (size, url, api)
+    return (best[1], best[2]) if best is not None else None
+
+
 def _json_xhr(snap: Snapshot) -> "list[tuple[str, Document]]":
     """The same-origin XHR/``fetch`` responses in a captured Snapshot whose body is JSON -- the live
     data-API behind the page, read from a render's network stream (not a URL guessed from the DOM).
@@ -311,7 +325,21 @@ async def _loading_requirements(
             )
         )
         ref = ref.model_copy(update={"profile": "basic"})
-        return await _prefer_api(page, ref, resolver) if brief.prefer_api else ref
+        if brief.prefer_api:  # the render's XHR stream is in hand: a consistent JSON API wins
+            best = best_api(rendered, snap)
+            if best is not None:
+                url, api = best
+                emit(
+                    ReasonEvent(
+                        stage="load",
+                        subject=url,
+                        text="the render called a JSON data-API consistent with the page — rooting "
+                        "the reference at it (the HTML lists only part of the dataset)",
+                    )
+                )
+                return ref.model_copy(update={"url": url, "kind": api.kind, "api_endpoint": url})
+            return await _prefer_api(page, ref, resolver)
+        return ref
     why = (
         "the page's signals say JS-app (SPA)"
         if signalled
@@ -319,14 +347,13 @@ async def _loading_requirements(
     )
     emit(ReasonEvent(stage="load", subject=page.url, text=f"JS-gated — {why} — needs a browser"))
     ref = ref.model_copy(update={"profile": "full_browser", "needs_browser": True})
-    for url, api in _json_xhr(snap):  # the JSON API the render actually called (reuse the render)
-        if _consistent(rendered, api):
-            emit(
-                ReasonEvent(stage="load", subject=url, text="found the data-API — easier to scrape")
-            )
-            return ref.model_copy(
-                update={"url": url, "kind": api.kind, "api_endpoint": url, "profile": "basic"}
-            )
+    best = best_api(rendered, snap)  # the JSON API the render actually called (reuse the render)
+    if best is not None:
+        url, api = best
+        emit(ReasonEvent(stage="load", subject=url, text="found the data-API — easier to scrape"))
+        return ref.model_copy(
+            update={"url": url, "kind": api.kind, "api_endpoint": url, "profile": "basic"}
+        )
     return ref
 
 

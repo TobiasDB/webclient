@@ -524,6 +524,14 @@ async def _author_steps(state: AuthorState, note: str) -> None:
             )
         )
         return
+    if result.no_records:
+        state.abort = (
+            "records_absent: no record selector matched anything on the fetched page -- the "
+            "records are not in this HTML (JS / interaction-gated beyond a plain render)"
+        )
+        state.attempts.append("every record selector tried matched nothing on the fetched page")
+        state.query = None
+        return
     if result.note:
         state.attempts.append(result.note)
     _tally(state, [], state.steps.unknown)
@@ -565,6 +573,32 @@ async def _escalate_to_browser(state: AuthorState) -> bool:
         )
         return False
     rendered = _locate_mod.document(snap)
+    api = _locate_mod.best_api(rendered, snap)
+    if api is not None:  # the render CALLED a JSON data-API consistent with the page: the dataset
+        api_url, api_doc = api
+        state.doc = api_doc
+        state.listing_skeleton = skeleton_for(api_doc)
+        state.reference = state.reference.model_copy(
+            update={
+                "url": api_url,
+                "kind": api_doc.kind,
+                "api_endpoint": api_url,
+                "profile": "basic",
+                "assessment": list(flags(api_doc)),
+                "record_selector": "",
+            }
+        )
+        state.resolver = _fetch_resolver(state.reference, state.resolver.pool)
+        state.steps = None
+        emit(
+            ReasonEvent(
+                stage="check",
+                subject=api_url,
+                text="the render called a JSON data-API consistent with the page — authoring over "
+                "the API (kind json, profile basic) instead of the HTML shell",
+            )
+        )
+        return True
     regions = rendered.records(top_k=1)
     rendered_items = sum(r.count for r in regions)
     if not regions or rendered_items <= static_items:
