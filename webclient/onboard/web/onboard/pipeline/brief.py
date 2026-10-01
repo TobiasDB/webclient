@@ -89,7 +89,7 @@ class Brief(BaseModel):
         if Path(spec).is_file():
             return cls.from_markdown(Path(spec).read_text(encoding="utf-8"))
         for name in {spec, spec.replace("-", "_"), spec.replace("_", "-")}:
-            res = files("web.onboard").joinpath(f"briefs/{name}.md")
+            res = files(__name__.rsplit(".", 1)[0]).joinpath(f"briefs/{name}.md")
             if res.is_file():
                 return cls.from_markdown(res.read_text(encoding="utf-8"))
         return cls(goal=spec)

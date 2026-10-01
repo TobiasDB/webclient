@@ -160,3 +160,157 @@ def test_search_then_review_search_stages_offline(tmp_path: Path) -> None:
     assert state.spend.by_stage == {"review_search": pytest.approx(0.001)}
     assert [l.stage for l in state.log] == ["search", "review_search"]
     assert Onboarding.load(tmp_path / "s.json").next_stage() == "crawl"
+
+
+def _site(httpserver: HTTPServer) -> None:
+    """A tiny IR site: a home page (lead) linking to a press-release listing; a third-party page."""
+    rows = "".join(
+        f"<li class='release'><h3><a href='/news/release-{n}'>Release {n}</a></h3>"
+        f"<time datetime='2026-09-{10 + n:02d}'>Sep {10 + n}</time><span class='tag'>Corporate</span></li>"
+        for n in range(1, 9)
+    )
+    httpserver.expect_request("/").respond_with_data(
+        "<html><body><nav><a href='/about'>About</a><a href='/news/'>News</a></nav>"
+        "<main><h1>ACME investors</h1></main></body></html>",
+        content_type="text/html",
+    )
+    httpserver.expect_request("/about").respond_with_data(
+        "<html><body><main><p>About ACME</p></main></body></html>", content_type="text/html"
+    )
+    httpserver.expect_request("/news/").respond_with_data(
+        f"<html><head><title>Press releases</title></head><body><main><ul class='list'>{rows}</ul>"
+        "<a rel='next' href='/news/?page=2'>Next</a></main></body></html>",
+        content_type="text/html",
+    )
+    for n in range(1, 9):
+        httpserver.expect_request(f"/news/release-{n}").respond_with_data(
+            f"<html><body><article><h1>Release {n}</h1><p>Body {n}</p></article></body></html>",
+            content_type="text/html",
+        )
+
+
+def test_whole_pipeline_offline_from_a_lead_to_the_authored_query(
+    httpserver: HTTPServer, tmp_path: Path
+) -> None:
+    # search -> review (a lead: the IR home) -> crawl reaches the listing and reviews it at once
+    # (early stop) -> expand (records, pager, no api) -> location review -> resolve plan (page,
+    # basic) -> extract: one shot misses `published` (wrong read), the repair fixes it -> review.
+    _site(httpserver)
+    home = httpserver.url_for("/")
+    listing = httpserver.url_for("/news/")
+    brief = Brief.from_markdown(
+        _BRIEF.replace(
+            'domain: ["{company}", "investors.{company}", "ir.{company}", "q4cdn", "gcs-web"]',
+            'domain: ["localhost", "127.0.0.1"]',
+        )
+    )
+    replies = [
+        json.dumps({"picks": [{"n": 1, "tier": "lead", "why": "the IR home"}]}),  # review_search
+        json.dumps(
+            {"picks": [{"n": 1, "tier": "must", "why": "the news listing"}]}
+        ),  # crawl round 1 (/about, /news/)
+        json.dumps({"present": True, "reason": "a list of releases"}),  # review_candidate (/news/)
+        json.dumps(
+            {"ok": True, "summary": "the press-release listing", "concerns": []}
+        ),  # review_location
+        json.dumps(  # author_extract, one shot: published read as text (not a datetime)
+            {
+                "fields": {
+                    "headline": {"css": "h3 a", "read": "text"},
+                    "published": {"css": "time", "read": "attr:datetime"},
+                    "url": {"css": "h3 a", "read": "href"},
+                    "bogus": {"css": "x", "read": "text"},
+                }
+            }
+        ),
+        json.dumps({"ok": True, "notes": "eight releases, newest first"}),  # author_review
+    ]
+    llm = _Llm(replies)
+    search = _Search([home, "https://www.benzinga.com/quote/ACME/news"])
+
+    async def go() -> Onboarding:
+        async with Resolver() as r:
+            state = Onboarding.start(brief, company="acme")
+            ctx = Context(resolver=r, llm=cast("object", llm), search=search)  # type: ignore[arg-type]
+            await run(state, ctx, until="crawl", save=tmp_path / "s.json")
+            # RESUME from the saved file with a fresh context (the page is fetched again)
+            resumed = Onboarding.load(tmp_path / "s.json")
+            assert resumed.next_stage() == "review_candidate"
+            ctx2 = Context(resolver=r, llm=cast("object", llm), search=search)  # type: ignore[arg-type]
+            return await run(resumed, ctx2, save=tmp_path / "s.json")
+
+    state = cast(Onboarding, _run(go()))
+    assert state.stopped == "", state.stopped
+    assert state.crawl is not None and state.crawl.stopped_early
+    assert [v.url for v in state.crawl.visited][:1] == [home]
+    assert state.crawl.candidates[0].url == listing
+    assert state.review_candidate is not None and state.review_candidate.url == listing
+    assert state.review_candidate.present and not state.review_candidate.retried_browser
+    src = state.expand
+    assert src is not None and src.record_selector == "li.release" and src.records == 8
+    assert src.pagination is not None and src.pagination.next_selector == "a[rel=next]"
+    assert src.api is None and src.spa is None
+    assert state.review_location is not None and state.review_location.ok
+    assert state.author_resolve is not None and state.author_resolve.url == listing
+    assert state.author_resolve.profile == "basic" and not state.author_resolve.via_api
+    ex = state.author_extract
+    assert ex is not None and ex.complete and ex.row_count == 8, ex.attempts
+    assert set(ex.fields) == {"headline", "published", "url"}  # the bogus field was dropped
+    assert "select_all('li.release')" in ex.source and "time" in ex.fields["published"]
+    first = cast("dict[str, object]", ex.sample[0])
+    assert first["headline"] == "Release 1" and first["published"] == "2026-09-11"
+    assert str(first["url"]).endswith("/news/release-1")
+    assert state.author_review is not None and state.author_review.ok
+    # cost shape: six small calls, every prompt under the budget, spend attributed per stage
+    assert len(llm.prompts) == 6 and all(len(p) < 4500 for p in llm.prompts), [
+        len(p) for p in llm.prompts
+    ]
+    assert set(state.spend.by_stage) == {
+        "review_search",
+        "crawl",
+        "review_candidate",
+        "review_location",
+        "author_extract",
+        "author_review",
+    }
+    assert [l.stage for l in state.log] == list(
+        __import__("web.onboard.pipeline", fromlist=["STAGE_NAMES"]).STAGE_NAMES
+    )
+    # the state file is the whole onboarding: it reloads equal to the in-memory state
+    assert Onboarding.load(tmp_path / "s.json") == state
+
+
+def test_review_candidate_retries_through_a_browser_once_and_rejects(
+    httpserver: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import web.onboard.pipeline.stages.review_candidate as rc
+    from web.fetch import Request, Snapshot
+    from web.onboard.pipeline.stages.review_candidate import review_one
+
+    rendered: list[str] = []
+
+    async def fake_render(ctx: object, url: str) -> Snapshot:  # the "browser" shows the same shell
+        rendered.append(url)
+        return Snapshot(
+            request=Request(url=url),
+            status=200,
+            content=b"<html><body><div id='app'></div></body></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    monkeypatch.setattr(rc, "render", fake_render)
+    httpserver.expect_request("/shell").respond_with_data(
+        "<html><body><div id='app'></div><script>window.__x=1</script></body></html>",
+        content_type="text/html",
+    )
+    llm = _Llm([json.dumps({"present": False, "reason": "an empty shell"})])
+
+    async def go() -> object:
+        async with Resolver() as r:
+            state = Onboarding.start(Brief.from_markdown(_BRIEF), company="acme")
+            ctx = Context(resolver=r, llm=cast("object", llm), search=_Search([]))  # type: ignore[arg-type]
+            return await review_one(state, ctx, httpserver.url_for("/shell"))
+
+    review = cast("rc.CandidateReview", _run(go()))
+    assert not review.present and review.retried_browser and review.profile == "full_browser"
+    assert rendered == [httpserver.url_for("/shell")] and len(llm.prompts) == 2

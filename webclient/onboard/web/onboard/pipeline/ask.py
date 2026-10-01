@@ -69,10 +69,13 @@ def _spent(llm: Llm) -> "tuple[int, float]":
     return (llm.calls, llm.spent_usd) if isinstance(llm, Metered) else (0, 0.0)
 
 
-async def ask(ctx: Context, state: Onboarding, stage: str, **args: str) -> str:
-    """One metered model call for ``stage``; the reply text."""
+async def ask(
+    ctx: Context, state: Onboarding, stage: str, *, prompt: "str | None" = None, **args: str
+) -> str:
+    """One metered model call charged to ``stage``, over the ``prompt`` template (``stage`` by
+    default -- a stage reusing another's prompt names it); the reply text."""
     calls0, usd0 = _spent(ctx.llm)
-    reply = await ctx.llm.complete(render(stage, **args))
+    reply = await ctx.llm.complete(render(prompt or stage, **args))
     calls1, usd1 = _spent(ctx.llm)
     state.charge(stage, calls1 - calls0, usd1 - usd0)
     return reply

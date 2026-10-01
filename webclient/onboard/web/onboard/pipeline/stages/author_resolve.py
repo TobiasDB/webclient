@@ -1,12 +1,27 @@
-"""Stage author_resolve -- TODO (built in the next slice)."""
+"""Stage 7 -- author resolve: the request that returns the dataset's document. Deterministic:
+the data API when the source has one (fetched at the cheap tier), else the page at the tier the
+review needed. (Pagination / several source URLs join this stage later.)"""
 
 from __future__ import annotations
 
-from pydantic import BaseModel
-
 from ..ask import Context
-from ..state import Onboarding
+from ..state import Onboarding, ResolvePlan
 
 
-async def run(state: Onboarding, ctx: Context) -> BaseModel:
-    raise NotImplementedError("stage author_resolve is not built yet")
+async def run(state: Onboarding, ctx: Context) -> ResolvePlan:
+    assert state.expand is not None
+    src = state.expand
+    if src.api is not None:
+        url, profile, via = src.api.url, "basic", True
+    else:
+        url, profile, via = (
+            src.url,
+            (src.spa.profile if src.spa is not None else src.profile),
+            False,
+        )
+    return ResolvePlan(
+        url=url,
+        profile=profile,
+        via_api=via,
+        source=f"wq.reference({url!r}).resolve(profile={profile!r})",
+    )

@@ -280,3 +280,18 @@ def test_sniff_text_with_multibyte_char_at_512_boundary() -> None:
     assert parse(body).kind == "text"
     # a genuine binary blob (invalid utf-8 mid-stream) is still binary
     assert parse(b"\x00\x01\xff\xfe" * 200).kind == "binary"
+
+
+def test_find_records_never_picks_a_selects_options() -> None:
+    # a year filter with 27 <option>s outranked the 12 real releases on an IR page
+    opts = "".join(f"<option value={y}>{y}</option>" for y in range(2000, 2027))
+    rows = "".join(
+        f"<article class=release><h3><a href='/r{i}'>R{i}</a></h3></article>" for i in range(12)
+    )
+    doc = parse(
+        f"<html><body><select>{opts}</select><div class=list>{rows}</div></body></html>".encode(),
+        url="http://x/",
+        content_type="text/html",
+    )
+    top = doc.records(top_k=1)[0]
+    assert top.item_selector == "article.release" and top.count == 12

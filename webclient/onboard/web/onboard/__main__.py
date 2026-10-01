@@ -48,7 +48,7 @@ from web.resolve import ResolveEvent, Resolver
 from .author import AuthorEvent, build_query
 from .author_loop import ENGINES, write_query
 from .compile import Query, QueryError
-from .config import build_resolver
+from .config import build_resolver, default_search
 from .config import env as _env
 from .config import env_flag as _env_flag
 from .config import env_float as _env_float
@@ -56,6 +56,9 @@ from .frontier import llm_frontier
 from .llm import AnthropicLlm, Llm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage
 from .locate import locate
 from .models import Brief, QueryArtifact, Reference
+from .pipeline import Brief as PipelineBrief
+from .pipeline import BriefError, Context, Onboarding
+from .pipeline import run as pipeline_run
 from .review import review
 from .search import DdgSearch
 from .shim import ClaudeShim
@@ -885,7 +888,124 @@ async def _resolve(args: argparse.Namespace) -> int:
     return 0
 
 
+# -- onboard: the staged pipeline ------------------------------------------------------------------
+
+
+def _state_path(args: argparse.Namespace, values: "dict[str, str]") -> Path:
+    if args.state:
+        return Path(args.state)
+    tail = "-".join(v.lower().replace(" ", "_") for v in values.values())
+    name = Path(args.brief).stem
+    return Path(f"{name}{'-' + tail if tail else ''}.json")
+
+
+async def _onboard(args: argparse.Namespace) -> int:
+    """Run (or resume) the staged pipeline for a brief; print each stage's outcome, the spend per
+    stage, and the authored query + sample rows."""
+    values: dict[str, str] = {}
+    for item in args.arg:
+        name, sep, value = item.partition("=")
+        if not sep:
+            _err(f"--arg wants NAME=VALUE, got {item!r}")
+            return 2
+        values[name.strip()] = value.strip()
+    if args.entity and "company" not in values:  # the positional entity is the usual argument
+        values["company"] = args.entity
+    brief = PipelineBrief.load(args.brief)
+    path = _state_path(args, values)
+    if path.is_file():
+        state = Onboarding.load(path)
+        if args.reset_from:
+            state.reset_from(args.reset_from)
+        _err(f"resuming {path} at {state.next_stage() or 'done'}")
+    else:
+        try:
+            state = Onboarding.start(brief, **values)
+        except BriefError as exc:
+            _err(f"{exc} (pass it with --arg name=value)")
+            return 2
+    resolver = _resolver(args.profile, args.proxy, args.browser_path)
+    llm = _build_llm(args)
+    ctx = Context(resolver=resolver, llm=llm, search=default_search())
+    try:
+        with _Progress(args.verbose):
+            await pipeline_run(state, ctx, until=args.until, save=path)
+    finally:
+        await resolver.aclose()
+        await llm.aclose()
+    _err("")
+    for line in state.log:
+        _err(f"  {line.stage:<17} {line.elapsed_s:>6.1f}s  {line.calls} call(s)  ${line.usd:.4f}")
+    _err(f"  spend:      ${state.spend.usd:.4f} over {state.spend.calls} call(s)")
+    _err(f"  state:      {path}")
+    if state.stopped:
+        _err(f"  stopped:    {state.stopped}")
+    if state.expand is not None:
+        src = state.expand
+        _err(
+            f"  source:     {src.url} ({src.kind}, {src.profile}, {src.records} records at {src.record_selector!r})"
+        )
+    if state.review_location is not None:
+        _err(
+            f"  location:   {'ok' if state.review_location.ok else 'CONCERN'} — {state.review_location.summary}"
+        )
+    ex = state.author_extract
+    if ex is not None:
+        _err(
+            f"  rows:       {ex.row_count}"
+            + (f"  misses: {', '.join(ex.misses)}" if ex.misses else "")
+        )
+        for row in ex.sample[: args.sample]:
+            _err(f"    {json.dumps(row, ensure_ascii=False, default=str)[:400]}")
+        if ex.blob:
+            print(ex.blob)
+    if state.author_review is not None:
+        _err(
+            f"  review:     {'ok' if state.author_review.ok else 'REJECTED'} — {state.author_review.notes}"
+        )
+    return 0 if (ex is not None and ex.complete and not state.stopped) else 1
+
+
 # -- entry ----------------------------------------------------------------------------------------
+
+
+def _llm_args(sub: argparse.ArgumentParser) -> None:
+    """The model metering options (the API path): a rate limit + per-million-token prices."""
+    sub.add_argument(
+        "--rate",
+        type=float,
+        default=_env_float("WEB_LLM_RATE", 0.0),
+        metavar="SECS",
+        help="min seconds between LLM calls (a shared/corporate key) [env WEB_LLM_RATE]",
+    )
+    sub.add_argument(
+        "--price-input",
+        type=float,
+        default=_env_float("WEB_PRICE_INPUT", 0.0),
+        metavar="USD",
+        help="input price ($/million tokens) -- for the spend report [env WEB_PRICE_INPUT]",
+    )
+    sub.add_argument(
+        "--price-output",
+        type=float,
+        default=_env_float("WEB_PRICE_OUTPUT", 0.0),
+        metavar="USD",
+        help="output price ($/M tokens) [env WEB_PRICE_OUTPUT]",
+    )
+    sub.add_argument(
+        "--price-cache-read",
+        type=float,
+        default=_env_float("WEB_PRICE_CACHE_READ", 0.0),
+        metavar="USD",
+        help="cache-read price ($/M tokens) [env WEB_PRICE_CACHE_READ]",
+    )
+    sub.add_argument(
+        "--price-cache-write",
+        type=float,
+        default=_env_float("WEB_PRICE_CACHE_WRITE", 0.0),
+        metavar="USD",
+        help="cache-write price ($/M tokens) [env WEB_PRICE_CACHE_WRITE]",
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -912,6 +1032,35 @@ def _parser() -> argparse.ArgumentParser:
         "--search-k", type=int, default=10, metavar="N", help="how many search results to seed from"
     )
 
+    onb = subs.add_parser(
+        "onboard",
+        help="the STAGED pipeline: search → review → crawl → review → expand → review → resolve "
+        "→ extract → review, resumable from a state file (see webclient/onboard/PIPELINE.md)",
+    )
+    _transport_args(onb)
+    _llm_args(onb)
+    onb.add_argument(
+        "--arg",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="a brief argument (e.g. --arg company=Intel); the brief declares its args",
+    )
+    onb.add_argument(
+        "--state",
+        default=None,
+        metavar="FILE",
+        help="the onboarding state file: resumed when it exists, written after every stage "
+        "(default: <brief>-<args>.json in the working directory)",
+    )
+    onb.add_argument("--until", default=None, metavar="STAGE", help="stop after this stage")
+    onb.add_argument(
+        "--reset-from", default=None, metavar="STAGE", help="redo this stage and every later one"
+    )
+    onb.add_argument(
+        "--sample", type=int, default=5, metavar="N", help="how many rows to print (default 5)"
+    )
+
     aut = subs.add_parser("author", help="write the wq query that extracts the dataset")
     _transport_args(aut)
     aut.add_argument(
@@ -920,41 +1069,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="use this Reference instead of the cache: '-' reads locate's JSON from stdin, else a file",
     )
-    aut.add_argument(
-        "--rate",
-        type=float,
-        default=_env_float("WEB_LLM_RATE", 0.0),
-        metavar="SECS",
-        help="min seconds between LLM calls (a shared/corporate key) [env WEB_LLM_RATE]",
-    )
-    aut.add_argument(
-        "--price-input",
-        type=float,
-        default=_env_float("WEB_PRICE_INPUT", 0.0),
-        metavar="USD",
-        help="input price ($/million tokens) -- for the spend report [env WEB_PRICE_INPUT]",
-    )
-    aut.add_argument(
-        "--price-output",
-        type=float,
-        default=_env_float("WEB_PRICE_OUTPUT", 0.0),
-        metavar="USD",
-        help="output price ($/M tokens) [env WEB_PRICE_OUTPUT]",
-    )
-    aut.add_argument(
-        "--price-cache-read",
-        type=float,
-        default=_env_float("WEB_PRICE_CACHE_READ", 0.0),
-        metavar="USD",
-        help="cache-read price ($/M tokens) [env WEB_PRICE_CACHE_READ]",
-    )
-    aut.add_argument(
-        "--price-cache-write",
-        type=float,
-        default=_env_float("WEB_PRICE_CACHE_WRITE", 0.0),
-        metavar="USD",
-        help="cache-write price ($/M tokens) [env WEB_PRICE_CACHE_WRITE]",
-    )
+    _llm_args(aut)
     aut.add_argument(
         "--simple",
         action="store_true",
@@ -988,7 +1103,13 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: "Sequence[str] | None" = None) -> int:
     args = _parser().parse_args(argv)
-    runner = {"locate": _locate, "author": _author, "fetch": _fetch, "resolve": _resolve}[args.cmd]
+    runner = {
+        "locate": _locate,
+        "author": _author,
+        "fetch": _fetch,
+        "resolve": _resolve,
+        "onboard": _onboard,
+    }[args.cmd]
 
     async def _run() -> int:
         # Close the process-wide default pool on THIS run's loop before it ends: pooled backends
