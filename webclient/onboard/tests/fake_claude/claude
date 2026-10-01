@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""A fake `claude` CLI for the shim tests: stream-json in / stream-json out, one process, many
+turns. Each reply reports the turn number and echoes the LAST line of the prompt, so a test can
+check the conversation stayed in one process and carried its turns. `--output-format json` (the
+one-shot form) replies once from stdin. The word CRASH in a prompt makes it exit mid-turn."""
+import json
+import sys
+
+args = sys.argv[1:]
+if "stream-json" not in args:  # the one-shot form
+    prompt = sys.stdin.read()
+    print(json.dumps({"result": "oneshot:" + [l for l in prompt.strip().splitlines() if l and not l.startswith("<!--")][-1][:40], "total_cost_usd": 0.001, "usage": {"input_tokens": 5, "output_tokens": 2}}))
+    sys.exit(0)
+turn = 0
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    content = msg["message"]["content"]
+    text = content if isinstance(content, str) else "".join(c.get("text", "") for c in content)
+    if "CRASH" in text:
+        sys.exit(3)
+    turn += 1
+    last = [l for l in text.strip().splitlines() if l and not l.startswith("<!--")][-1][:40]
+    print(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "..."}]}}), flush=True)
+    print(json.dumps({"type": "result", "subtype": "success", "result": f"turn{turn}:{last}", "total_cost_usd": 0.002, "session_id": "fake", "usage": {"input_tokens": 10, "output_tokens": 3, "cache_read_input_tokens": 7 if turn > 1 else 0, "cache_creation_input_tokens": 0}}), flush=True)

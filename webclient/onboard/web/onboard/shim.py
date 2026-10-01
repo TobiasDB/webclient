@@ -2,7 +2,11 @@
 NO API key), for authoring without an Anthropic key. It drives ``claude -p`` headless with the
 agent system prompt REPLACED by a minimal "be a precise text function" one, tools disabled, and the
 dynamic (cwd/git/memory) sections stripped -- so it behaves like a raw text completion and returns
-clean output. One CLI turn per call (slow), and it draws on the Claude Code plan's usage/rate
+clean output. A one-shot ``complete`` spawns one CLI process per call (slow: ~30s with the
+process start + a cold prompt); a :meth:`ClaudeShim.conversation` keeps ONE process alive over
+``--input-format stream-json`` and feeds it turn after turn -- the model keeps the history, the
+prompt cache hits, and a turn takes a second or two. The author / evaluate loops use it through
+the :class:`~web.onboard.llm.Conversational` seam. Draws on the Claude Code plan's usage/rate
 limits. Needs the ``claude`` CLI on ``PATH``.
 """
 
@@ -86,6 +90,31 @@ class ClaudeShim:
         self.usage = Usage()
         self.spent_usd = 0.0
         self.calls = 0
+        self._conversations: "list[_ShimConversation]" = []  # live processes, closed by aclose()
+
+    def conversation(self) -> "_ShimConversation":
+        """Open a multi-turn conversation over ONE persistent ``claude -p`` process (see the module
+        docstring): the opening turn is sent once; every later turn rides on the kept history."""
+        conv = _ShimConversation(self)
+        self._conversations.append(conv)
+        return conv
+
+    def _argv(self, *, stream: bool) -> "list[str]":
+        """The CLI invocation: a raw text function (our system prompt, no tools, no dynamic
+        sections); ``stream`` = the persistent stream-json form."""
+        return [
+            "claude",
+            "-p",
+            "--output-format",
+            "stream-json" if stream else "json",
+            *(("--input-format", "stream-json", "--verbose") if stream else ()),
+            "--system-prompt",
+            _SYSTEM,  # answer like a raw completion, not a coding agent
+            "--exclude-dynamic-system-prompt-sections",  # drop cwd/git/memory noise
+            "--allowed-tools",
+            "",  # no tools: pure text in/out
+            *(("--model", self._model) if self._model else ()),
+        ]
 
     async def complete(self, prompt: str) -> str:
         self.budget.ensure()  # stop BEFORE spending past the cap (raises BudgetExceeded)
@@ -110,18 +139,7 @@ class ClaudeShim:
 
     async def _once(self, prompt: str) -> str:
         """ONE ``claude -p`` call -> the reply (metered); any failure is an ``llm.shim`` error."""
-        argv = [
-            "claude",
-            "-p",
-            "--output-format",
-            "json",
-            "--system-prompt",
-            _SYSTEM,  # answer like a raw completion, not a coding agent
-            "--exclude-dynamic-system-prompt-sections",  # drop cwd/git/memory noise
-            "--allowed-tools",
-            "",  # no tools: pure text in/out
-            *(("--model", self._model) if self._model else ()),
-        ]
+        argv = self._argv(stream=False)
         # the prompt is passed on STDIN, never argv: an author prompt can start with "---"/"-",
         # which `claude` would else parse as an option. The anti-cache marker keeps each call unique
         # so a repair never replays a prior identical reply (a stalled loop -- see the helper).
@@ -183,8 +201,104 @@ class ClaudeShim:
         )
 
     async def aclose(self) -> None:
-        """Nothing to close -- each call is a fresh subprocess (for a uniform ``Llm`` lifecycle)."""
-        return None
+        """End every live conversation process (a one-shot call leaves nothing behind)."""
+        for conv in self._conversations:
+            await conv.aclose()
+        self._conversations.clear()
+
+
+class _ShimConversation:
+    """A :class:`~web.onboard.llm.Conversation` over ONE persistent ``claude -p`` process: user
+    turns go in as stream-json lines, each reply is the ``result`` event that closes a turn
+    (metered like a one-shot call). The process starts on the first ``send``. If it dies or a
+    turn times out, the next ``send`` RESTARTS it and replays the exchange so far as a catch-up
+    prefix -- the loop keeps its memory at the cost of one longer turn."""
+
+    def __init__(self, shim: ClaudeShim) -> None:
+        self._shim = shim
+        self._proc: "asyncio.subprocess.Process | None" = None
+        self._history: "list[tuple[str, str]]" = []  # (user turn, reply) so far
+
+    async def send(self, text: str) -> str:
+        self._shim.budget.ensure()
+        await self._shim._gate.hold()
+        catch_up = ""
+        if self._proc is None or self._proc.returncode is not None:
+            if self._history:  # a restart: the process lost the history -- replay it compactly
+                catch_up = (
+                    "Our conversation so far (you replied to each of these):\n\n"
+                    + "\n\n".join(f"[user]\n{u}\n[you]\n{r}" for u, r in self._history)
+                    + "\n\nContinue from here.\n\n"
+                )
+            await self._start()
+        assert self._proc is not None and self._proc.stdin is not None
+        sent = catch_up + text + anticache_suffix()
+        msg = {
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "text", "text": sent}]},
+        }
+        try:
+            self._proc.stdin.write((json.dumps(msg) + "\n").encode("utf-8"))
+            await self._proc.stdin.drain()
+            payload = await asyncio.wait_for(self._result(), timeout=self._shim._timeout)
+        except asyncio.TimeoutError as exc:
+            await self._kill()
+            raise WebException(
+                err("llm.shim", f"claude -p (conversation) timed out after {self._shim._timeout}s")
+            ) from exc
+        except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+            await self._kill()
+            raise WebException(err("llm.shim", f"claude -p (conversation) died: {exc}")) from exc
+        if payload is None:  # the process ended without a result for this turn
+            code = self._proc.returncode
+            await self._kill()
+            raise WebException(
+                err("llm.shim", f"claude -p (conversation) exited (code {code}) mid-turn")
+            )
+        result = payload.get("result")
+        reply = result if isinstance(result, str) else ""
+        self._shim.reply = reply
+        self._shim._meter(payload)
+        self._history.append((text, reply))
+        return reply
+
+    async def _start(self) -> None:
+        try:
+            self._proc = await asyncio.create_subprocess_exec(
+                *self._shim._argv(stream=True), stdin=PIPE, stdout=PIPE, stderr=PIPE
+            )
+        except OSError as exc:
+            raise WebException(err("llm.shim", f"could not run claude -p: {exc}")) from exc
+
+    async def _result(self) -> "dict[str, object] | None":
+        """Read stream-json events until the ``result`` that closes the turn (``None`` at EOF)."""
+        assert self._proc is not None and self._proc.stdout is not None
+        while True:
+            line = await self._proc.stdout.readline()
+            if not line:
+                return None
+            try:
+                event: object = json.loads(line.decode("utf-8", "replace"))
+            except ValueError:
+                continue  # a non-JSON line (a warning) -- not ours
+            if isinstance(event, dict) and event.get("type") == "result":
+                return event
+
+    async def _kill(self) -> None:
+        if self._proc is not None and self._proc.returncode is None:
+            self._proc.kill()
+            await _reap(self._proc)
+
+    async def aclose(self) -> None:
+        """End the process (close its stdin, then make sure it is gone)."""
+        if self._proc is None:
+            return
+        if self._proc.stdin is not None and not self._proc.stdin.is_closing():
+            self._proc.stdin.close()
+        try:
+            await asyncio.wait_for(self._proc.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            await self._kill()
 
 
 __all__ = ["ClaudeShim"]

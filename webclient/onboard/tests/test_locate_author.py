@@ -2266,3 +2266,23 @@ def test_json_detail_follows_a_relative_link_and_a_failed_detail_is_not_already_
     assert "followed a typical record's link, " + httpserver.url_for("/e/1") in llm.turns[5]
     first = cast("dict[str, object]", art.sample[0])
     assert cast("dict[str, object]", first["detail"])["body"] == "Body One"
+
+
+def test_records_result_notes_a_count_outside_the_expected_range(httpserver: HTTPServer) -> None:
+    from web.onboard import QueryArtifact, write_query
+
+    httpserver.expect_request("/list").respond_with_data(_TABLE, content_type="text/html")
+    llm = _StepConv(['records("tr")', 'field(x, wq.doc.select("td").attr("text"))', "done()"])
+
+    async def go() -> QueryArtifact:
+        async with Resolver() as r:
+            return await write_query(
+                Reference(url=httpserver.url_for("/list"), kind="html"),
+                DatasetBrief(fields=["x"], expect_rows="50-100"),
+                resolver=r,
+                llm=cast("object", llm),  # type: ignore[arg-type]
+                engine="steps",
+            )
+
+    _run(go())
+    assert "NOTE: 4 record(s) is BELOW the brief's expectation (50-100)" in llm.turns[1]

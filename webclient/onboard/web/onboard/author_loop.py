@@ -308,6 +308,12 @@ async def _review_rows(state: AuthorState) -> "tuple[bool, str]":
         if state.brief.review_hint
         else ""
     )
+    if state.brief.expect_rows:
+        extra += (
+            f"\nThe brief expects about {state.brief.expect_rows} records per run (the sample shows "
+            f"{min(len(state.rows_full), _SAMPLE)} of {len(state.rows_full)} extracted) -- a guide, "
+            "not a rule."
+        )
     if state.absent:  # a field the source does not carry is not a defect of the sample
         extra += (
             f"\nFields established as ABSENT from this source (do NOT fail the sample for them): "

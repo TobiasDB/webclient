@@ -42,7 +42,7 @@ from .evaluate import (
     reference,
 )
 from .llm import Llm, ReasonEvent
-from .models import LocateBrief, Reference
+from .models import in_range, LocateBrief, Reference
 from .search import Search, search_web
 from .select import select_candidates
 
@@ -198,6 +198,14 @@ def schema_fit(api: Document, brief: "LocateBrief") -> int:
     return len(want & key_words)
 
 
+# PLANNED PIPELINE STEP (out of scope for now -- USER DIRECTION 2026-10-01): "API DISCOVERY".
+# A data feed the render calls is one SLICE of the dataset: Pfizer's events come from
+# feed/Event.svc/GetEventList?eventSelection=1 (upcoming) and ...=0&year=2026 (past), each with
+# page / pageSize / year / type / sort parameters. A later Locate stage should DISCOVER the feed's
+# parameters (what each query-string knob selects; the full dataset = the union of slices), its
+# ORDERING and TIMELINESS (newest first? paged?), its FILTERS (year / type / search), and express
+# the dataset as SECTIONS across feeds -- so a split dataset is authored once per slice and the
+# runner concatenates. Until then :func:`best_api` picks ONE feed: the one that fits the brief.
 def best_api(
     page: Document, snap: Snapshot, brief: "LocateBrief | None" = None
 ) -> "tuple[str, Document] | None":
@@ -286,6 +294,12 @@ def _record_count(doc: Document) -> int:
     return regions[0].count if regions else 0
 
 
+def _show_range(bounds: "tuple[int, int] | None") -> str:
+    if bounds is None:
+        return "any"
+    return f">= {bounds[0]}" if bounds[1] >= 10**9 else f"{bounds[0]}-{bounds[1]}"
+
+
 #: words in an evaluate verdict that say the records are injected by script.
 _RENDER_WORDS = re.compile(r"render|javascript|\bjs\b|dynamic|ajax|client-side|xhr", re.I)
 
@@ -354,15 +368,26 @@ async def _loading_requirements(
     # than the static HTML (a server-rendered shell: the record count grew materially, or the
     # rendered page passes the schema check while the static page did not).
     gained = rendered_ct >= 2 and rendered_ct > static_ct + 1
-    js_gated = signalled or gained or (_has_records(rendered, brief) and not static_ok)
+    # the brief's expected range is a FLEXIBLE guide (a record count is never a hard rule): a static
+    # page BELOW it whose render is NOT below it is gated, whatever the dominant region counted
+    bounds = brief.expected_range()
+    below_static = in_range(static_ct, bounds) is not None and static_ct < (bounds or (0, 0))[0]
+    within_rendered = in_range(rendered_ct, bounds) is None
+    js_gated = (
+        signalled
+        or gained
+        or (_has_records(rendered, brief) and not static_ok)
+        or (below_static and within_rendered)
+    )
     if not js_gated:
         emit(
             ReasonEvent(
                 stage="load",
                 subject=page.url,
                 text=f"rendered and compared: {static_ct} static vs {rendered_ct} rendered records, "
-                f"schema {'found' if static_ok else 'not found'} statically — not JS-gated, "
-                "profile basic",
+                f"schema {'found' if static_ok else 'not found'} statically"
+                + (f"; note: {in_range(static_ct, bounds)}" if in_range(static_ct, bounds) else "")
+                + " — not JS-gated, profile basic",
             )
         )
         ref = ref.model_copy(update={"profile": "basic"})
@@ -384,7 +409,9 @@ async def _loading_requirements(
     why = (
         "the page's signals say JS-app (SPA)"
         if signalled
-        else f"the render revealed the dataset ({static_ct}→{rendered_ct} records)"
+        else f"the render revealed the dataset ({static_ct}→{rendered_ct} records"
+        + (f"; the brief expects {_show_range(bounds)}" if bounds else "")
+        + ")"
     )
     emit(ReasonEvent(stage="load", subject=page.url, text=f"JS-gated — {why} — needs a browser"))
     ref = ref.model_copy(update={"profile": "full_browser", "needs_browser": True})

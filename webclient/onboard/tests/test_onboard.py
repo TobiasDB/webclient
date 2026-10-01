@@ -79,7 +79,7 @@ def test_conversation_sends_the_opening_once_cache_marked_and_budget_caps() -> N
             pricing=Pricing(input=1.0, output=1.0, cache_read=0.1, cache_write=1.25),
         )
         assert isinstance(llm, Conversational)  # the author's conversation seam
-        assert not isinstance(ClaudeShim(), Conversational)  # claude -p is stateless -> fallback
+        assert isinstance(ClaudeShim(), Conversational)  # one persistent claude -p process per conversation
         conv = llm.conversation()
         assert isinstance(conv, Conversation)
         assert await conv.send("BIG OPENING: skeleton+guide") == "reply-1"
@@ -261,3 +261,66 @@ def test_claude_shim_retries_a_timed_out_call() -> None:
             raise AssertionError("max_retries=0 must raise on the first failure")
     finally:
         asyncio.sleep = orig_sleep  # type: ignore[assignment]
+
+
+def test_expected_rows_is_a_flexible_guide() -> None:
+    # USER: record counts are flawed as a hard rule -- the brief may carry an EXPECTED range of rows
+    # and every stage treats it as a guide (a note), never a veto.
+    from web.onboard import Brief
+    from web.onboard.models import in_range, parse_range
+
+    assert parse_range("10-50") == (10, 50)
+    assert parse_range("~20") == (10, 40)
+    assert parse_range(">=5") == (5, 10**9) and parse_range("5+") == (5, 10**9)
+    assert parse_range("<200") == (0, 199) and parse_range("<=200") == (0, 200)
+    assert parse_range("40") == (30, 51)
+    assert parse_range("") is None and parse_range("lots") is None
+    assert in_range(25, (10, 50)) is None and in_range(25, None) is None
+    assert "BELOW" in (in_range(3, (10, 50)) or "") and "ABOVE" in (in_range(200, (10, 50)) or "")
+    brief = Brief.from_markdown("---\nexpect_rows: 10-50\nschema:\n  - a: x\n---\ng")
+    assert brief.expected_range() == (10, 50)
+    from web.onboard.patterns import steps_prompt
+
+    assert "EXPECTED SIZE (from the brief): about 10-50 records" in steps_prompt(
+        brief, "<ul>", [], kind="html"
+    )
+
+
+def test_claude_shim_conversation_keeps_one_process_and_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # USER: "start one Claude process and build a conversation API on top of it". A conversation
+    # feeds turns to ONE `claude -p --input-format stream-json` process (the fake CLI numbers its
+    # turns), meters each turn, and -- when the process dies mid-turn -- restarts it on the next
+    # send with a catch-up of the exchange so far. The shim is Conversational, so the author loop
+    # picks it up.
+    import asyncio
+    import os
+    from pathlib import Path
+
+    from web.fetch import WebException
+    from web.onboard.llm import Conversational
+    from web.onboard.shim import ClaudeShim
+
+    fake = Path(__file__).parent / "fake_claude"
+    monkeypatch.setenv("PATH", f"{fake}{os.pathsep}{os.environ.get('PATH', '')}")
+    shim = ClaudeShim(model="haiku", timeout=10)
+    assert isinstance(shim, Conversational)
+
+    async def go() -> None:
+        conv = shim.conversation()
+        assert await conv.send("opening prompt\nfirst") == "turn1:first"
+        assert await conv.send("second") == "turn2:second"  # the SAME process: turn 2
+        assert shim.calls == 2 and shim.usage.cache_read == 7  # metered per turn
+        try:
+            await conv.send("please CRASH now")
+        except WebException as exc:
+            assert exc.error.code == "llm.shim" and "exited" in exc.error.message
+        else:
+            raise AssertionError("a process that dies mid-turn must raise")
+        reply = await conv.send("third")  # a fresh process, caught up: its turn 1 again
+        assert reply.startswith("turn1:") and reply.endswith("third")
+        assert await shim.complete("one\nshot") == "oneshot:shot"  # the one-shot form still works
+        await shim.aclose()
+
+    asyncio.run(go())

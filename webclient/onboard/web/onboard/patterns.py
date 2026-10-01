@@ -143,6 +143,12 @@ def _notes(
         )
     if brief.review_hint:  # the review criterion is a REQUIREMENT -- the author must know it
         notes.append(f"REQUIREMENT (the extracted data must satisfy this): {brief.review_hint}")
+    if brief.expect_rows:  # a flexible guide for the record pick (never a hard rule)
+        notes.append(
+            f"EXPECTED SIZE (from the brief): about {brief.expect_rows} records per run -- a record "
+            "selector that matches far more includes non-records; far fewer, the records are "
+            "elsewhere (another section, a detail page, a feed)."
+        )
     if brief.identity_hint:  # a SPECIFIC identity is asked for -> the author declares it
         notes.append(
             f"IDENTITY (from the brief): {brief.identity_hint} -- declare it explicitly with "

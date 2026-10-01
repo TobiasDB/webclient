@@ -58,7 +58,7 @@ from .agent import BoundedLoop, Done
 from .compile import Query, clean_reply, parse_query, reroot
 from .evaluate import skeleton_for
 from .llm import Conversation, Conversational, Llm, ReasonEvent
-from .models import DatasetBrief, Reference
+from .models import DatasetBrief, Reference, in_range
 from .patterns import steps_prompt
 from .prompts import clip
 
@@ -837,7 +837,7 @@ def _apply_with(
             session.pending = _turn(session, f"NOT APPLIED: {op.args[0]}", brief)
             emit(ReasonEvent(stage="author", text=f"step rejected: {op.args[0]}"))
             return
-        applied, result, summary = await _step(session, op, resolver)
+        applied, result, summary = await _step(session, op, resolver, brief)
         if not summary.startswith(_PRECONDITION):  # a precondition can change -- do not memorise
             session.tried[op.line()] = summary
         if applied:
@@ -851,7 +851,9 @@ def _apply_with(
     return apply
 
 
-async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool, str, str]":
+async def _step(
+    session: StepSession, op: Op, resolver: Resolver, brief: DatasetBrief
+) -> "tuple[bool, str, str]":
     """Apply ``op`` to a COPY of the draft and probe it -> ``(applied, the result turn text, a
     one-line summary)``. A failed probe leaves the draft untouched (the op is reverted)."""
     doc, new = session.doc, session.draft.copy()
@@ -960,7 +962,12 @@ async def _step(session: StepSession, op: Op, resolver: Resolver) -> "tuple[bool
         session.draft = new
         session.skip = skip
         session.zero_picks = 0
-        text = f"{head}\nmatched {n} record(s). The FIRST record's structure (wq.doc for field(...)):\n"
+        off = in_range(n, brief.expected_range())
+        text = (
+            f"{head}\nmatched {n} record(s)."
+            + (f" NOTE: {off} -- check the selector before adding fields." if off else "")
+            + " The FIRST record's structure (wq.doc for field(...)):\n"
+        )
         text += _first_record(doc, new.records) or "(not a markup record)"
         if session.record_selector and new.records != session.record_selector:
             text += (

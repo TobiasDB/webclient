@@ -24,12 +24,59 @@ pydantic model (not an ad-hoc dict) is what lets Locate and Author stay independ
 
 from __future__ import annotations
 
+import re
+
 from importlib.resources import files
 from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, JsonValue
 from web.resolve import Flag
+
+
+def parse_range(spec: str) -> "tuple[int, int] | None":
+    """A row-count expectation -> ``(low, high)``: ``"10-50"``, ``"~20"`` (half to double),
+    ``">=5"`` / ``"5+"``, ``"<200"`` / ``"<=200"``, or a bare number (exactly, ±25%)."""
+    text = spec.strip().replace(" ", "")
+    if not text:
+        return None
+    big = 10**9
+    m = re.fullmatch(r"(\d+)-(\d+)", text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = re.fullmatch(r"~(\d+)", text)
+    if m:
+        n = int(m.group(1))
+        return max(1, n // 2), n * 2
+    m = re.fullmatch(r"(?:>=|>)?(\d+)\+?", text)
+    if m and (text.startswith((">", ">=")) or text.endswith("+")):
+        return int(m.group(1)), big
+    m = re.fullmatch(r"<=?(\d+)", text)
+    if m:
+        return 0, int(m.group(1)) - (0 if text.startswith("<=") else 1)
+    m = re.fullmatch(r"(\d+)", text)
+    if m:
+        n = int(m.group(1))
+        return max(1, n * 3 // 4), n * 5 // 4 + 1
+    return None
+
+
+def in_range(count: int, bounds: "tuple[int, int] | None") -> "str | None":
+    """``None`` when ``count`` is within ``bounds`` (or there are none); else a short note saying how
+    it is off -- a flexible guide for a log line or a model hint, never a veto."""
+    if bounds is None:
+        return None
+    low, high = bounds
+    if count < low:
+        return f"{count} record(s) is BELOW the brief's expectation ({_show(bounds)})"
+    if count > high:
+        return f"{count} record(s) is ABOVE the brief's expectation ({_show(bounds)})"
+    return None
+
+
+def _show(bounds: "tuple[int, int]") -> str:
+    low, high = bounds
+    return f">= {low}" if high >= 10**9 else f"{low}-{high}"
 
 
 class Brief(BaseModel):
@@ -68,6 +115,9 @@ class Brief(BaseModel):
     selectors: dict[str, str] = {}  # field -> css/JSON-path override
     optional: list[str] = []  # fields that may legitimately be absent (not required in the review)
     download: bool = False  # harvest the file(s) themselves, not parsed rows
+    expect_rows: str = ""  # how many records a run should yield, e.g. "10-50", "~20", ">=5", "<200"
+    #                        -- a FLEXIBLE guide for every stage (a record count is never a hard rule):
+    #                        Locate's static-vs-rendered read, the author's record pick, the review.
     identity_hint: str = ""  # NL: what identifies a record / a document when the default (the hash
     #                          of every extracted field) is not it -- e.g. "a story is identified by
     #                          its published time + headline; an article page by its article text".
@@ -81,6 +131,11 @@ class Brief(BaseModel):
     name: str = ""
     title: str = ""
     exit_when: str = ""
+
+    def expected_range(self) -> "tuple[int, int] | None":
+        """``expect_rows`` as ``(low, high)`` (``~20`` = 10..40, ``>=5`` = 5..∞, ``<200`` = 0..199,
+        ``10-50``); ``None`` when the brief gives no expectation."""
+        return parse_range(self.expect_rows)
 
     @classmethod
     def from_markdown(cls, text: str) -> "Brief":
