@@ -340,6 +340,23 @@ def _one(
         return _json_get(
             obj, str(args[0])
         )  # a JSON sub-value (dict/list -> navigable, scalar -> leaf)
+    if name in ("next", "prev"):  # a SIBLING of the current element (loud like select)
+        css = str(args[0]) if args else ""
+        sib = (
+            (obj.next(css) if name == "next" else obj.prev(css))
+            if isinstance(obj, Element)
+            else None
+        )
+        if sib is None and not kwargs.get("optional"):
+            raise WebException(
+                err(
+                    "dsl.select_miss",
+                    f"no {'following' if name == 'next' else 'preceding'} sibling matches {css!r}",
+                    url=_base_of(obj),
+                    selector=css,
+                )
+            )
+        return sib
     if name == "select_all":
         if _markup(obj):
             items = obj.select_all(str(args[0])) if isinstance(obj, (Document, Element)) else []

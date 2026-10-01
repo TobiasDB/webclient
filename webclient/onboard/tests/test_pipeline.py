@@ -920,3 +920,14 @@ def test_a_feed_is_used_only_when_it_replays_as_a_get_else_the_page_is_authored(
     assert src.api is not None and src.api.method == "POST" and not src.api.usable
     assert src.api.body == '{"year": 2026}' and src.api.records_path == "items"
     assert not plan.via_api and plan.url == httpserver.url_for("/events")  # the page is authored
+
+
+def test_the_author_may_read_a_sibling_with_a_plus_prefix() -> None:
+    from web.onboard.pipeline.stages.author_extract import _chain, _Read
+
+    assert _chain("when", _Read(css="+ p.date", read="datetime"), json=False, optional=False) == (
+        "wq.doc.next('p.date').attr(\"text\").datetime()"
+    )
+    assert _chain("x", _Read(css="~ p.d", read="text"), json=False, optional=True) == (
+        "wq.doc.next('p.d', optional=True).attr(\"text\")"
+    )

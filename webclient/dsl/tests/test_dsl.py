@@ -847,3 +847,37 @@ def test_presence_tests_answer_on_a_missed_optional_select() -> None:
     assert asyncio.run(from_source(probe + ".is_empty()").acollect(doc)) is True
     assert asyncio.run(from_source(probe + ".is_ok()").acollect(doc)) is False
     assert asyncio.run(from_source("~" + probe + ".is_empty()").acollect(doc)) is False
+
+
+def test_next_and_prev_read_a_records_sibling_elements(httpserver: HTTPServer) -> None:
+    # Adobe's events: a title paragraph (with the link) followed by a date paragraph -- values
+    # that are SIBLINGS of the record element; CSS cannot start at a sibling, the DSL can
+    html = b"<div><p class=t><a href='/e1'>Earnings call</a></p><p class=d>Nov 5, 2026</p><p class=t><a href='/e2'>Annual meeting</a></p><p class=d>Dec 1, 2026</p></div>"
+    httpserver.expect_request("/").respond_with_data(html, content_type="text/html")
+    from web.dsl import Query
+
+    q = Query.from_source(
+        f"wq.reference({httpserver.url_for('/')!r}).resolve().select_all('p.t')"
+        ".extract(title=wq.doc.select('a').attr('text'), when=wq.doc.next('p.d').attr('text'), "
+        "before=wq.doc.prev('p.d', optional=True).attr('text'))"
+    )
+
+    async def go() -> object:
+        async with Resolver() as r:
+            return await q.run(r)
+
+    run = asyncio.run(go())
+    rows = cast("list[dict[str, object]]", run.rows)  # type: ignore[attr-defined]
+    assert [(r["title"], r["when"], r["before"]) for r in rows] == [
+        ("Earnings call", "Nov 5, 2026", None),
+        ("Annual meeting", "Dec 1, 2026", "Nov 5, 2026"),
+    ]
+    loud = Query.from_source(
+        f"wq.reference({httpserver.url_for('/')!r}).resolve().select_all('p.d').extract(x=wq.doc.next('p.zzz').attr('text'))"
+    )
+    assert "following sibling" in asyncio.run(_failures(loud))[0]
+
+
+async def _failures(q: object) -> "list[str]":
+    async with Resolver() as r:
+        return (await q.run(r)).report.failures  # type: ignore[attr-defined]

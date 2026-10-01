@@ -49,7 +49,11 @@ def _chain(field: str, spec: _Read, *, json: bool, optional: bool) -> str:
         chain = f"wq.doc.attr({(spec.key or spec.css)!r})"
     else:
         opt = ", optional=True" if optional else ""
-        chain = f"wq.doc.select({spec.css!r}{opt})"
+        css = spec.css.strip()
+        if css.startswith(("+", "~")):  # a SIBLING of the record: the value sits next to it
+            chain = f"wq.doc.next({css[1:].strip()!r}{opt})"
+        else:
+            chain = f"wq.doc.select({css!r}{opt})"
     read = spec.read or "text"
     if read.startswith("attr:"):
         chain += f".attr({read[5:]!r})"
@@ -126,7 +130,7 @@ def matches(doc: Document, css: str) -> "tuple[int, str]":
     """``(how many elements css matches, "")`` -- or ``(0, why)`` when the selector is not valid
     CSS (a model writes one now and then; the engine's parse error is the reason it hears)."""
     try:
-        return len(doc.select_all(css)), ""
+        return len(doc.select_all(css.lstrip("+~ "))), ""
     except Exception as exc:  # noqa: BLE001 -- cssselect / lxml raise their own types
         return 0, f"{css!r} is not a valid selector ({type(exc).__name__}: {exc})"
 

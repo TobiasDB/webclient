@@ -90,11 +90,39 @@ class Element:
         """ALL descendants matching a CSS selector (nested selection)."""
         return [Element(n, self._base) for n in query(self._node, css)]
 
+    def next(self, css: str = "") -> "Element | None":
+        """The first FOLLOWING sibling element matching ``css`` (``""`` = the very next element),
+        or ``None`` -- a record whose values are sibling elements (a title paragraph, then a date
+        paragraph) is read this way."""
+        for sib in self._node.itersiblings():
+            if not isinstance(sib.tag, str):
+                continue  # a comment / processing instruction
+            cand = Element(sib, self._base)
+            if not css or _matches(sib, css):
+                return cand
+        return None
+
+    def prev(self, css: str = "") -> "Element | None":
+        """The first PRECEDING sibling element matching ``css`` (``""`` = the previous element)."""
+        for sib in self._node.itersiblings(preceding=True):
+            if not isinstance(sib.tag, str):
+                continue
+            if not css or _matches(sib, css):
+                return Element(sib, self._base)
+        return None
+
     @property
     def region(self) -> str:
         """The page landmark this node sits in -- ``nav`` / ``main`` / ``article`` / ``header`` /
         ``footer`` / ``aside`` (nearest ancestor), or ``""``."""
         return _content.region(self)
+
+
+def _matches(node: Node, css: str) -> bool:
+    """Whether ``node`` itself matches ``css`` (queried from its parent, so a sibling test is exact)."""
+    parent = node.getparent()
+    scope = parent if parent is not None else node
+    return any(n is node for n in query(scope, css))
 
 
 class Document:
