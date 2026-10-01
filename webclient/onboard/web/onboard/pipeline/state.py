@@ -154,9 +154,11 @@ class ResolvePlan(BaseModel):
 
 
 class ExtractQuery(BaseModel):
-    """The field extraction over the resolved document -- the ``wq`` source (page-relative) and
-    the self-contained ``blob``; ``sample`` rows; ``misses`` are required fields never populated."""
+    """The field extraction over the resolved document for ONE authoring guide -- the ``wq``
+    source (page-relative) and the self-contained ``blob``; ``sample`` rows; ``misses`` are
+    required fields never populated."""
 
+    name: str = ""  # the guide's name ("" for a single-query brief)
     source: str = ""
     blob: str = ""
     record_selector: str = ""
@@ -175,6 +177,7 @@ class AuthorReview(BaseModel):
     column; ``pending`` the fields to read there): the detail pages are onboarded as their own
     source from stage 7, with ``detail_field``'s URLs as the records, and the queries joined."""
 
+    name: str = ""  # the guide reviewed
     ok: bool = False
     notes: str = ""
     next: str = "done"  # done | nested
@@ -242,8 +245,8 @@ class Onboarding(BaseModel):
     expand: "DatasetSource | None" = None
     review_location: "LocationReview | None" = None
     author_resolve: "ResolvePlan | None" = None
-    author_extract: "ExtractQuery | None" = None
-    author_review: "AuthorReview | None" = None
+    author_extract: "list[ExtractQuery] | None" = None  # one per authoring guide
+    author_review: "list[AuthorReview] | None" = None  # one per query, same order
     spend: Spend = Spend()
     log: list[StageLog] = []
     trace: list[Trace] = []

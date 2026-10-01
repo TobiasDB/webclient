@@ -266,7 +266,7 @@ def test_whole_pipeline_offline_from_a_lead_to_the_authored_query(
     assert state.review_location is not None and state.review_location.ok
     assert state.author_resolve is not None and state.author_resolve.url == listing
     assert state.author_resolve.profile == "basic" and not state.author_resolve.via_api
-    ex = state.author_extract
+    ex = (state.author_extract or [None])[0]
     assert ex is not None and ex.complete and ex.row_count == 8, ex.attempts
     assert set(ex.fields) == {"headline", "published", "url"}  # the bogus field was dropped
     assert ex.record_selector == "li.release" and "select_all('li.release')" in ex.source
@@ -274,7 +274,7 @@ def test_whole_pipeline_offline_from_a_lead_to_the_authored_query(
     first = cast("dict[str, object]", ex.sample[0])
     assert first["headline"] == "Release 1" and first["published"] == "2026-09-11"
     assert str(first["url"]).endswith("/news/release-1")
-    assert state.author_review is not None and state.author_review.ok
+    assert state.author_review and state.author_review[0].ok
     # cost shape: six small calls, every prompt under the budget, spend attributed per stage
     assert len(llm.prompts) == 6 and all(len(p) < 4500 for p in llm.prompts), [
         len(p) for p in llm.prompts
@@ -365,25 +365,27 @@ def test_author_review_marks_the_nested_seam_and_spend_estimates_the_api_cost() 
         )
     ).render(company="acme")
     state = Onboarding(brief=brief)
-    state.author_extract = ExtractQuery(
-        fields={
-            "headline": "wq.doc.select('h3').attr('text')",
-            "url": "wq.doc.select('a').attr('href')",
-            "published": "x",
-        },
-        row_count=3,
-        sample=[
-            {"headline": "h", "url": "http://x/1", "published": "2026-01-01", "_identity": "i"}
-        ],
-        complete=True,
-    )
+    state.author_extract = [
+        ExtractQuery(
+            fields={
+                "headline": "wq.doc.select('h3').attr('text')",
+                "url": "wq.doc.select('a').attr('href')",
+                "published": "x",
+            },
+            row_count=3,
+            sample=[
+                {"headline": "h", "url": "http://x/1", "published": "2026-01-01", "_identity": "i"}
+            ],
+            complete=True,
+        )
+    ]
     llm = _Llm([json.dumps({"ok": True, "notes": "fine"})])
 
-    async def go() -> AuthorReview:
+    async def go() -> "list[AuthorReview]":
         ctx = Context(resolver=cast("object", None), llm=cast("object", llm), search=_Search([]))  # type: ignore[arg-type]
         return await author_review.run(state, ctx)
 
-    review = cast(AuthorReview, _run(go()))
+    review = cast("list[AuthorReview]", _run(go()))[0]
     assert review.ok and review.next == "nested"
     assert review.detail_field == "url" and review.pending == ["body"]
     assert "_identity" not in llm.prompts[0] and "Optional fields" in llm.prompts[0]
@@ -497,8 +499,8 @@ def test_a_rejected_review_sends_the_extraction_back_once_with_its_note(
             return await run(state, ctx, save=tmp_path / "s.json")
 
     state = cast(Onboarding, _run(go()))
-    assert state.repairs == 1 and state.author_review is not None and state.author_review.ok
-    ex = state.author_extract
+    assert state.repairs == 1 and state.author_review and state.author_review[0].ok
+    ex = (state.author_extract or [None])[0]
     assert ex is not None and "time" in ex.fields["published"] and ex.row_count == 8
     assert "REPAIR -- a reviewer rejected" in llm.prompts[5] and "category tag" in llm.prompts[5]
     assert [l.stage for l in state.log][-4:] == [
@@ -524,3 +526,139 @@ def test_the_skeleton_is_always_the_full_outline_without_detector_marks() -> Non
     assert "deep-leaf" in out and "Event 39" in out and len(out) <= SKELETON_CHARS + 100
     assert "select_all(" not in out and "RECORD LIST" not in out  # no detector pointer
     assert "nav" not in out.split("main")[0]  # chrome dropped
+
+
+def test_a_brief_with_several_guides_authors_one_query_each_and_run_joins_them(
+    httpserver: HTTPServer,
+) -> None:
+    # USER: "split the events brief into two queries -- a brief contains several authoring guides
+    # -> several authoring steps". Each guide is one extract + one review; run() joins the rows.
+    from web.onboard import run as run_queries
+
+    up = "".join(
+        f"<li class=up><b>Up {i}</b><time datetime='2027-01-0{i}'>d</time></li>"
+        for i in range(1, 3)
+    )
+    past = "".join(
+        f"<li class=past><b>Past {i}</b><time datetime='2025-01-0{i}'>d</time></li>"
+        for i in range(1, 5)
+    )
+    httpserver.expect_request("/events").respond_with_data(
+        f"<html><body><main><h2>Upcoming</h2><ul>{up}</ul><h2>Past</h2><ul>{past}</ul></main></body></html>",
+        content_type="text/html",
+    )
+    brief = Brief.from_markdown("""---
+name: ev
+args: [company]
+search: {term: "{company} events", domain: ["localhost", "127.0.0.1"]}
+queries:
+  - {name: upcoming, hint: "only the upcoming events"}
+  - {name: past, hint: "only the past events", fields: [title]}
+schema:
+  - title: {type: string, description: the event}
+  - when: {type: datetime, description: the date}
+---
+events of {company}
+""")
+    assert [g.name for g in brief.guides()] == ["upcoming", "past"]
+    replies = [
+        json.dumps({"picks": [{"n": 1, "tier": "must", "why": "the events page"}]}),
+        json.dumps({"present": True, "reason": "two event lists"}),
+        json.dumps({"ok": True, "summary": "the events page", "concerns": []}),
+        json.dumps(
+            {
+                "records": "li.up",
+                "fields": {
+                    "title": {"css": "b", "read": "text"},
+                    "when": {"css": "time", "read": "attr:datetime"},
+                },
+            }
+        ),
+        json.dumps({"records": "li.past", "fields": {"title": {"css": "b", "read": "text"}}}),
+        json.dumps({"ok": True, "notes": "two upcoming"}),
+        json.dumps({"ok": True, "notes": "four past"}),
+    ]
+    llm = _Llm(replies)
+
+    async def go() -> "tuple[Onboarding, object]":
+        async with Resolver() as r:
+            state = Onboarding.start(brief, company="acme")
+            ctx = Context(resolver=r, llm=cast("object", llm), search=_Search([httpserver.url_for("/events")]))  # type: ignore[arg-type]
+            await run(state, ctx)
+            return state, await run_queries(state, resolver=r)
+
+    state, result = cast("tuple[Onboarding, object]", _run(go()))
+    assert state.stopped == "", state.stopped
+    assert [ex.name for ex in state.author_extract or []] == ["upcoming", "past"]
+    assert [ex.row_count for ex in state.author_extract or []] == [2, 4]
+    assert (
+        "THIS QUERY: past" in llm.prompts[4]
+        and "when" not in llm.prompts[4].split("FIELDS:")[1].split("This is")[0]
+    )
+    assert [r.name for r in state.author_review or []] == ["upcoming", "past"] and all(
+        r.ok for r in state.author_review or []
+    )
+    rows = cast("list[dict[str, object]]", result.rows)  # type: ignore[attr-defined]
+    assert [r["title"] for r in rows] == ["Up 1", "Up 2", "Past 1", "Past 2", "Past 3", "Past 4"]
+    assert result.report.rows == 6  # type: ignore[attr-defined]
+
+
+def test_an_invalid_css_selector_from_the_model_is_a_repair_not_a_crash(
+    httpserver: HTTPServer,
+) -> None:
+    # USER: "a broken css selector in author extract crashed the whole pipeline instead of
+    # handling it and retrying the LLM"
+    from web.onboard.pipeline.stages.author_extract import matches
+    from web.parse import parse
+
+    doc = parse(b"<ul><li class=r><b>A</b></li></ul>", url="http://x/", content_type="text/html")
+    assert matches(doc, "li.r") == (1, "")
+    n, why = matches(doc, "li.r[")  # unterminated attribute selector
+    assert n == 0 and "not a valid selector" in why
+    _site(httpserver)
+    brief = Brief.from_markdown(
+        _BRIEF.replace(
+            'domain: ["{company}", "investors.{company}", "ir.{company}", "q4cdn", "gcs-web"]',
+            'domain: ["localhost", "127.0.0.1"]',
+        )
+    )
+    replies = [
+        json.dumps({"picks": [{"n": 1, "tier": "must", "why": "the listing"}]}),
+        json.dumps({"present": True, "reason": "a list"}),
+        json.dumps({"ok": True, "summary": "the listing", "concerns": []}),
+        json.dumps(
+            {"records": "li.release[", "fields": {"headline": {"css": "h3 a", "read": "text"}}}
+        ),  # broken
+        json.dumps(
+            {
+                "records": "li.release",
+                "fields": {
+                    "headline": {"css": "h3 a(", "read": "text"},
+                    "published": {"css": "time", "read": "attr:datetime"},
+                },
+            }
+        ),  # a broken FIELD
+        json.dumps(
+            {
+                "records": "li.release",
+                "fields": {
+                    "headline": {"css": "h3 a", "read": "text"},
+                    "published": {"css": "time", "read": "attr:datetime"},
+                },
+            }
+        ),
+        json.dumps({"ok": True, "notes": "fine"}),
+    ]
+    llm = _Llm(replies)
+
+    async def go() -> Onboarding:
+        async with Resolver() as r:
+            state = Onboarding.start(brief, company="acme")
+            ctx = Context(resolver=r, llm=cast("object", llm), search=_Search([httpserver.url_for("/news/")]))  # type: ignore[arg-type]
+            return await run(state, ctx)
+
+    state = cast(Onboarding, _run(go()))
+    ex = (state.author_extract or [None])[0]
+    assert ex is not None and ex.complete and ex.row_count == 8, state.stopped
+    assert "not a valid selector" in ex.attempts[0] and "not a valid selector" in llm.prompts[4]
+    assert len(ex.attempts) == 3

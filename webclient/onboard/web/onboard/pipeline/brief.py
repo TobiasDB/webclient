@@ -40,6 +40,16 @@ class SearchSpec(BaseModel):
 FieldSpec = FieldDef
 
 
+class QueryGuide(BaseModel):
+    """ONE authoring step of a brief: a named part of the dataset (``upcoming`` / ``past``), the
+    guidance the author gets for it, and (optionally) the subset of fields it extracts. A brief
+    with several guides yields several queries, run together."""
+
+    name: str = ""
+    hint: str = ""
+    fields: list[str] = []  # the fields this query extracts ([] = every brief field)
+
+
 class Brief(BaseModel):
     """The onboarding ask. ``goal`` is the dataset in one paragraph; ``title`` names it; ``args``
     are the names a caller supplies; ``search`` drives stage 1; ``look`` / ``ignore`` scope the
@@ -55,6 +65,7 @@ class Brief(BaseModel):
     fields: list[FieldSpec] = []
     expect_rows: str = ""
     hints: dict[str, str] = {}  # per-stage natural-language hints: {"author_extract": "..."}
+    queries: list[QueryGuide] = []  # the authoring guides: one query each ([] = one query)
     values: dict[str, str] = {}  # the argument values once rendered
 
     # -- loading --
@@ -141,9 +152,19 @@ class Brief(BaseModel):
     def expected_range(self) -> "tuple[int, int] | None":
         return parse_range(self.expect_rows)
 
-    def as_schema(self) -> Schema:
-        """The brief as the query's OPTIONAL schema (rides the authored blob)."""
-        return Schema(fields=list(self.fields), expect_rows=self.expect_rows)
+    def as_schema(self, guide: "QueryGuide | None" = None) -> Schema:
+        """The brief (or one of its guides' field subset) as the query's OPTIONAL schema."""
+        fields = [f for f in self.fields if not guide or not guide.fields or f.name in guide.fields]
+        return Schema(fields=fields, expect_rows=self.expect_rows)
+
+    def guides(self) -> "list[QueryGuide]":
+        """The authoring steps: the brief's ``queries``, else ONE guide from ``hints``."""
+        if self.queries:
+            return list(self.queries)
+        return [QueryGuide(name="", hint=self.hints.get("author_extract", ""))]
+
+    def guide_fields(self, guide: QueryGuide) -> "list[FieldDef]":
+        return [f for f in self.fields if not guide.fields or f.name in guide.fields]
 
 
 def packaged_briefs() -> "list[str]":
@@ -179,4 +200,4 @@ def _collect(value: JsonValue, found: "set[str]") -> None:
             _collect(v, found)
 
 
-__all__ = ["Brief", "BriefError", "FieldSpec", "SearchSpec", "packaged_briefs"]
+__all__ = ["Brief", "BriefError", "FieldSpec", "QueryGuide", "SearchSpec", "packaged_briefs"]

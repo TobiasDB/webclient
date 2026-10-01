@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .ask import Context, ReplyError, ask, ask_json
-from .brief import Brief, BriefError, FieldSpec, SearchSpec, packaged_briefs
+from .brief import Brief, BriefError, FieldSpec, QueryGuide, SearchSpec, packaged_briefs
 from .runner import STAGES, Stage, run
 from .state import (
     STAGE_NAMES,
@@ -43,6 +43,7 @@ __all__ = [
     "Onboarding",
     "PaginateDescription",
     "Pick",
+    "QueryGuide",
     "ReplyError",
     "ResolvePlan",
     "STAGES",

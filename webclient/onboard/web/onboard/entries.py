@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from web.dsl import Query, Run, Sink
+from web.dsl import Query, Report, Run, Sink
 from web.resolve import Resolver
 
 from .config import build_resolver, default_llm, default_search
@@ -54,13 +54,16 @@ async def onboard(
             await resolver.aclose()
 
 
+def queries_of(state: Onboarding) -> "list[Query]":
+    """The authored :class:`~web.dsl.Query` per authoring guide (schema from the brief) -- empty
+    before / without a complete extraction."""
+    return [Query.from_blob(ex.blob) for ex in (state.author_extract or []) if ex.blob]
+
+
 def query_of(state: Onboarding) -> "Query | None":
-    """The authored :class:`~web.dsl.Query` of an onboarding (its schema from the brief), or
-    ``None`` before / without a complete extraction."""
-    ex = state.author_extract
-    if ex is None or not ex.blob:
-        return None
-    return Query.from_blob(ex.blob)
+    """The FIRST authored query (a single-guide brief has exactly one), or ``None``."""
+    found = queries_of(state)
+    return found[0] if found else None
 
 
 async def run(
@@ -73,16 +76,47 @@ async def run(
     """Execute an onboarding's authored query (or any :class:`~web.dsl.Query`) -- see
     :meth:`web.dsl.Query.run`: rows, documents (the schema's document-typed fields fetched) and the
     report, streamed to ``sink`` as they come. A resolver built here is closed on the way out."""
-    query = query_of(source) if isinstance(source, Onboarding) else source
-    if query is None:
-        return Run()
+    queries = queries_of(source) if isinstance(source, Onboarding) else [source]
     own = resolver is None
     resolver = resolver or build_resolver()
+    total = Run()
     try:
-        return await query.run(resolver, sink=sink, lenient=lenient)
+        for query in queries:
+            part = await query.run(resolver, sink=sink, lenient=lenient)
+            total.rows.extend(part.rows)
+            total.documents.extend(part.documents)
+            total.report = (
+                _merge(total.report, part.report) if total.rows != part.rows else part.report
+            )
     finally:
         if own:
             await resolver.aclose()
+    return total
 
 
-__all__ = ["onboard", "query_of", "run"]
+def _merge(a: Report, b: Report) -> Report:
+    """Two queries' reports as one: counts summed, fill weighted by rows, the rest concatenated."""
+    rows = a.rows + b.rows
+    fill = {
+        n: ((a.fill.get(n, 0.0) * a.rows) + (b.fill.get(n, 0.0) * b.rows)) / rows if rows else 0.0
+        for n in {*a.fill, *b.fill}
+    }
+    return Report(
+        rows=rows,
+        expected=b.expected or a.expected,
+        fill=fill,
+        duplicates=a.duplicates + b.duplicates,
+        newest=max(a.newest, b.newest),
+        newest_age_days=(
+            min(x for x in (a.newest_age_days, b.newest_age_days) if x is not None)
+            if (a.newest_age_days is not None or b.newest_age_days is not None)
+            else None
+        ),
+        issues=[*a.issues, *b.issues],
+        fetches=[*a.fetches, *b.fetches],
+        failures=[*a.failures, *b.failures],
+        elapsed_s=round(a.elapsed_s + b.elapsed_s, 2),
+    )
+
+
+__all__ = ["onboard", "queries_of", "query_of", "run"]

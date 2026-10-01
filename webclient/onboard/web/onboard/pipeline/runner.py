@@ -7,7 +7,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import BaseModel
 from web.fetch import emit
 
 from ..llm import ReasonEvent
@@ -23,13 +22,13 @@ from .stages import (
     review_search,
     search,
 )
-from .state import STAGE_NAMES, Onboarding, StageLog, now
+from .state import STAGE_NAMES, AuthorReview, Onboarding, StageLog, now
 
 
 @dataclass(frozen=True)
 class Stage:
     name: str
-    run: "Callable[[Onboarding, Context], Awaitable[BaseModel]]"
+    run: "Callable[[Onboarding, Context], Awaitable[object]]"  # a contract model, or a list of them
 
 
 STAGES: "tuple[Stage, ...]" = (
@@ -61,26 +60,27 @@ async def run(
     when a stage sets ``state.stopped``. The state is saved to ``save`` after each stage. A
     REJECTED author review sends the extraction back once (its notes become the repair note)."""
     await _pass(state, ctx, until=until, save=save)
-    review = state.author_review
-    while (
-        review is not None
-        and not review.ok
-        and review.next == "done"
-        and state.repairs < MAX_REVIEW_REPAIRS
-        and until in (None, "author_review")
-    ):
+    rejected = _rejected(state)
+    while rejected and state.repairs < MAX_REVIEW_REPAIRS and until in (None, "author_review"):
         state.repairs += 1
-        state.review_note = review.notes
+        state.review_note = "; ".join(
+            f"{r.name + ': ' if r.name else ''}{r.notes}" for r in rejected
+        )
         state.author_extract, state.author_review = None, None
         emit(
             ReasonEvent(
                 stage="author_review",
-                text=f"rejected — repairing the extraction once: {review.notes}",
+                text=f"rejected — repairing the extraction once: {state.review_note}",
             )
         )
         await _pass(state, ctx, until=until, save=save)
-        review = state.author_review
+        rejected = _rejected(state)
     return state
+
+
+def _rejected(state: Onboarding) -> "list[AuthorReview]":
+    """The reviews that rejected their query (the nested seam is not a rejection)."""
+    return [r for r in (state.author_review or []) if not r.ok and r.next == "done"]
 
 
 async def _pass(

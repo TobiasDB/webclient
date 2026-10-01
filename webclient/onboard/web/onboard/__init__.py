@@ -22,7 +22,7 @@ from web.dsl import Attachment, Dataset, MemorySink, Query, Run, Sink, identity_
 
 from .compile import QueryError, hygienic, parse_query, reroot
 from .config import build_resolver, default_llm, default_search
-from .entries import onboard, query_of, run
+from .entries import onboard, queries_of, query_of, run
 from .llm import (
     AnthropicLlm,
     Budget,
@@ -55,6 +55,7 @@ from .pipeline import (
     Onboarding,
     PaginateDescription,
     Pick,
+    QueryGuide,
     ReplyError,
     ResolvePlan,
     SearchResult,
@@ -75,6 +76,7 @@ __all__ = [
     "onboard",
     "run",
     "query_of",
+    "queries_of",
     "Dataset",
     "Attachment",
     "Run",
@@ -82,6 +84,7 @@ __all__ = [
     "Brief",
     "BriefError",
     "FieldSpec",
+    "QueryGuide",
     "SearchSpec",
     "packaged_briefs",
     # -- the stages and their contracts --

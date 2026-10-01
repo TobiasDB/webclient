@@ -49,7 +49,8 @@ from .config import PIPELINE_MODEL, build_resolver, default_search
 from .config import env as _env
 from .config import env_flag as _env_flag
 from .config import env_float as _env_float
-from .entries import query_of
+from .entries import queries_of
+from .entries import run as run_queries
 from .llm import AnthropicLlm, LlmEvent, Pricing, RateLimit, ReasonEvent, TraceEvent, Usage
 from .pipeline import STAGE_NAMES, Brief, BriefError, Context, Onboarding, packaged_briefs
 from .pipeline import run as pipeline_run
@@ -419,21 +420,27 @@ async def _onboard(args: argparse.Namespace) -> int:
         _err(
             f"  location:   {'ok' if state.review_location.ok else 'CONCERN'} — {state.review_location.summary}"
         )
-    ex = state.author_extract
-    if ex is not None:
+    queries = state.author_extract or []
+    for ex in queries:
+        label = f" ({ex.name})" if ex.name else ""
         _err(
-            f"  rows:       {ex.row_count}"
+            f"  rows{label}:".ljust(14)
+            + f"{ex.row_count}"
             + (f"  misses: {', '.join(ex.misses)}" if ex.misses else "")
         )
+        if ex.report:
+            _err(f"  report:     {ex.report}")
         for row in ex.sample[: args.sample]:
             _err(f"    {json.dumps(row, ensure_ascii=False, default=str)[:400]}")
         if ex.blob:
             print(ex.blob)
-    if state.author_review is not None:
+    for review in state.author_review or []:
+        label = f" ({review.name})" if review.name else ""
         _err(
-            f"  review:     {'ok' if state.author_review.ok else 'REJECTED'} — {state.author_review.notes}"
+            f"  review{label}:".ljust(14) + f"{'ok' if review.ok else 'REJECTED'} — {review.notes}"
         )
-    return 0 if (ex is not None and ex.complete and not state.stopped) else 1
+    done = bool(queries) and all(ex.complete for ex in queries) and not state.stopped
+    return 0 if done else 1
 
 
 # -- run: execute an authored query ----------------------------------------------------------------
@@ -445,16 +452,19 @@ async def _run_query(args: argparse.Namespace) -> int:
     """
     path = Path(args.source)
     if path.is_file() and path.suffix == ".json":
-        query = query_of(Onboarding.load(path))
-        if query is None:
+        state = Onboarding.load(path)
+        if not queries_of(state):
             _err(f"{path} holds no authored query yet")
             return 2
+        source: "Onboarding | Query" = state
     else:
-        query = Query.from_blob(path.read_text(encoding="utf-8") if path.is_file() else args.source)
+        source = Query.from_blob(
+            path.read_text(encoding="utf-8") if path.is_file() else args.source
+        )
     resolver = _resolver(args.profile, args.proxy, args.browser_path)
     try:
         with _Progress(args.verbose):
-            result = await query.run(resolver, lenient=args.lenient)
+            result = await run_queries(source, resolver=resolver, lenient=args.lenient)
     finally:
         await resolver.aclose()
     _err(f"  report:     {result.report.summary()}")
@@ -511,7 +521,12 @@ def _view(args: argparse.Namespace) -> int:
     if log and log.note:
         print(f"   note: {log.note}")
     print("-- contract:")
-    print(out.model_dump_json(indent=1) if out is not None else "(no output yet)")
+    if out is None:
+        print("(no output yet)")
+    elif isinstance(out, list):
+        print(json.dumps([item.model_dump() for item in out], indent=1, ensure_ascii=False))
+    else:
+        print(out.model_dump_json(indent=1))
     traces = [t for t in state.trace if t.stage == args.stage]
     print(f"-- model exchanges: {len(traces)}")
     for i, t in enumerate(traces, 1):
@@ -523,8 +538,10 @@ def _view(args: argparse.Namespace) -> int:
     return 0
 
 
-def _one_line(model: BaseModel) -> str:
-    """A stage output in one line for the overview."""
+def _one_line(model: "BaseModel | list[BaseModel]") -> str:
+    """A stage output in one line for the overview (a list: one per item, joined)."""
+    if isinstance(model, list):
+        return " | ".join(_one_line(m) for m in model) or "(none)"
     data = model.model_dump()
     if "hits" in data:
         return f"{len(data['hits'])} hit(s) for {data.get('term')!r}"

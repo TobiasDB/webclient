@@ -20,6 +20,7 @@ from ...compile import QueryError, parse_query, reroot
 from ...llm import ReasonEvent
 from ..apis import records_path
 from ..ask import Context, ask_json
+from ..brief import QueryGuide
 from ..hints import attrs_of, closest, leaves, record_structure, typical
 from ..state import ExtractQuery, Onboarding
 from .review_candidate import skeleton
@@ -98,6 +99,15 @@ def _empty(v: object) -> bool:
     )
 
 
+def matches(doc: Document, css: str) -> "tuple[int, str]":
+    """``(how many elements css matches, "")`` -- or ``(0, why)`` when the selector is not valid
+    CSS (a model writes one now and then; the engine's parse error is the reason it hears)."""
+    try:
+        return len(doc.select_all(css)), ""
+    except Exception as exc:  # noqa: BLE001 -- cssselect / lxml raise their own types
+        return 0, f"{css!r} is not a valid selector ({type(exc).__name__}: {exc})"
+
+
 def _hints(
     doc: Document,
     records: str,
@@ -118,7 +128,7 @@ def _hints(
                 f"- records: {records!r} matched NO element. Pick the element that repeats once per "
                 "record from the page structure (a tag plus a semantic class or attribute)."
             )
-        else:
+        elif not matches(doc, records)[1]:
             lines.append(
                 f"- records: {records!r} matched {matched} element(s); a typical one:\n{record_structure(doc, records)}"
             )
@@ -129,12 +139,15 @@ def _hints(
         css = spec.css or spec.key if spec is not None else ""
         line = f"- {name}: {css!r} read nothing on every record."
         if scope is not None and css:
-            near = closest(scope, css)
-            if near:
-                line += " Closest selectors in the record: " + ", ".join(near) + "."
-            have = attrs_of(scope, css)
-            if have:
-                line += " Its attributes: " + ", ".join(have) + "."
+            try:
+                near, have = closest(scope, css), attrs_of(scope, css)
+            except Exception as exc:  # noqa: BLE001 -- the field's selector is not valid CSS
+                line += f" (not a valid selector: {exc})"
+            else:
+                if near:
+                    line += " Closest selectors in the record: " + ", ".join(near) + "."
+                if have:
+                    line += " Its attributes: " + ", ".join(have) + "."
         lines.append(line)
     if scope is not None:
         what = leaves(scope)
@@ -143,13 +156,14 @@ def _hints(
     return "\n".join(lines)
 
 
-async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
+async def run(state: Onboarding, ctx: Context) -> "list[ExtractQuery]":
+    """One query per authoring guide of the brief (``queries:``; else one), over the same fetched
+    document. A guide that stops the run stops it with its name."""
     assert state.author_resolve is not None and state.expand is not None
-    plan, src, brief = state.author_resolve, state.expand, state.brief
+    plan = state.author_resolve
     prof = _rp.get(plan.profile) or _rp.BASIC
     resolver = Resolver(profile=prof, pool=ctx.resolver.pool)
     doc = document(await resolver.snapshot(Request(url=plan.url)))
-    is_json = doc.kind == "json"
     outline = skeleton(doc)  # the WHOLE structure: the author chooses from all of it
     emit(
         ReasonEvent(
@@ -159,15 +173,50 @@ async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
             f"({len(outline)} chars):\n{outline}",
         )
     )
-    out = ExtractQuery()
-    optional = {f.name for f in brief.fields if f.optional}
+    out: list[ExtractQuery] = []
+    for guide in state.brief.guides():
+        if guide.name:
+            emit(
+                ReasonEvent(
+                    stage="author_extract", text=f"query {guide.name!r}: {guide.hint[:120]}"
+                )
+            )
+        one = await _one(state, ctx, guide, doc, outline, resolver)
+        out.append(one)
+        if not one.complete:
+            state.stopped = f"author_extract{' (' + guide.name + ')' if guide.name else ''}: " + (
+                one.attempts[-1] if one.attempts else "nothing extracted"
+            )
+            break
+    return out
+
+
+async def _one(
+    state: Onboarding,
+    ctx: Context,
+    guide: QueryGuide,
+    doc: Document,
+    outline: str,
+    resolver: Resolver,
+) -> ExtractQuery:
+    assert state.author_resolve is not None
+    plan, brief = state.author_resolve, state.brief
+    fields_in = brief.guide_fields(guide)
+    names = [f.name for f in fields_in]
+    required = [f.name for f in fields_in if not f.optional]
+    is_json = doc.kind == "json"
+    out = ExtractQuery(name=guide.name)
+    optional = {f.name for f in fields_in if f.optional}
     note = (
         f"\nREPAIR -- a reviewer rejected the previous extraction: {state.review_note}\n"
         "Fix what it names; keep the rest."
         if state.review_note
         else ""
     )
-    schema = brief.as_schema()
+    schema = brief.as_schema(guide)
+    guidance = (brief.hints.get("author_extract", "") + "\n" + guide.hint).strip()
+    if guide.name:
+        guidance = f"THIS QUERY: {guide.name} -- {guide.hint}".strip()
     for attempt in range(1 + _REPAIRS):
         reply = await ask_json(
             ctx,
@@ -175,7 +224,10 @@ async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
             "author_extract",
             _Reply,
             goal=brief.goal,
-            schema=brief.schema_lines(),
+            schema="\n".join(
+                f"- {f.name} ({f.type}): {f.description}" + (" [optional]" if f.optional else "")
+                for f in fields_in
+            ),
             kind=(
                 "a JSON document: 'records' is the dotted path to the record array (\"\" when "
                 "the document IS the array), a field reads a key of each record"
@@ -184,13 +236,13 @@ async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
                 "once per record, a field reads an element RELATIVE to that record"
             ),
             skeleton=outline,
-            hint=brief.hints.get("author_extract", ""),
+            hint=guidance,
             note=note,
         )
         records = reply.records.strip() if not is_json else reply.records.strip()
         if is_json and not records:
             records = records_path(doc.json())
-        specs = {n: r for n, r in reply.fields.items() if n in brief.names}
+        specs = {n: r for n, r in reply.fields.items() if n in names}
         failure = ""
         if not is_json:
             records = normalise(records)
@@ -202,8 +254,12 @@ async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
         if not specs and not failure:
             failure = "the reply named none of the schema's fields (use the field names exactly)"
         fields = {n: _chain(n, r, json=is_json, optional=n in optional) for n, r in specs.items()}
-        matched = len(doc.select_all(records)) if (records and not is_json) else 0
-        rates: dict[str, float] = {n: 0.0 for n in brief.required}
+        matched = 0
+        if records and not is_json and not failure:
+            matched, bad = matches(doc, records)
+            if bad:
+                failure = bad
+        rates: dict[str, float] = {n: 0.0 for n in required}
         rows = 0
         if not failure:
             try:  # a LENIENT probe: every field optional; the report's fill rates say what read
@@ -214,7 +270,7 @@ async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
                 ).with_schema(schema)
                 result = await probe.run(resolver, lenient=True)
                 rows = result.report.rows
-                rates = {n: result.report.fill.get(n, 0.0) for n in brief.required}
+                rates = {n: result.report.fill.get(n, 0.0) for n in required}
                 if result.report.failures:
                     failure = "; ".join(result.report.failures)
             except QueryError as exc:  # selector hygiene refused something: the reason goes back
@@ -223,11 +279,11 @@ async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
                 failure = f"the query could not run ({type(exc).__name__}: {exc})"
         # a required field read on NO record is a miss (repair); on SOME records it marks the
         # elements that are not records of the dataset (a promo in the list) -> filter them out
-        misses = [n for n in brief.required if rates[n] == 0.0] if rows else list(brief.required)
-        keep = [n for n in brief.required if 0.0 < rates[n] < 1.0]
+        misses = [n for n in required if rates[n] == 0.0] if rows else list(required)
+        keep = [n for n in required if 0.0 < rates[n] < 1.0]
         source = compile_source(records, fields, keep=keep) if records and fields else ""
         out.record_selector, out.fields, out.source, out.misses = records, fields, source, misses
-        fill = ", ".join(f"{n} {rates[n]:.0%}" for n in brief.required) if rows else "no rows"
+        fill = ", ".join(f"{n} {rates[n]:.0%}" for n in required) if rows else "no rows"
         out.attempts.append(
             f"attempt {attempt + 1}: records {records!r}"
             + (f" ({matched} matched)" if not is_json else "")

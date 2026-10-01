@@ -14,6 +14,9 @@ fails loudly. The `search` section drives stage 1 deterministically: a `term`, `
 `path` HINTS — fragments scored against each result's host and path (`investors.{company}`,
 `news`, `press`). `look` / `ignore` are the one-line natural-language scope the review stages see.
 `schema` is the field list (name, type, description); `optional` and `expect_rows` bound the author.
+`queries` is the list of AUTHORING GUIDES (a name, a hint, an optional field subset): stage 8 writes
+one query per guide over the same document and stage 9 reviews each; `run(state)` executes them
+all into one result (ir-events: `upcoming` and `past`). Without `queries`, one query.
 
 ## LLM calls: `ask(ctx, STAGE, **args)`
 
