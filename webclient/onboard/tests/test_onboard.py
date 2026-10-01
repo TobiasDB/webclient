@@ -315,3 +315,16 @@ def test_claude_shim_conversation_keeps_one_process_and_recovers(
         await shim.aclose()
 
     asyncio.run(go())
+
+
+def test_every_packaged_brief_loads_and_renders() -> None:
+    # a colon in an unquoted title broke ir-events at load time -- every packaged brief must parse
+    from web.onboard import Brief, packaged_briefs
+
+    names = packaged_briefs()
+    assert {"ir-events", "ir-news", "news"} <= set(names)
+    for name in names:
+        brief = Brief.load(name)
+        assert brief.name == name and brief.goal and brief.fields, name
+        rendered = brief.render(**{a: "x" for a in brief.args})
+        assert "{" not in rendered.search.term and rendered.placeholders() == set()

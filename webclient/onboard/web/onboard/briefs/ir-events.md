@@ -1,6 +1,6 @@
 ---
 name: ir-events
-title: Investor-relations events (the latest: upcoming and the current period)
+title: "Investor-relations events (the latest: upcoming and the current period)"
 args: [company]
 related: [ir-news]
 search:
