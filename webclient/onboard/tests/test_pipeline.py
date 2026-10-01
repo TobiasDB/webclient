@@ -797,3 +797,16 @@ events of {company}
     assert [r.name for r in state.author_review or []] == [
         "past"
     ]  # only the complete query is reviewed
+
+
+def test_a_feed_without_a_record_array_is_never_the_api() -> None:
+    # Allstate ir-news: an API was found that returned no data
+    from web.onboard.pipeline.apis import has_records
+
+    assert has_records({"GetEventListResult": [{"Title": "a"}]})
+    assert has_records([{"a": 1}])
+    assert (
+        not has_records({"status": "ok", "items": []})
+        and not has_records([])
+        and not has_records({"n": 3})
+    )

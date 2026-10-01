@@ -15,7 +15,14 @@ from web.resolve import Flag, Resolver, document, flags
 from web.resolve import profiles as _rp
 
 from ...llm import ReasonEvent
-from ..apis import consistent, declared_endpoints, observed_endpoints, records_path, schema_fit
+from ..apis import (
+    consistent,
+    declared_endpoints,
+    has_records,
+    observed_endpoints,
+    records_path,
+    schema_fit,
+)
 from ..ask import Context
 from ..brief import Brief
 from ..state import (
@@ -203,7 +210,9 @@ async def run(state: Onboarding, ctx: Context) -> DatasetSource:
         found.append((url, api))
     found.extend(observed_endpoints(snap))
     for url, api in found:
-        if api.kind == "json" and consistent(doc, api):
+        if api.kind != "json" or not has_records(api.json()):
+            continue  # no record array: not the dataset's feed (an empty / status reply)
+        if consistent(doc, api):
             fit = schema_fit(api, state.brief)
             if best is None or fit > best[0]:
                 best = (fit, url, api)

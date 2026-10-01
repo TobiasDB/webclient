@@ -74,6 +74,16 @@ def records_path(value: object, path: str = "") -> str:
     return ""
 
 
+def has_records(value: object) -> bool:
+    """Whether a JSON value holds a NON-EMPTY array of objects somewhere (the record array) -- a
+    feed that answers with an empty list / a status envelope is not the dataset's feed."""
+    if isinstance(value, list):
+        return bool(value) and isinstance(value[0], dict)
+    if isinstance(value, dict):
+        return any(has_records(v) for v in value.values())
+    return False
+
+
 def declared_endpoints(doc: Document) -> "list[str]":
     """Same-origin JSON endpoints the DOM points at: feed / JSON ``<link>``s, ``/api/`` and
     ``.json`` links -- most declared first, deduped."""
@@ -113,6 +123,7 @@ def observed_endpoints(snap: Snapshot) -> "list[tuple[str, Document]]":
 __all__ = [
     "consistent",
     "declared_endpoints",
+    "has_records",
     "observed_endpoints",
     "records_path",
     "schema_fit",
