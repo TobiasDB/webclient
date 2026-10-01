@@ -62,6 +62,7 @@ async def run(
             emit(ReasonEvent(stage=stage.name, text="…"))
             started, t0 = now(), time.monotonic()
             calls0, usd0 = state.spend.calls, state.spend.usd
+            in0, out0 = state.spend.chars_in, state.spend.chars_out
             out = await stage.run(state, ctx)
             setattr(state, stage.name, out)
             state.log.append(
@@ -71,6 +72,8 @@ async def run(
                     elapsed_s=round(time.monotonic() - t0, 2),
                     calls=state.spend.calls - calls0,
                     usd=round(state.spend.usd - usd0, 5),
+                    chars_in=state.spend.chars_in - in0,
+                    chars_out=state.spend.chars_out - out0,
                     note=state.stopped,
                 )
             )

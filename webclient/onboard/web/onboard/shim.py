@@ -39,7 +39,8 @@ def _int(value: object) -> int:
 _SYSTEM = (
     "You are a precise text function. Do exactly what the user's message instructs and output ONLY "
     "the requested content -- no preamble, no explanation, no markdown code fences unless the "
-    "instruction asks for them. Do not use any tools; answer from the message alone."
+    "instruction asks for them. When the message asks for JSON, reply with that JSON and nothing "
+    "else. Do not use any tools; answer from the message alone."
 )
 
 

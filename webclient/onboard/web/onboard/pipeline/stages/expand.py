@@ -5,6 +5,8 @@ a pager's parameters, an API's knobs -- are later refinements of this stage.)"""
 
 from __future__ import annotations
 
+from urllib.parse import parse_qs, urlparse
+
 from pydantic import JsonValue
 from web.fetch import Request, Snapshot
 from web.parse import Document
@@ -23,6 +25,32 @@ from ..state import (
 from .review_candidate import record_count
 
 _PAGERS = {"paginated": "next_link", "infinite_scroll": "scroll"}
+#: query parameters a pager bumps, most common first.
+_PAGE_PARAMS = ("page", "p", "pg", "pagenum", "page_number", "offset", "start", "skip")
+
+
+def pager_of(doc: Document, kind: str, note: str) -> PaginateDescription:
+    """How the pager works, from the DOM: a ``rel=next`` link (``next_link``); else a same-path link
+    carrying a page parameter (``param`` -- its name); else a scroll / an unknown pager."""
+    if kind == "scroll":
+        return PaginateDescription(kind="scroll", note=note)
+    if doc.select("a[rel=next], link[rel=next]") is not None:
+        return PaginateDescription(kind="next_link", next_selector="a[rel=next]", note=note)
+    path = urlparse(doc.url).path.rstrip("/")
+    for link in doc.links():
+        parts = urlparse(link)
+        if parts.path.rstrip("/") != path:
+            continue
+        names = {k.lower(): k for k in parse_qs(parts.query)}
+        for cand in _PAGE_PARAMS:
+            if cand in names:
+                return PaginateDescription(kind="param", param=names[cand], note=note)
+    return PaginateDescription(kind="next_link", note=note)
+
+
+def knobs_of(url: str) -> "dict[str, str]":
+    """An endpoint's query parameters as called (the knobs a feed exposes: page / year / type)."""
+    return {k: v[0] for k, v in parse_qs(urlparse(url).query).items() if v}
 
 
 async def page_of(ctx: Context, url: str, profile: str) -> "tuple[Document, Snapshot]":

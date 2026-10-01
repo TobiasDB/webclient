@@ -112,6 +112,7 @@ class ApiDescription(BaseModel):
     kind: str = "json"
     records_path: str = ""  # the JSON path to the record array
     fit: int = 0  # how many brief fields its keys resemble
+    knobs: dict[str, str] = {}  # the endpoint's query parameters as called (page / year / type…)
 
 
 class SpaDescription(BaseModel):
@@ -171,9 +172,16 @@ class ExtractQuery(BaseModel):
 
 
 class AuthorReview(BaseModel):
+    """The final review -- and the NESTED seam: ``next`` is ``"nested"`` when required fields are
+    not on the listing but every record links to its own page (``detail_field`` names the URL
+    column; ``pending`` the fields to read there): the detail pages are onboarded as their own
+    source from stage 7, with ``detail_field``'s URLs as the records, and the queries joined."""
+
     ok: bool = False
     notes: str = ""
-    next: str = "done"  # reserved: "nested" = onboard the detail pages as their own source
+    next: str = "done"  # done | nested
+    detail_field: str = ""
+    pending: list[str] = []
 
 
 # -- the state --------------------------------------------------------------------------------------
@@ -185,13 +193,27 @@ class StageLog(BaseModel):
     elapsed_s: float = 0.0
     calls: int = 0
     usd: float = 0.0
+    chars_in: int = 0
+    chars_out: int = 0
     note: str = ""
 
 
 class Spend(BaseModel):
+    """The run's model spend: the client's OWN metered ``usd`` (the shim's accounting includes its
+    CLI overhead), and the prompt / reply sizes every call sent, from which :meth:`api_estimate`
+    prices the same calls on the API (Haiku list prices) -- the number the $0.01 target is about."""
+
     calls: int = 0
     usd: float = 0.0
+    chars_in: int = 0
+    chars_out: int = 0
     by_stage: dict[str, float] = {}
+
+    def api_estimate(self, usd_in: float = 1.0, usd_out: float = 5.0) -> float:
+        """The API cost of this run's calls at ``usd_in`` / ``usd_out`` per million tokens
+        (4 chars ~ 1 token), plus a fixed system prompt per call."""
+        tokens_in = self.chars_in / 4 + 60 * self.calls
+        return round(tokens_in * usd_in / 1e6 + (self.chars_out / 4) * usd_out / 1e6, 5)
 
 
 class Onboarding(BaseModel):
@@ -242,9 +264,13 @@ class Onboarding(BaseModel):
             return None
         return next((n for n in STAGE_NAMES if getattr(self, n) is None), None)
 
-    def charge(self, stage: str, calls: int, usd: float) -> None:
+    def charge(
+        self, stage: str, calls: int, usd: float, *, chars_in: int = 0, chars_out: int = 0
+    ) -> None:
         self.spend.calls += calls
         self.spend.usd += usd
+        self.spend.chars_in += chars_in
+        self.spend.chars_out += chars_out
         self.spend.by_stage[stage] = self.spend.by_stage.get(stage, 0.0) + usd
 
 

@@ -37,9 +37,14 @@ per stage in `state.spend`. The target is about $0.01 per onboarding on Haiku-cl
 | 8 | author_extract | `ExtractQuery` — the field extraction over THAT document; one shot, then repair with precise per-field hints; NO nested resolves | 1–3 |
 | 9 | author_review | `AuthorReview` — the final review of the sample against the brief | 1 |
 
-Stage 8 never follows links: a record's detail page is a LATER onboarding of its own (back to stage
-7 with the detail URL column as the source, the queries joined) — the seam `AuthorReview.next`
-is reserved for it.
+Stage 8 never follows links. When required fields are not on the listing but every record links
+to its own page, stage 9 sets `AuthorReview.next = "nested"` with `detail_field` (the URL column)
+and `pending` (the fields to read there): the detail pages are onboarded as their own source from
+stage 7, with that column's URLs as the records, and the queries joined. That join is the next
+build; the contract is in place.
+
+Stage 5 reads the page mechanically: the pager's shape (`rel=next` link, a page parameter, a
+scroll), the data API's query knobs as called (`ApiDescription.knobs`), filters, the SPA tier.
 
 ## Running
 
@@ -50,6 +55,10 @@ await run(state, ctx, save="intel-ir-news.json")   # resumable: re-run the same 
 ```
 
 ## Cost
+
+The API path (`default_llm()` without the shim) runs Haiku with a JSON-only system prompt and a
+1,500-token output cap; `state.spend.api_estimate()` prices every run's prompt / reply sizes at
+Haiku list prices, so the shim's own overhead never hides the number the target is about.
 
 Target $0.01 per onboarding; $0.10 is the ceiling. Every prompt input is clipped to
 `PROMPT_INPUT_CHARS` (about 700 tokens); the spend is attributed per stage in `state.spend` and

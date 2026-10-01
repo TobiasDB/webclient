@@ -38,4 +38,9 @@ async def run(state: Onboarding, ctx: Context) -> AuthorReview:
         rows=clip(rows, PROMPT_INPUT_CHARS, "rows", kind="json"),
         note="",
     )
-    return AuthorReview(ok=reply.ok, notes=reply.notes)
+    review = AuthorReview(ok=reply.ok, notes=reply.notes)
+    pending = [f for f in state.brief.required if f not in ex.fields or f in ex.misses]
+    url_fields = [f.name for f in state.brief.fields if f.type == "url" and f.name in ex.fields]
+    if pending and url_fields:  # the rest lives on each record's own page: the nested seam
+        review.next, review.detail_field, review.pending = "nested", url_fields[0], pending
+    return review

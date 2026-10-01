@@ -314,3 +314,65 @@ def test_review_candidate_retries_through_a_browser_once_and_rejects(
     review = cast("rc.CandidateReview", _run(go()))
     assert not review.present and review.retried_browser and review.profile == "full_browser"
     assert rendered == [httpserver.url_for("/shell")] and len(llm.prompts) == 2
+
+
+def test_expand_reads_a_page_parameter_pager_and_api_knobs(httpserver: HTTPServer) -> None:
+    from web.onboard.pipeline.stages.expand import knobs_of, pager_of
+    from web.parse import parse
+
+    doc = parse(
+        b"<html><body><ul>"
+        + b"".join(b"<li class=r><a href='/x'>a</a></li>" for _ in range(4))
+        + b"</ul><a href='/news/?page=2'>2</a><a href='/news/?page=3'>3</a></body></html>",
+        url="http://x/news/",
+        content_type="text/html",
+    )
+    pager = pager_of(doc, "next_link", "a pager")
+    assert pager.kind == "param" and pager.param == "page"
+    nxt = parse(
+        b"<a rel=next href='/news/?p=2'>n</a>", url="http://x/news/", content_type="text/html"
+    )
+    assert pager_of(nxt, "next_link", "").next_selector == "a[rel=next]"
+    assert pager_of(doc, "scroll", "").kind == "scroll"
+    assert knobs_of("https://x/feed/Event.svc/GetEventList?year=2026&pageSize=-1&type=") == {
+        "year": "2026",
+        "pageSize": "-1",
+    }
+
+
+def test_author_review_marks_the_nested_seam_and_spend_estimates_the_api_cost() -> None:
+    from web.onboard.pipeline import AuthorReview, ExtractQuery
+    from web.onboard.pipeline.stages import author_review
+
+    brief = Brief.from_markdown(
+        _BRIEF.replace("optional: [url]", "optional: []").replace(
+            "  - url: {type: url, description: the link to the release}",
+            "  - url: {type: url, description: the link to the release}\n  - body: {type: string, description: the full text, on the release page}",
+        )
+    ).render(company="acme")
+    state = Onboarding(brief=brief)
+    state.author_extract = ExtractQuery(
+        fields={
+            "headline": "wq.doc.select('h3').attr('text')",
+            "url": "wq.doc.select('a').attr('href')",
+            "published": "x",
+        },
+        row_count=3,
+        sample=[
+            {"headline": "h", "url": "http://x/1", "published": "2026-01-01", "_identity": "i"}
+        ],
+        complete=True,
+    )
+    llm = _Llm([json.dumps({"ok": True, "notes": "fine"})])
+
+    async def go() -> AuthorReview:
+        ctx = Context(resolver=cast("object", None), llm=cast("object", llm), search=_Search([]))  # type: ignore[arg-type]
+        return await author_review.run(state, ctx)
+
+    review = cast(AuthorReview, _run(go()))
+    assert review.ok and review.next == "nested"
+    assert review.detail_field == "url" and review.pending == ["body"]
+    assert "_identity" not in llm.prompts[0] and "Optional fields" in llm.prompts[0]
+    # the spend carries the prompt / reply sizes; the API estimate prices them at Haiku rates
+    assert state.spend.chars_in > 100 and state.spend.chars_out > 10
+    assert 0 < state.spend.api_estimate() < 0.001

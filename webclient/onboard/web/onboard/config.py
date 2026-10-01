@@ -36,6 +36,7 @@ from web.resolve import EscalationPolicy, Resolver
 from web.resolve import profiles as _rp
 
 from .llm import AnthropicLlm, Llm
+from .pipeline.ask import MAX_TOKENS, SYSTEM
 from .search import DdgSearch, Search
 from .shim import ClaudeShim
 
@@ -106,6 +107,10 @@ def env_float(name: str, default: float) -> float:
         return default
 
 
+#: the pipeline's default API model: the cheap tier -- every stage prompt is tiny and asks for JSON.
+PIPELINE_MODEL = "claude-haiku-4-5-20251001"
+
+
 def default_llm(*, model: "str | None" = None, shim: "bool | None" = None) -> Llm:
     """The LLM from the env. ``WEB_LLM_SHIM`` -> the local ``claude -p`` shim (no key, real model);
     else the Anthropic API (:class:`AnthropicLlm` reads its key / base_url / model from the env
@@ -113,7 +118,11 @@ def default_llm(*, model: "str | None" = None, shim: "bool | None" = None) -> Ll
     # WEB_LLM_RATE is applied by the clients themselves (RateLimit.from_env via their gate), so it
     # holds for a directly-built AnthropicLlm()/ClaudeShim() too, not only through here.
     use_shim = env_flag("WEB_LLM_SHIM") if shim is None else shim
-    return ClaudeShim(model=model) if use_shim else AnthropicLlm(model=model)
+    if use_shim:
+        return ClaudeShim(model=model)
+    return AnthropicLlm(
+        model=model or env("WEB_LLM_MODEL") or PIPELINE_MODEL, system=SYSTEM, max_tokens=MAX_TOKENS
+    )
 
 
 def default_search() -> Search:

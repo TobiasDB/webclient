@@ -29,6 +29,17 @@ T = TypeVar("T", bound=BaseModel)
 
 #: the character budget of any page-derived prompt input (~700 tokens): a prompt stays tiny.
 PROMPT_INPUT_CHARS = 2_800
+#: the system prompt for the API path: every stage asks for JSON and wants NOTHING else -- the
+#: prose a model wraps around its JSON is the dominant API cost (output tokens).
+SYSTEM = (
+    "You are one stage of a data-onboarding pipeline. Reply with exactly the JSON the message asks "
+    "for and nothing else: no preamble, no explanation, no markdown fences."
+)
+#: the output cap for one stage reply (a field map / a verdict never needs more).
+MAX_TOKENS = 1_500
+#: Haiku 4.5 list prices, $ per million tokens -- the API-cost ESTIMATE from prompt / reply size
+#: (4 chars ~ 1 token) that the state carries alongside the client's own metered spend.
+HAIKU_IN, HAIKU_OUT = 1.0, 5.0
 
 
 @runtime_checkable
@@ -74,10 +85,11 @@ async def ask(
 ) -> str:
     """One metered model call charged to ``stage``, over the ``prompt`` template (``stage`` by
     default -- a stage reusing another's prompt names it); the reply text."""
+    text = render(prompt or stage, **args)
     calls0, usd0 = _spent(ctx.llm)
-    reply = await ctx.llm.complete(render(prompt or stage, **args))
+    reply = await ctx.llm.complete(text)
     calls1, usd1 = _spent(ctx.llm)
-    state.charge(stage, calls1 - calls0, usd1 - usd0)
+    state.charge(stage, calls1 - calls0, usd1 - usd0, chars_in=len(text), chars_out=len(reply))
     return reply
 
 
@@ -122,4 +134,16 @@ def _parse(reply: str, model: "type[T]") -> T:
         ) from exc
 
 
-__all__ = ["Context", "Metered", "PROMPT_INPUT_CHARS", "ReplyError", "ask", "ask_json", "render"]
+__all__ = [
+    "Context",
+    "HAIKU_IN",
+    "HAIKU_OUT",
+    "MAX_TOKENS",
+    "Metered",
+    "PROMPT_INPUT_CHARS",
+    "ReplyError",
+    "SYSTEM",
+    "ask",
+    "ask_json",
+    "render",
+]

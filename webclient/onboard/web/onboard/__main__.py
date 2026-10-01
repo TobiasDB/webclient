@@ -44,13 +44,14 @@ from web.fetch import profiles as _fp
 from web.fetch import using
 from web.resolve import ResolveEvent, Resolver
 
-from .config import build_resolver, default_search
+from .config import PIPELINE_MODEL, build_resolver, default_search
 from .config import env as _env
 from .config import env_flag as _env_flag
 from .config import env_float as _env_float
 from .llm import AnthropicLlm, LlmEvent, Pricing, RateLimit, ReasonEvent, Usage
 from .pipeline import Brief, BriefError, Context, Onboarding, packaged_briefs
 from .pipeline import run as pipeline_run
+from .pipeline.ask import MAX_TOKENS, SYSTEM
 from .shim import ClaudeShim
 
 
@@ -242,9 +243,13 @@ def _build_llm(args: argparse.Namespace) -> "AnthropicLlm | ClaudeShim":
         cache_write=args.price_cache_write,
     )
     rate = RateLimit(min_interval=args.rate)
-    if args.model:
-        return AnthropicLlm(model=args.model, rate=rate, pricing=pricing)
-    return AnthropicLlm(rate=rate, pricing=pricing)
+    return AnthropicLlm(
+        model=args.model or _env("WEB_LLM_MODEL") or PIPELINE_MODEL,
+        rate=rate,
+        pricing=pricing,
+        system=SYSTEM,
+        max_tokens=MAX_TOKENS,
+    )
 
 
 # -- web fetch / web resolve ----------------------------------------------------------------------
@@ -383,7 +388,11 @@ async def _onboard(args: argparse.Namespace) -> int:
     _err("")
     for line in state.log:
         _err(f"  {line.stage:<17} {line.elapsed_s:>6.1f}s  {line.calls} call(s)  ${line.usd:.4f}")
-    _err(f"  spend:      ${state.spend.usd:.4f} over {state.spend.calls} call(s)")
+    _err(
+        f"  spend:      ${state.spend.usd:.4f} over {state.spend.calls} call(s) "
+        f"({state.spend.chars_in} chars in / {state.spend.chars_out} out; the same calls on the "
+        f"API at Haiku prices ≈ ${state.spend.api_estimate():.4f})"
+    )
     _err(f"  state:      {path}")
     if state.stopped:
         _err(f"  stopped:    {state.stopped}")
