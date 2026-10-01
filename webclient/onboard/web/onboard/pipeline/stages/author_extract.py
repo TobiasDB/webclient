@@ -291,7 +291,9 @@ async def _one(
             try:  # a LENIENT probe: every field optional; the report's fill rates say what read
                 probe = Query.of(
                     reroot(
-                        parse_query(compile_source(records, fields)), plan.url, profile=plan.profile
+                        parse_query(compile_source(records, fields, where=where)),
+                        plan.url,
+                        profile=plan.profile,
                     )
                 ).with_schema(schema)
                 result = await probe.run(resolver, lenient=True)
@@ -342,9 +344,10 @@ async def _one(
         out.blob = query.to_blob()
         out.report = final.report.summary()
         out.complete = bool(final.rows) and not final.report.failures
+        if not final.rows and not final.report.failures:
+            out.attempts.append(
+                "the final run returned 0 row(s)"
+                + (" -- the where predicate kept no record" if where else "")
+            )
         emit(ReasonEvent(stage="author_extract", text=f"final run: {final.report.summary()}"))
-    if not out.complete:
-        state.stopped = (
-            f"author_extract: {out.attempts[-1] if out.attempts else 'nothing extracted'}"
-        )
     return out

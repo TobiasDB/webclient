@@ -715,3 +715,85 @@ def test_expand_describes_year_tabs_and_the_author_hears_the_latest_data_rule() 
         note="",
     )
     assert prompt.startswith("NOW: ") and "year tabs" in prompt and "LATEST data" in prompt
+
+
+def test_a_guide_with_no_records_does_not_stop_the_run_when_another_completes(
+    httpserver: HTTPServer,
+) -> None:
+    # 10x: the feed holds only past events, so the "upcoming" guide's where predicate keeps
+    # nothing -- that is a fact about the source, not a failure of the run
+    past = "".join(
+        f"<li class=ev><b>Past {i}</b><time datetime='2025-01-0{i}'>d</time></li>"
+        for i in range(1, 4)
+    )
+    httpserver.expect_request("/events").respond_with_data(
+        f"<html><body><main><ul>{past}</ul></main></body></html>", content_type="text/html"
+    )
+    brief = Brief.from_markdown("""---
+name: ev
+args: [company]
+search: {term: "{company} events", domain: ["localhost", "127.0.0.1"]}
+queries:
+  - {name: upcoming, hint: "only the upcoming events"}
+  - {name: past, hint: "only the past events"}
+schema:
+  - title: {type: string, description: the event}
+  - when: {type: datetime, description: the date}
+---
+events of {company}
+""")
+    fields = {
+        "title": {"css": "b", "read": "text"},
+        "when": {"css": "time", "read": "attr:datetime"},
+    }
+    replies = [
+        json.dumps({"picks": [{"n": 1, "tier": "must", "why": "the events page"}]}),
+        json.dumps({"present": True, "reason": "an event list"}),
+        json.dumps({"ok": True, "summary": "the events page", "concerns": []}),
+        json.dumps(
+            {
+                "records": "li.ev",
+                "where": "wq.doc.select('time').attr('datetime') >= '2026-10-01'",
+                "fields": fields,
+            }
+        ),  # upcoming: 0
+        json.dumps(
+            {
+                "records": "li.ev",
+                "where": "wq.doc.select('time').attr('datetime') >= '2026-10-01'",
+                "fields": fields,
+            }
+        ),  # repair 1: still 0
+        json.dumps(
+            {
+                "records": "li.ev",
+                "where": "wq.doc.select('time').attr('datetime') >= '2026-10-01'",
+                "fields": fields,
+            }
+        ),  # repair 2
+        json.dumps(
+            {
+                "records": "li.ev",
+                "where": "wq.doc.select('time').attr('datetime') < '2026-10-01'",
+                "fields": fields,
+            }
+        ),  # past: 3
+        json.dumps({"ok": True, "notes": "three past events"}),
+    ]
+    llm = _Llm(replies)
+
+    async def go() -> Onboarding:
+        async with Resolver() as r:
+            state = Onboarding.start(brief, company="acme")
+            ctx = Context(resolver=r, llm=cast("object", llm), search=_Search([httpserver.url_for("/events")]))  # type: ignore[arg-type]
+            return await run(state, ctx)
+
+    state = cast(Onboarding, _run(go()))
+    assert state.stopped == "", state.stopped
+    up, past_q = state.author_extract or [None, None]
+    assert up is not None and not up.complete and up.row_count == 0
+    assert "kept no record" in " ".join(up.attempts) or "0 probed" in " ".join(up.attempts)
+    assert past_q is not None and past_q.complete and past_q.row_count == 3
+    assert [r.name for r in state.author_review or []] == [
+        "past"
+    ]  # only the complete query is reviewed
