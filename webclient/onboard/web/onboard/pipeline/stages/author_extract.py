@@ -22,7 +22,7 @@ from ..apis import records_path
 from ..ask import Context, ask_json
 from ..hints import attrs_of, closest, leaves, record_structure, typical
 from ..state import ExtractQuery, Onboarding
-from .review_candidate import full_skeleton
+from .review_candidate import skeleton
 
 _REPAIRS = 2
 
@@ -150,7 +150,7 @@ async def run(state: Onboarding, ctx: Context) -> ExtractQuery:
     resolver = Resolver(profile=prof, pool=ctx.resolver.pool)
     doc = document(await resolver.snapshot(Request(url=plan.url)))
     is_json = doc.kind == "json"
-    outline = full_skeleton(doc)  # the WHOLE structure: the author chooses from all of it
+    outline = skeleton(doc)  # the WHOLE structure: the author chooses from all of it
     emit(
         ReasonEvent(
             stage="author_extract",

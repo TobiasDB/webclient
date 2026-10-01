@@ -28,38 +28,21 @@ class _Reply(BaseModel):
     reason: str = ""
 
 
-#: the page outline a review / the author sees: ~1.4k tokens, shallow enough to cover the WHOLE
-#: page (a deep widget -- a PDF viewer's toolbar -- must not eat the budget), chrome dropped, and
-#: WITHOUT the record detector's marks (a selector pointer upstream poisons what follows).
-SKELETON_CHARS = 5_600
-_DEPTH = 12
+#: the FULL page outline every stage sees (USER 2026-10-01: the skeleton is always the full
+#: outline): full depth and width, chrome dropped, WITHOUT the record detector's marks (a selector
+#: pointer upstream poisons what follows); only a safety cap against a pathological page.
+SKELETON_CHARS = 100_000
 
 
 def skeleton(doc: Document) -> str:
-    """The page outline the model judges / authors by: a JSON shape, or the DOM outline with
-    chrome dropped, nesting capped, no detector marks, clipped from the top (page order)."""
+    """The whole document structure: a JSON shape, or the DOM outline with chrome dropped, no
+    detector marks, clipped only at the safety cap (from the top: page order)."""
     if doc.kind == "json":
-        return clip(doc.json_skeleton(max_lines=400), SKELETON_CHARS, "skeleton", kind="json")
-    outline = doc.skeleton(
-        max_lines=600, text_chars=40, max_depth=_DEPTH, mark_records=False, drop_chrome=True
-    )
-    return clip(outline, SKELETON_CHARS, "skeleton")
-
-
-#: the author sees the FULL structure (USER 2026-10-01: a small outline made authoring fail);
-#: only a safety cap against a pathological page (~25k tokens).
-FULL_SKELETON_CHARS = 100_000
-
-
-def full_skeleton(doc: Document) -> str:
-    """The whole document structure for the AUTHOR: full depth and width, chrome dropped, no
-    detector marks, clipped only at the safety cap."""
-    if doc.kind == "json":
-        return clip(doc.json_skeleton(max_lines=4000), FULL_SKELETON_CHARS, "skeleton", kind="json")
+        return clip(doc.json_skeleton(max_lines=4000), SKELETON_CHARS, "skeleton", kind="json")
     outline = doc.skeleton(
         max_lines=4000, text_chars=60, max_depth=60, mark_records=False, drop_chrome=True
     )
-    return clip(outline, FULL_SKELETON_CHARS, "skeleton")
+    return clip(outline, SKELETON_CHARS, "skeleton")
 
 
 async def _judge(state: Onboarding, ctx: Context, doc: Document, profile: str) -> _Reply:

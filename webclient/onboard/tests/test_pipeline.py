@@ -509,36 +509,18 @@ def test_a_rejected_review_sends_the_extraction_back_once_with_its_note(
     ]
 
 
-def test_review_skeleton_outlines_the_whole_page_without_detector_marks() -> None:
-    # a rendered IR page's skeleton was 32k chars: centre-clipping landed inside a PDF viewer's
-    # toolbar and the review saw no records. The outline is shallow, chrome-free, top-first, and
-    # carries no `select_all(...)` mark (an upstream pointer).
+def test_the_skeleton_is_always_the_full_outline_without_detector_marks() -> None:
+    # USER: "the skeleton should always be the full outline" (a small outline made authoring
+    # fail; a centre-clipped one hid the records from the review). Full depth and width, chrome
+    # dropped, no `select_all(...)` mark (an upstream pointer), only a safety cap.
     from web.onboard.pipeline.stages.review_candidate import SKELETON_CHARS, skeleton
-    from web.parse import parse
-
-    deep = "<div>" * 30 + "<button>deep toolbar</button>" + "</div>" * 30
-    rows = "".join(f"<li class=ev><a href='/e{i}'>Event {i}</a></li>" for i in range(6))
-    html = f"<html><body><nav><a href='/'>home</a></nav><main><ul class=events>{rows}</ul>{deep}</main></body></html>"
-    doc = parse(html.encode(), url="http://x/", content_type="text/html")
-    out = skeleton(doc)
-    assert len(out) <= SKELETON_CHARS + 100 and "li.ev" in out and "Event 0" in out
-    assert "select_all(" not in out and "RECORD LIST" not in out  # no detector pointer
-    assert "deep toolbar" not in out  # beyond the depth cap
-    assert "nav" not in out.split("main")[0]  # chrome dropped
-
-
-def test_the_author_sees_the_full_skeleton() -> None:
-    # USER: "authoring fails because the skeleton is too small -- include the full skeleton"
-    from web.onboard.pipeline.stages.review_candidate import full_skeleton, skeleton
     from web.parse import parse
 
     deep = "<div>" * 20 + "<span class=deep-leaf>leaf</span>" + "</div>" * 20
     rows = "".join(f"<li class=ev><a href='/e{i}'>Event {i}</a>{deep}</li>" for i in range(40))
-    doc = parse(
-        f"<html><body><main><ul>{rows}</ul></main></body></html>".encode(),
-        url="http://x/",
-        content_type="text/html",
-    )
-    full, short = full_skeleton(doc), skeleton(doc)
-    assert len(full) > len(short) and "deep-leaf" in full and "Event 39" in full
-    assert "select_all(" not in full  # still no detector pointer
+    html = f"<html><body><nav><a href='/'>home</a></nav><main><ul class=events>{rows}</ul></main></body></html>"
+    doc = parse(html.encode(), url="http://x/", content_type="text/html")
+    out = skeleton(doc)
+    assert "deep-leaf" in out and "Event 39" in out and len(out) <= SKELETON_CHARS + 100
+    assert "select_all(" not in out and "RECORD LIST" not in out  # no detector pointer
+    assert "nav" not in out.split("main")[0]  # chrome dropped
