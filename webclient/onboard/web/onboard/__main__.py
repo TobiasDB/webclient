@@ -110,20 +110,23 @@ class _Progress:
                 f"in={u.input} out={u.output} cache_r={u.cache_read} cache_w={u.cache_write} tok "
                 f"→ ${event.cost_usd:.4f}  (running ${event.spent_usd:.4f})"
             )
-        elif isinstance(event, TraceEvent):  # the model exchange: the reply always, the prompt -v
+        elif isinstance(event, TraceEvent):  # the model exchange: -v only (else `web view`)
             if self._verbose:
                 _err(f"  ┌ {event.stage} PROMPT ({len(event.prompt)} chars):")
                 for line in event.prompt[:3000].splitlines():
                     _err(f"  │ {line}")
-            reply = " ".join(event.reply.split())
-            _err(
-                f"  └ {event.stage} REPLY ({len(event.reply)} chars): {reply[:1500 if self._verbose else 300]}"
-            )
+                reply = " ".join(event.reply.split())
+                _err(f"  └ {event.stage} REPLY ({len(event.reply)} chars): {reply[:1500]}")
         elif isinstance(event, ReasonEvent):  # WHY a choice was made
             if event.stage != "llm":  # a retry notice is not a stage change
                 self._stage = event.stage
             subj = f"{event.subject} — " if event.subject else ""  # full URL/subject, not truncated
-            _err(f"  ⋯ {event.stage}: {subj}{event.text}")
+            text = event.text
+            if "\n" in text and not self._verbose:  # a structure / hints dump: the first line only
+                text = (
+                    text.split("\n", 1)[0] + " (the rest: `web view <state> " + event.stage + "`)"
+                )
+            _err(f"  ⋯ {event.stage}: {subj}{text}")
         elif isinstance(
             event, ResolveEvent
         ):  # transport fallbacks: which tier a fetch escalated to
